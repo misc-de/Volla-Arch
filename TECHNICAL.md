@@ -233,8 +233,20 @@ tools/publish.sh              # sign the local repo into the channel beta → bu
 tools/release.sh              # after testing: the signed beta state 1:1 to stable, nothing re-signed
 REPO_TARGET=user@host:/path tools/upload-repo.sh   # beta, then stable: packages, database, old packages last
 tools/kernel-trial.sh build/ut/<build>   # try a new UT kernel through a second boot entry
+tools/kernel-kmi.py -C build/kernel-trial types --genksyms <old> <new> --symtypes <obj> --needs pkgbuilds/plinius-kernel/vendor-needs.txt
+                              # after a linux-6.1.y merge: what the vendor modules' interface sees changed
+tools/kernel-checkbuild.sh [--package] <rev>   # check build of a kernel commit, pkgrel 99, never into the repo
 tools/run-tests.sh            # the test suite
 ```
+
+A merge of a new linux-6.1.y release into `plinius-kernel` is measured with `tools/kernel-kmi.py`
+before it is built: `conflicts` classifies the conflict regions, `types` lists the definitions
+that change among the types the prebuilt modules reach (with `--genksyms` as genksyms sees them
+after the KMI repair: none may be left), `inlines` the macros and inline functions of the headers
+(compiled into the modules, so no CRC shows them), `dupes` fixes a merge applies a second time,
+`vendor-const` finds an inlined constant in the modules' code and `layout` compares the member
+offsets of two builds. `tools/kernel-checkbuild.sh` then builds the commit with the PKGBUILD's own
+`prepare()` and `build()`, which checks every imported CRC.
 
 ## Third-party projects and licenses
 

@@ -5,6 +5,10 @@
 #
 # Usage: [ARCH=x86_64] tools/build.sh <package>
 #
+# PKGSRC=<dir> builds the PKGBUILD in <dir> instead of pkgbuilds/<package>, PKGOUT=<dir> puts the
+# package into <dir> (a repo of its own) instead of the local repo, e.g. for the check builds of
+# tools/kernel-checkbuild.sh --package, which must never reach [plinius-local].
+#
 # A PKGBUILD with the line "# plinius-build: cross" is built for aarch64 in the x86_64 chroot
 # (CARCH=aarch64, the tools are x86_64 ones). For packages whose build is a cross build anyway,
 # like the kernel: under qemu-user it would take many hours instead of minutes. [plinius-local]
@@ -13,7 +17,8 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 pkg=${1:?usage: tools/build.sh <package>}
-src=$PKGBUILDS/$pkg
+src=${PKGSRC:-$PKGBUILDS/$pkg}
+out=${PKGOUT:-$LOCALREPO}
 [[ -f $src/PKGBUILD ]] || die "no PKGBUILD in $src"
 cross=0
 if [[ $ARCH == aarch64 ]] && grep -qx '# plinius-build: cross' "$src/PKGBUILD"; then
@@ -24,7 +29,7 @@ fi
 [[ -d $CHROOT/usr ]] || die "build chroot missing, run tools/chroot-init.sh first"
 check_host
 
-mkdir -p "$LOCALREPO" "$SRCCACHE"
+mkdir -p "$out" "$SRCCACHE"
 work=$(mktemp -d "$BUILD/work-$pkg.XXXXXX")
 trap 'ns_rm "$work"' EXIT
 mkdir -p "$work"/{upper,ovl,merged}
@@ -90,9 +95,11 @@ ns_run '
 		in_chroot "$r" repo-add -q /repo/plinius-local.db.tar.gz "/repo/${f##*/}"
 		echo "  -> ${f##*/}"
 	done
-' "$CHROOT" "$work" "$src" "$LOCALREPO" "$(build_jobs)" "$ARCH" "$SRCCACHE" "$cross"
+' "$CHROOT" "$work" "$src" "$out" "$(build_jobs)" "$ARCH" "$SRCCACHE" "$cross"
 
-msg "Done: $pkg (repo: $LOCALREPO)"
+msg "Done: $pkg (repo: $out)"
+# A package outside the local repo is no part of the approval
+[[ -z ${PKGOUT:-} ]] || exit 0
 # Coupled libraries may have changed along with this package
 ARCH=$ARCH "$VOLLA_DIR/tools/freigabe.py" --check ||
 	msg "The approval (plinius-freigabe) no longer matches the packages; run tools/freigabe.py after testing"
