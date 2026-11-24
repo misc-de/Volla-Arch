@@ -3,7 +3,7 @@
 
 pkgname=phosh-plinius
 pkgver=0.59.0
-pkgrel=27
+pkgrel=28
 pkgdesc="Phosh mobile shell with a restart button, NFC, cast and USB switches and settings for the notch, the app overview and the calendar week"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 # Debug symbols in a -debug package (ALARM's makepkg.conf has !debug): perf names Phosh's functions
@@ -297,7 +297,7 @@ sha256sums=('SKIP'
 	'b6c4353b9cfded061b2238695832b8b2cee647466dc168d06a32edae0e7bf4d2'
 	'6d69d73c34a5c83950f29cc144636413e4537d223c5839008b5711153eda2bcf'
 	'56a79acf6b3c2177ce32ed32174825114ef621134734397f8188cacb2f9e395b'
-	'321b47bc689a499ff8981ca11f047a176b93cfdce487827bb0099a0ddd0825af'
+	'235902e23961278dbc5769cbc6a9c565dceb0e313314233c6ce026b6a63d03a2'
 	'ebb9c179b37634f52e86b23e4377fee34a0120618c0674f662693d3bc764bbbc'
 	'38ca9adca511598de91f13da14d67fdeaf596d5ccf59693488db6cbd3e44c9f1')
 

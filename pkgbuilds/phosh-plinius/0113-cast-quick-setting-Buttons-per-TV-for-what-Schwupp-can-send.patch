@@ -12,21 +12,21 @@ once it is there). For a link or a video Schwupp asks in a window of its
 own, so the quick settings fold away first. Speakers get no buttons.
 
 The buttons stay while a TV is in use, the one it gets right now marked
-(Source): a tap on another one switches over, a tap on the marked one or
-on the row stops. The row says what the TV gets: the screen, the
-desktop, a video or a link. Once the desktop shows on the TV, the quick
-settings fold away and the touchpad and keyboard for it open
-(plinius-remote, its desktop action).
+(Source): a tap on another one switches over, a tap on the marked one
+stops. A row with buttons takes taps only on them. The row says what the
+TV gets: the screen, the desktop, a video or a link. Once the desktop
+shows on the TV, the quick settings fold away and the touchpad and
+keyboard for it open (plinius-remote, its desktop action).
 
 The spinner of the list runs from the moment the list is open: D-Bus
 starts Schwupp on demand, and until it reported its search the list
 looked idle for several seconds.
 ---
- .../cast-quick-setting/cast-quick-setting.c   | 180 ++++++++++++++++--
- 1 file changed, 167 insertions(+), 13 deletions(-)
+ .../cast-quick-setting/cast-quick-setting.c   | 186 ++++++++++++++++--
+ 1 file changed, 173 insertions(+), 13 deletions(-)
 
 diff --git a/plugins/cast-quick-setting/cast-quick-setting.c b/plugins/cast-quick-setting/cast-quick-setting.c
-index c771639..35de38d 100644
+index c771639..b1f0b5c 100644
 --- a/plugins/cast-quick-setting/cast-quick-setting.c
 +++ b/plugins/cast-quick-setting/cast-quick-setting.c
 @@ -6,12 +6,14 @@
@@ -101,7 +101,7 @@ index c771639..35de38d 100644
  
  static char *
  get_string (PhoshCastQuickSetting *self, const char *name)
-@@ -76,13 +111,120 @@ get_discovering (PhoshCastQuickSetting *self)
+@@ -76,13 +111,124 @@ get_discovering (PhoshCastQuickSetting *self)
  }
  
  
@@ -148,14 +148,16 @@ index c771639..35de38d 100644
 +}
 +
 +
-+static void
++/* The buttons for what Schwupp offers for the device; returns how many there are */
++static guint
 +add_action_buttons (PhoshCastQuickSetting *self, GtkWidget *row, const char *id,
 +                    const char *source)
 +{
 +  g_auto (GStrv) actions = get_actions (self, id);
++  guint n_buttons = 0;
 +
 +  if (!actions)
-+    return;
++    return 0;
 +
 +  for (guint i = 0; i < G_N_ELEMENTS (cast_actions); i++) {
 +    GtkWidget *button;
@@ -178,7 +180,9 @@ index c771639..35de38d 100644
 +    g_signal_connect_object (button, "clicked", G_CALLBACK (on_action_clicked), self,
 +                             G_CONNECT_SWAPPED);
 +    gtk_container_add (GTK_CONTAINER (row), button);
++    n_buttons++;
 +  }
++  return n_buttons;
 +}
 +
 +
@@ -224,11 +228,13 @@ index c771639..35de38d 100644
  {
    GtkWidget *row = hdy_action_row_new ();
    GtkWidget *icon = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_BUTTON);
-@@ -94,15 +236,17 @@ create_row (const char *id,
+@@ -94,15 +240,19 @@ create_row (const char *id,
  
    if (!active) {
      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), description);
-+    add_action_buttons (self, row, id, NULL);
++    /* With buttons only they act, a tap beside them does nothing */
++    if (add_action_buttons (self, row, id, NULL))
++      gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
    } else if (g_strcmp0 (state, "streaming") == 0) {
 -    GtkWidget *check = gtk_image_new_from_icon_name ("object-select-symbolic",
 -                                                     GTK_ICON_SIZE_BUTTON);
@@ -243,14 +249,14 @@ index c771639..35de38d 100644
 +      gtk_container_add (GTK_CONTAINER (row),
 +                         gtk_image_new_from_icon_name ("object-select-symbolic",
 +                                                       GTK_ICON_SIZE_BUTTON));
-+    } else {
-+      /* The buttons stay, the one in use marked: switch between them while connected */
-+      add_action_buttons (self, row, id, source);
++    } else if (add_action_buttons (self, row, id, source)) {
++      /* The buttons stay, the one in use marked: switch between them, or stop with it */
++      gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
 +    }
    } else {
      GtkWidget *spinner = gtk_spinner_new ();
  
-@@ -127,10 +271,12 @@ update (PhoshCastQuickSetting *self)
+@@ -127,10 +277,12 @@ update (PhoshCastQuickSetting *self)
    g_autofree char *active = get_string (self, "ActiveDevice");
    g_autofree char *state = get_string (self, "State");
    g_autofree char *error = get_string (self, "Error");
@@ -263,7 +269,7 @@ index c771639..35de38d 100644
    GVariantIter iter;
    const char *id, *name, *description, *icon_name;
    guint n_rows = 0;
-@@ -152,11 +298,18 @@ update (PhoshCastQuickSetting *self)
+@@ -152,11 +304,18 @@ update (PhoshCastQuickSetting *self)
        if (is_active)
          active_name = g_strdup (name);
        gtk_list_box_insert (self->list_box,
@@ -283,7 +289,7 @@ index c771639..35de38d 100644
    /* Tile: the TV while mirroring, otherwise what is going on */
    phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), busy);
    if (!busy)
-@@ -168,8 +321,9 @@ update (PhoshCastQuickSetting *self)
+@@ -168,8 +327,9 @@ update (PhoshCastQuickSetting *self)
    else
      phosh_status_icon_set_info (self->info, _("Connecting…"));
  

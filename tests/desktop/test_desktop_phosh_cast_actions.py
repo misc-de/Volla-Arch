@@ -284,7 +284,8 @@ def test_a_tv_gets_a_button_for_everything_schwupp_offers(harness):
     (_, row), *buttons = map(fields, run(harness, "row", *TV, "0", "idle", "", ALL))
     assert (row["title"], row["subtitle"], row["id"], row["prefix"]) == (
         "Living Room", "Chromecast · TV", "cast:tv", "video-display-symbolic")
-    assert row["activatable"] == "1" and row["shown"] == "1" and row["children"] == "4"
+    # Only the buttons take taps, not the row beside them
+    assert row["activatable"] == "0" and row["shown"] == "1" and row["children"] == "4"
     for (_, button), (icon, method, label) in zip(buttons, BUTTONS, strict=True):
         assert (button["kind"], button["icon"], button["method"]) == ("button", icon, method)
         assert button["id"] == "cast:tv" and button["css"] == "flat" and button["valign"] == "3"
@@ -308,6 +309,7 @@ def test_only_what_the_tv_can_in_the_fixed_order(harness):
 def test_no_buttons(harness, device, props):
     (kind, row), = map(fields, run(harness, "row", *device, "0", "idle", "", props))
     assert row["children"] == "0" and row["subtitle"] == device[2]
+    assert row["activatable"] == "1"                         # without buttons a tap starts
 
 
 @pytest.mark.parametrize("index, expected", [
@@ -340,7 +342,8 @@ def test_a_tv_in_use_keeps_its_buttons_with_the_one_in_use_marked(harness, sourc
                                                                    marked):
     (_, row), *buttons = map(fields, run(harness, "row", *TV, "1", "streaming", source, ALL))
     assert row["subtitle"] == subtitle and row["children"] == "4"
-    # Switch over with another button; the marked one stops, as the row does
+    assert row["activatable"] == "0"
+    # Switch over with another button; the marked one stops
     for (_, b), (icon, method, label) in zip(buttons, BUTTONS, strict=True):
         if method == marked:
             assert (b["css"], b["method"], b["icon"]) == ("suggested-action", "Disconnect", icon)
