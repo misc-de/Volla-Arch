@@ -32,7 +32,7 @@ def refs(**kw):
     return out
 
 
-C1, C2, C3, C4 = ("1" * 40, "2" * 40, "3" * 40, "4" * 40)
+C1, C2, C3, C4, C5 = ("1" * 40, "2" * 40, "3" * 40, "4" * 40, "5" * 40)
 
 
 # --- tags and versions ------------------------------------------------------------------------
@@ -78,6 +78,26 @@ def test_release_of_commit_matches_a_short_id(st):
 ])
 def test_stable_branch(st, heads, version, branch):
     assert st.stable_branch(refs(heads={h: C1 for h in heads}), version) == branch
+
+
+def test_stable_branch_named_after_the_project_wins_over_a_shorter_one(st):
+    # libhandy has msvc-1-8 (a Windows port) beside libhandy-1-8, the real stable branch
+    r = refs(heads={"msvc-1-8": C1, "libhandy-1-8": C2, "main": C1})
+    assert st.stable_branch(r, "1.8.3", "libhandy") == "libhandy-1-8"
+    # Without the project name the shortest one is still the guess
+    assert st.stable_branch(r, "1.8.3") == "msvc-1-8"
+    # A project without such a branch keeps the other rules
+    assert st.stable_branch(refs(heads={"backport-5702-3-24": C1, "gtk-3-24": C2}),
+                            "3.24.52", "gtk3") == "gtk-3-24"
+
+
+@pytest.mark.parametrize("url,name", [
+    ("https://gitlab.gnome.org/GNOME/libhandy.git", "libhandy"),
+    ("https://gitlab.gnome.org/GNOME/libhandy", "libhandy"),
+    ("https://github.com/k2-fsa/sherpa-onnx/", "sherpa-onnx"),
+])
+def test_project_name(st, url, name):
+    assert st.project_name(url) == name
 
 
 # --- where a package comes from -----------------------------------------------------------------
@@ -413,6 +433,16 @@ def test_commit_pin_after_a_release_follows_its_stable_branch(st, monkeypatch):
     r = refs(tags={"51.1": C1}, heads={"gnome-51": C4, "main": C3}, head=C3)
     line = upstream(st, monkeypatch, "g", src, r, pkgver="51.1")
     assert line == f"g: gnome-51 {C4[:10]} past pin {C2[:10]}"
+
+
+def test_commit_pin_follows_the_stable_branch_named_after_the_project(st, monkeypatch):
+    # libhandy 1.8.3 pinned on libhandy-1-8; the moved msvc-1-8 of a Windows port is no update
+    r = refs(tags={"1.8.3": C1}, heads={"libhandy-1-8": C2, "msvc-1-8": C4, "main": C3}, head=C3)
+    src = [f"git+https://gitlab.gnome.org/GNOME/libhandy.git#commit={C2}"]
+    assert upstream(st, monkeypatch, "libhandy-plinius", src, r, pkgver="1.8.3") is None
+    r = refs(tags={"1.8.3": C1}, heads={"libhandy-1-8": C5, "msvc-1-8": C4, "main": C3}, head=C3)
+    line = upstream(st, monkeypatch, "libhandy-plinius", src, r, pkgver="1.8.3")
+    assert line == f"libhandy-plinius: libhandy-1-8 {C5[:10]} past pin {C2[:10]}"
 
 
 def test_commit_pin_after_a_release_without_stable_branch_compares_the_default_branch(

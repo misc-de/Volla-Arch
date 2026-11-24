@@ -168,10 +168,18 @@ def has_release(refs, version):
     return False
 
 
-def stable_branch(refs, version):
+def project_name(url):
+    """Name of a repository from its URL: libhandy for https://gitlab.gnome.org/GNOME/libhandy.git."""
+    name = url.rstrip("/").rsplit("/", 1)[-1]
+    return name[:-len(".git")] if name.endswith(".git") else name
+
+
+def stable_branch(refs, version, project=None):
     """The branch that receives fixes for a release version, by its name, or None.
 
     GNOME: gnome-51 for 51.1. Elsewhere major and minor: 1.6, v0.10, 2_12, libhandy-1-8.
+    project is the repository's name: a branch named after it (libhandy-1-8) wins over other
+    branches of the same series, like the shorter msvc-1-8 of a port.
     """
     major, _, rest = version.partition(".")
     minor = rest.split(".")[0]
@@ -179,6 +187,8 @@ def stable_branch(refs, version):
     if minor:
         names += [f"refs/heads/{major}.{minor}", f"refs/heads/v{major}.{minor}",
                   f"refs/heads/{major}_{minor}"]
+        if project:
+            names.append(f"refs/heads/{project}-{major}-{minor}")
     for name in names:
         if name in refs:
             return name[len("refs/heads/"):]
@@ -290,13 +300,13 @@ def check_main_source(pkg, info, infos):
         # next version. Without a stable branch, only a newer release (above) is news.
         _, pinned_release = release_of_commit(refs, pinned)
         if pinned_release:
-            branch = stable_branch(refs, pinned_release)
+            branch = stable_branch(refs, pinned_release, project_name(url))
             if not branch:
                 return f"{pkg}: " + "; ".join(notes) if notes else None
         elif has_release(refs, info["pkgver"]):
             # A commit after the release pkgver names (translations taken over from gnome-51
             # after 51.1): it sits on that release's stable branch, if there is one
-            branch = stable_branch(refs, info["pkgver"])
+            branch = stable_branch(refs, info["pkgver"], project_name(url))
     head = refs.get(f"refs/heads/{branch}") if branch else refs.get("HEAD")
     if head and pinned and not head.startswith(pinned) and not notes:
         # Only without a newer release: the branch we follow has moved on
