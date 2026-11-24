@@ -12,7 +12,9 @@
 #       Puts Plinius Boot under downloads/, from its release (tools/flatpak.sh --release of
 #       plinius-boot): the Flatpak as org.plinius.Boot-x86_64.flatpak and the archive as
 #       plinius-boot.tar.gz, the names the homepage links, each also under its own name and with
-#       a .sha256. The homepage offers the archive and names the Flatpak below it.
+#       a .sha256. The homepage offers the archive and names the Flatpak below it. For the
+#       archive app.json says {"version", "url", "size", "sha256"} as latest.json does for the
+#       image; the version is the newest release in the archive's metainfo.
 #   DOWNLOAD_TARGET=user@host:/var/www/plinius [DOWNLOAD_SSH_PORT=22] tools/downloads.sh upload
 #       Images first, latest.json after them (a phone's PC never finds a latest.json whose image
 #       is not there yet), then the images latest.json no longer names leave; the screenshots
@@ -74,6 +76,19 @@ print()' "$version" "$base/images/$name" "$size" "$sha" > "$dir/latest.json.part
 	msg "$name ($size bytes) in $dir, latest.json names version $version"
 }
 
+# The version of Plinius Boot in archive $1: the newest release its metainfo names
+archive_version() {
+	python3 -I -c 'import re, sys, tarfile
+import xml.etree.ElementTree as ET
+with tarfile.open(sys.argv[1], "r:gz") as tar:
+    member = next(m for m in tar.getmembers() if m.isfile() and m.name.endswith("/org.plinius.Boot.metainfo.xml"))
+    release = ET.parse(tar.extractfile(member)).getroot().find("releases/release")
+version = release.get("version")
+if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", version):
+    raise SystemExit(1)
+print(version)' "$1" 2>/dev/null
+}
+
 # The name the homepage links for a file of Plinius Boot; fails for any other file
 linked_name() {
 	if [[ $1 =~ ^org\.plinius\.Boot[A-Za-z0-9._-]*\.flatpak$ ]]; then
@@ -87,12 +102,15 @@ linked_name() {
 
 do_app() {
 	(($#)) || die "usage: tools/downloads.sh app FILE..."
-	local dir=$out/downloads app name linked
+	local dir=$out/downloads app name linked version= size sha
 	# All of them checked first, so that a wrong one changes nothing
 	for app in "$@"; do
 		[[ -f $app ]] || die "$app missing"
-		linked_name "$(basename "$app")" >/dev/null ||
+		linked=$(linked_name "$(basename "$app")") ||
 			die "$(basename "$app") is neither the Flatpak nor the archive of Plinius Boot"
+		if [[ $linked == plinius-boot.tar.gz ]]; then
+			version=$(archive_version "$app") || die "$(basename "$app") names no version of Plinius Boot"
+		fi
 	done
 	mkdir -p "$dir"
 	for app in "$@"; do
@@ -104,6 +122,16 @@ do_app() {
 		chmod 644 "$dir/$linked.sha256"
 		msg "$name in $dir"
 	done
+	[[ -n $version ]] || return 0
+	size=$(stat -c %s "$dir/plinius-boot.tar.gz")
+	sha=$(sha256sum < "$dir/plinius-boot.tar.gz")
+	sha=${sha%% *}
+	python3 -I -c 'import json, sys
+version, url, size, sha = sys.argv[1:5]
+json.dump({"version": version, "url": url, "size": int(size), "sha256": sha}, sys.stdout, indent=2)
+print()' "$version" "$base/downloads/plinius-boot.tar.gz" "$size" "$sha" > "$dir/app.json"
+	chmod 644 "$dir/app.json"
+	msg "app.json names Plinius Boot $version"
 }
 
 do_upload() {
@@ -124,7 +152,8 @@ do_upload() {
 	fi
 	if [[ -d $out/downloads ]]; then
 		msg "Plinius Boot to $target/downloads"
-		rsync "${options[@]}" "$out/downloads/" "$target/downloads/"
+		# All files appear together, app.json never names an archive not there yet
+		rsync "${options[@]}" --delay-updates "$out/downloads/" "$target/downloads/"
 	fi
 	msg "Done"
 }

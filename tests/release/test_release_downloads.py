@@ -8,9 +8,11 @@
 # build/ lies in tmp_path; pins are written for the fake Android and boot files. rsync is a stub.
 
 import hashlib
+import io
 import json
 import shutil
 import subprocess
+import tarfile
 
 import pytest
 
@@ -387,24 +389,78 @@ def test_the_app_under_the_linked_name_is_not_doubled(tmp_path, volla, fake_bin)
         "org.plinius.Boot-x86_64.flatpak", "org.plinius.Boot-x86_64.flatpak.sha256"]
 
 
+METAINFO = """<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.plinius.Boot</id>
+  <releases>
+    <release version="{version}" date="2026-11-24"/>
+    <release version="0.16" date="2026-11-20"/>
+  </releases>
+</component>
+"""
+
+
+def make_archive(path, version="0.17", metainfo=True):
+    """A release archive of Plinius Boot as tools/archive.sh of plinius-boot packs it"""
+    files = {f"plinius-boot-{version}/plinius-boot": b"#!/usr/bin/env python3\n"}
+    if metainfo:
+        files[f"plinius-boot-{version}/org.plinius.Boot.metainfo.xml"] = METAINFO.format(version=version).encode()
+    with tarfile.open(path, "w:gz") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return path
+
+
 def test_the_archive_goes_beside_the_flatpak_under_the_name_the_homepage_links(tmp_path, volla, fake_bin):
     flatpak = tmp_path / "org.plinius.Boot-x86_64.flatpak"
     flatpak.write_bytes(b"bundle")
-    archive = tmp_path / "plinius-boot-0.17.tar.gz"
-    archive.write_bytes(b"archive")
+    archive = make_archive(tmp_path / "plinius-boot-0.17.tar.gz")
     assert run(volla, fake_bin, "downloads.sh", "app", flatpak, archive).returncode == 0
     d = downloads(volla) / "downloads"
     assert sorted(f.name for f in d.iterdir()) == [
-        "org.plinius.Boot-x86_64.flatpak", "org.plinius.Boot-x86_64.flatpak.sha256",
+        "app.json", "org.plinius.Boot-x86_64.flatpak", "org.plinius.Boot-x86_64.flatpak.sha256",
         "plinius-boot-0.17.tar.gz", "plinius-boot.tar.gz", "plinius-boot.tar.gz.sha256"]
-    assert (d / "plinius-boot.tar.gz").read_bytes() == b"archive"
-    digest = hashlib.sha256(b"archive").hexdigest()
+    assert (d / "plinius-boot.tar.gz").read_bytes() == archive.read_bytes()
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     assert (d / "plinius-boot.tar.gz.sha256").read_text() == f"{digest}  plinius-boot.tar.gz\n"
 
 
-def test_one_wrong_file_puts_none_of_them_there(tmp_path, volla, fake_bin):
+def test_app_json_names_the_archive_as_latest_json_names_the_image(tmp_path, volla, fake_bin):
+    archive = make_archive(tmp_path / "plinius-boot-0.18.tar.gz", version="0.18")
+    r = run(volla, fake_bin, "downloads.sh", "app", archive)
+    assert r.returncode == 0 and "app.json names Plinius Boot 0.18" in r.stderr + r.stdout
+    d = downloads(volla) / "downloads"
+    data = archive.read_bytes()
+    assert json.loads((d / "app.json").read_text()) == {
+        "version": "0.18", "url": "https://plinius.cais.de/downloads/plinius-boot.tar.gz",
+        "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    assert (d / "app.json").stat().st_mode & 0o777 == 0o644
+
+
+def test_the_flatpak_alone_writes_no_app_json(tmp_path, volla, fake_bin):
+    flatpak = tmp_path / "org.plinius.Boot-x86_64.flatpak"
+    flatpak.write_bytes(b"bundle")
+    assert run(volla, fake_bin, "downloads.sh", "app", flatpak).returncode == 0
+    assert not (downloads(volla) / "downloads" / "app.json").exists()
+
+
+@pytest.mark.parametrize("make", [
+    lambda p: p.write_bytes(b"not an archive"),
+    lambda p: make_archive(p, metainfo=False),
+    lambda p: make_archive(p, version="0.17 <script>"),
+])
+def test_an_archive_without_a_clean_version_is_refused(tmp_path, volla, fake_bin, make):
     archive = tmp_path / "plinius-boot.tar.gz"
-    archive.write_bytes(b"archive")
+    make(archive)
+    r = run(volla, fake_bin, "downloads.sh", "app", archive)
+    assert r.returncode == 1 and "plinius-boot.tar.gz names no version of Plinius Boot" in r.stderr
+    assert not (downloads(volla) / "downloads").exists()
+
+
+def test_one_wrong_file_puts_none_of_them_there(tmp_path, volla, fake_bin):
+    archive = make_archive(tmp_path / "plinius-boot.tar.gz")
     other = tmp_path / "plinius-boot.zip"
     other.write_bytes(b"zip")
     r = run(volla, fake_bin, "downloads.sh", "app", archive, other)
@@ -433,7 +489,7 @@ def test_upload_images_first_latest_json_after_then_the_app(tmp_path, volla, fak
         OPTIONS + ["--exclude=latest.json"] + ONLY_OURS + images,
         OPTIONS + ["--delay-updates"] + ONLY_OURS + images,
         OPTIONS + ["--delete-after"] + ONLY_OURS + images,
-        OPTIONS + [f"{d}/downloads/", "u@h:/srv/www/downloads/"],
+        OPTIONS + ["--delay-updates", f"{d}/downloads/", "u@h:/srv/www/downloads/"],
     ]
 
 
