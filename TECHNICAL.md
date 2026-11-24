@@ -11,7 +11,7 @@ Goal: run a native **Arch Linux ARM** with **Phosh** as the user interface on th
 | Device | Volla Phone Plinius / Plinius Plus (`ansuz`, `ansuz-plus`) |
 | SoC | MediaTek MT6878 (Dimensity 7300), GPU Mali-G615, NPU MediaTek APU |
 | Halium | 14 (Android 15 vendor according to the UT device page) |
-| Kernel | own `plinius-kernel` 6.1.192: UT's Halium kernel (`android14-6.1-halium`, 6.1.145) merged with Google's ACK `android14-6.1` and linux-6.1.y, with the interface of the prebuilt MediaTek modules kept (2560 symbol CRCs checked at each build); boot header v4, separate `init_boot` partition |
+| Kernel | own `plinius-kernel` 6.1.193: UT's Halium kernel (`android14-6.1-halium`, 6.1.145) merged with Google's ACK `android14-6.1` and linux-6.1.y, with the interface of the prebuilt MediaTek modules kept (2560 symbol CRCs checked at each build); boot header v4, separate `init_boot` partition |
 | Kernel support | Google ACK `android14-6.1` until **2029-07-01**, kernel.org 6.1 LTS until Dec 2027 (planned) |
 | Reference port | Ubuntu Touch 24.04, official reference port, largely usable day to day |
 | Build host | Manjaro x86_64 with `qemu-user-static-binfmt` (aarch64 chroot without Docker) |
@@ -237,6 +237,7 @@ tools/kernel-kmi.py -C build/kernel-trial types --genksyms <old> <new> --symtype
                               # after a linux-6.1.y merge: what the vendor modules' interface sees changed
 tools/kernel-checkbuild.sh [--package] <rev>   # check build of a kernel commit, pkgrel 99, never into the repo
 tools/run-tests.sh            # the test suite
+tools/phone-check.py          # everyday functions of the phone live over SSH (reads and scans only)
 ```
 
 A merge of a new linux-6.1.y release into `plinius-kernel` is measured with `tools/kernel-kmi.py`
