@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=sherpa-onnx
-pkgver=2.0.2
+pkgver=2.0.3
 pkgrel=1
 pkgdesc="Offline speech recognition and voice activity detection with ONNX Runtime (C API and tools)"
 arch=(aarch64 x86_64)  # x86_64 for the KVM preview
@@ -20,7 +20,7 @@ makedepends=(cmake ninja python)
 # without a soname: everything linking the C API (plinius-dictate) has to be rebuilt with it.
 options=(!lto)
 source=("sherpa-onnx-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('187627fa17a2a6d7024cd32f5bbcf8ff414151c14f739532940c24aa7cdc7d69')
+sha256sums=('40e2ded061e16eda9750a49d1dee78ba308d5c37fc544108d8a660611d3b4c8d')
 
 build() {
 	# onnxruntime-plinius installs its headers to /usr/include/onnxruntime
