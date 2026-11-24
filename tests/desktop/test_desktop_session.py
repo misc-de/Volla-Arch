@@ -223,8 +223,11 @@ def test_start_bar_fills_in_output_and_edge(session, mod, monkeypatch):
     # waybar takes JSON with // comments
     config = json.loads(re.sub(r"^\s*//.*$", "", text, flags=re.M))
     assert config["output"] == "HEADLESS-4" and config["position"] == "bottom"
-    # A click on a window in the task bar brings it to the front, or minimizes it when it is
-    assert config["wlr/taskbar"]["on-click"] == "minimize-raise"
+    # A click on a window in the task bar brings it to the desktop, also one active on the phone
+    # (minimize-raise minimized that one first); right click minimizes, middle click closes
+    taskbar = config["wlr/taskbar"]
+    assert (taskbar["on-click"], taskbar["on-click-right"], taskbar["on-click-middle"]) == (
+        "activate", "minimize", "close")
     assert "@" not in text
     # Over VNC the clock shows minutes
     assert config["clock"]["format"] == "{:%a %d %b  %H:%M}" and "interval" not in config["clock"]
@@ -833,6 +836,8 @@ def cast(session, mod, monkeypatch):
     monkeypatch.setattr(mod, "notify_ready", lambda: session.log.append("ready"))
     session.start_desktop = lambda: session.log.append("desktop")
     session.start_wayvnc = lambda: pytest.fail("no VNC server on a TV")
+    monkeypatch.setattr(mod.common, "make_tv_sink", lambda: session.log.append("tv sink"))
+    monkeypatch.setattr(mod.common, "set_sound", lambda t: session.log.append(("sound", t)))
     return session
 
 
@@ -844,10 +849,24 @@ def test_run_cast_owns_a_full_hd_desktop(cast, mod):
     cast.acquire_screen = acquire
     put(cast, {"method": "bar-moved"}, {"method": "stop"})
     assert cast.run() == 0
-    # The desktop as set up for VNC (2560x1440 at 1.5), only in the TV's size
-    assert cast.log == [(1920, 1080, 1.125), "desktop", "ready"]
+    # The desktop as set up for VNC (2560x1440 at 1.5), only in the TV's size; the TV's own
+    # output, and the sound there as set ("Desktop": the phone stays silent)
+    assert cast.log == [(1920, 1080, 1.125), "desktop", "tv sink", ("sound", "desktop"), "ready"]
     assert cast.threads.started == ["keep_awake"]
     assert cast.output == "HEADLESS-1"
+
+
+def test_run_cast_with_the_sound_on_the_phone(cast, mod, monkeypatch):
+    monkeypatch.setattr(mod.common, "load", lambda: {"resolution": "1920x1080", "scale": "1",
+                                                     "sound": "phone", "keyboard": "us"})
+
+    def acquire(width, height, scale):
+        cast.owner = True
+        return "HEADLESS-1"
+    cast.acquire_screen = acquire
+    put(cast, {"method": "stop"})
+    assert cast.run() == 0
+    assert cast.log == ["desktop", "tv sink", "ready"]
 
 
 def test_run_cast_shares_the_vnc_desktop_until_it_is_gone(cast):
@@ -879,16 +898,17 @@ def test_run_vnc_ends_when_the_shared_screen_is_gone(loop):
     assert loop.log == ["wayvnc", "screen", ("notify", "10.0.0.1")]
 
 
-def test_stop_of_the_tv_owner_leaves_the_sound(session, mod, monkeypatch):
+def test_stop_of_the_tv_owner_takes_the_tv_sink_away(session, mod, monkeypatch):
     log = []
     session.mode, session.owner, session.output = "cast", True, "HEADLESS-1"
     monkeypatch.setattr(mod.common, "close_all_menus", lambda: log.append("menus"))
-    monkeypatch.setattr(mod.common, "drop_desktop_sound", lambda: pytest.fail("Schwupp's sound"))
+    monkeypatch.setattr(mod.common, "drop_desktop_sound", lambda: pytest.fail("VNC's tunnel"))
+    monkeypatch.setattr(mod.common, "drop_tv_sink", lambda: log.append("tv sink"))
     session.virtual_call = lambda method, args: log.append(method)
     session.unnotify = lambda: log.append("unnotify")
     # Nothing to remove is no failure
     session.stop()
-    assert log == ["menus", "Destroy", "unnotify"]
+    assert log == ["menus", "tv sink", "Destroy", "unnotify"]
 
 
 def test_stop_of_a_shared_screen_leaves_it_to_its_owner(session, mod, monkeypatch):

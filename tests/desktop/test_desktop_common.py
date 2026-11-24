@@ -297,6 +297,36 @@ def test_sound_to_the_desktop_without_a_viewer_changes_nothing(desk):
     assert pactl_calls(desk) == []
 
 
+def test_sound_to_the_desktop_on_a_tv_goes_to_the_tv_sink(desk):
+    """No VNC viewer, but the desktop is on a TV: the TV's sink, the phone stays silent."""
+    pactl_stub(desk, sinks="0\thal_output\n8\tplinius_tv\n", inputs="4\t0\t3\tPipeWire\n")
+    desk.fake_bin.stub("wayvncctl", "echo '[]'")
+    assert desk.set_sound("desktop") is True
+    assert pactl_calls(desk) == [["set-default-sink", "plinius_tv"],
+                                 ["move-sink-input", "4", "plinius_tv"]]
+
+
+def test_the_tv_sink_is_made_once(desk):
+    pactl_stub(desk)
+    desk.make_tv_sink()
+    assert pactl_calls(desk) == [["load-module", "module-null-sink", "sink_name=plinius_tv",
+                                  "sink_properties=device.description=TV"]]
+    pactl_stub(desk, sinks="0\thal_output\n8\tplinius_tv\n")
+    desk.make_tv_sink()
+    assert pactl_calls(desk) == [["load-module", "module-null-sink", "sink_name=plinius_tv",
+                                  "sink_properties=device.description=TV"]]
+
+
+def test_drop_tv_sink_unloads_only_ours(desk):
+    pactl_stub(desk, modules=(
+        "4\tmodule-null-sink\tsink_name=plinius_tv sink_properties=device.description=TV\n"
+        "6\tmodule-null-sink\tsink_name=plinius_tv_other\n"
+        "7\tmodule-tunnel-sink\tsink_name=plinius_tv\n"
+        "9\tmodule-x\n"))
+    desk.drop_tv_sink()
+    assert pactl_calls(desk) == [["set-default-sink", "hal_output"], ["unload-module", "4"]]
+
+
 def test_drop_desktop_sound_unloads_only_our_tunnel(desk):
     pactl_stub(desk, modules=(
         "3\tmodule-tunnel-sink\tserver=tcp:10.0.0.9:4713 sink_name=other\\n"

@@ -21,6 +21,8 @@ OUTPUT_FILE = os.path.join(SCREEN_DIR, "output")
 CLIENT_FILE = os.path.join(RUNTIME_DIR, "client")
 PHONE_SINK = "hal_output"
 DESKTOP_SINK = "plinius_desktop"
+# The desktop on a TV: an output of its own the phone does not play; Schwupp sends what reaches it
+TV_SINK = "plinius_tv"
 
 RESOLUTIONS = [("1280x720", "1280 × 720"),
                ("1600x900", "1600 × 900"), ("1920x1080", "1920 × 1080"),
@@ -134,17 +136,22 @@ def sinks():
 
 
 def set_sound(target):
-    """Default sink and every playing stream to the phone or through a tunnel to the viewer's PC."""
+    """Default sink and every playing stream to the phone, through a tunnel to the viewer's PC
+    or, with the desktop on a TV, to the TV's sink (the phone stays silent)."""
     sink = PHONE_SINK
     if target == "desktop":
-        if DESKTOP_SINK not in sinks():
-            address = client_address()
-            if not address:
-                return False
-            run(["pactl", "load-module", "module-tunnel-sink",
-                 f"server=tcp:{address}:4713", f"sink_name={DESKTOP_SINK}",
-                 "sink_properties=device.description=Desktop"])
+        current = sinks()
         sink = DESKTOP_SINK
+        if DESKTOP_SINK not in current:
+            address = client_address()
+            if address:
+                run(["pactl", "load-module", "module-tunnel-sink",
+                     f"server=tcp:{address}:4713", f"sink_name={DESKTOP_SINK}",
+                     "sink_properties=device.description=Desktop"])
+            elif TV_SINK in current:
+                sink = TV_SINK
+            else:
+                return False
     run(["pactl", "set-default-sink", sink])
     for line in run(["pactl", "list", "sink-inputs", "short"]).stdout.splitlines():
         run(["pactl", "move-sink-input", line.split()[0], sink])
@@ -157,6 +164,23 @@ def drop_desktop_sound():
     for line in run(["pactl", "list", "modules", "short"]).stdout.splitlines():
         if "module-tunnel-sink" in line and DESKTOP_SINK in line:
             run(["pactl", "unload-module", line.split()[0]])
+
+
+def make_tv_sink():
+    """The TV's sink, while the desktop is on a TV (a null sink: only its monitor is heard)."""
+    if TV_SINK not in sinks():
+        run(["pactl", "load-module", "module-null-sink", f"sink_name={TV_SINK}",
+             "sink_properties=device.description=TV"])
+
+
+def drop_tv_sink():
+    """Back to the phone and the TV's sink gone, once the desktop left the TV."""
+    set_sound("phone")
+    for line in run(["pactl", "list", "modules", "short"]).stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) > 2 and fields[1] == "module-null-sink" \
+                and f"sink_name={TV_SINK}" in fields[2].split():
+            run(["pactl", "unload-module", fields[0]])
 
 
 def screen_locked(bus):

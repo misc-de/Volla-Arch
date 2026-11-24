@@ -18,7 +18,8 @@
     "format": "{icon} {title:.28}",
     "icon-size": 22,
     "tooltip": false,
-    "on-click": "minimize-raise",
+    "on-click": "activate",
+    "on-click-right": "minimize",
     "on-click-middle": "close"
   },
   "custom/fullscreen": {

@@ -351,6 +351,11 @@ class Session:
             return 1
         if self.owner:
             self.start_desktop()
+            # The TV's own output: "Desktop" in the settings sends the sound there, Schwupp
+            # takes it to the TV and the phone stays silent
+            common.make_tv_sink()
+            if settings["sound"] == "desktop":
+                common.set_sound("desktop")
         else:
             threading.Thread(target=self.watch_screen, daemon=True).start()
         threading.Thread(target=self.keep_awake, daemon=True).start()
@@ -408,6 +413,8 @@ class Session:
         if self.output and self.owner:
             if self.mode == "vnc":
                 common.drop_desktop_sound()
+            else:
+                common.drop_tv_sink()
             for path in (common.OUTPUT_FILE, os.path.join(common.SCREEN_DIR, "waybar.jsonc")):
                 try:
                     os.unlink(path)
