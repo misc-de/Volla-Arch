@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 16:50:00 +0100
+Subject: [PATCH] ofono-binder: A card without applications is no error
+
+Since 1.1.42 ("Handle SIMs with no apps") a card without applications,
+like an eUICC without an enabled profile, counts as inserted. oFono then
+reads its files every 20 seconds, and binder_sim_append_path() logged
+"Unsupported app type 0" as an error each time, though the path falls
+back to the MF as before. Only a debug message for such a card; any other
+unknown application type stays an error.
+---
+  src/binder_sim.c | 9 +++++++++
+  1 file changed, 9 insertions(+)
+
+diff --git a/src/binder_sim.c b/src/binder_sim.c
+--- a/src/binder_sim.c
++++ b/src/binder_sim.c
+@@ -424,6 +424,15 @@ binder_sim_append_path(
+         len = ofono_get_ef_path_3g(fileid, db_path);
+     } else if (app_type == RADIO_APP_TYPE_SIM) {
+         len = ofono_get_ef_path_2g(fileid, db_path);
++    } else if (app_type == RADIO_APP_TYPE_UNKNOWN) {
++        /*
++         * A card without applications (an eUICC without an enabled
++         * profile) counts as inserted since 1.1.42, and oFono reads
++         * its files over and over: from the MF, below, as before.
++         * That is expected there, not an error.
++         */
++        DBG_(self, "no application, file %04x from the MF", fileid);
++        len = 0;
+     } else {
+         ofono_error("Unsupported app type %d", app_type);
+         len = 0;

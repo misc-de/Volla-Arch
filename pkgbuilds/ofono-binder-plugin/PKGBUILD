@@ -2,7 +2,7 @@
 
 pkgname=ofono-binder-plugin
 pkgver=1.1.42
-pkgrel=1
+pkgrel=2
 pkgdesc="ofono plugin for the Android radio HAL over binder (HIDL and AIDL), with libofonobinderpluginext"
 arch=(aarch64 x86_64)
 url="https://github.com/mer-hybris/ofono-binder-plugin"
@@ -14,13 +14,15 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz"
 	0003-ofono-binder-Report-only-registration-failures-with-the-display-off.patch
 	0004-ofono-binder-Send-the-IMS-data-profile-with-IWLAN-allowed.patch
 	0005-ofono-binder-Set-up-emergency-numbers-with-emergencyDial.patch
-	0006-ofono-binder-Keep-the-IRadio-version-of-calls-that-the-ext-also-reports.patch)
+	0006-ofono-binder-Keep-the-IRadio-version-of-calls-that-the-ext-also-reports.patch
+	0007-ofono-binder-A-card-without-applications-is-no-error.patch)
 sha256sums=('474bae214f92e3aa684e5970fccc793da2b04a525fe8eda95b6ef3c161cec6be'
 	'c515fe870b6a4756adc719f5798fe61d658103374ce162bf71fa3a1d236c2180'
 	'789273c44a85e89b3ebf98e4d54e71a87c84877639cfad7d179da5e4910806ea'
 	'692c5ea427eea91a42ced87e5325c23b42431d88b1485c40b5fd83a5e6ba755b'
 	'e74566a4dddba89b42ad871a168379d58a0063026cf4a67875e1145d594230f6'
-	'43528ca9c5ef57d1a11496c6ffbb5325f5c10b0814c26ceb09d2c3688935baa4')
+	'43528ca9c5ef57d1a11496c6ffbb5325f5c10b0814c26ceb09d2c3688935baa4'
+	'9498e4dd9d967a0f3907d6b61d71428136e27be95d4ec98ed1ce6b88702bf659')
 
 prepare() {
 	# eSIM without an enabled profile: otherwise all SIM requests of its slot wait forever
@@ -38,6 +40,9 @@ prepare() {
 	# Takes back upstream's 3bfe33b: ext-mtk flags all of its calls as incoming, so its version
 	# of an outgoing VoLTE or emergency call must not replace the one from IRadio
 	patch -d "$pkgname-$pkgver" -Np1 -i "$srcdir/0006-ofono-binder-Keep-the-IRadio-version-of-calls-that-the-ext-also-reports.patch"
+	# The eSIM without an enabled profile counts as inserted since 1.1.42: reading its files is
+	# no error, otherwise "Unsupported app type 0" lands in the journal every 20 s
+	patch -d "$pkgname-$pkgver" -Np1 -i "$srcdir/0007-ofono-binder-A-card-without-applications-is-no-error.patch"
 }
 
 build() {
