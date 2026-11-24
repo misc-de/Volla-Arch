@@ -20,7 +20,7 @@ check with "plinius-software --updates-json".
 ---
 --- a/panels/applications/cc-applications-panel.blp
 +++ b/panels/applications/cc-applications-panel.blp
-@@ -32,7 +32,8 @@
+@@ -32,7 +32,8 @@ template $CcApplicationsPanel: $CcPanel {
          name: "apps-page";
  
          child: Adw.PreferencesPage {
@@ -40,7 +40,7 @@ check with "plinius-software --updates-json".
  #include "cc-removable-media-settings.h"
  #include "shell/cc-window.h"
  #ifdef HAVE_SNAP
-@@ -63,6 +64,9 @@
+@@ -63,6 +64,9 @@ struct _CcApplicationsPanel {
  
      AdwNavigationPage *app_settings_page;
      GtkStack *main_page_stack;
@@ -50,7 +50,7 @@ check with "plinius-software --updates-json".
      GtkListBox *app_listbox;
      GtkEntry *app_search_entry;
      GAppInfoMonitor *monitor;
-@@ -1219,7 +1223,7 @@
+@@ -1219,7 +1223,7 @@ on_items_changed_cb (GListModel *list, guint position, guint removed, guint adde
          gtk_widget_set_visible (GTK_WIDGET (self->app_search_entry), FALSE);
      }
  #ifdef HAVE_MALCONTENT
@@ -59,7 +59,7 @@ check with "plinius-software --updates-json".
          gtk_stack_set_visible_child_name (self->main_page_stack, "malcontent-not-found-page");
          gtk_widget_set_visible (GTK_WIDGET (self->app_search_entry), FALSE);
      }
-@@ -1445,6 +1449,9 @@
+@@ -1445,6 +1449,9 @@ update_panel (CcApplicationsPanel *self, GtkListBoxRow *row)
      adw_navigation_page_set_title (self->app_settings_page, g_app_info_get_display_name (info));
      cc_panel_push_subpage (CC_PANEL (self), self->app_settings_page);
      gtk_widget_set_visible (GTK_WIDGET (self->view_details_button), gnome_software_is_installed ());
@@ -69,16 +69,17 @@ check with "plinius-software --updates-json".
  
      g_clear_pointer (&self->current_app_id, g_free);
      g_clear_pointer (&self->current_portal_app_id, g_free);
-@@ -1497,7 +1504,7 @@
-             continue;
+@@ -1579,6 +1586,9 @@ get_app_filter_cb (GObject *source, GAsyncResult *res, CcApplicationsPanel *self
  
- #ifdef HAVE_MALCONTENT
--        if (!mct_app_filter_is_appinfo_allowed (self->app_filter, info))
-+        if (!self->app_filter_disabled && !mct_app_filter_is_appinfo_allowed (self->app_filter, info))
-             continue;
- #endif
+     g_clear_pointer (&self->app_filter, mct_app_filter_unref);
+     self->app_filter = mct_manager_get_app_filter_finish (self->manager, res, &error);
++    /* Plinius: without malcontent (only libmalcontent installed) filtering is globally off; the
++     * list then shows every app instead of the "malcontent not found" page */
++    self->app_filter_disabled = g_error_matches (error, MCT_MANAGER_ERROR, MCT_MANAGER_ERROR_DISABLED);
  
-@@ -1634,6 +1641,10 @@
+     if (error && !g_error_matches (error, MCT_MANAGER_ERROR, MCT_MANAGER_ERROR_DISABLED)) {
+         g_debug ("Error retrieving app filter: %s", error->message);
+@@ -1666,6 +1676,10 @@ on_app_search_entry_activated_cb (CcApplicationsPanel *self)
  {
      GtkListBoxRow *row;
  
@@ -89,7 +90,7 @@ check with "plinius-software --updates-json".
      row = gtk_list_box_get_row_at_y (self->app_listbox, 0);
  
      if (!row)
-@@ -1788,6 +1799,7 @@
+@@ -1820,6 +1834,7 @@ cc_applications_panel_class_init (CcApplicationsPanelClass *klass)
      gtk_widget_class_bind_template_child (widget_class, CcApplicationsPanel, launch_button);
      gtk_widget_class_bind_template_child (widget_class, CcApplicationsPanel, location_row);
      gtk_widget_class_bind_template_child (widget_class, CcApplicationsPanel, main_page_stack);
@@ -97,7 +98,7 @@ check with "plinius-software --updates-json".
      gtk_widget_class_bind_template_child (widget_class, CcApplicationsPanel, microphone_row);
      gtk_widget_class_bind_template_child (widget_class, CcApplicationsPanel, no_camera_row);
      gtk_widget_class_bind_template_child (widget_class, CcApplicationsPanel, no_location_row);
-@@ -1852,6 +1864,10 @@
+@@ -1879,6 +1894,10 @@ cc_applications_panel_init (CcApplicationsPanel *self)
  
      gtk_widget_set_visible (GTK_WIDGET (self->install_button), gnome_software_is_installed ());
  
@@ -108,19 +109,6 @@ check with "plinius-software --updates-json".
      g_signal_connect_object (self->app_listbox, "row-activated", G_CALLBACK (row_activated_cb), self,
                               G_CONNECT_SWAPPED);
  
-@@ -1882,6 +1898,12 @@
-     self->manager = mct_manager_new (system_bus);
-     self->app_filter = mct_manager_get_app_filter (self->manager, getuid (), MCT_MANAGER_GET_VALUE_FLAGS_NONE,
-                                                    self->cancellable, &error);
-+    /* Plinius: without malcontent (only libmalcontent installed) filtering is globally off; the
-+     * list then shows every app instead of none */
-+    if (g_error_matches (error, MCT_MANAGER_ERROR, MCT_MANAGER_ERROR_DISABLED)) {
-+        self->app_filter_disabled = TRUE;
-+        g_clear_error (&error);
-+    }
-     if (error) {
-         g_warning ("Error retrieving app filter: %s", error->message);
-         return;
 --- a/panels/applications/meson.build
 +++ b/panels/applications/meson.build
 @@ -1,6 +1,14 @@
@@ -138,7 +126,7 @@ check with "plinius-software --updates-json".
  i18n.merge_file(
           type : 'desktop',
          input : desktop + '.in',
-@@ -34,6 +42,7 @@
+@@ -34,6 +42,7 @@ sources = files(
    'cc-application-shortcut-dialog.c',
    'cc-default-apps-page.c',
    'cc-default-apps-row.c',
@@ -146,7 +134,7 @@ check with "plinius-software --updates-json".
    'cc-removable-media-settings.c',
    'globs.c',
    'search.c',
-@@ -67,10 +76,13 @@
+@@ -67,10 +76,13 @@ if host_is_linux
  endif
  
  if enable_snap
@@ -171,7 +159,7 @@ check with "plinius-software --updates-json".
  
  #include "about/cc-about-page.h"
  #include "datetime/cc-datetime-page.h"
-@@ -165,4 +166,10 @@
+@@ -165,4 +166,10 @@ cc_system_panel_init (CcSystemPanel *self)
      /* Plinius: swap file, threshold and what RAM and swap hold (plinius-swap) */
      if (cc_plinius_swap_add_page (CC_PANEL (self)))
          cc_plinius_swap_row_setup (self->swap_row);
@@ -184,7 +172,7 @@ check with "plinius-software --updates-json".
  }
 --- a/shell/cc-panel-loader.c
 +++ b/shell/cc-panel-loader.c
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ extern GType cc_desktop_vnc_panel_get_type (void);
  extern void cc_desktop_vnc_panel_static_init_func (void);
  extern GType cc_usb_panel_get_type (void);
  extern void cc_usb_panel_static_init_func (void);
@@ -193,7 +181,7 @@ check with "plinius-software --updates-json".
  extern GType cc_background_panel_get_type (void);
  #ifdef BUILD_BLUETOOTH
  extern GType cc_bluetooth_panel_get_type (void);
-@@ -132,6 +134,7 @@
+@@ -132,6 +134,7 @@ static CcPanelLoaderVtable default_panels[] = {
      PANEL_TYPE ("streaming", cc_streaming_panel_get_type, cc_streaming_panel_static_init_func),
      PANEL_TYPE ("system", cc_system_panel_get_type, NULL),
      PANEL_TYPE ("universal-access", cc_ua_panel_get_type, NULL),

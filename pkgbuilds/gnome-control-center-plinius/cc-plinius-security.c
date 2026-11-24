@@ -779,7 +779,7 @@ update_vulnerabilities_row (SecurityPage *sp, JsonNode *root)
 
     if (!o) {
         sp->vulnerabilities_level = LEVEL_WARNING;
-        text = g_strdup (P_("Not checked yet. The list is loaded once a day."));
+        text = g_strdup (P_("Not checked yet. The list is loaded four times a day."));
     } else if (total == 0) {
         sp->vulnerabilities_level = LEVEL_GOOD;
         text = g_strdup (P_("No known vulnerabilities in the installed packages."));
@@ -1176,7 +1176,7 @@ update_vulnerabilities_page (SecurityPage *sp)
         }
         adw_action_row_set_subtitle (ADW_ACTION_ROW (row), text);
     } else {
-        adw_action_row_set_subtitle (ADW_ACTION_ROW (row), P_("Not yet. The list is loaded once a day while online."));
+        adw_action_row_set_subtitle (ADW_ACTION_ROW (row), P_("Not yet. The list is loaded four times a day while online."));
     }
     gtk_widget_add_css_class (row, "property");
     adw_preferences_group_add (group, row);

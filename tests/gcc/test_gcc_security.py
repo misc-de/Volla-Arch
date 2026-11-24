@@ -536,8 +536,8 @@ def issue(cve, severity="Medium", status=None, package="openssl", installed="3.0
 
 
 @pytest.mark.parametrize("data, subtitle, icon", [
-    (None, "Not checked yet. The list is loaded once a day.", WARN),
-    ("not json", "Not checked yet. The list is loaded once a day.", WARN),
+    (None, "Not checked yet. The list is loaded four times a day.", WARN),
+    ("not json", "Not checked yet. The list is loaded four times a day.", WARN),
     ({"issues": []}, "No known vulnerabilities in the installed packages.", GOOD),
     ({"issues": [issue("CVE-1", "High", "affected"), issue("CVE-2"), issue("CVE-3", status="not-affected")]},
      "3 known vulnerabilities in installed packages: 1 affects this system, 1 not assessed", BAD),
@@ -641,7 +641,7 @@ def test_vulnerabilities_page_without_a_list(program, gcc_world, system):
     r = gcc_world.run(program, [settle(), push("plinius-vulnerabilities"), settle(), dump("vuln")])
     page = r.dump("vuln").within(type="AdwNavigationPage", tag="plinius-vulnerabilities")
     assert page.one(type="AdwActionRow", text="Last Checked")["subtitle"] == (
-        "Not yet. The list is loaded once a day while online.")
+        "Not yet. The list is loaded four times a day while online.")
 
 
 def test_vulnerabilities_page_with_an_error_and_no_issues(program, gcc_world, system):
