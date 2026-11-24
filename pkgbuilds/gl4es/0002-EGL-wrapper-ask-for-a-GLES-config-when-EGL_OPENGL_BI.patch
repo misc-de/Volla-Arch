@@ -1,0 +1,58 @@
+From e1b15ed19dc91cce15f9609b0f656b0c07d12532 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 08:17:06 +0100
+Subject: [PATCH 2/3] EGL wrapper: ask for a GLES config when EGL_OPENGL_BIT is
+ requested
+
+A GLES-only driver (Android's EGL through libhybris) has no config with
+EGL_OPENGL_BIT, so eglChooseConfig returned none and programs asking for
+desktop OpenGL, such as glmark2 or SDL, could not create a window. The
+context gl4es creates is a GLES one; ask for the matching renderable type
+instead.
+---
+ src/egl/egl.c | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/src/egl/egl.c b/src/egl/egl.c
+index ec1e9205..067fc886 100644
+--- a/src/egl/egl.c
++++ b/src/egl/egl.c
+@@ -1,4 +1,7 @@
+ 
++#include <stdlib.h>
++#include <string.h>
++
+ #include "egl.h"
+ #include "../gl/loader.h"
+ #include "../glx/hardext.h"
+@@ -48,7 +51,26 @@ EGLBoolean gl4es_eglGetConfigs(EGLDisplay dpy, EGLConfig *configs, EGLint config
+ 
+ EGLBoolean gl4es_eglChooseConfig(EGLDisplay dpy, const EGLint *attrib_list, EGLConfig *configs, EGLint config_size, EGLint *num_config) {
+     LOAD_EGL(eglChooseConfig);
+-    return egl_eglChooseConfig(dpy, attrib_list, configs, config_size, num_config);
++    if (!attrib_list)
++        return egl_eglChooseConfig(dpy, attrib_list, configs, config_size, num_config);
++    // A GLES driver has no config with EGL_OPENGL_BIT; the context gl4es creates is a GLES one,
++    // so ask for a config that can render it instead.
++    int n = 0;
++    while (attrib_list[n] != EGL_NONE)
++        n += 2;
++    EGLint *attribs = (EGLint *)malloc((n + 1) * sizeof(EGLint));
++    if (!attribs)
++        return EGL_FALSE;
++    memcpy(attribs, attrib_list, (n + 1) * sizeof(EGLint));
++    for (int i = 0; i < n; i += 2) {
++        if (attribs[i] == EGL_RENDERABLE_TYPE && attribs[i + 1] != EGL_DONT_CARE && (attribs[i + 1] & EGL_OPENGL_BIT)) {
++            attribs[i + 1] &= ~EGL_OPENGL_BIT;
++            attribs[i + 1] |= (hardext.esversion == 1) ? EGL_OPENGL_ES_BIT : EGL_OPENGL_ES2_BIT;
++        }
++    }
++    EGLBoolean ret = egl_eglChooseConfig(dpy, attribs, configs, config_size, num_config);
++    free(attribs);
++    return ret;
+ }
+ 
+ EGLBoolean gl4es_eglGetConfigAttrib(EGLDisplay dpy, EGLConfig config, EGLint attribute, EGLint *value) {
+-- 
+2.56.0
+

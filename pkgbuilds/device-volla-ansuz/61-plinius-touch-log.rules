@@ -1,0 +1,6 @@
+# Volla Phone Plinius: the FocalTech touch driver logs every touch with its coordinates at log
+# level 1 (its default), as "fts_input_report_b: P0(x, y) DOWN!". journald keeps these debug
+# lines, and anyone in wheel can read them back: the PIN of the lock screen, all that is typed on
+# the on-screen keyboard (2026-11-13). Level 0 keeps only its errors. The prompt for the disk
+# password at startup sets 0 itself (plinius-crypt's halium-unlock), right after loading the driver.
+ACTION=="add|bind", SUBSYSTEM=="spi", DRIVER=="fts_ts", ATTR{fts_log_level}="0"

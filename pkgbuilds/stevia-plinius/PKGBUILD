@@ -1,0 +1,109 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=stevia-plinius
+pkgver=0.59.0
+pkgrel=3
+pkgdesc="On-screen keyboard for Phosh, in its original look or the glass look of the password prompt at startup"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://gitlab.gnome.org/World/Phosh/stevia"
+license=(GPL-3.0-or-later)
+# As Arch's stevia
+depends=(
+	cairo dconf feedbackd gdk-pixbuf2 glib2 glibc gnome-desktop gst-plugins-base-libs gstreamer
+	gtk3 hunspell json-glib libgcc libhandy libsoup3 pango systemd-libs wayland
+)
+makedepends=(git glib2-devel meson wayland-protocols)
+provides=("stevia=$pkgver" phosh-osk-provider)
+conflicts=(stevia squeekboard)
+# Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
+_commit=810aba74e86109f08f34af6d32632ac4d6eaaeda
+source=(
+	"git+$url.git#commit=$_commit"
+	0001-style-manager-Glass-look-of-the-password-prompt-at-startup.patch
+	0002-osk-Microphone-key-for-speech-to-text.patch
+	0003-style-manager-Glass-look-or-the-original-one-as-a-setting.patch
+	0004-osk-widget-Symbol-rows-fill-the-whole-width.patch
+	0005-osk-widget-ABC-key-with-one-letter-per-line.patch
+	0006-size-manager-A-virtual-output-doesn-t-cost-the-keyboard-its-height.patch
+	0007-data-Start-along-with-Phosh.patch
+	0008-input-surface-Dictation-also-without-an-active-input-method.patch
+	0009-osk-The-microphone-key-shows-what-dictation-does.patch
+	0010-input-surface-Held-backspace-gets-faster.patch
+	0011-osk-Remember-the-layout-per-application.patch
+	0012-osk-Hold-the-microphone-key-to-dictate.patch
+	0013-osk-The-microphone-key-buzzes-once-it-really-listens.patch
+	0014-input-surface-No-settings-from-the-keyboard-of-a-greeter.patch
+	org.plinius.keyboard.gschema.xml
+	plinius-osk-early.conf
+)
+sha256sums=('SKIP'
+	'c4ff6ab67ca21c5b9e4fa1d0ffe323c2c54a8ffcb1b41cb2c3e4472f815a30d7'
+	'6c13296dc2ea8a1a23ca478c9d82db5bf4df2680b71abaabcafc40d0e0b3add6'
+	'f3eebd0ad728dcbdb2fbe431877f84c5106868fcae32573f636d471f47129243'
+	'386b28f2c690f01637aa58ee2d694344fddd7d3b7e236e7cf16bca0c972db51b'
+	'19f0c8cc852af8f90ada0b3415721b473cd7b8fe421d9dda2bb6d1b3fb513519'
+	'0c33298d49a978c2d3055a602c87ddf0d039c9897c0ff83575e2294a9c5ea313'
+	'c5897bd0ce91fe5ea2c8d99a1f5b02fe294b470799a23716c671911db60d2a78'
+	'8522ba080a314168ff8e4fc50befef822c408bba0f4a2c9f4d94761a9477c051'
+	'5f1c6ece37d41a30cd144bcdcc8e63c5e6f758c33639c5f97c58d7b03968c07d'
+	'dbfee221b2495177b77430663d2a59749d29bc439a76e5576ef06e3652d77d3b'
+	'7f4bf33950470dcb7a41b0b228a96f0283273e76b59040eb68b5b28336ac6404'
+	'11e65c1995b4e8f900611c9b70d602118523406c9c33d79797bcd1c5a8d6650b'
+	'dc8731dc68bb3150c1cee73b332050223d7b970c9e42e089a8e3025a2316dfbf'
+	'e5e688b346b4e8204650f4e4ea8ae6283258453208ec73a8c136bbfb6adb9237'
+	'cdbf2c08e95163949eb6dda269f97818186c5141260f9209a75824eac2b21255'
+	'f55d428789634f71686d1e755aef6872d4325c18e1e4bffd78a0fd0bc3f6781e')
+
+prepare() {
+	# Keys as unl0kr's theme plinius-glass (pkgbuilds/buffybox): glass over the blurred
+	# wallpaper, wider character keys, the custom accent color of phosh-plinius
+	patch -d stevia -Np1 -i "$srcdir/0001-style-manager-Glass-look-of-the-password-prompt-at-startup.patch"
+	# Microphone key left of the space bar for speech to text (plinius-dictate, optional:
+	# only shown when its settings schema is installed and dictation is switched on)
+	patch -d stevia -Np1 -i "$srcdir/0002-osk-Microphone-key-for-speech-to-text.patch"
+	# Glass look or Stevia's original one, chosen in GNOME Settings > Keyboard
+	# (org.plinius.keyboard style); switches at once
+	patch -d stevia -Np1 -i "$srcdir/0003-style-manager-Glass-look-or-the-original-one-as-a-setting.patch"
+	# The rows of the 123 and ={< views reach both edges, as the letters' first row does
+	patch -d stevia -Np1 -i "$srcdir/0004-osk-widget-Symbol-rows-fill-the-whole-width.patch"
+	# ABC side by side touches the edges of its key, so one letter per line
+	patch -d stevia -Np1 -i "$srcdir/0005-osk-widget-ABC-key-with-one-letter-per-line.patch"
+	# A second, virtual output (VNC) must not shrink the keyboard to its default height
+	patch -d stevia -Np1 -i "$srcdir/0006-size-manager-A-virtual-output-doesn-t-cost-the-keyboard-its-height.patch"
+	# Start along with Phosh: right after a reboot the keyring prompt comes before Phosh is ready
+	patch -d stevia -Np1 -i "$srcdir/0007-data-Start-along-with-Phosh.patch"
+	# The microphone key also when the keyboard was opened by hand: without an active input
+	# method the text is typed through the virtual keyboard, like emoji
+	patch -d stevia -Np1 -i "$srcdir/0008-input-surface-Dictation-also-without-an-active-input-method.patch"
+	# The microphone key animates for what dictation does (plinius-dictate 0.2 Activity and
+	# Level): a ring that follows the voice, an arc while loading or recognizing
+	patch -d stevia -Np1 -i "$srcdir/0009-osk-The-microphone-key-shows-what-dictation-does.patch"
+	# Held backspace speeds up over two seconds; without an input method whole words after three
+	patch -d stevia -Np1 -i "$srcdir/0010-input-surface-Held-backspace-gets-faster.patch"
+	# With one input source per window, a layout picked in the menu stays with the app;
+	# an app without one gets the first input source
+	patch -d stevia -Np1 -i "$srcdir/0011-osk-Remember-the-layout-per-application.patch"
+	# Holding the microphone key listens until it is let go; a tap still switches it on and off
+	patch -d stevia -Np1 -i "$srcdir/0012-osk-Hold-the-microphone-key-to-dictate.patch"
+	# Switching the microphone on buzzes with its first sound, not on the press
+	patch -d stevia -Np1 -i "$srcdir/0013-osk-The-microphone-key-buzzes-once-it-really-listens.patch"
+	# No settings from the keyboard's menu in a greeter: its session is never locked, yet
+	# nobody has logged in (plinius-greeter)
+	patch -d stevia -Np1 -i "$srcdir/0014-input-surface-No-settings-from-the-keyboard-of-a-greeter.patch"
+}
+
+build() {
+	# As Arch: uim and govarnam are not in the repos
+	arch-meson stevia build \
+		-D uim=disabled \
+		-D govarnam=disabled
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+	# Look of the keyboard; GNOME Settings shows its choice only with this schema
+	install -Dm644 "$srcdir/org.plinius.keyboard.gschema.xml" -t "$pkgdir/usr/share/glib-2.0/schemas"
+	# Pulled in along with Phosh, see 0007
+	install -Dm644 "$srcdir/plinius-osk-early.conf" -t "$pkgdir/usr/lib/systemd/user/mobi.phosh.Shell.service.d"
+}

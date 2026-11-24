@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 07:54:58 +0100
+Subject: [PATCH] storage-view: Count every file system once
+
+The totals added up every entry of the mount list. Bind mounts list the
+same file system many times, and a loop device backed by an image file
+takes its space from the file system holding that file. On a phone with
+an image-based root bind-mounted into an Android container, 223 GB of
+storage were shown as 4.5 TB.
+
+Count each device number once and skip file-backed loop devices. The
+root file system still feeds the "Operating System" item, and is used
+alone if nothing else is left.
+---
+ src/storage/storage-view.vala | 37 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/src/storage/storage-view.vala b/src/storage/storage-view.vala
+index fe68646..c4f1266 100644
+--- a/src/storage/storage-view.vala
++++ b/src/storage/storage-view.vala
+@@ -227,6 +227,15 @@ public class Usage.StorageView : Usage.View {
+         header_label.label = Environment.get_host_name ();
+     }
+ 
++    /* True for /dev/loopN devices whose backing store is a regular file. */
++    private static bool is_file_backed_loop (string devname) {
++        if (!devname.has_prefix ("/dev/loop"))
++            return false;
++
++        var backing = "/sys/block/%s/loop/backing_file".printf (Path.get_basename (devname));
++        return FileUtils.test (backing, FileTest.EXISTS);
++    }
++
+     private void setup_mount_sizes () {
+         total_used_size = 0;
+         total_free_size = 0;
+@@ -234,6 +243,12 @@ public class Usage.StorageView : Usage.View {
+         MountList mount_list;
+         MountEntry[] entries = GTop.get_mountlist (out mount_list, false);
+ 
++        /* Bind mounts list the same file system many times (an image-based
++         * root bind-mounted into containers shows up dozens of times), so
++         * every file system is counted once, keyed by its device number. */
++        var seen_devices = new GenericSet<uint64?> (int64_hash, int64_equal);
++        uint64 root_used = 0, root_free = 0;
++
+         for (int i = 0; i < mount_list.number; i++) {
+             string dir = (string) entries[i].mountdir;
+ 
+@@ -248,12 +263,34 @@ public class Usage.StorageView : Usage.View {
+                 os_item.name = _("Operating System");
+                 os_item.size = used;
+                 os_item.custom_type = StorageViewType.OS;
++                root_used = used;
++                root_free = free;
++            }
++
++            Posix.Stat st;
++            if (Posix.stat (dir, out st) == 0) {
++                uint64 device = (uint64) st.st_dev;
++                if (device in seen_devices)
++                    continue;
++                seen_devices.add (device);
+             }
+ 
++            /* A loop device backed by an image file takes its space from the
++             * file system holding that file, which is already counted. */
++            if (is_file_backed_loop ((string) entries[i].devname))
++                continue;
++
+             total_used_size += used;
+             total_free_size += free;
+         }
+ 
++        /* Nothing left after skipping (e.g. a live system on a loop image):
++         * fall back to the root file system alone. */
++        if (total_used_size + total_free_size == 0) {
++            total_used_size = root_used;
++            total_free_size = root_free;
++        }
++
+         os_item.percentage = os_item.size * 100 / (double) total_used_size;
+         total_size = total_used_size + total_free_size;
+ 

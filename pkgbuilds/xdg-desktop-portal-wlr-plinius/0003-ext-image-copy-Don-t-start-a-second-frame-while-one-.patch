@@ -1,0 +1,45 @@
+From 61ae18e34be52d411c43c5cb2985f574d229346f Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 11:00:25 +0100
+Subject: [PATCH 3/3] ext-image-copy: Don't start a second frame while one is
+ in flight
+
+When the PipeWire stream goes from streaming to paused and back (a
+consumer renegotiating its format, as GStreamer does once its encoder
+is set up) within the frame rate limit, two captures start for the
+same buffer: the one delayed by the limit before the pause and the one
+after the resume. A second frame is a protocol error (duplicate_frame):
+the compositor drops the connection and the portal quits.
+
+Since the frame lifetime is tied to the buffer, a frame still in
+flight already captures into the current buffer. Let it finish instead
+of starting another one.
+---
+ src/screencast/ext_image_copy.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/screencast/ext_image_copy.c b/src/screencast/ext_image_copy.c
+index 8b2c256..b2b16ea 100644
+--- a/src/screencast/ext_image_copy.c
++++ b/src/screencast/ext_image_copy.c
+@@ -317,6 +317,17 @@ void xdpw_ext_ic_frame_capture(struct xdpw_screencast_instance *cast) {
+ 		logprint(ERROR, "ext: started frame without buffer");
+ 		return;
+ 	}
++	// A frame lives only as long as the buffer it captures into (it is
++	// cancelled wherever the buffer is dropped), so a frame still in flight
++	// already fills the current buffer. A second one would be a protocol
++	// error (duplicate_frame) and the compositor would drop the connection.
++	// This happens when a stream paused and resumed (a consumer
++	// renegotiating) within the frame rate limit: the capture delayed by the
++	// limit and the one after the resume both start.
++	if (cast->ext_session.frame) {
++		logprint(DEBUG, "ext: frame already in flight, not starting another");
++		return;
++	}
+ 
+ 	ext_register_frame_cb(cast);
+ }
+-- 
+2.56.0
+

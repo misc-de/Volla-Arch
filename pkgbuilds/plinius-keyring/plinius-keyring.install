@@ -1,0 +1,12 @@
+post_upgrade() {
+	# Only once the keyring is initialized (image/mkimage.sh runs --populate itself afterwards)
+	if usr/bin/pacman-key -l >/dev/null 2>&1; then
+		usr/bin/pacman-key --populate plinius
+	fi
+}
+
+post_install() {
+	if [ -x usr/bin/pacman-key ]; then
+		post_upgrade
+	fi
+}

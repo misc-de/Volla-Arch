@@ -1,0 +1,7 @@
+# Call audio on the Plinius comes from audio-hal-bridge, not from callaudiod (which needs a
+# PulseAudio card with call profiles). This directory comes first in XDG_DATA_DIRS
+# (50-plinius-callaudio.conf), so this activation file wins.
+[D-BUS Service]
+Name=org.mobian_project.CallAudio
+Exec=/bin/false
+SystemdService=audio-hal-bridge.service

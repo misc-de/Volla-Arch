@@ -1,0 +1,83 @@
+From 8a24870d9aee5268efa2326fc3eefa40ee8cdc33 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:13:36 +0100
+Subject: [PATCH] system/secure-shell: Allowed networks below the SSH switch
+
+Plinius: the SSH server answers on the USB network only, unless more is
+allowed. The Secure Shell page gets a group "Allowed Networks" below the
+switch (cc-plinius-ssh.c, a file of its own) with three switches: USB
+network, local networks (Wi-Fi, hotspot, Ethernet; local addresses
+only) and all networks. They run plinius-ssh-set through pkexec, which
+sets firewall rules and the sshd file; allowing a network asks for the
+PIN. The group can only be used while SSH is on. Nothing shows without
+plinius-ssh.
+---
+ panels/system/meson.build                           | 1 +
+ panels/system/secure-shell/cc-secure-shell-page.blp | 2 +-
+ panels/system/secure-shell/cc-secure-shell-page.c   | 6 ++++++
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/panels/system/meson.build b/panels/system/meson.build
+index f56a93569..865c95cbb 100644
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -57,6 +57,7 @@ sources = files(
+   'remote-desktop/cc-remote-desktop-page.c',
+   'remote-desktop/cc-remote-login-page.c',
+   'remote-desktop/cc-tls-certificate.c',
++  'secure-shell/cc-plinius-ssh.c',
+   'secure-shell/cc-secure-shell.c',
+   'secure-shell/cc-secure-shell-page.c',
+   'users/cc-add-user-dialog.c',
+diff --git a/panels/system/secure-shell/cc-secure-shell-page.blp b/panels/system/secure-shell/cc-secure-shell-page.blp
+index c05af53a5..71e52ff62 100644
+--- a/panels/system/secure-shell/cc-secure-shell-page.blp
++++ b/panels/system/secure-shell/cc-secure-shell-page.blp
+@@ -10,7 +10,7 @@ template $CcSecureShellPage: Adw.Dialog {
+     Adw.HeaderBar {}
+ 
+     content: Adw.ToastOverlay toast_overlay {
+-      child: Adw.PreferencesPage {
++      child: Adw.PreferencesPage preferences_page {
+         Adw.PreferencesGroup {
+           Label {
+             halign: center;
+diff --git a/panels/system/secure-shell/cc-secure-shell-page.c b/panels/system/secure-shell/cc-secure-shell-page.c
+index a64cad16f..277bc3dd6 100644
+--- a/panels/system/secure-shell/cc-secure-shell-page.c
++++ b/panels/system/secure-shell/cc-secure-shell-page.c
+@@ -24,6 +24,7 @@
+ 
+ #include "cc-hostname.h"
+ #include "cc-list-row.h"
++#include "cc-plinius-ssh.h"
+ #include "cc-secure-shell-page.h"
+ #include "cc-secure-shell.h"
+ #include "cc-systemd-service.h"
+@@ -36,6 +37,7 @@ struct _CcSecureShellPage {
+     AdwDialog parent_instance;
+ 
+     AdwActionRow *hostname_row;
++    AdwPreferencesPage *preferences_page;
+     AdwSwitchRow *secure_shell_row;
+     AdwToastOverlay *toast_overlay;
+ 
+@@ -82,6 +84,7 @@ cc_secure_shell_page_class_init (CcSecureShellPageClass *klass)
+         widget_class, "/org/gnome/control-center/system/secure-shell/cc-secure-shell-page.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcSecureShellPage, hostname_row);
++    gtk_widget_class_bind_template_child (widget_class, CcSecureShellPage, preferences_page);
+     gtk_widget_class_bind_template_child (widget_class, CcSecureShellPage, secure_shell_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSecureShellPage, toast_overlay);
+ 
+@@ -106,4 +109,7 @@ cc_secure_shell_page_init (CcSecureShellPage *self)
+     hostname = cc_hostname_get_static_hostname (cc_hostname_get_default ());
+     command = g_strdup_printf ("ssh %s", hostname);
+     adw_action_row_set_subtitle (self->hostname_row, command);
++
++    /* Plinius: the networks SSH answers on (plinius-ssh), below the switch */
++    cc_plinius_ssh_setup (self->preferences_page, self->secure_shell_row);
+ }
+-- 
+2.56.0
+

@@ -1,0 +1,437 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 03 Nov 2026 22:30:00 +0100
+Subject: [PATCH] ofono-binder: Set up emergency numbers with emergencyDial
+
+Every number went out as an ordinary dial. Whether that reaches the emergency
+services depends on the modem recognizing the number, and over IMS on the
+network telling the modem to try again.
+
+oFono's core raises the modem's emergency mode right before it asks the
+driver to dial an emergency number. With no other call up, set the call up
+with emergencyDial on the radio, then through the extension (IMS, new flag
+BINDER_EXT_CALL_DIAL_FLAG_EMERGENCY), then as an ordinary dial. A refusal or
+no answer within 15 s moves on to the next way. If an attempt never connected,
+the next one starts with the other way. Ordinary numbers take the same path
+as before. HIDL radios keep dialing as before: only AIDL has been read.
+---
+--- a/lib/include/binder_ext_call.h
++++ b/lib/include/binder_ext_call.h
+@@ -86,7 +86,8 @@ typedef enum binder_ext_call_result {
+ } BINDER_EXT_CALL_RESULT;
+ 
+ typedef enum binder_ext_call_dial_flags {
+-    BINDER_EXT_CALL_DIAL_FLAGS_NONE = 0
++    BINDER_EXT_CALL_DIAL_FLAGS_NONE = 0,
++    BINDER_EXT_CALL_DIAL_FLAG_EMERGENCY = 0x01 /* Set up an emergency call */
+ } BINDER_EXT_CALL_DIAL_FLAGS;
+ 
+ typedef enum binder_ext_call_deflect_flags {
+--- a/src/binder_voicecall.c
++++ b/src/binder_voicecall.c
+@@ -89,6 +89,13 @@ typedef struct binder_voicecall {
+     RadioRequest* clcc_poll_req;
+     guint ext_send_dtmf_id;
+     guint ext_req_id;
++    char* em_number; /* The emergency number being set up */
++    int em_type;
++    enum ofono_clir_option em_clir;
++    guint em_step;
++    gboolean em_ext_first;
++    gboolean em_attempted;
++    gboolean em_connected;
+     GSList* ext_hangups;
+     gulong ext_event[VOICECALL_EXT_EVENT_COUNT];
+     gulong voice_event[VOICECALL_EVENT_COUNT];
+@@ -123,6 +130,27 @@ typedef struct binder_voicecall_info {
+     BinderExtCall* ext; /* Not a ref */
+ } BinderVoiceCallInfo;
+ 
++/*
++ * The ways an emergency call can be set up, in the order they are tried.
++ * A way that the radio refuses, or that doesn't answer in time, falls through
++ * to the next. An ordinary dial comes last: the modem may still recognize the
++ * number, and any attempt is better than none.
++ */
++typedef enum binder_voicecall_em_route {
++    EM_ROUTE_RADIO, /* emergencyDial on the IRadioVoice of this slot */
++    EM_ROUTE_EXT,   /* emergencyDial through the extension, i.e. over IMS */
++    EM_ROUTE_DIAL,  /* Ordinary dial */
++    EM_ROUTE_COUNT
++} BINDER_VOICECALL_EM_ROUTE;
++
++static const BINDER_VOICECALL_EM_ROUTE em_routes[2][EM_ROUTE_COUNT] = {
++    { EM_ROUTE_RADIO, EM_ROUTE_EXT, EM_ROUTE_DIAL },
++    { EM_ROUTE_EXT, EM_ROUTE_RADIO, EM_ROUTE_DIAL }
++};
++
++/* Don't wait for long if the radio doesn't answer at all */
++#define EM_DIAL_TIMEOUT_MS (15000)
++
+ #define ANSWER_FLAGS BINDER_EXT_CALL_ANSWER_NO_FLAGS
+ 
+ #define DBG_(self,fmt,args...) DBG("%s" fmt, (self)->log_prefix, ##args)
+@@ -146,6 +174,11 @@ struct binder_voicecall_api {
+         GBinderWriter* writer,
+         const char* address,
+         int clir);
++    RADIO_REQ voice_emergency_dial_req; /* RADIO_REQ_NONE if not implemented */
++    void (*write_emergency_dial_args)(
++        GBinderWriter* writer,
++        const char* address,
++        int clir);
+     RADIO_REQ voice_accept_call_req;
+     RADIO_REQ voice_reject_call_req;
+     RADIO_REQ voice_hangup_req;
+@@ -695,6 +728,16 @@ binder_voicecall_set_calls(
+         }
+     }
+ 
++    /* An emergency attempt counts as working once any call is active */
++    for (n = list; n; n = n->next) {
++        const BinderVoiceCallInfo* call = n->data;
++
++        if (call->oc.status == OFONO_CALL_STATUS_ACTIVE) {
++            self->em_connected = TRUE;
++            break;
++        }
++    }
++
+     g_slist_free_full(self->calls, binder_voicecall_info_free);
+     self->calls = list;
+ }
+@@ -970,6 +1013,22 @@ binder_voicecall_request_submit(
+     }
+ }
+ 
++static
++void
++binder_voicecall_dial_failed(
++    BinderVoiceCall* self)
++{
++    if (self->cb) {
++        struct ofono_error err;
++        ofono_voicecall_cb_t cb = self->cb;
++        void* cbdata = self->data;
++
++        self->cb = NULL;
++        self->data = NULL;
++        cb(binder_error_failure(&err), cbdata);
++    }
++}
++
+ static
+ void
+ binder_voicecall_dial_cb(
+@@ -1002,15 +1061,7 @@ binder_voicecall_dial_cb(
+      * successfully by binder_voicecall_clcc_poll_cb, dial request
+      * may still fail.
+      */
+-    if (self->cb) {
+-        struct ofono_error err;
+-        ofono_voicecall_cb_t cb = self->cb;
+-        void* cbdata = self->data;
+-
+-        self->cb = NULL;
+-        self->data = NULL;
+-        cb(binder_error_failure(&err), cbdata);
+-    }
++    binder_voicecall_dial_failed(self);
+ }
+ 
+ static
+@@ -1065,6 +1116,192 @@ binder_voicecall_ext_clir(
+     return BINDER_EXT_CALL_CLIR_DEFAULT;
+ }
+ 
++static
++gboolean
++binder_voicecall_submit_dial(
++    BinderVoiceCall* self,
++    const char* number,
++    int clir)
++{
++    const BinderVoiceCallApi* api = self->api;
++    GBinderWriter args;
++    RadioRequest* req = radio_request_new2(self->voice_g, api->voice_dial_req,
++        &args, binder_voicecall_dial_cb, NULL, self);
++    gboolean ok;
++
++    api->write_dial_args(&args, number, clir);
++    ok = radio_request_submit(req);
++    radio_request_unref(req);
++    return ok;
++}
++
++/*
++ * oFono's core raises the modem's emergency mode right before it asks the
++ * driver to dial an emergency number, but doesn't tell the driver why. An
++ * emergency call that is still up raises it too, hence the empty call list:
++ * a second call must never turn an ordinary number into an emergency setup,
++ * which the network would route to the emergency services whatever the number.
++ */
++static
++gboolean
++binder_voicecall_dialing_emergency(
++    BinderVoiceCall* self)
++{
++    return !self->calls && ofono_modem_get_emergency_mode
++        (ofono_voicecall_get_modem(self->vc));
++}
++
++static
++void
++binder_voicecall_emergency_dial_next(
++    BinderVoiceCall* self);
++
++static
++void
++binder_voicecall_emergency_dial_cb(
++    RadioRequest* req,
++    RADIO_TX_STATUS status,
++    RADIO_RESP resp,
++    RADIO_ERROR error,
++    const GBinderReader* args,
++    gpointer user_data)
++{
++    BinderVoiceCall* self = user_data;
++
++    /* The call may be there already, then there's nothing left to do */
++    if (self->cb) {
++        if (status == RADIO_TX_STATUS_OK && error == RADIO_ERROR_NONE) {
++            binder_voicecall_clcc_poll(self);
++        } else {
++            ofono_warn("emergencyDial failed: %s", status == RADIO_TX_STATUS_OK
++                ? binder_radio_error_string(error) : "no answer");
++            binder_voicecall_emergency_dial_next(self);
++        }
++    }
++}
++
++static
++void
++binder_voicecall_emergency_ext_dial_cb(
++    BinderExtCall* ext,
++    BINDER_EXT_CALL_RESULT result,
++    void* user_data)
++{
++    BinderVoiceCall* self = user_data;
++
++    self->ext_req_id = 0;
++    if (self->cb) {
++        if (result == BINDER_EXT_CALL_RESULT_OK) {
++            struct ofono_error err;
++            ofono_voicecall_cb_t cb = self->cb;
++            void* cbdata = self->data;
++
++            self->cb = NULL;
++            self->data = NULL;
++            cb(binder_error_ok(&err), cbdata);
++        } else {
++            ofono_warn("emergency dial over IMS failed");
++            binder_voicecall_emergency_dial_next(self);
++        }
++    }
++}
++
++static
++gboolean
++binder_voicecall_emergency_dial_radio(
++    BinderVoiceCall* self)
++{
++    const BinderVoiceCallApi* api = self->api;
++    GBinderWriter args;
++    RadioRequest* req;
++    gboolean ok;
++
++    if (api->voice_emergency_dial_req == RADIO_REQ_NONE) {
++        return FALSE;
++    }
++
++    req = radio_request_new2(self->voice_g, api->voice_emergency_dial_req,
++        &args, binder_voicecall_emergency_dial_cb, NULL, self);
++    api->write_emergency_dial_args(&args, self->em_number, self->em_clir);
++    radio_request_set_timeout(req, EM_DIAL_TIMEOUT_MS);
++    ok = radio_request_submit(req);
++    radio_request_unref(req);
++    return ok;
++}
++
++static
++gboolean
++binder_voicecall_emergency_dial_ext(
++    BinderVoiceCall* self)
++{
++    if (!binder_voicecall_can_ext_dial(self)) {
++        return FALSE;
++    }
++
++    self->ext_req_id = binder_ext_call_dial(self->ext, self->em_number,
++        self->em_type, binder_voicecall_ext_clir(self->em_clir),
++        BINDER_EXT_CALL_DIAL_FLAG_EMERGENCY,
++        binder_voicecall_emergency_ext_dial_cb, NULL, self);
++    return self->ext_req_id != 0;
++}
++
++static
++void
++binder_voicecall_emergency_dial_next(
++    BinderVoiceCall* self)
++{
++    while (self->em_step < EM_ROUTE_COUNT) {
++        const BINDER_VOICECALL_EM_ROUTE route =
++            em_routes[self->em_ext_first ? 1 : 0][self->em_step++];
++
++        switch (route) {
++        case EM_ROUTE_RADIO:
++            ofono_info("emergency dial on the radio");
++            if (binder_voicecall_emergency_dial_radio(self)) {
++                return;
++            }
++            break;
++        case EM_ROUTE_EXT:
++            ofono_info("emergency dial over IMS");
++            if (binder_voicecall_emergency_dial_ext(self)) {
++                return;
++            }
++            break;
++        case EM_ROUTE_DIAL:
++            ofono_warn("emergency number as an ordinary dial");
++            if (binder_voicecall_submit_dial(self, self->em_number,
++                self->em_clir)) {
++                return;
++            }
++            break;
++        case EM_ROUTE_COUNT:
++            break;
++        }
++    }
++    binder_voicecall_dial_failed(self);
++}
++
++static
++void
++binder_voicecall_emergency_dial(
++    BinderVoiceCall* self,
++    const char* number,
++    int type,
++    enum ofono_clir_option clir)
++{
++    /* The last attempt never connected, take the other way first this time */
++    self->em_ext_first = self->em_attempted && !self->em_connected &&
++        !self->em_ext_first;
++    self->em_attempted = TRUE;
++    self->em_connected = FALSE;
++    self->em_step = 0;
++    self->em_type = type;
++    self->em_clir = clir;
++    g_free(self->em_number);
++    self->em_number = g_strdup(number);
++    binder_voicecall_emergency_dial_next(self);
++}
++
+ static
+ void
+ binder_voicecall_dial(
+@@ -1075,16 +1312,21 @@ binder_voicecall_dial(
+     void* data)
+ {
+     BinderVoiceCall* self = binder_voicecall_get_data(vc);
+-    const BinderVoiceCallApi* api = self->api;
+     char phbuf[OFONO_PHONE_NUMBER_BUFFER_SIZE];
+     const char* phstr = ofono_phone_number_to_string(ph, phbuf);
+-    GBinderWriter args;
+-    RadioRequest* req;
+ 
+     ofono_info("dialing \"%s\"", phstr);
+     DBG_(self, "%s,%d,0", phstr, clir);
+ 
+     binder_ext_call_cancel(self->ext, self->ext_req_id);
++    if (binder_voicecall_dialing_emergency(self)) {
++        self->ext_req_id = 0;
++        self->cb = cb;
++        self->data = data;
++        binder_voicecall_emergency_dial(self, phstr, ph->type, clir);
++        return;
++    }
++
+     if (binder_voicecall_can_ext_dial(self)) {
+         self->ext_req_id = binder_ext_call_dial(self->ext, phstr, ph->type,
+             binder_voicecall_ext_clir(clir), BINDER_EXT_CALL_DIAL_FLAGS_NONE,
+@@ -1099,11 +1341,7 @@ binder_voicecall_dial(
+     }
+ 
+     /* Default action */
+-    req = radio_request_new2(self->voice_g, api->voice_dial_req, &args,
+-        binder_voicecall_dial_cb, NULL, self);
+-    api->write_dial_args(&args, phstr, clir);
+-
+-    if (radio_request_submit(req)) {
++    if (binder_voicecall_submit_dial(self, phstr, clir)) {
+         self->cb = cb;
+         self->data = data;
+     } else {
+@@ -1111,7 +1349,6 @@ binder_voicecall_dial(
+ 
+         cb(binder_error_failure(&err), data);
+     }
+-    radio_request_unref(req);
+ }
+ 
+ static
+@@ -2221,6 +2458,7 @@ binder_voicecall_remove(
+     }
+ 
+     binder_ims_reg_unref(self->ims_reg);
++    g_free(self->em_number);
+     g_free(self->log_prefix);
+     g_free(self);
+ 
+@@ -2410,6 +2648,8 @@ static const BinderVoiceCallApi binder_voicecall_api_hidl = {
+     RADIO_REQ_SET_SUPP_SERVICE_NOTIFICATIONS,
+     RADIO_REQ_DIAL,
+     binder_voicecall_api_write_dial_args_hidl,
++    RADIO_REQ_NONE,
++    NULL,
+     RADIO_REQ_ACCEPT_CALL,
+     RADIO_REQ_REJECT_CALL,
+     RADIO_REQ_HANGUP,
+@@ -2493,6 +2733,29 @@ binder_voicecall_api_write_dial_args_aidl(
+     gbinder_writer_finish_parcelable(&parcel);
+ }
+ 
++static
++void
++binder_voicecall_api_write_emergency_dial_args_aidl(
++    GBinderWriter* writer,
++    const char* address,
++    int clir)
++{
++    /*
++     * emergencyDial(in int serial, in Dial dialInfo, in int categories,
++     *     in String[] urns, in EmergencyCallRouting routing,
++     *     in boolean hasKnownUserIntentEmergency, in boolean isTesting)
++     *
++     * The category and the routing stay unknown, which leaves both to the
++     * modem. isTesting is never set: its effect on a real modem is unknown.
++     */
++    binder_voicecall_api_write_dial_args_aidl(writer, address, clir);
++    gbinder_writer_append_int32(writer, RADIO_EMERGENCY_SERVICE_UNSPECIFIED);
++    gbinder_writer_append_int32(writer, 0); /* no urns */
++    gbinder_writer_append_int32(writer, 0); /* EmergencyCallRouting.UNKNOWN */
++    gbinder_writer_append_bool(writer, TRUE); /* The user asked for this call */
++    gbinder_writer_append_bool(writer, FALSE); /* isTesting */
++}
++
+ static
+ guint
+ binder_voicecall_api_read_last_call_fail_cause_aidl(
+@@ -2686,6 +2949,8 @@ static const BinderVoiceCallApi binder_voicecall_api_aidl = {
+     RADIO_NETWORK_REQ_SET_SUPP_SERVICE_NOTIFICATIONS,
+     RADIO_VOICE_REQ_DIAL,
+     binder_voicecall_api_write_dial_args_aidl,
++    RADIO_VOICE_REQ_EMERGENCY_DIAL,
++    binder_voicecall_api_write_emergency_dial_args_aidl,
+     RADIO_VOICE_REQ_ACCEPT_CALL,
+     RADIO_VOICE_REQ_REJECT_CALL,
+     RADIO_VOICE_REQ_HANGUP,

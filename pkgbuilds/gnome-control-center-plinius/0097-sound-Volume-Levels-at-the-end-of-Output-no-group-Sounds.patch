@@ -1,0 +1,130 @@
+From e16267736d643cbba4c4fa0c09387b01559ceecd Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 07:49:40 +0100
+Subject: [PATCH] sound: Volume Levels at the end of Output, no group Sounds
+
+The group "Sounds" had two rows: Volume Levels and Alert Sound. Phoc did
+not play the alert sound at all, so it moves to Sounds and Vibration as a
+kind of its own, played by feedbackd like the others. Volume Levels, the
+volume of each app playing, becomes the last row of Output.
+---
+ panels/sound/cc-sound-panel.blp | 23 ++++++++---------------
+ panels/sound/cc-sound-panel.c   | 25 -------------------------
+ 2 files changed, 8 insertions(+), 40 deletions(-)
+
+diff --git a/panels/sound/cc-sound-panel.blp b/panels/sound/cc-sound-panel.blp
+index 8b133ad..c6bc88f 100644
+--- a/panels/sound/cc-sound-panel.blp
++++ b/panels/sound/cc-sound-panel.blp
+@@ -126,6 +126,14 @@ template $CcSoundPanel: $CcPanel {
+             }
+           }
+         }
++
++        // Plinius: the volume of each app at the end of Output, no group "Sounds"; the alert
++        // sound is a kind of its own in Sounds and Vibration (feedbackd plays it)
++        $CcListRow {
++          title: _("Vo_lume Levels");
++          show-arrow: true;
++          activated => $volume_levels_activated_cb(template);
++        }
+       }
+ 
+       Adw.PreferencesGroup output_no_devices_group {
+@@ -191,21 +199,6 @@ template $CcSoundPanel: $CcPanel {
+         }
+       }
+ 
+-      Adw.PreferencesGroup {
+-        title: _("Sounds");
+-
+-        $CcListRow {
+-          title: _("Vo_lume Levels");
+-          show-arrow: true;
+-          activated => $volume_levels_activated_cb(template);
+-        }
+-
+-        $CcListRow alert_sound_row {
+-          title: _("_Alert Sound");
+-          show-arrow: true;
+-          activated => $alert_sound_activated_cb(template);
+-        }
+-      }
+     };
+   };
+ }
+diff --git a/panels/sound/cc-sound-panel.c b/panels/sound/cc-sound-panel.c
+index 322d42a..01daa3a 100644
+--- a/panels/sound/cc-sound-panel.c
++++ b/panels/sound/cc-sound-panel.c
+@@ -25,7 +25,6 @@
+ #include <glib/gi18n-lib.h>
+ #include <gvc-mixer-control.h>
+ 
+-#include "cc-alert-chooser-page.h"
+ #include "cc-balance-slider.h"
+ #include "cc-device-combo-row.h"
+ #include "cc-fade-slider.h"
+@@ -58,7 +57,6 @@ struct _CcSoundPanel {
+     CcProfileComboRow *input_profile_combo_row;
+     CcVolumeSlider *input_volume_slider;
+     AdwPreferencesGroup *input_no_devices_group;
+-    CcListRow *alert_sound_row;
+ 
+     GvcMixerControl *mixer_control;
+     GSettings *sound_settings;
+@@ -73,13 +71,6 @@ enum {
+ 
+ #define KEY_SOUNDS_SCHEMA "org.gnome.desktop.sound"
+ 
+-static void
+-update_alert_sound_label (CcSoundPanel *self)
+-{
+-    const gchar *alert_name = get_selected_alert_display_name ();
+-    cc_list_row_set_secondary_label (self->alert_sound_row, alert_name);
+-}
+-
+ static void
+ allow_amplified_changed_cb (CcSoundPanel *self)
+ {
+@@ -184,18 +175,6 @@ volume_levels_activated_cb (CcSoundPanel *self)
+     cc_panel_push_subpage (CC_PANEL (self), ADW_NAVIGATION_PAGE (volume_levels));
+ }
+ 
+-static void
+-alert_sound_activated_cb (CcSoundPanel *self)
+-{
+-    AdwNavigationPage *page;
+-
+-    page = ADW_NAVIGATION_PAGE (cc_alert_chooser_page_new ());
+-
+-    g_signal_connect_object (page, "hiding", G_CALLBACK (update_alert_sound_label), self, G_CONNECT_SWAPPED);
+-
+-    cc_panel_push_subpage (CC_PANEL (self), page);
+-}
+-
+ static const char *
+ cc_sound_panel_get_help_uri (CcPanel *panel)
+ {
+@@ -242,11 +221,9 @@ cc_sound_panel_class_init (CcSoundPanelClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcSoundPanel, input_profile_combo_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSoundPanel, input_volume_slider);
+     gtk_widget_class_bind_template_child (widget_class, CcSoundPanel, input_no_devices_group);
+-    gtk_widget_class_bind_template_child (widget_class, CcSoundPanel, alert_sound_row);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, test_output_configuration_button_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, volume_levels_activated_cb);
+-    gtk_widget_class_bind_template_callback (widget_class, alert_sound_activated_cb);
+ 
+     g_type_ensure (CC_TYPE_BALANCE_SLIDER);
+     g_type_ensure (CC_TYPE_DEVICE_COMBO_ROW);
+@@ -284,6 +261,4 @@ cc_sound_panel_init (CcSoundPanel *self)
+                              G_CONNECT_SWAPPED);
+ 
+     gvc_mixer_control_open (self->mixer_control);
+-
+-    update_alert_sound_label (self);
+ }
+-- 
+2.56.0
+

@@ -1,0 +1,1754 @@
+#!/usr/bin/env python3
+# Software: install apps from the package repositories and update the whole system.
+# The catalog comes from AppStream (archlinux-appstream-data), the phone rating from
+# display_length and /usr/share/plinius-software/apps.conf. Package operations are done by
+# plinius-pkg via pkexec; this app is only the user interface for it (docs/PAKETIERUNG.md).
+#
+# Usage: plinius-software                  open the app
+#        plinius-software --check-updates  check once and notify (plinius-software-check.timer)
+#        plinius-software --updates-json   check once, print the result as JSON (Settings)
+#
+# Settings (gnome-control-center-plinius) has the same pages: Apps (Explore, Installed,
+# Settings) and System/Security > Updates. Its Updates page asks --updates-json, so the check
+# and the approval rules (plinius-freigabe) exist only here. The app itself is no longer in the
+# app grid; the update notification opens Settings on the Updates page.
+# SPDX-License-Identifier: MIT
+
+import fcntl
+import gettext
+import json
+import locale
+import os
+import queue
+import re
+import subprocess
+import sys
+import threading
+import time
+import traceback
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("AppStream", "1.0")
+gi.require_version("Soup", "3.0")
+gi.require_version("GioUnix", "2.0")
+from gi.repository import Adw, AppStream, Gdk, Gio, GioUnix, GLib, GObject, Gtk, Pango, Soup  # noqa: E402
+
+# Translations (*.po in the package directory): source strings are English, which is also the
+# fallback. gettext picks the language from LANGUAGE, LC_ALL, LC_MESSAGES and LANG.
+try:
+    locale.setlocale(locale.LC_ALL, "")
+except locale.Error:
+    pass
+_translation = gettext.translation("plinius-software", "/usr/share/locale", fallback=True)
+_ = _translation.gettext
+ngettext = _translation.ngettext
+
+APP_ID = "org.plinius.Software"
+HELPER = "/usr/lib/plinius-software/plinius-pkg"
+# After an update: which restart brings the new versions into use (result written by HELPER)
+RESTART = "/usr/lib/plinius-software/plinius-restart"
+RESTART_RESULT = "/run/plinius-pkg/restart.json"
+RATINGS = "/usr/share/plinius-software/apps.conf"
+SETTINGS = os.path.join(GLib.get_user_config_dir(), "plinius-software", "settings.ini")
+# Time of the last successful update check (also written by the timer, --check-updates)
+LAST_CHECK = os.path.join(GLib.get_user_state_dir(), "plinius-software", "last-check")
+# Freshness stamp of [plinius] (tools/lib.sh write_stamp): channel, time and the SHA-256 of the
+# database, signed with the repo key. STAMP_CHECK compares it with the database checkupdates just
+# fetched (the same helper checks it as root in plinius-pkg upgrade). The newest stamp seen is
+# kept system-wide (/var/lib/plinius-pkg, written by plinius-pkg) and, as a floor of its own,
+# here per user and channel (STAMP_STATE-beta, -stable): an older one from the server is a
+# replay. Stable is only stamped at a release, so after a switch from beta its time is older
+# than beta's without being a replay.
+STAMP_CHECK = "/usr/lib/plinius-software/plinius-repo-stamp"
+STAMP_STATE = os.path.join(GLib.get_user_state_dir(), "plinius-software", "repo-stamp")
+# A database that does not match the stamp may be an upload switching both over: after this
+# many seconds checkupdates and the stamp are fetched once more before it is a warning
+STAMP_RETRY_DELAY = 15
+# Updates held back by plinius-freigabe: notified when it starts and again after this many days
+HELD_ALARM_DAYS = 7
+HELD_SINCE = os.path.join(GLib.get_user_state_dir(), "plinius-software", "held-since")
+# Apps of the selection that can be removed (pkgbuilds/plinius-apps/recommended.list)
+RECOMMENDED = "/usr/share/plinius-apps/recommended.list"
+# Shorter screen side of the Plinius in logical pixels, as in AppStream display_length
+PHONE_WIDTH = 360
+
+# Phone ratings; the values are also the rating keywords in apps.conf
+PHONE, SCALED, DESKTOP, UNKNOWN = "phone", "scaled", "desktop", "unknown"
+LABELS = {
+    PHONE: _("For phones"),
+    SCALED: _("With limitations"),
+    DESKTOP: _("For large screens"),
+    UNKNOWN: _("Not specified"),
+}
+NOTES = {
+    PHONE: _("The app fits the screen."),
+    SCALED: _("Some windows are wider than the screen and are scaled down."),
+    DESKTOP: _("According to the app, it needs more space than the screen offers."),
+    UNKNOWN: _("The app does not state a screen size. It may or may not fit the phone."),
+}
+STYLES = {PHONE: "success", SCALED: "warning", DESKTOP: "error", UNKNOWN: "dim-label"}
+# "Explore" always shows phone apps; these on request as well (menu at the top right)
+EXTRA = {"show-unknown": (UNKNOWN, _("Apps not approved for mobile")),
+         "show-desktop": (DESKTOP, _("Apps for large screens"))}
+
+# Groups under "Explore", built from the freedesktop.org main categories (AppStream <categories>).
+# An app can be in several groups; None = all apps, "recommended" = recommended.list.
+CATEGORIES = [
+    (_("Recommended"), "starred-symbolic", "recommended"),
+    (_("Communication & Internet"), "web-browser-symbolic", {"Network"}),
+    (_("Music & Video"), "folder-music-symbolic", {"AudioVideo", "Audio", "Video"}),
+    (_("Office & Documents"), "x-office-document-symbolic", {"Office"}),
+    (_("Photos & Graphics"), "image-x-generic-symbolic", {"Graphics"}),
+    (_("Learning & Science"), "accessories-dictionary-symbolic", {"Education", "Science"}),
+    (_("Games"), "applications-games-symbolic", {"Game"}),
+    (_("Utilities"), "applications-utilities-symbolic", {"Utility"}),
+    (_("System"), "applications-system-symbolic", {"System", "Settings", "Development"}),
+    (_("All Apps"), "view-grid-symbolic", None),
+]
+
+# Sources: the system's package repositories (pacman) and, on request, Flathub (menu at the top right)
+PACMAN, FLATPAK = "pacman", "flatpak"
+
+# Exit codes of plinius-pkg (see its header) and pkexec
+STALE_DB, STALE_FILE, FLATHUB_IN_USE, NOTHING_TO_DO, ONLY_FLATPAK = 3, 4, 5, 6, 7
+HELD, BUSY, LOW_BATTERY = 8, 9, 10
+REPO_UNVERIFIED = 12
+PKEXEC_CANCELLED = (126, 127)
+
+
+def load_shown():
+    """Ratings that "Explore" shows, from the settings file (EXTRA keys)."""
+    shown = {PHONE, SCALED}
+    keyfile = GLib.KeyFile()
+    try:
+        keyfile.load_from_file(SETTINGS, GLib.KeyFileFlags.NONE)
+    except GLib.Error:
+        return shown
+    for key, (rating, _label) in EXTRA.items():
+        try:
+            if keyfile.get_boolean("Anzeige", key):
+                shown.add(rating)
+        except GLib.Error:
+            pass
+    return shown
+
+
+def save_shown(shown):
+    """Store the EXTRA choices of the menu in the settings file."""
+    keyfile = GLib.KeyFile()
+    for key, (rating, _label) in EXTRA.items():
+        keyfile.set_boolean("Anzeige", key, rating in shown)
+    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
+    keyfile.save_to_file(SETTINGS)
+
+
+def desktop_info(desktop_id):
+    """GioUnix.DesktopAppInfo or None; the constructor raises if the file does not exist."""
+    try:
+        return GioUnix.DesktopAppInfo.new(desktop_id) if desktop_id else None
+    except TypeError:
+        return None
+
+
+def load_recommended():
+    """Package names from recommended.list; empty if the file is missing."""
+    try:
+        with open(RECOMMENDED) as f:
+            return {line.strip() for line in f if line.strip() and not line.startswith("#")}
+    except OSError:
+        return set()
+
+
+def in_category(app, categories):
+    """Whether app belongs to a CATEGORIES group (None, "recommended" or a set of categories)."""
+    if categories is None:
+        return True
+    if categories == "recommended":
+        return app.recommended
+    return bool(app.categories & categories)
+
+
+def last_check_text():
+    """Text like "today at 14:05", "yesterday at ..." or "on 10/27/26 at ..." (localized) for
+    the last check, None if there was none."""
+    try:
+        return when_text(int(os.path.getmtime(LAST_CHECK)))
+    except OSError:
+        return None
+
+
+def when_text(timestamp):
+    """Unix time as "today at 14:05", "yesterday at ..." or "on 10/27/26 at ..." (localized)."""
+    when = GLib.DateTime.new_from_unix_local(timestamp)
+    days = GLib.DateTime.new_now_local().get_day_of_year() - when.get_day_of_year()
+    same_year = GLib.DateTime.new_now_local().get_year() == when.get_year()
+    time = when.format("%H:%M")
+    if same_year and days == 0:
+        return _("today at {time}").format(time=time)
+    if same_year and days == 1:
+        return _("yesterday at {time}").format(time=time)
+    return _("on {date} at {time}").format(date=when.format("%x"), time=time)
+
+
+def touch_last_check():
+    """Record now as the time of the last successful check (mtime of LAST_CHECK)."""
+    os.makedirs(os.path.dirname(LAST_CHECK), exist_ok=True)
+    with open(LAST_CHECK, "a"):
+        os.utime(LAST_CHECK)
+
+
+def package_info():
+    """From pacman -Qi: package -> packages that need it ("Required By"), and provided
+    name -> installed package ("Provides", e.g. gnome-control-center -> gnome-control-center-plinius)."""
+    required, provider, name, field = {}, {}, None, None
+    for line in lines("env", "LC_ALL=C", "pacman", "-Qi"):
+        if line.startswith(" "):
+            # Continuation line of a long field
+            values = line.split()
+        else:
+            key, _, value = line.partition(":")
+            field = key.strip()
+            if field == "Name":
+                name = value.strip()
+                continue
+            values = [] if value.strip() == "None" else value.split()
+        if field == "Required By":
+            required.setdefault(name, []).extend(values)
+        elif field == "Provides":
+            for v in values:
+                provider.setdefault(v.split("=")[0], name)
+    return required, provider
+
+
+def removal(pkg, required):
+    """Packages removed together with pkg, or None if another package needs it (e.g.
+    plinius-apps). Add-ons such as firefox-i18n-de (pkg-..., not needed otherwise) go along."""
+    extra = []
+    for other in required.get(pkg, []):
+        if not other.startswith(pkg + "-") or required.get(other):
+            return None
+        extra.append(other)
+    return [pkg, *extra]
+
+
+# Notes from apps.conf, listed here so xgettext finds them
+N_ = str
+CONF_NOTES = (N_("With the mobile tweaks from mobile-config-firefox"),)
+
+
+def load_ratings():
+    """apps.conf as {AppStream ID: (rating, translated note or "")}; invalid lines are skipped."""
+    ratings = {}
+    try:
+        with open(RATINGS) as f:
+            for line in f:
+                parts = line.split(None, 2)
+                if len(parts) < 2 or parts[0].startswith("#") or parts[1] not in LABELS:
+                    continue
+                note = parts[2].strip() if len(parts) > 2 else ""
+                ratings[parts[0]] = (parts[1], _(note) if note else "")
+    except OSError:
+        pass
+    return ratings
+
+
+def classify(cpt):
+    """Rating from the app's own AppStream data: the smallest required/recommended/supported
+    display_length on the shorter side decides; otherwise Purism's form_factor hint."""
+    widths = []
+    for rel in cpt.get_requires() + cpt.get_recommends() + cpt.get_supports():
+        if rel.get_item_kind() != AppStream.RelationItemKind.DISPLAY_LENGTH:
+            continue
+        if rel.get_display_side_kind() == AppStream.DisplaySideKind.LONGEST:
+            continue
+        px = rel.get_value_px()
+        if px <= 0:
+            continue
+        if rel.get_compare() == AppStream.RelationCompare.GE:
+            widths.append(px)
+        elif rel.get_compare() == AppStream.RelationCompare.GT:
+            widths.append(px + 1)
+    if widths:
+        return PHONE if min(widths) <= PHONE_WIDTH else DESKTOP
+    if cpt.get_custom_value("Purism::form_factor") == "mobile":
+        return PHONE
+    return UNKNOWN
+
+
+def icon_file(cpt, size):
+    """Catalog icon whose size comes closest to size."""
+    best = None
+    for icon in cpt.get_icons():
+        if icon.get_kind() == AppStream.IconKind.CACHED and icon.get_filename():
+            if best is None or abs(icon.get_width() - size) < abs(best.get_width() - size):
+                best = icon
+    return best.get_filename() if best else None
+
+
+def icon_name(cpt):
+    """Name of the icon in the icon theme; it usually only exists once the app is installed."""
+    for icon in cpt.get_icons():
+        if icon.get_kind() == AppStream.IconKind.STOCK:
+            return icon.get_name()
+    return None
+
+
+def screenshot_urls(cpt, width=624):
+    """One image per screenshot: the smallest thumbnail at least width wide, else the original."""
+    urls = []
+    for shot in cpt.get_screenshots_all():
+        if shot.get_media_kind() != AppStream.ScreenshotMediaKind.IMAGE:
+            continue
+        images = [i for i in shot.get_images_all() if i.get_url() and i.get_locale() in (None, "", "C")]
+        thumbs = [i for i in images
+                  if i.get_kind() == AppStream.ImageKind.THUMBNAIL and i.get_width() >= width]
+        sources = [i for i in images if i.get_kind() == AppStream.ImageKind.SOURCE]
+        if thumbs:
+            urls.append(min(thumbs, key=lambda i: i.get_width()).get_url())
+        elif sources:
+            urls.append(sources[0].get_url())
+    return urls
+
+
+class Loader:
+    """Loads images one after another in its own thread; results arrive in the main thread.
+    Requests for the same key while it is loading share one load."""
+
+    def __init__(self, keep):
+        self.keep = keep  # cache icons, not screenshots (large, rarely needed twice)
+        self.cache = {}
+        self.waiting = {}
+        self.jobs = queue.Queue()
+        threading.Thread(target=self.work, daemon=True).start()
+
+    def get(self, key, load, callback):
+        """Call callback(texture or None) with load(key), from the cache if possible."""
+        if key in self.cache:
+            callback(self.cache[key])
+        elif key in self.waiting:
+            self.waiting[key].append(callback)
+        else:
+            self.waiting[key] = [callback]
+            self.jobs.put((key, load))
+
+    def work(self):
+        while True:
+            key, load = self.jobs.get()
+            try:
+                texture = load(key)
+            except (GLib.Error, OSError):
+                texture = None
+            GLib.idle_add(self.done, key, texture)
+
+    def done(self, key, texture):
+        if self.keep:
+            self.cache[key] = texture
+        for callback in self.waiting.pop(key, []):
+            callback(texture)
+
+
+def load_file(path):
+    # Arch ships the catalog icons as JPEG XL. Since GTK 4.24, Gtk.IconTheme no longer loads
+    # them from a file (empty image), but Gdk.Texture via glycin does.
+    return Gdk.Texture.new_from_filename(path)
+
+
+# One Soup.Session per thread; sessions must not be shared between threads
+_session = threading.local()
+
+
+def load_url(url):
+    """Download an image (screenshot) as a texture; None on an invalid URL or HTTP error."""
+    # The URLs come from the AppStream data of each app: only https, so nobody on the network
+    # can swap the image or see which app is being looked at
+    if not url.startswith("https://"):
+        return None
+    if not hasattr(_session, "soup"):
+        _session.soup = Soup.Session(timeout=30, user_agent="plinius-software")
+    message = Soup.Message.new("GET", url)
+    if message is None:
+        return None
+    data = _session.soup.send_and_read(message, None)
+    if message.get_status() != Soup.Status.OK:
+        return None
+    return Gdk.Texture.new_from_bytes(data)
+
+
+ICONS = Loader(keep=True)
+SCREENSHOTS = Loader(keep=False)
+
+
+def set_icon(image, app, size):
+    """Show the theme icon or a placeholder at once, then the catalog icon. icon_key guards
+    against recycled list rows getting the icon of a previous app."""
+    theme = Gtk.IconTheme.get_for_display(image.get_display())
+    name = app.icon_name if app.icon_name and theme.has_icon(app.icon_name) else "application-x-executable"
+    image.set_from_icon_name(name)
+    image.icon_key = path = icon_file(app.cpt, size)
+    if path:
+        def show(texture):
+            if texture and image.icon_key == path:
+                image.set_from_paintable(texture)
+        ICONS.get(path, load_file, show)
+
+
+class App(GObject.Object):
+    """One catalog entry (pacman package or Flatpak ref) with everything the UI shows."""
+
+    def __init__(self, cpt, source, pkg, version, rating, installed):
+        super().__init__()
+        self.cpt = cpt
+        self.id = cpt.get_id()
+        self.name = cpt.get_name() or self.id
+        self.summary = cpt.get_summary() or ""
+        self.source = source
+        self.pkg = pkg  # pacman: package name, Flatpak: ref (app/ID/arch/branch)
+        # flatpak knows the app by the ID from the ref; the AppStream ID may differ
+        self.flatpak_id = pkg.split("/")[1] if source == FLATPAK else None
+        self.version = version
+        self.installed = installed
+        self.removal = None  # packages to remove, None = cannot be removed (load_catalog)
+        self.recommended = False
+        self.rating, note = rating or (classify(cpt), "")
+        self.note = note or NOTES[self.rating]
+        self.search = " ".join([self.name, self.summary, pkg, *cpt.get_keywords()]).casefold()
+        self.categories = set(cpt.get_categories())
+        self.icon_name = icon_name(cpt)
+        launchable = cpt.get_launchable(AppStream.LaunchableKind.DESKTOP_ID)
+        entries = launchable.get_entries() if launchable else []
+        self.desktop_id = entries[0] if entries else None
+        # Installed, but not in the app grid (NoDisplay, OnlyShowIn), e.g. helper programs
+        # pulled in as a dependency
+        info = desktop_info(self.desktop_id) if installed else None
+        self.hidden = bool(info) and not info.should_show()
+
+
+def lines(*command):
+    """stdout of command as a list of lines; empty if it cannot be started."""
+    try:
+        return subprocess.run(command, capture_output=True, text=True).stdout.splitlines()
+    except OSError:
+        return []
+
+
+def pacman_lines(*args):
+    return lines("pacman", *args)
+
+
+def flathub_enabled():
+    return "flathub" in lines("flatpak", "remotes", "--system", "--columns=name")
+
+
+# How the Flatpak remotes are shown; FuriHub (plinius-pkg furihub-enable) only comes with Flathub
+REMOTE_TITLES = {"flathub": "Flathub", "furihub": "FuriHub"}
+
+
+def remote_title(remote):
+    return REMOTE_TITLES.get(remote, remote or "Flatpak")
+
+
+def release_version(cpt):
+    """Version of the newest release in the catalog, "" if none (Flatpak apps)."""
+    releases = cpt.get_releases_plain()
+    return releases.index_safe(0).get_version() if releases and releases.get_size() else ""
+
+
+def load_catalog():
+    """Runs in the background: AppStream catalog and package state from the installed sync
+    database; with Flathub on, also its catalog (/var/lib/flatpak/appstream)."""
+    flathub = flathub_enabled()
+    pool = AppStream.Pool()
+    flags = AppStream.PoolFlags.LOAD_OS_CATALOG
+    if flathub:
+        flags |= AppStream.PoolFlags.LOAD_FLATPAK
+    pool.set_flags(flags)
+    pool.load(None)
+    available = {}
+    for line in pacman_lines("-Sl"):
+        parts = line.split()
+        if len(parts) >= 3:
+            available.setdefault(parts[1], parts[2])  # first repo wins, as in pacman
+    installed = set(pacman_lines("-Qq"))
+    required, provider = package_info()
+    recommended = load_recommended()
+    flatpaks = set(lines("flatpak", "list", "--system", "--app", "--columns=application")) if flathub else set()
+    ratings = load_ratings()
+    apps = {}
+    box = pool.get_components_by_kind(AppStream.ComponentKind.DESKTOP_APP)
+    for i in range(box.get_size()):
+        cpt = box.index_safe(i)
+        rating = ratings.get(cpt.get_id())
+        bundle = cpt.get_bundle(AppStream.BundleKind.FLATPAK)
+        if bundle:
+            ref = bundle.get_id()
+            app = App(cpt, FLATPAK, ref, release_version(cpt), rating, ref.split("/")[1] in flatpaks)
+            app.removal = [app.flatpak_id] if app.installed else None
+        else:
+            pkg = cpt.get_pkgname()
+            # The catalog comes from Arch x86_64; only show what actually exists in this state
+            if pkg not in available:
+                continue
+            # A custom build is installed instead of the Arch package (provides): that one counts
+            if pkg not in installed and pkg in provider:
+                pkg = provider[pkg]
+            app = App(cpt, PACMAN, pkg, available.get(pkg, ""), rating, pkg in installed)
+            app.recommended = pkg in recommended
+            if app.installed:
+                app.removal = removal(pkg, required)
+        # If an app is in both sources, the installed one wins, otherwise the one from the repositories
+        old = apps.get(app.id)
+        if old is None or (app.installed, app.source == PACMAN) > (old.installed, old.source == PACMAN):
+            apps[app.id] = app
+    return sorted(apps.values(), key=lambda a: a.name.casefold())
+
+
+# A versioned conflict such as "glibc>2.44-1" (name, operator, version)
+CONSTRAINT = re.compile(r"^([^<>=]+)(<=|>=|<|>|=)(.+)$")
+
+
+def vercmp(a, b):
+    """pacman version comparison: < 0, 0 or > 0, like strcmp."""
+    return int(subprocess.run(["vercmp", a, b], capture_output=True, text=True).stdout or 0)
+
+
+def approval_limits(db):
+    """Version limits from plinius-freigabe (conflicts), taken from the version that will be
+    installed after an -Syu: the higher of the installed one and the one in checkupdates'
+    database copy."""
+    best = None
+    for args in (["-Qi"], ["-Si", "--dbpath", db]):
+        info = {}
+        for line in lines("env", "LC_ALL=C", "pacman", *args, "plinius-freigabe"):
+            key, _, value = line.partition(":")
+            info.setdefault(key.strip(), value.strip())
+        if "Version" in info and (best is None or vercmp(info["Version"], best["Version"]) > 0):
+            best = info
+    value = best.get("Conflicts With", "None") if best else "None"
+    return [] if value == "None" else [m.groups() for m in map(CONSTRAINT.match, value.split()) if m]
+
+
+def held_by_approval(packages, db):
+    """The limits in plinius-freigabe that would make the -Syu fail, as (name, version after the
+    update, operator, limit). pacman then refuses the whole update; pacman -Su --print does not
+    check such conflicts, so they are computed here. What counts is the version after the
+    update: the new one, otherwise the installed one (a new approval can constrain a package
+    that is already beyond its limit)."""
+    limits = approval_limits(db)
+    if not limits:
+        return []
+    after = {name: version for name, version in
+             (line.split()[:2] for line in pacman_lines("-Q", *{n for n, _o, _v in limits}) if " " in line)}
+    after.update({name: new for name, _old, new in packages})
+    held = []
+    for name, op, version in limits:
+        if name in after:
+            c = vercmp(after[name], version)
+            if {"<": c < 0, "<=": c <= 0, ">": c > 0, ">=": c >= 0, "=": c == 0}[op]:
+                held.append((name, after[name], op, version))
+    return held
+
+
+def held_since(held):
+    """When the current hold by plinius-freigabe was first seen (Unix time, HELD_SINCE), None
+    without a hold. The time stays while the hold lasts, whichever packages it names."""
+    if not held:
+        try:
+            os.remove(HELD_SINCE)
+        except OSError:
+            pass
+        return None
+    try:
+        with open(HELD_SINCE, encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        pass
+    now = int(time.time())
+    os.makedirs(os.path.dirname(HELD_SINCE), exist_ok=True)
+    with open(HELD_SINCE, "w", encoding="utf-8") as f:
+        f.write(str(now))
+    return now
+
+
+def checkupdates_db():
+    """checkupdates works on its own copy of the databases (CHECKUPDATES_DB); the system's stay
+    untouched. App and timer share it."""
+    return os.path.join(GLib.get_user_runtime_dir(), "plinius-software", "db")
+
+
+def find_updates():
+    """Runs in the background (app and timer): (checkupdates exit code, packages as
+    (name, old, new), Flatpak updates as (name, version, remote), hold).
+    checkupdates exits 0 with updates, 2 without; anything else is a failure.
+    While a package waits for approval (plinius-freigabe), pacman refuses the whole -Syu, so no
+    system update can be installed yet: then packages is empty and hold says why, as a dict
+    with "limits" (held_by_approval), "packages" (the system updates that wait) and "since"
+    (held_since); otherwise hold is None. Flatpak apps are updated regardless.
+    Flathub's answer does not depend on pacman's, so both servers are asked at the same time."""
+    flatpaks = []
+    flatpak_check = threading.Thread(target=lambda: flatpaks.extend(flatpak_updates()), daemon=True)
+    flatpak_check.start()
+    db = checkupdates_db()
+    os.makedirs(db, exist_ok=True)
+    try:
+        # App and timer share the copy; running at the same time, checkupdates would fail on its lock
+        with open(os.path.join(db, "..", "check.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            r = subprocess.run(["checkupdates"], capture_output=True, text=True,
+                               env=dict(os.environ, CHECKUPDATES_DB=db))
+        code, output = r.returncode, r.stdout
+    except OSError:
+        code, output = 1, ""
+    packages = [(p[0], p[1], p[3]) for p in (line.split() for line in output.splitlines())
+                if len(p) >= 4] if code == 0 else []
+    hold = None
+    if code in (0, 2):
+        held = held_by_approval(packages, db)
+        since = held_since(held)
+        if held:
+            hold = {"limits": held, "packages": packages, "since": since}
+            packages = []
+    flatpak_check.join()
+    if code in (0, 2):
+        touch_last_check()
+    return code, packages, flatpaks, hold
+
+
+def flatpak_updates():
+    """Updates of the system's Flatpak apps as (name, version, remote); none without Flathub."""
+    if not flathub_enabled():
+        return []
+    return [tuple((line.split("\t") + ["", ""])[:3]) for line in
+            lines("flatpak", "remote-ls", "--updates", "--system", "--columns=application,version,origin")]
+
+
+def hold_texts(hold):
+    """(title, description) of a hold by plinius-freigabe (find_updates), localized."""
+    n = len(hold["packages"])
+    names = ", ".join(f"{name} {version}" for name, version, _op, _limit in hold["limits"])
+    title = ngettext("{n} update waits for approval", "{n} updates wait for approval", n).format(n=n)
+    text = _("Plinius has not yet approved {packages}. Until then no system package is updated, "
+             "security updates included.").format(packages=names)
+    if hold.get("since"):
+        text += "\n" + _("Waiting since {when}").format(when=when_text(hold["since"]))
+    return title, text
+
+
+def hold_json(hold):
+    """The hold for --updates-json: as find_updates has it, plus "days", "title" and "text"."""
+    if not hold:
+        return None
+    title, text = hold_texts(hold)
+    days = int((time.time() - hold["since"]) // 86400) if hold.get("since") else 0
+    return {"limits": hold["limits"], "packages": hold["packages"], "since": hold.get("since"),
+            "days": max(days, 0), "title": title, "text": text}
+
+
+def check_repo_stamp():
+    """The verdict of STAMP_CHECK on the stamp of [plinius] and the database checkupdates just
+    fetched (a dict, see there), or None if the helper gave none."""
+    try:
+        r = subprocess.run([STAMP_CHECK, "check", "--db", os.path.join(checkupdates_db(), "sync", "plinius.db"),
+                            "--user-state", STAMP_STATE], capture_output=True, text=True, timeout=180)
+        verdict = json.loads(r.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    return verdict if isinstance(verdict, dict) else None
+
+
+def stamp_warning(verdict):
+    """The warning for the user about a verdict of check_repo_stamp, None if there is none."""
+    result = verdict.get("result") if verdict else None
+    if result in ("ok", "skip", "none"):
+        return None
+    if result == "unreachable":
+        return _("The update server did not hand out its signed state. Updates may be held back.")
+    if result == "unsigned":
+        return _("The update server's state is not signed by Plinius. Updates are not trustworthy.")
+    if result == "channel":
+        return _("The update server offers the updates of another channel ({got} instead of "
+                 "{want}).").format(got=verdict.get("got"), want=verdict.get("want"))
+    if result == "replay":
+        return _("The update server offers an older state than before. Updates may be held back.")
+    if result == "unhashed":
+        return _("The update server's signed state does not vouch for its package list. "
+                 "Updates may be held back.")
+    if result == "mismatch":
+        return _("The update server's package list does not match its signed state. Updates may "
+                 "be held back or come from another channel.")
+    if result == "unreadable":
+        return _("The package list could not be read to check it against the update server's "
+                 "signed state.")
+    if result == "stale":
+        days = verdict.get("days", 0)
+        return ngettext("The update server's state is {n} day old. Updates may be held back.",
+                        "The update server's state is {n} days old. Updates may be held back.",
+                        days).format(n=days)
+    # missing, http, malformed, or the helper failed
+    return _("The update server gives no proof of how current its updates are.")
+
+
+def check_all():
+    """One update check with the stamp (app-less callers: --updates-json and the timer):
+    (code, packages, flatpaks, hold, repo warning). Only a check that reached the servers says
+    anything about the stamp. A database that does not match it may be an upload in progress:
+    both are fetched once more before that is a warning."""
+    code, packages, flatpaks, hold = find_updates()
+    if code not in (0, 2):
+        return code, packages, flatpaks, hold, None
+    verdict = check_repo_stamp()
+    if verdict and verdict.get("result") == "mismatch":
+        time.sleep(STAMP_RETRY_DELAY)
+        code, packages, flatpaks, hold = find_updates()
+        if code not in (0, 2):
+            return code, packages, flatpaks, hold, None
+        verdict = check_repo_stamp()
+    return code, packages, flatpaks, hold, stamp_warning(verdict)
+
+
+def updates_json():
+    """Settings' Updates page (--updates-json): one check, printed as JSON. "last_check" is
+    the localized time of the last successful check (last_check_text), or null; "repo_warning"
+    a warning about the update server (check_all), or null; "held" null, or the updates that
+    plinius-freigabe holds back (hold_json: "packages" as [name, old, new] like "packages",
+    "limits" as [name, version, operator, limit], "since" Unix time, "days", and the localized
+    "title" and "text" to show instead of "up to date")."""
+    code, packages, flatpaks, hold, warning = check_all()
+    print(json.dumps({"code": code, "packages": packages,
+                      "flatpaks": flatpaks, "last_check": last_check_text(),
+                      "repo_warning": warning, "held": hold_json(hold)}))
+    return 0
+
+
+def notify_once(name, key, summary, body):
+    """Timer: sends a notification unless the last one under name had the same key (it stays
+    until the key changes); key None forgets it."""
+    state = os.path.join(GLib.get_user_state_dir(), "plinius-software", name)
+    if not key:
+        if os.path.exists(state):
+            os.remove(state)
+        return
+    try:
+        with open(state, encoding="utf-8") as f:
+            if f.read() == key:
+                return
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    with open(state, "w", encoding="utf-8") as f:
+        f.write(key)
+    send_update_notification(summary, body)
+
+
+def notify_repo_warning(warning):
+    """Timer: the warning of check_all, once per text."""
+    notify_once("repo-warning", warning, _("Updates could not be verified"), warning)
+
+
+def notify_hold(hold):
+    """Timer: a hold by plinius-freigabe, once when it starts (or names other packages) and once
+    more after HELD_ALARM_DAYS: security updates wait with it."""
+    if not hold:
+        notify_once("held-notified", None, None, None)
+        return
+    data = hold_json(hold)
+    names = " ".join(name for name, _v, _op, _l in hold["limits"])
+    if data["days"] >= HELD_ALARM_DAYS:
+        body = ngettext("System updates have been on hold for {n} day. Security updates wait too.",
+                        "System updates have been on hold for {n} days. Security updates wait too.",
+                        data["days"]).format(n=data["days"]) + "\n" + data["text"].split("\n")[0]
+        key = f"long {names}"
+    else:
+        body = data["text"].split("\n")[0]
+        key = f"new {names}"
+    notify_once("held-notified", key, _("System updates are on hold"), body)
+
+
+def notify_updates():
+    """Timer (plinius-software --check-updates): notifies once per new set of updates (packages
+    waiting for approval are not among them, see find_updates; notify_hold tells about them),
+    and about a warning on the update server."""
+    code, packages, flatpaks, hold, warning = check_all()
+    state = os.path.join(GLib.get_user_state_dir(), "plinius-software", "notified")
+    items = [f"{n} {new}" for n, _old, new in packages] + [f"{n} {v}" for n, v, _r in flatpaks]
+    if code not in (0, 2):
+        return 0
+    notify_repo_warning(warning)
+    notify_hold(hold)
+    if not items:
+        if os.path.exists(state):
+            os.remove(state)
+        return 0
+    text = "\n".join(items)
+    try:
+        with open(state) as f:
+            if f.read() == text:
+                return 0
+    except OSError:
+        pass
+    with open(state, "w") as f:
+        f.write(text)
+    n = len(items)
+    send_update_notification(_("System update available"),
+                             ngettext("{n} package can be updated.", "{n} packages can be updated.",
+                                      n).format(n=n))
+    return 0
+
+
+def open_updates_panel(bus):
+    """Opens Settings on its Updates panel through its D-Bus action "launch-panel" (D-Bus
+    activation starts Settings if it is not running). Not by running "gnome-control-center
+    updates": that child would live in this process' systemd unit, which is stopped, child
+    included, as soon as this process exits, so the panel request was lost on the way."""
+    try:
+        bus.call_sync("org.gnome.Settings", "/org/gnome/Settings", "org.freedesktop.Application",
+                      "ActivateAction",
+                      GLib.Variant("(sava{sv})", ("launch-panel",
+                                                  [GLib.Variant("(sav)", ("updates", []))], {})),
+                      None, Gio.DBusCallFlags.NONE, 30000)
+    except GLib.Error as e:
+        print(f"plinius-software: could not open Settings on Updates: {e.message}", file=sys.stderr)
+
+
+def send_update_notification(summary, body):
+    """Sends the update notification and waits until it is tapped, dismissed or the
+    notification server goes away. Phosh does not open apps itself: tapping a notification
+    only sends ActionInvoked("default") back to the sender, so this process has to stay and
+    open Settings on its Updates page (gnome-control-center starts it, or hands the panel to
+    the running instance)."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+    loop = GLib.MainLoop()
+    notification = {}
+
+    def on_signal(_bus, _sender, _path, _iface, signal, params):
+        if params[0] != notification.get("id"):
+            return
+        try:
+            if signal == "ActionInvoked" and params[1] == "default":
+                open_updates_panel(bus)
+        finally:
+            loop.quit()
+
+    for signal in ("ActionInvoked", "NotificationClosed"):
+        bus.signal_subscribe("org.freedesktop.Notifications", "org.freedesktop.Notifications", signal,
+                             "/org/freedesktop/Notifications", None, Gio.DBusSignalFlags.NONE, on_signal)
+    # Phosh restarted (session ended): the notification is gone, nobody will tap it
+    Gio.bus_watch_name_on_connection(bus, "org.freedesktop.Notifications", Gio.BusNameWatcherFlags.NONE,
+                                     None, lambda *_: loop.quit())
+    # Shown as coming from Settings. The hint is needed: on a tap Phosh activates that app itself
+    # with an xdg-activation token, and only that brings the window to the front (without it
+    # Settings switched the panel but stayed small in the overview). Phosh sends its Activate
+    # before ActionInvoked, so the panel request from open_updates_panel() arrives after it.
+    hints = {"desktop-entry": GLib.Variant("s", "org.gnome.Settings")}
+    reply = bus.call_sync("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                          "org.freedesktop.Notifications", "Notify",
+                          GLib.Variant("(susssasa{sv}i)", (_("Software"), 0, "software-update-available-symbolic",
+                                                           summary, body,
+                                                           ["default", _("Go to Updates")], hints, -1)),
+                          GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, -1)
+    notification["id"] = reply[0]
+    loop.run()
+
+
+def show_in_phosh(app):
+    """Phosh's app overview only shows apps with X-Purism-FormFactor=Mobile in its mobile
+    filter. Apps rated phone-ready here are added to force-adaptive, or they would be missing."""
+    if app.rating not in (PHONE, SCALED) or not app.desktop_id:
+        return
+    source = Gio.SettingsSchemaSource.get_default()
+    # mobi.phosh.shell since Phosh 0.59, sm.puri.phosh before
+    schema = source and (source.lookup("mobi.phosh.shell", True) or source.lookup("sm.puri.phosh", True))
+    if not schema:
+        return
+    info = desktop_info(app.desktop_id)
+    if info:
+        factors = f"{info.get_string('X-Purism-FormFactor')};{info.get_string('X-KDE-FormFactor')}"
+        if "mobile" in factors.casefold():
+            return
+    settings = Gio.Settings.new_full(schema, None, None)
+    ids = settings.get_strv("force-adaptive")
+    if app.desktop_id not in ids:
+        settings.set_strv("force-adaptive", ids + [app.desktop_id])
+
+
+def launch(app):
+    """Start an installed app via its launcher, for new Flatpak apps via flatpak run."""
+    info = desktop_info(app.desktop_id)
+    if info:
+        info.launch([], None)
+    elif app.source == FLATPAK:
+        # The running session only finds the launchers of new Flatpak apps after the next login
+        Gio.Subprocess.new(["flatpak", "run", app.flatpak_id], Gio.SubprocessFlags.NONE)
+
+
+def restart_apply(level):
+    """Restart the apps, or the user interface and the apps (plinius-restart apply), in a scope
+    of its own: it may close this app too."""
+    Gio.Subprocess.new(["systemd-run", "--user", "--scope", "--collect", "--quiet", "--",
+                        RESTART, "apply", level, RESTART_RESULT], Gio.SubprocessFlags.NONE)
+
+
+def restart_app_names(result):
+    """Names of this user's apps that a restart closes and opens again, comma-separated."""
+    names = []
+    for app in result.get("apps", []):
+        if app.get("uid") != os.getuid() or not app.get("id"):
+            continue
+        info = desktop_info(app["id"] + ".desktop")
+        name = info.get_display_name() if info else app["id"]
+        if name not in names:
+            names.append(name)
+    return ", ".join(names)
+
+
+def offer_restart(page, title):
+    """After an update: offer the restart it needs (none, apps, ui or reboot, see
+    plinius-restart). Without an answer: a reboot. Returns True if a button was added."""
+    try:
+        with open(RESTART_RESULT) as f:
+            result = json.load(f)
+    except (OSError, ValueError):
+        result = {}
+    level = result.get("level", "reboot")
+    apps = restart_app_names(result)
+    if level == "none" or (level == "apps" and not apps):
+        page.finish(True, title, _("Everything that is running already uses the new versions."))
+        return False
+    if level == "apps":
+        page.finish(True, title, _("Restart {apps} to use the new versions. Unsaved changes "
+                                   "in them are lost.").format(apps=apps))
+        page.add_button(_("Restart Apps"), lambda: restart_apply("apps"), "suggested-action")
+        return True
+    if level == "ui":
+        text = _("Restart Phosh to use the new versions. The phone locks; open apps stay open.")
+        if apps:
+            text += " " + _("{apps} also restart. Unsaved changes in them are lost.").format(apps=apps)
+        page.finish(True, title, text)
+        page.add_button(_("Restart Phosh"), lambda: restart_apply("ui"), "suggested-action")
+        return True
+    # Only offer the restart; back is at the top left
+    page.finish(True, title, _("Restart the phone to run the new versions."))
+    page.add_button(_("Restart Phone"), reboot, "suggested-action")
+    return True
+
+
+def reboot():
+    """Reboot via logind (interactive=True: polkit may ask)."""
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+    bus.call_sync("org.freedesktop.login1", "/org/freedesktop/login1",
+                  "org.freedesktop.login1.Manager", "Reboot", GLib.Variant("(b)", (True,)),
+                  None, Gio.DBusCallFlags.NONE, -1)
+
+
+def plain_row(title, subtitle=None, **props):
+    """Adw.ActionRow without markup, so "Music & Video" or URLs with & stay readable.
+    use_markup must be set before the title; in the constructor it comes too late."""
+    row = Adw.ActionRow(use_markup=False, **props)
+    row.set_title(title)
+    if subtitle:
+        row.set_subtitle(subtitle)
+    return row
+
+
+def pill(label, callback, style=None):
+    """Centered pill button calling callback() on click."""
+    button = Gtk.Button(label=label, halign=Gtk.Align.CENTER)
+    button.add_css_class("pill")
+    if style:
+        button.add_css_class(style)
+    button.connect("clicked", lambda *_: callback())
+    return button
+
+
+class StatusHeader(Gtk.Box):
+    """Icon, title and description like Adw.StatusPage, but without its own scrolled window:
+    inside scrolled() a StatusPage is squeezed to its minimum height and cuts off its text."""
+
+    def __init__(self, icon_name, title):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=24)
+        icon = Gtk.Image(icon_name=icon_name, pixel_size=96, margin_bottom=12)
+        icon.add_css_class("dim-label")
+        self.append(icon)
+        self.title = Gtk.Label(label=title, wrap=True, justify=Gtk.Justification.CENTER)
+        self.title.add_css_class("title-2")
+        self.append(self.title)
+        self.description = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, visible=False)
+        self.append(self.description)
+
+    def set_title(self, title):
+        self.title.set_label(title)
+
+    def set_description(self, description):
+        self.description.set_label(description or "")
+        self.description.set_visible(bool(description))
+
+
+def scrolled(child):
+    """child centered at a phone-friendly maximum width, scrolling vertically."""
+    clamp = Adw.Clamp(child=child, maximum_size=600, margin_start=12, margin_end=12,
+                      margin_top=12, margin_bottom=24)
+    return Gtk.ScrolledWindow(child=clamp, vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+
+
+class AppRow(Gtk.Box):
+    """List row: icon, name, summary, rating badge, optional remove button.
+    Rows are recycled by Gtk.ListView, so bind() resets everything per app."""
+
+    def __init__(self, on_remove=None):
+        super().__init__(spacing=12, margin_top=6, margin_bottom=6)
+        self.app = None
+        self.icon = Gtk.Image(pixel_size=48)
+        self.append(self.icon)
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER, hexpand=True)
+        self.name = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END)
+        self.name.add_css_class("heading")
+        self.summary = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END)
+        self.summary.add_css_class("dim-label")
+        self.badge = Gtk.Label(xalign=0)
+        self.badge.add_css_class("caption")
+        for w in (self.name, self.summary, self.badge):
+            texts.append(w)
+        self.append(texts)
+        self.remove_button = None
+        if on_remove:
+            self.remove_button = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
+                                            tooltip_text=_("Remove"))
+            self.remove_button.add_css_class("flat")
+            self.remove_button.connect("clicked", lambda *_: on_remove(self.app))
+            self.append(self.remove_button)
+
+    def bind(self, app):
+        self.app = app
+        if self.remove_button:
+            # What plinius-apps (or another package) needs cannot be removed
+            self.remove_button.set_visible(bool(app.removal))
+        set_icon(self.icon, app, 64)
+        self.name.set_text(app.name)
+        self.summary.set_text(app.summary)
+        for style in STYLES.values():
+            self.badge.remove_css_class(style)
+        self.badge.add_css_class(STYLES[app.rating])
+        extra = " · " + _("Part of the system") if app.installed and not app.removal else ""
+        if app.source == FLATPAK:
+            extra += " · Flathub"
+        self.badge.set_text(LABELS[app.rating] + extra)
+
+
+# Steps of an operation: (key, title, weight in the overall progress)
+SYNC = ("sync", _("Fetching package lists"), 1)
+DOWNLOAD = ("download", _("Downloading packages"), 4)
+CHECK = ("check", _("Checking packages"), 1)
+INSTALL = ("install", _("Installing packages"), 4)
+REMOVE = ("install", _("Removing packages"), 2)
+HOOKS = ("hooks", _("Finishing up"), 1)
+FLATPAK_UPDATE = ("flatpak", _("Updating Flatpak apps"), 3)
+FLATHUB_CATALOG = ("flathub", _("Loading the Flathub catalog"), 3)
+
+# pacman output with LC_ALL=C and --noprogressbar (plinius-pkg): sections and counters
+MARKERS = [
+    (re.compile(r"^:: Synchronizing package databases"), "sync"),
+    (re.compile(r"^:: Retrieving packages"), "download"),
+    (re.compile(r"^(checking keyring|checking package integrity|loading package files|"
+                r"checking for file conflicts|checking available disk space)"), "check"),
+    (re.compile(r"^:: Processing package changes"), "install"),
+    (re.compile(r"^:: Running post-transaction hooks"), "hooks"),
+    (re.compile(r"^::plinius:: (\w+)"), None),  # plinius-pkg's own sections
+]
+TOTAL = re.compile(r"^Packages \((\d+)\)")
+DOWNLOADED = re.compile(r"^ \S+ downloading\.\.\.$")
+CHANGED = re.compile(r"^(installing|upgrading|reinstalling|downgrading|removing) \S+\.\.\.$")
+NUMBERED = re.compile(r"^\(\s*(\d+)/(\d+)\)")
+
+
+class Progress:
+    """Progress from the output of plinius-pkg: current step and how far along it is."""
+
+    def __init__(self, steps):
+        self.steps = steps
+        self.index = -1
+        self.done = 0  # done in the current step
+        self.total = 0  # packages according to "Packages (N)"
+        self.hooks = 0  # hooks according to "(i/N)"
+
+    def feed(self, line):
+        """Process one output line: a section marker switches steps, other lines count."""
+        for pattern, key in MARKERS:
+            m = pattern.match(line)
+            if m:
+                self.enter(key or m.group(1))
+                return
+        m = TOTAL.match(line)
+        if m:
+            self.total = int(m.group(1))
+        elif self.key() == "download" and DOWNLOADED.match(line):
+            self.done += 1
+        elif self.key() == "install" and CHANGED.match(line):
+            self.done += 1
+        elif self.key() == "hooks":
+            m = NUMBERED.match(line)
+            if m:
+                self.done, self.hooks = int(m.group(1)), int(m.group(2))
+
+    def enter(self, key):
+        # Skipped steps (e.g. nothing to download) count as done; never go backwards
+        for i, step in enumerate(self.steps):
+            if step[0] == key and i > self.index:
+                self.index, self.done = i, 0
+                return
+
+    def key(self):
+        return self.steps[self.index][0] if self.index >= 0 else None
+
+    def count(self):
+        """(done, total) in the current step, total 0 = unknown."""
+        key = self.key()
+        if key in ("download", "install"):
+            return self.done, self.total
+        if key == "hooks":
+            return self.done, self.hooks
+        return self.done, 0
+
+    def fraction(self):
+        """Overall progress 0..1: finished steps by weight plus the share of the current one."""
+        weights = [w for _k, _t, w in self.steps]
+        done = sum(weights[:max(self.index, 0)])
+        n, total = self.count()
+        if self.index >= 0 and total:
+            done += weights[self.index] * min(n / total, 1)
+        return done / sum(weights)
+
+
+class OperationPage(Adw.NavigationPage):
+    """Progress of a plinius-pkg operation. It cannot be left until the operation is done.
+    Without steps (Flatpak) the bar only pulses."""
+
+    def __init__(self, title, steps):
+        super().__init__(title=title, can_pop=False)
+        self.progress = Progress(steps) if steps else None
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.icon = Gtk.Image(icon_name="software-update-available-symbolic", pixel_size=64,
+                              margin_top=24)
+        self.icon.add_css_class("dim-label")
+        self.status = Gtk.Label(label=title, wrap=True, justify=Gtk.Justification.CENTER)
+        self.status.add_css_class("title-2")
+        self.step = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, label=_("Preparing…"))
+        self.bar = Gtk.ProgressBar(margin_top=6)
+        self.detail = Gtk.Label(justify=Gtk.Justification.CENTER, wrap=True)
+        self.detail.add_css_class("dim-label")
+        self.detail.add_css_class("caption")
+        self.buttons = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=12)
+        # Only someone tracking down an error needs the log
+        self.log = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        log_scroll = Gtk.ScrolledWindow(child=self.log, min_content_height=240)
+        log_scroll.add_css_class("card")
+        self.details = Gtk.Expander(label=_("Details"), child=log_scroll, visible=False)
+        for w in (self.icon, self.status, self.step, self.bar, self.detail, self.buttons, self.details):
+            box.append(w)
+        view = Adw.ToolbarView(content=scrolled(box))
+        view.add_top_bar(Adw.HeaderBar())
+        self.set_child(view)
+
+    def add_line(self, text):
+        buf = self.log.get_buffer()
+        buf.insert(buf.get_end_iter(), text + "\n")
+        if not self.progress:
+            self.bar.pulse()
+            return
+        self.progress.feed(text)
+        p = self.progress
+        if p.index < 0:
+            return
+        self.step.set_text(_("Step {current} of {total}: {title}").format(
+            current=p.index + 1, total=len(p.steps), title=p.steps[p.index][1]))
+        n, total = p.count()
+        self.detail.set_text(_("{done} of {total}").format(done=n, total=total) if total else "")
+        self.bar.set_fraction(p.fraction())
+
+    def finish(self, ok, title, text=""):
+        """Show the result; the log stays reachable under "Details" on failure."""
+        self.set_can_pop(True)
+        self.icon.set_from_icon_name("object-select-symbolic" if ok else "dialog-warning-symbolic")
+        self.icon.remove_css_class("dim-label")
+        self.icon.add_css_class("success" if ok else "error")
+        self.status.set_text(title)
+        self.step.set_text(text)
+        self.step.set_visible(bool(text))
+        self.bar.set_visible(False)
+        self.detail.set_visible(False)
+        self.details.set_visible(not ok)
+
+    def add_button(self, label, callback, style=None):
+        self.buttons.append(pill(label, callback, style))
+
+
+class DetailPage(Adw.NavigationPage):
+    """App details: install/open/remove, screenshots, rating, description, package info."""
+
+    def __init__(self, win, app):
+        super().__init__(title=app.name)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+
+        head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        icon = Gtk.Image(pixel_size=96)
+        set_icon(icon, app, 128)
+        head.append(icon)
+        name = Gtk.Label(label=app.name, wrap=True, justify=Gtk.Justification.CENTER)
+        name.add_css_class("title-1")
+        head.append(name)
+        summary = Gtk.Label(label=app.summary, wrap=True, justify=Gtk.Justification.CENTER)
+        summary.add_css_class("dim-label")
+        head.append(summary)
+        box.append(head)
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        if not app.installed:
+            actions.append(pill(_("Install"), lambda: win.install(app), "suggested-action"))
+        else:
+            if app.desktop_id or app.source == FLATPAK:
+                actions.append(pill(_("Open"), lambda: launch(app), "suggested-action"))
+            if app.removal:
+                actions.append(pill(_("Remove"), lambda: win.confirm_remove(app), "destructive-action"))
+            else:
+                hint = Gtk.Label(label=_("Part of the system (Phosh, phone) and cannot be removed."),
+                                 wrap=True, justify=Gtk.Justification.CENTER)
+                hint.add_css_class("dim-label")
+                hint.add_css_class("caption")
+                actions.append(hint)
+        box.append(actions)
+
+        urls = screenshot_urls(app.cpt)
+        if urls:
+            box.append(self.screenshots(urls))
+
+        group = Adw.PreferencesGroup()
+        rating = plain_row(title=LABELS[app.rating], subtitle=app.note)
+        rating.add_css_class("property")
+        group.add(rating)
+        box.append(group)
+
+        description = app.cpt.get_description()
+        if description:
+            text = AppStream.markup_convert(description, AppStream.MarkupKind.TEXT)
+            label = Gtk.Label(label=text.strip(), wrap=True, xalign=0, selectable=True)
+            box.append(label)
+
+        info = Adw.PreferencesGroup(title=_("Details"))
+        if app.source == FLATPAK:
+            package = plain_row(title=_("Source"), subtitle=f"Flathub {app.version}".strip())
+        else:
+            package = plain_row(title=_("Package"), subtitle=f"{app.pkg} {app.version}")
+        package.add_css_class("property")
+        info.add(package)
+        homepage = app.cpt.get_url(AppStream.UrlKind.HOMEPAGE)
+        if homepage:
+            row = plain_row(title=_("Website"), subtitle=homepage, activatable=True)
+            row.add_suffix(Gtk.Image(icon_name="adw-external-link-symbolic"))
+            row.connect("activated", lambda *_: Gtk.UriLauncher(uri=homepage).launch(win, None, None))
+            info.add(row)
+        box.append(info)
+
+        view = Adw.ToolbarView(content=scrolled(box))
+        view.add_top_bar(Adw.HeaderBar())
+        self.set_child(view)
+
+    def screenshots(self, urls):
+        """Screenshots from the network, as linked in AppStream (the respective app's server)."""
+        carousel = Adw.Carousel(spacing=12, allow_scroll_wheel=False)
+        for url in urls:
+            stack = Gtk.Stack(height_request=320, hexpand=True)
+            stack.add_named(Adw.Spinner(), "loading")
+            picture = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
+            stack.add_named(picture, "picture")
+            failed = Gtk.Label(label=_("Image not available"))
+            failed.add_css_class("dim-label")
+            stack.add_named(failed, "failed")
+            carousel.append(stack)
+
+            def show(texture, stack=stack, picture=picture):
+                if texture:
+                    picture.set_paintable(texture)
+                stack.set_visible_child_name("picture" if texture else "failed")
+            SCREENSHOTS.get(url, load_url, show)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.append(carousel)
+        if len(urls) > 1:
+            box.append(Adw.CarouselIndicatorDots(carousel=carousel))
+        return box
+
+
+class CategoryPage(Adw.NavigationPage):
+    """Offered apps of one CATEGORIES group."""
+
+    def __init__(self, win, title, categories):
+        super().__init__(title=title)
+        model = Gtk.FilterListModel(model=win.store, filter=Gtk.CustomFilter.new(
+            lambda a: win.offered(a) and in_category(a, categories)))
+        view = Adw.ToolbarView(content=win.app_list(model))
+        view.add_top_bar(Adw.HeaderBar())
+        self.set_child(view)
+
+
+class Window(Adw.ApplicationWindow):
+    """Main window: Explore, Installed and Updates tabs; operations are pushed as pages."""
+
+    def __init__(self, app):
+        super().__init__(application=app, title=_("Software"), default_width=360, default_height=720)
+        self.busy = False
+        self.shown = load_shown()
+        self.store = Gio.ListStore(item_type=App)
+        self.connect("close-request", self.on_close)
+
+        self.stack = Adw.ViewStack()
+        self.stack.add_titled_with_icon(self.build_explore(), "explore", _("Explore"),
+                                        "system-search-symbolic")
+        self.stack.add_titled_with_icon(self.build_installed(), "installed", _("Installed"),
+                                        "view-list-symbolic")
+        self.updates_page = self.stack.add_titled_with_icon(self.build_updates(), "updates", _("Updates"),
+                                                            "software-update-available-symbolic")
+        header = Adw.HeaderBar()
+        search_button = Gtk.ToggleButton(icon_name="system-search-symbolic", tooltip_text=_("Search"))
+        search_button.bind_property("active", self.search_bar, "search-mode-enabled",
+                                    GObject.BindingFlags.BIDIRECTIONAL)
+        search_button.connect("toggled", self.on_search_toggled)
+        header.pack_start(search_button)
+        header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=self.build_menu(),
+                                       tooltip_text=_("Menu")))
+        view = Adw.ToolbarView(content=self.stack)
+        view.add_top_bar(header)
+        view.add_bottom_bar(Adw.ViewSwitcherBar(stack=self.stack, reveal=True))
+        self.main_page = Adw.NavigationPage(title=_("Software"), child=view, tag="main")
+        self.nav = Adw.NavigationView()
+        self.nav.add(self.main_page)
+        self.toasts = Adw.ToastOverlay(child=self.nav)
+        self.set_content(self.toasts)
+
+        self.reload()
+        self.check_updates()
+
+    def build_menu(self):
+        """Menu at the top right: extra ratings under "Explore" and the Flathub switch."""
+        section = Gio.Menu()
+        for key, (rating, label) in EXTRA.items():
+            action = Gio.SimpleAction.new_stateful(key, None, GLib.Variant("b", rating in self.shown))
+            action.connect("change-state", self.on_shown_changed, rating)
+            self.add_action(action)
+            section.append(label, f"win.{key}")
+        menu = Gio.Menu()
+        menu.append_section(_("Also show under “Explore”"), section)
+
+        self.flathub = Gio.SimpleAction.new_stateful("flathub", None, GLib.Variant("b", flathub_enabled()))
+        self.flathub.connect("change-state", self.on_flathub_changed)
+        self.add_action(self.flathub)
+        sources = Gio.Menu()
+        sources.append("Flathub", "win.flathub")
+        menu.append_section(_("Software Sources"), sources)
+        return menu
+
+    def on_flathub_changed(self, _action, value):
+        # The check mark only follows the result of plinius-pkg
+        if value.get_boolean():
+            dialog = Adw.AlertDialog(
+                heading=_("Turn On Flathub?"),
+                body=_("Flathub is an app store for Flatpak apps, independent of system updates. "
+                       "The apps run in a sandbox and bring their own runtimes, so the first app "
+                       "downloads a few hundred MB.\n\nOn the Plinius, Flatpak apps do not yet have "
+                       "graphics acceleration via libhybris; they render in software and run slower."))
+            dialog.add_response("cancel", _("Cancel"))
+            dialog.add_response("enable", _("Turn On"))
+            dialog.set_response_appearance("enable", Adw.ResponseAppearance.SUGGESTED)
+            dialog.connect("response", lambda _d, r: r == "enable" and self.enable_flathub())
+            dialog.present(self)
+        else:
+            self.disable_flathub()
+
+    def enable_flathub(self):
+        def done(code, page):
+            self.flathub.set_state(GLib.Variant("b", code == 0))
+            if code == 0:
+                page.finish(True, _("Flathub is on"),
+                            _("Apps from Flathub appear under “Explore” marked “Flathub”. The app "
+                              "grid shows their launchers after you log in again."))
+            elif not self.common_failure(code, page):
+                page.finish(False, _("Could not turn on Flathub"), _("See “Details” for more information"))
+        self.run_helper(["flathub-enable"], _("Turning on Flathub"),
+                        [DOWNLOAD, CHECK, INSTALL, HOOKS, FLATHUB_CATALOG], done)
+
+    def disable_flathub(self):
+        def done(code, page):
+            self.flathub.set_state(GLib.Variant("b", code != 0))
+            if code == 0:
+                page.finish(True, _("Flathub is off"))
+            elif code == FLATHUB_IN_USE:
+                page.finish(False, _("Apps from Flathub are still installed"),
+                            _("Remove them under “Installed” first."))
+            elif self.common_failure(code, page):
+                pass
+            else:
+                page.finish(False, _("Could not turn off Flathub"), _("See “Details” for more information"))
+        self.run_helper(["flathub-disable"], _("Turning off Flathub"), None, done)
+
+    def on_shown_changed(self, action, value, rating):
+        action.set_state(value)
+        if value.get_boolean():
+            self.shown.add(rating)
+        else:
+            self.shown.discard(rating)
+        save_shown(self.shown)
+        self.filter.changed(Gtk.FilterChange.DIFFERENT)
+        self.update_explore()
+
+    # Lists
+
+    def app_list(self, model, removable=False):
+        """Scrollable list of model; activating a row opens its DetailPage."""
+        on_remove = self.confirm_remove if removable else None
+        factory = Gtk.SignalListItemFactory()
+        factory.connect("setup", lambda _f, item: item.set_child(AppRow(on_remove)))
+        factory.connect("bind", lambda _f, item: item.get_child().bind(item.get_item()))
+        view = Gtk.ListView(model=Gtk.NoSelection(model=model), factory=factory,
+                            single_click_activate=True)
+        view.add_css_class("navigation-sidebar")
+        view.connect("activate", lambda _v, pos: self.nav.push(DetailPage(self, model.get_item(pos))))
+        return Gtk.ScrolledWindow(child=view, vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+
+    def build_explore(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        # The magnifier at the top left opens the search; without a search term "Explore" shows the categories
+        self.search = Gtk.SearchEntry(placeholder_text=_("Search apps"), hexpand=True)
+        self.search_bar = Gtk.SearchBar(child=Adw.Clamp(child=self.search, maximum_size=600))
+        self.search_bar.connect_entry(self.search)
+        box.append(self.search_bar)
+
+        self.filter = Gtk.CustomFilter.new(self.explore_visible)
+        self.explore_model = Gtk.FilterListModel(model=self.store, filter=self.filter)
+        self.explore_stack = Gtk.Stack()
+        self.explore_stack.add_named(Adw.Spinner(), "loading")
+        self.explore_stack.add_named(self.build_categories(), "categories")
+        self.explore_stack.add_named(self.app_list(self.explore_model), "list")
+        self.explore_stack.add_named(Adw.StatusPage(icon_name="system-search-symbolic",
+                                                    title=_("No Results")), "empty")
+        self.explore_stack.add_named(Adw.StatusPage(
+            icon_name="dialog-warning-symbolic", title=_("No App Catalog"),
+            description=_("The catalog could not be loaded. Is the package "
+                          "archlinux-appstream-data missing?")), "nocatalog")
+        box.append(self.explore_stack)
+
+        def changed(*_):
+            self.filter.changed(Gtk.FilterChange.DIFFERENT)
+            self.update_explore()
+        self.search.connect("search-changed", changed)
+        self.store.connect("items-changed", lambda *_: self.update_explore())
+        return box
+
+    def build_categories(self):
+        # One category per row: icon, name, number of apps, arrow
+        group = Adw.PreferencesGroup()
+        self.category_rows = []
+        for title, icon, categories in CATEGORIES:
+            row = plain_row(title=title, activatable=True)
+            row.add_prefix(Gtk.Image(icon_name=icon, pixel_size=24))
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated", lambda _r, t=title, c=categories:
+                        self.nav.push(CategoryPage(self, t, c)))
+            group.add(row)
+            self.category_rows.append((row, categories))
+        return scrolled(group)
+
+    def offered(self, app):
+        """What "Explore" offers: not installed, rating selected (menu at the top right)."""
+        return not app.installed and app.rating in self.shown
+
+    def searching(self):
+        return self.search_bar.get_search_mode() and self.search.get_text().strip()
+
+    def explore_visible(self, app):
+        words = self.search.get_text().casefold().split()
+        return self.offered(app) and all(w in app.search for w in words)
+
+    def on_search_toggled(self, button):
+        if button.get_active():
+            self.stack.set_visible_child_name("explore")
+        else:
+            self.search.set_text("")
+        self.update_explore()
+
+    def update_explore(self):
+        """Switch "Explore" between categories, results and empty state; update the counts."""
+        if not self.store.get_n_items():
+            return  # still loading, or no catalog (set_apps)
+        if self.searching():
+            self.explore_stack.set_visible_child_name(
+                "list" if self.explore_model.get_n_items() else "empty")
+            return
+        offered = [a for a in (self.store.get_item(i) for i in range(self.store.get_n_items()))
+                   if self.offered(a)]
+        for row, categories in self.category_rows:
+            n = sum(1 for a in offered if in_category(a, categories))
+            row.set_subtitle(ngettext("{n} app", "{n} apps", n).format(n=n))
+            # Hide empty groups, e.g. "Recommended" once everything is installed
+            row.set_visible(n > 0)
+        self.explore_stack.set_visible_child_name("categories")
+
+    def build_installed(self):
+        # All installed apps from the catalog, including the bundled ones (plinius-apps), as far
+        # as they are in the app grid; a trash button on all that no other package needs
+        model = Gtk.FilterListModel(model=self.store, filter=Gtk.CustomFilter.new(
+            lambda a: a.installed and (a.removal or not a.hidden)))
+        stack = Gtk.Stack()
+        stack.add_named(self.app_list(model, removable=True), "list")
+        stack.add_named(Adw.StatusPage(
+            icon_name="view-list-symbolic", title=_("No Apps Installed"),
+            description=_("Apps you install from “Explore” appear here.")), "empty")
+        model.connect("items-changed", lambda m, *_: stack.set_visible_child_name(
+            "list" if m.get_n_items() else "empty"))
+        stack.set_visible_child_name("empty")
+        return stack
+
+    def reload(self):
+        """Reload the catalog in the background, e.g. after an operation."""
+        def work():
+            try:
+                apps = load_catalog()
+            except Exception:
+                # Otherwise "Explore" would be stuck at the spinner; details go to the journal
+                traceback.print_exc()
+                apps = []
+            GLib.idle_add(self.set_apps, apps)
+        threading.Thread(target=work, daemon=True).start()
+
+    def set_apps(self, apps):
+        self.store.splice(0, self.store.get_n_items(), apps)
+        if not apps:
+            self.explore_stack.set_visible_child_name("nocatalog")
+
+    # Updates
+
+    def build_updates(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.update_status = StatusHeader("software-update-available-symbolic", _("Checking for updates…"))
+        box.append(self.update_status)
+        # "Check Again" first, "Update Now" below it, as in Settings
+        self.check_button = pill(_("Check Again"), self.check_updates)
+        # One empty line above it, so that it does not read as part of the status
+        self.check_button.set_margin_top(24)
+        box.append(self.check_button)
+        self.upgrade_button = pill(_("Update Now"), self.upgrade, "suggested-action")
+        self.upgrade_button.set_visible(False)
+        box.append(self.upgrade_button)
+        self.update_list = Adw.PreferencesGroup(title=_("Packages"), visible=False)
+        box.append(self.update_list)
+        self.update_rows = []
+        return scrolled(box)
+
+    def check_updates(self):
+        """Check for updates in the background; the result goes to on_updates."""
+        self.check_button.set_sensitive(False)
+        self.update_status.set_title(_("Checking for updates…"))
+        self.update_status.set_description(None)
+
+        def work():
+            GLib.idle_add(self.on_updates, *find_updates())
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_updates(self, code, packages, flatpaks, hold):
+        """Show the result of find_updates on the Updates tab. "Update Now" stays available
+        when the check failed: the upgrade fetches fresh databases itself. Updates held back by
+        plinius-freigabe are named as such, not as "up to date"."""
+        self.check_button.set_sensitive(True)
+        for row in self.update_rows:
+            self.update_list.remove(row)
+        self.update_rows = []
+        last = last_check_text()
+        updates = [(name, f"{old} → {new}") for name, old, new in packages]
+        updates += [(name, f"{remote_title(remote)} {version}".strip()) for name, version, remote in flatpaks]
+        if code not in (0, 2) and not updates:
+            self.update_status.set_title(_("Check failed"))
+            self.update_status.set_description(
+                _("No connection to the server? You can still update.")
+                + ("\n" + _("Last successful check: {when}").format(when=last) if last else ""))
+        elif hold:
+            title, text = hold_texts(hold)
+            self.update_status.set_title(title)
+            self.update_status.set_description(text)
+        elif updates:
+            self.update_status.set_title(ngettext("{n} update available", "{n} updates available",
+                                                  len(updates)).format(n=len(updates)))
+            self.update_status.set_description(
+                _("The whole system is always updated at once.")
+                + ("\n" + _("Checked: {when}").format(when=last) if last and code in (0, 2) else ""))
+        else:
+            self.update_status.set_title(_("The system is up to date"))
+            self.update_status.set_description(_("Last checked: {when}").format(when=last) if last else None)
+        for title, subtitle in updates:
+            row = plain_row(title=title, subtitle=subtitle)
+            self.update_list.add(row)
+            self.update_rows.append(row)
+        self.update_list.set_visible(bool(updates))
+        self.upgrade_button.set_visible(bool(updates) or code not in (0, 2))
+        self.updates_page.set_badge_number(len(updates))
+        self.updates_page.set_needs_attention(bool(updates))
+
+    # Package operations
+
+    def run_helper(self, args, title, steps, done):
+        """Run plinius-pkg via pkexec, with progress on an OperationPage. done(code, page) sets
+        the result; if it returns True, the "Done" button is left out."""
+        self.busy = True
+        page = OperationPage(title, steps)
+        self.nav.push(page)
+
+        def on_line(stream, result):
+            try:
+                line, _length = stream.read_line_finish_utf8(result)
+            except GLib.Error:
+                line = "�"  # not valid UTF-8, but the line has been consumed anyway
+            if line is None:
+                proc.wait_async(None, on_exit)
+                return
+            page.add_line(line)
+            stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
+
+        def on_exit(proc, result):
+            proc.wait_finish(result)
+            self.busy = False
+            code = proc.get_exit_status()
+            if code in PKEXEC_CANCELLED:
+                page.set_can_pop(True)
+                self.nav.pop()
+                return
+            # Back leads to the overview; detail pages would show an outdated state after the operation
+            self.nav.replace([self.main_page, page])
+            if not done(code, page):
+                page.add_button(_("Done"), lambda: self.nav.pop_to_tag("main"))
+            self.reload()
+
+        try:
+            proc = Gio.Subprocess.new(["pkexec", HELPER, *args],
+                                      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
+        except GLib.Error as e:
+            self.busy = False
+            page.finish(False, _("Could not start"), e.message)
+            page.add_button(_("Done"), lambda: self.nav.pop_to_tag("main"))
+            return
+        stream = Gio.DataInputStream.new(proc.get_stdout_pipe())
+        stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
+
+    def stale(self, page):
+        """The installed database state is outdated (STALE_DB, STALE_FILE): send to Updates."""
+        page.finish(False, _("Update the system first"),
+                    _("The app belongs to a newer state than the installed system."))
+        page.add_button(_("Go to Updates"), self.show_updates, "suggested-action")
+
+    def common_failure(self, code, page):
+        """Failures any operation can have; True if code is one of them."""
+        if code == BUSY:
+            page.finish(False, _("Another operation is running"),
+                        _("Wait until it has finished and try again."))
+        elif code in (STALE_DB, STALE_FILE):
+            self.stale(page)
+        else:
+            return False
+        return True
+
+    def show_updates(self):
+        self.nav.pop_to_tag("main")
+        self.stack.set_visible_child_name("updates")
+
+    def install(self, app):
+        def done(code, page):
+            if code == 0:
+                show_in_phosh(app)
+                page.finish(True, _("{name} is installed").format(name=app.name))
+                if app.desktop_id or app.source == FLATPAK:
+                    page.add_button(_("Open"), lambda: launch(app), "suggested-action")
+            elif code == HELD:
+                page.finish(False, _("Waiting for approval"),
+                            _("{name} needs packages that are still being tested with the Plinius "
+                              "adaptations. It can be installed once they are approved.").format(name=app.name))
+            elif not self.common_failure(code, page):
+                page.finish(False, _("Installation failed"), _("See “Details” for more information"))
+        args = ["flatpak-install", app.pkg] if app.source == FLATPAK else ["install", app.pkg]
+        steps = None if app.source == FLATPAK else [DOWNLOAD, CHECK, INSTALL, HOOKS]
+        self.run_helper(args, _("Installing {name}").format(name=app.name), steps, done)
+
+    def confirm_remove(self, app):
+        """Ask before removing app."""
+        dialog = Adw.AlertDialog(heading=_("Remove {name}?").format(name=app.name),
+                                 body=_("The app and dependencies that are no longer needed will be "
+                                        "removed. Your files and settings are kept."))
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("remove", _("Remove"))
+        dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", lambda _d, r: r == "remove" and self.remove(app))
+        dialog.present(self)
+
+    def remove(self, app):
+        def done(code, page):
+            if code == 0:
+                page.finish(True, _("{name} has been removed").format(name=app.name))
+            elif not self.common_failure(code, page):
+                page.finish(False, _("Removal failed"), _("See “Details” for more information"))
+        args = ["flatpak-remove" if app.source == FLATPAK else "remove", *app.removal]
+        steps = None if app.source == FLATPAK else [REMOVE, HOOKS]
+        self.run_helper(args, _("Removing {name}").format(name=app.name), steps, done)
+
+    def upgrade(self):
+        """Update the whole system (pacman -Syu, then Flatpak apps if Flathub is on)."""
+        def done(code, page):
+            self.check_updates()
+            if code == 0:
+                return offer_restart(page, _("The system has been updated"))
+            if code == NOTHING_TO_DO:
+                page.finish(True, _("The system is already up to date"))
+            elif code == ONLY_FLATPAK:
+                return offer_restart(page, _("The Flatpak apps have been updated"))
+            elif code == LOW_BATTERY:
+                page.finish(False, _("Battery too low"),
+                            _("Connect the charger or charge the phone to at least 10 %, then update. "
+                              "An update interrupted by an empty battery can leave the system unable to start."))
+            elif code == REPO_UNVERIFIED:
+                page.finish(False, _("Updates could not be verified"),
+                            _("The update server's package list does not match its signed state. "
+                              "Nothing was changed. Try again later."))
+            elif not self.common_failure(code, page):
+                page.finish(False, _("Update failed"), _("See “Details” for more information"))
+        steps = [SYNC, DOWNLOAD, CHECK, INSTALL, HOOKS]
+        if self.flathub.get_state().get_boolean():
+            steps.append(FLATPAK_UPDATE)
+        self.run_helper(["upgrade"], _("Updating the system"), steps, done)
+
+    def on_close(self, *_args):
+        """Keep the window open while an operation runs."""
+        if self.busy:
+            self.toasts.add_toast(Adw.Toast(title=_("Please wait until the operation has finished")))
+            return True
+        return False
+
+
+class Application(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+        # Opened from the update notification (send_update_notification)
+        action = Gio.SimpleAction.new("show-updates", None)
+        action.connect("activate", self.on_show_updates)
+        self.add_action(action)
+
+    def do_activate(self):
+        (self.get_active_window() or Window(self)).present()
+
+    def on_show_updates(self, *_):
+        window = self.get_active_window() or Window(self)
+        window.show_updates()
+        window.present()
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--check-updates"]:
+        sys.exit(notify_updates())
+    if sys.argv[1:] == ["--updates-json"]:
+        sys.exit(updates_json())
+    sys.exit(Application().run(sys.argv))

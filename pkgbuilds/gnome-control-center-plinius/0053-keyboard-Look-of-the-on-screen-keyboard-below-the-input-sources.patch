@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 19:20:00 +0100
+Subject: [PATCH] keyboard: Look of the on-screen keyboard below the input sources
+
+A choice between the glass look of the password prompt at startup and
+Stevia's original look (stevia-plinius, setting org.plinius.keyboard
+style). The group lives in cc-plinius-osk-style.c; this only calls it.
+---
+--- a/panels/keyboard/cc-keyboard-panel.c
++++ b/panels/keyboard/cc-keyboard-panel.c
+@@ -32,6 +32,7 @@
+ #include "cc-keyboard-shortcut-page.h"
+ #include "cc-list-row.h"
+ #include "cc-plinius-dictate.h"
++#include "cc-plinius-osk-style.h"
+ #include "cc-xkb-modifier-page.h"
+ 
+ #include "keyboard-shortcuts.h"
+@@ -221,6 +222,8 @@
+ 
+     /* Plinius: speech to text in the on-screen keyboard, below the input sources */
+     cc_plinius_dictate_setup (self->preferences_page);
++    /* Plinius: look of the on-screen keyboard, between the input sources and speech to text */
++    cc_plinius_osk_style_setup (self->preferences_page);
+ 
+     self->input_source_settings = g_settings_new ("org.gnome.desktop.input-sources");
+ 
+--- a/panels/keyboard/meson.build
++++ b/panels/keyboard/meson.build
+@@ -86,6 +86,7 @@
+   'cc-keyboard-shortcut-page.c',
+   'cc-keyboard-panel.c',
+   'cc-plinius-dictate.c',
++  'cc-plinius-osk-style.c',
+   'cc-keyboard-item.c',
+   'cc-keyboard-manager.c',
+   'cc-keyboard-shortcut-editor.c',

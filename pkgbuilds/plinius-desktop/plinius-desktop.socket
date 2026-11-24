@@ -1,0 +1,22 @@
+# The port of the desktop over VNC. Listening costs nothing: the server and the virtual screen
+# only start with a connection (plinius-desktop.service). Switched on and off by the "Desktop
+# over VNC" page of GNOME Settings; which networks may reach it is the firewall's business
+# (plinius-desktop-set).
+[Unit]
+Description=Plinius Desktop: VNC port
+PartOf=graphical-session.target
+# Only behind the firewall: plinius-desktop-set makes this file once its rules are in place.
+# Without it the port stays closed instead of open to every network, mobile data included.
+ConditionPathExists=/run/plinius-desktop-firewall
+
+[Socket]
+ListenStream=5900
+# A connection that breaks without a goodbye (cable out, viewer's computer off) ends the session
+# after about 35 s. wayvnc's accepted sockets inherit this from the listening one.
+KeepAlive=yes
+KeepAliveTimeSec=15
+KeepAliveIntervalSec=5
+KeepAliveProbes=4
+
+[Install]
+WantedBy=graphical-session.target

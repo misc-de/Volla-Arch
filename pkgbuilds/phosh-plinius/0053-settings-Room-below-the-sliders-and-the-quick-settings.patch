@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 10:50:00 +0100
+Subject: [PATCH] settings: Room below the sliders and the quick settings
+
+The volume slider sat right on the tiles and the last tile right on what comes next.
+---
+ src/ui/settings.ui | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/ui/settings.ui b/src/ui/settings.ui
+index 70725ddf..cfb928de 100644
+--- a/src/ui/settings.ui
++++ b/src/ui/settings.ui
+@@ -33,7 +33,7 @@
+                             <property name="visible">1</property>
+                             <property name="orientation">vertical</property>
+                             <property name="margin-top">6</property>
+-                            <property name="margin-bottom">6</property>
++                            <property name="margin-bottom">18</property>
+                             <child>
+                               <object class="PhoshBrightnessSettings" id="brightness_settings"/>
+                             </child>
+@@ -49,6 +49,7 @@
+                     </child>
+                     <child>
+                       <object class="PhoshQuickSettings" id="quick_settings">
++                        <property name="margin-bottom">18</property>
+                         <property name="visible">1</property>
+                       </object>
+                     </child>

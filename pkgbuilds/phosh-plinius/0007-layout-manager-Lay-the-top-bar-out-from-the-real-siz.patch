@@ -1,0 +1,732 @@
+From 5c0382ff22fcea49a7256775d2f4bb98773fee86 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 18:02:00 +0100
+Subject: [PATCH] layout-manager: Lay the top bar out from the real sizes and
+ panel data
+
+Plinius: upstream assumes a 40 px clock and a fixed number of icons when it
+places the top bar around a notch. With the weekday, the date and the calendar
+week the clock is far wider, so a clock moved to the left pushed the network
+icons under the camera.
+
+The top bar now reports the widths its clock and icon boxes really need, and
+the layout manager places the clock in the center if it fits beside the notch,
+otherwise at the side that fits; an icon box that would end up under the notch
+is padded past it (new side box shift, CSS on the named boxes).
+
+The notch setting gains "auto" (the default): the panel comes from the device
+package (/usr/share/plinius/display-panel.json, gmobile's format), else from
+gmobile, else there is no cutout. Left/center/right stay as manual estimates.
+---
+ src/layout-manager.c | 359 +++++++++++++++++++++++++++++++++++----------------
+ src/layout-manager.h |   5 +
+ src/top-panel.c      |  98 +++++++++++++-
+ src/ui/top-panel.ui  |   4 +
+ 4 files changed, 349 insertions(+), 117 deletions(-)
+
+diff --git a/src/layout-manager.c b/src/layout-manager.c
+index 0d30f049..bf6a2549 100644
+--- a/src/layout-manager.c
++++ b/src/layout-manager.c
+@@ -52,6 +52,7 @@ struct _PhoshLayoutManager {
+ 
+   GmDisplayPanel             *panel;
+   GmDisplayPanel             *device_panel;
++  GmDisplayPanel             *file_panel;
+   GSettings                  *settings;
+   GSettings                  *plinius_settings;
+ 
+@@ -60,6 +61,11 @@ struct _PhoshLayoutManager {
+   guint                       clock_box_shift;
+   guint                       corner_shift;
+   guint                       network_box_shift;
++  guint                       side_box_shift;
++  /* Plinius: what the top bar's clock and icon boxes need, -1 until reported */
++  int                         clock_width;
++  int                         network_width;
++  int                         indicators_width;
+   guint                       indicators_box_shift;
+ 
+   PhoshMonitor               *builtin;
+@@ -72,6 +78,11 @@ G_DEFINE_TYPE (PhoshLayoutManager, phosh_layout_manager, G_TYPE_OBJECT)
+ /* Height of the clock box */
+ #define CLOCK_BOX_HEIGHT 16 /* px */
+ 
++/* Plinius: padding of the top bar clock when it moved to the left or right (common.css) */
++#define CLOCK_SIDE_PADDING 6 /* px */
++/* Plinius: panel data of the device in gmobile's format, shipped by the device package */
++#define PLINIUS_PANEL_FILE "plinius/display-panel.json"
++
+ /* The minimum space needed when shifting the indicator area due to a
+  * cutout. This is less than the `*_box_rect.width` as the clock will
+  * just be shifted by GTK in those cases */
+@@ -95,57 +106,76 @@ static const GdkRectangle indicators_box_rect = {
+   .height = PHOSH_TOP_BAR_HEIGHT
+ };
+ 
++/*
++ * Plinius: the cutouts the top bar has to avoid, as one rectangle in GTK coordinates
++ * (scaled). Only cutouts that reach into the top bar count.
++ *
++ * Returns: %TRUE if there is such a cutout
++ */
++static gboolean
++get_top_bar_notch (PhoshLayoutManager *self, float scale, GdkRectangle *notch)
++{
++  GListModel *cutouts;
++  GdkRectangle top_bar = { .x = 0, .y = 0, .height = PHOSH_TOP_BAR_HEIGHT };
++  gboolean found = FALSE;
++
++  top_bar.width = self->builtin->width / scale;
++  cutouts = gm_display_panel_get_cutouts (self->panel);
++  for (int i = 0; i < g_list_model_get_n_items (cutouts); i++) {
++    g_autoptr (GmCutout) cutout = g_list_model_get_item (cutouts, i);
++    const GmRect *bounds = gm_cutout_get_bounds (cutout);
++    GdkRectangle rect = {
++      .x = floor (bounds->x / scale),
++      .y = floor (bounds->y / scale),
++      .width = ceil (bounds->width / scale),
++      .height = ceil (bounds->height / scale),
++    };
++
++    if (!gdk_rectangle_intersect (&rect, &top_bar, NULL))
++      continue;
++
++    if (found)
++      gdk_rectangle_union (notch, &rect, notch);
++    else
++      *notch = rect;
++    found = TRUE;
++  }
++
++  return found;
++}
++
++
+ /**
+- * get_clock_pos:
++ * get_clock_box_shift:
+  * @self: The layout manager
+- * @clock_box_shift:(out): How far to shift the settings clock box downwards
+- *
+- * Update the clock's positions.
+- *
+- * If the clock can't be in the center due to the built-in display
+- * having a notch shift it left or right (whatever causes less overlap
+- * with the notch)
+- *
+- * We assume the panel uses it's native orientation.
+  *
+- * Returns: The desired clock position
++ * How far to shift the settings clock box downwards so it starts below any cutout.
+  */
+-static PhoshLayoutClockPosition
+-get_clock_pos (PhoshLayoutManager *self, guint *clock_box_shift)
++static guint
++get_clock_box_shift (PhoshLayoutManager *self)
+ {
+-  PhoshLayoutClockPosition clock_pos = PHOSH_LAYOUT_CLOCK_POS_CENTER;
+   GListModel *cutouts;
+-  GdkRectangle clock_rect;
+   GdkRectangle clock_box_rect;
+   float scale;
+   guint shift = 0;
+ 
+-  if (self->layout != PHOSH_SHELL_LAYOUT_DEVICE)
+-    return clock_pos;
+-
+-  if (self->builtin == NULL)
+-    return clock_pos;
++  if (self->layout != PHOSH_SHELL_LAYOUT_DEVICE || self->builtin == NULL)
++    return 0;
+ 
+-  if (phosh_monitor_get_transform (self->builtin) != PHOSH_MONITOR_TRANSFORM_NORMAL) {
+-    /* TODO: we can do better here */
+-    return clock_pos;
+-  }
++  if (phosh_monitor_get_transform (self->builtin) != PHOSH_MONITOR_TRANSFORM_NORMAL)
++    return 0;
+ 
+   scale = phosh_monitor_get_fractional_scale (self->builtin);
+-  clock_rect = center_clock_rect;
+-  clock_rect.x = (self->builtin->width / scale / 2.0) - center_clock_rect.width / 2.0;
+-  clock_box_rect.width = self->builtin->width / scale;
+-  clock_box_rect.height = CLOCK_BOX_HEIGHT;
++  clock_box_rect = (GdkRectangle) {
++    .width = self->builtin->width / scale,
++    .height = CLOCK_BOX_HEIGHT,
++  };
+ 
+   cutouts = gm_display_panel_get_cutouts (self->panel);
+   for (int i = 0; i < g_list_model_get_n_items (cutouts); i++) {
+     g_autoptr (GmCutout) cutout = g_list_model_get_item (cutouts, i);
+-    GdkRectangle notch;
+-    int overlap_left, overlap_right;
+-    const GmRect *bounds;
+-
+-    bounds = gm_cutout_get_bounds (cutout);
+-    notch = (GdkRectangle) {
++    const GmRect *bounds = gm_cutout_get_bounds (cutout);
++    GdkRectangle notch = {
+       .x = floor (bounds->x / scale),
+       .y = floor (bounds->y / scale),
+       .width = ceil (bounds->width / scale),
+@@ -154,104 +184,114 @@ get_clock_pos (PhoshLayoutManager *self, guint *clock_box_shift)
+ 
+     if (gdk_rectangle_intersect (&notch, &clock_box_rect, NULL))
+       shift = MAX (shift, notch.height + notch.y);
+-
+-    /* Look for top-bar notch */
+-    if (!gdk_rectangle_intersect (&notch, &clock_rect, NULL))
+-        continue;
+-
+-    overlap_left = network_box_rect.width + center_clock_rect.width - notch.x;
+-    if (overlap_left <= 0) {
+-      clock_pos = PHOSH_LAYOUT_CLOCK_POS_LEFT;
+-      break;
+-    }
+-
+-    overlap_right = (indicators_box_rect.width + center_clock_rect.width -
+-                     ((self->builtin->width / scale) - notch.x - notch.width));
+-    if (overlap_right <= 0) {
+-      clock_pos = PHOSH_LAYOUT_CLOCK_POS_RIGHT;
+-      break;
+-    }
+-
+-    g_debug ("Notch overlaps left: %d, right: %d", overlap_left, overlap_right);
+-    g_warning ("No clock placement found to fully avoid notch");
+-    clock_pos = (overlap_left < overlap_right) ? PHOSH_LAYOUT_CLOCK_POS_LEFT :
+-      PHOSH_LAYOUT_CLOCK_POS_RIGHT;
+-    break;
+   }
+ 
+-  if (clock_box_shift)
+-    *clock_box_shift = shift;
+-
+-  g_debug ("Center clock pos: %d, margin: %u", clock_pos, shift);
+-  return clock_pos;
++  return shift;
+ }
+ 
++
+ /**
+- * get_cutout_shifts:
++ * get_top_bar_layout:
+  * @self: The layout manager
++ * @pad: The padding at both edges (at least the corner shift)
++ * @network:(out): Padding at the first child (the network box or the clock on the left)
++ * @indicators:(out): Padding at the last child (the indicators box or the clock on the right)
++ * @side:(out): Padding of the icon box next to a clock that moved to the left or right
+  *
+- * Get the shifts for network and indicator box.
++ * Plinius: place the clock and the two icon boxes around a notch.
+  *
+- * If the network box can't be left aligned due to the built-in
+- * display having a notch shift it to the right. Similar for the
+- * indicators but shift them to the left.
++ * Upstream assumes a 40 px clock and a fixed number of icons. The top bar reports the widths
++ * its clock (which can carry the weekday, the date and the calendar week) and its icon
++ * boxes really take, so the whole row is laid out from those: the clock stays in the center
++ * if it fits beside the notch, otherwise it moves to the side where everything fits (or
++ * overlaps the least). An icon box that would reach under the notch is pushed past it.
+  *
+  * We assume the panel uses its native orientation.
++ *
++ * Returns: The clock position
+  */
+-static void
+-get_cutout_shifts (PhoshLayoutManager *self, guint *network, guint *indicators)
++static PhoshLayoutClockPosition
++get_top_bar_layout (PhoshLayoutManager *self, guint padding, guint *network, guint *indicators, guint *side)
+ {
+-  GListModel *cutouts;
++  GdkRectangle notch;
+   float scale;
+-  GdkRectangle indicators_box = indicators_box_rect;
+-  GdkRectangle network_box = network_box_rect;
+-  guint width;
++  int pad = padding;
++  int width, cw, nw, iw, nl, nr, left, right;
++  int overlap_left = 0, overlap_right = 0, side_left = 0, side_right = 0;
++  int ind_left = 0, net_right = 0;
+ 
+-  if (self->layout != PHOSH_SHELL_LAYOUT_DEVICE)
+-    goto out;
++  *network = *indicators = *side = 0;
+ 
+-  if (self->builtin == NULL)
+-    goto out;
++  if (self->layout != PHOSH_SHELL_LAYOUT_DEVICE || self->builtin == NULL)
++    return PHOSH_LAYOUT_CLOCK_POS_CENTER;
+ 
+-  if (phosh_monitor_get_transform (self->builtin) != PHOSH_MONITOR_TRANSFORM_NORMAL)
+-    goto out;
++  if (phosh_monitor_get_transform (self->builtin) != PHOSH_MONITOR_TRANSFORM_NORMAL) {
++    /* TODO: we can do better here */
++    return PHOSH_LAYOUT_CLOCK_POS_CENTER;
++  }
+ 
+   scale = phosh_monitor_get_fractional_scale (self->builtin);
+-  width = self->builtin->logical.width;
+-
+-  network_box.x = PHOSH_TOP_BAR_MIN_PADDING;
+-  indicators_box.x = width - indicators_box.width - PHOSH_TOP_BAR_MIN_PADDING;
++  if (!get_top_bar_notch (self, scale, &notch))
++    return PHOSH_LAYOUT_CLOCK_POS_CENTER;
++
++  width = self->builtin->width / scale;
++  /* Until the top bar reported its sizes, use upstream's assumptions */
++  cw = self->clock_width >= 0 ? self->clock_width : center_clock_rect.width;
++  nw = self->network_width >= 0 ? self->network_width : network_box_rect.width;
++  iw = self->indicators_width >= 0 ? self->indicators_width : indicators_box_rect.width;
++  /* Keep a little distance to the notch */
++  nl = notch.x - PHOSH_TOP_BAR_CUTOUT_MIN_PADDING;
++  nr = notch.x + notch.width + PHOSH_TOP_BAR_CUTOUT_MIN_PADDING;
++
++  g_debug ("Top bar notch %d-%d, clock %d, network %d, indicators %d, width %d",
++           nl, nr, cw, nw, iw, width);
++
++  /* The clock in the center, the icon boxes at the edges or past the notch */
++  left = (width - cw) / 2;
++  right = left + cw;
++  if (right <= nl || left >= nr) {
++    if (pad + nw > nl && pad < nr)
++      *network = nr;
++    if (width - pad - iw < nr && width - pad > nl)
++      *indicators = width - nl;
++    return PHOSH_LAYOUT_CLOCK_POS_CENTER;
++  }
+ 
+-  cutouts = gm_display_panel_get_cutouts (self->panel);
+-  for (int i = 0; i < g_list_model_get_n_items (cutouts); i++) {
+-    g_autoptr (GmCutout) cutout = g_list_model_get_item (cutouts, i);
+-    const GmRect *phys_bounds = gm_cutout_get_bounds (cutout);
+-    GdkRectangle bounds;
+-    int available_space;
+-
+-    bounds = (GdkRectangle) {
+-      .x = floor (phys_bounds->x / scale),
+-      .y = floor (phys_bounds->y / scale),
+-      .width = ceil (phys_bounds->width / scale),
+-      .height = ceil (phys_bounds->height / scale),
+-    };
++  /* The clock on the left, the network box after it (the clock gets extra padding there) */
++  right = pad + cw + CLOCK_SIDE_PADDING;
++  if (right > nl) {
++    overlap_left = right - nl;
++  } else if (right + nw > nl) {
++    side_left = nr - right;
++    overlap_left = MAX (0, nr + nw - (width - pad - iw));
++  }
++  if (width - pad - iw < nr && width - pad > nl)
++    ind_left = width - nl;
++
++  /* The clock on the right, the indicators box before it */
++  left = width - pad - cw - CLOCK_SIDE_PADDING;
++  if (left < nr) {
++    overlap_right = nr - left;
++  } else if (left - iw < nr) {
++    side_right = left - nl;
++    overlap_right = MAX (0, pad + nw - (nl - iw));
++  }
++  if (pad + nw > nl && pad < nr)
++    net_right = nr;
+ 
+-    available_space = ((width - center_clock_rect.width) / 2) - (bounds.x + bounds.width) -
+-      CORNER_CUTOUT_SHIFT_THRESHOLD;
+-    if (gdk_rectangle_intersect (&bounds, &network_box, NULL) && available_space > 0)
+-      *network = bounds.x + bounds.width + PHOSH_TOP_BAR_CUTOUT_MIN_PADDING;
++  if (overlap_left > 0 && overlap_right > 0)
++    g_warning ("No clock placement found to fully avoid notch (left: %d, right: %d)",
++               overlap_left, overlap_right);
+ 
+-    available_space = ((width - center_clock_rect.width) / 2) - (width - bounds.x) -
+-      CORNER_CUTOUT_SHIFT_THRESHOLD;
+-    if (gdk_rectangle_intersect (&bounds, &indicators_box, NULL) && available_space > 0)
+-      *indicators = (self->builtin->width / scale - bounds.x) + PHOSH_TOP_BAR_CUTOUT_MIN_PADDING;
++  if (overlap_left <= overlap_right) {
++    *side = side_left;
++    *indicators = ind_left;
++    return PHOSH_LAYOUT_CLOCK_POS_LEFT;
+   }
+ 
+- out:
+-  *network = MAX (*network, PHOSH_TOP_BAR_MIN_PADDING);
+-  *indicators = MAX (*indicators, PHOSH_TOP_BAR_MIN_PADDING);
+-
+-  g_debug ("Network box: %d, indicators shift: %d", *network, *indicators);
++  *side = side_right;
++  *network = net_right;
++  return PHOSH_LAYOUT_CLOCK_POS_RIGHT;
+ }
+ 
+ /**
+@@ -309,7 +349,8 @@ G_GNUC_END_IGNORE_DEPRECATIONS
+ /*
+  * Plinius: builds the panel from the notch setting: a square around the camera hole at
+  * the top edge (left, center or right), or no cutout at all. Rounded corners still come
+- * from the device's panel data, if gmobile knows the device.
++ * from the device's panel data, if gmobile knows the device. "auto" takes the panel data
++ * of the device package (PLINIUS_PANEL_FILE), else gmobile's, else no cutout.
+  */
+ static void
+ update_notch_panel (PhoshLayoutManager *self)
+@@ -331,7 +372,15 @@ update_notch_panel (PhoshLayoutManager *self)
+   top = NOTCH_TOP_MM * px_per_mm;
+ 
+   notch = g_settings_get_string (self->plinius_settings, NOTCH_KEY);
+-  if (g_str_equal (notch, "left"))
++  if (g_str_equal (notch, "auto")) {
++    GmDisplayPanel *known = self->file_panel ?: self->device_panel;
++
++    if (known) {
++      g_set_object (&self->panel, known);
++      g_debug ("Notch 'auto': %s", gm_display_panel_get_name (known));
++      return;
++    }
++  } else if (g_str_equal (notch, "left"))
+     x = NOTCH_SIDE_MM * px_per_mm;
+   else if (g_str_equal (notch, "center"))
+     x = (monitor->width - size) / 2;
+@@ -366,12 +415,13 @@ static void
+ update_layout (PhoshLayoutManager *self)
+ {
+   PhoshLayoutClockPosition pos;
+-  guint corner_shift, clock_box_shift = 0;
++  guint corner_shift, clock_box_shift = 0, side_box_shift = 0;
+   guint network_box_shift = 0, indicators_box_shift = 0;
+ 
+   corner_shift = get_corner_shift (self);
+-  get_cutout_shifts (self, &network_box_shift, &indicators_box_shift);
+-  pos = get_clock_pos (self, &clock_box_shift);
++  pos = get_top_bar_layout (self, corner_shift, &network_box_shift, &indicators_box_shift,
++                            &side_box_shift);
++  clock_box_shift = get_clock_box_shift (self);
+ 
+   indicators_box_shift = MAX (indicators_box_shift, corner_shift);
+   network_box_shift = MAX (network_box_shift, corner_shift);
+@@ -379,6 +429,7 @@ update_layout (PhoshLayoutManager *self)
+   if (self->corner_shift == corner_shift &&
+       self->network_box_shift == network_box_shift &&
+       self->indicators_box_shift == indicators_box_shift &&
++      self->side_box_shift == side_box_shift &&
+       self->clock_pos == pos &&
+       self->clock_box_shift == clock_box_shift) {
+     return;
+@@ -389,6 +440,7 @@ update_layout (PhoshLayoutManager *self)
+   self->corner_shift = corner_shift;
+   self->network_box_shift = network_box_shift;
+   self->indicators_box_shift = indicators_box_shift;
++  self->side_box_shift = side_box_shift;
+ 
+   g_signal_emit (self, signals[LAYOUT_CHANGED], 0);
+ }
+@@ -476,6 +528,7 @@ phosh_layout_manager_finalize (GObject *object)
+   g_clear_object (&self->plinius_settings);
+   g_clear_object (&self->panel);
+   g_clear_object (&self->device_panel);
++  g_clear_object (&self->file_panel);
+ 
+   G_OBJECT_CLASS (phosh_layout_manager_parent_class)->finalize (object);
+ }
+@@ -496,6 +549,33 @@ phosh_layout_manager_class_init (PhoshLayoutManagerClass *klass)
+ }
+ 
+ 
++/* Plinius: the panel data of the device package, from the first data dir that has it */
++static GmDisplayPanel *
++load_file_panel (void)
++{
++  const char * const *dirs = g_get_system_data_dirs ();
++
++  for (int i = 0; dirs[i]; i++) {
++    g_autofree char *path = g_build_filename (dirs[i], PLINIUS_PANEL_FILE, NULL);
++    g_autofree char *data = NULL;
++    g_autoptr (GError) err = NULL;
++    GmDisplayPanel *panel;
++
++    if (!g_file_get_contents (path, &data, NULL, NULL))
++      continue;
++
++    panel = gm_display_panel_new_from_data (data, &err);
++    if (panel == NULL)
++      g_warning ("Failed to read panel data %s: %s", path, err ? err->message : "unknown");
++    else
++      g_debug ("Panel data from %s", path);
++    return panel;
++  }
++
++  return NULL;
++}
++
++
+ static void
+ phosh_layout_manager_init (PhoshLayoutManager *self)
+ {
+@@ -509,6 +589,7 @@ phosh_layout_manager_init (PhoshLayoutManager *self)
+   self->network_box_shift = PHOSH_TOP_BAR_MIN_PADDING;
+   self->indicators_box_shift = PHOSH_TOP_BAR_MIN_PADDING;
+   self->corner_shift = PHOSH_TOP_BAR_MIN_PADDING;
++  self->clock_width = self->network_width = self->indicators_width = -1;
+ 
+   self->settings = g_settings_new ("mobi.phosh.shell");
+   g_signal_connect_object (self->settings, "changed::" SHELL_LAYOUT_KEY,
+@@ -524,6 +605,9 @@ phosh_layout_manager_init (PhoshLayoutManager *self)
+     g_set_object (&self->panel, self->device_panel);
+   }
+ 
++  /* Plinius: the device package can describe the panel (cutouts) in gmobile's format */
++  self->file_panel = load_file_panel ();
++
+   /* Plinius: with the notch setting the panel is built once the built-in monitor is known */
+   if (source)
+     schema = g_settings_schema_source_lookup (source, PLINIUS_DISPLAY_SCHEMA, TRUE);
+@@ -606,3 +690,50 @@ phosh_layout_manager_get_box_shifts (PhoshLayoutManager *self,
+   *indicators_shift = self->indicators_box_shift;
+   *settings_shift = self->corner_shift;
+ }
++
++
++/**
++ * phosh_layout_manager_get_side_box_shift:
++ * @self: The layout manager
++ *
++ * Plinius: padding of the icon box next to a clock that moved to the left or right
++ * (the network box or the indicators box), so the icons stay clear of the notch.
++ *
++ * Returns: The padding in pixels
++ */
++guint
++phosh_layout_manager_get_side_box_shift (PhoshLayoutManager *self)
++{
++  g_return_val_if_fail (PHOSH_IS_LAYOUT_MANAGER (self), 0);
++
++  return self->side_box_shift;
++}
++
++
++/**
++ * phosh_layout_manager_set_top_bar_widths:
++ * @self: The layout manager
++ * @clock: Width of the clock's text
++ * @network: Width of the network box's content
++ * @indicators: Width of the indicators box's content
++ *
++ * Plinius: the top bar reports the widths (in GTK coordinates, without the paddings the
++ * layout adds) that its clock and icon boxes need, so the layout can avoid the notch
++ * with the real sizes instead of assumptions.
++ */
++void
++phosh_layout_manager_set_top_bar_widths (PhoshLayoutManager *self, int clock, int network, int indicators)
++{
++  g_return_if_fail (PHOSH_IS_LAYOUT_MANAGER (self));
++
++  if (self->clock_width == clock && self->network_width == network &&
++      self->indicators_width == indicators)
++    return;
++
++  self->clock_width = clock;
++  self->network_width = network;
++  self->indicators_width = indicators;
++
++  if (self->builtin && phosh_monitor_is_configured (self->builtin) && self->panel)
++    update_layout (self);
++}
+diff --git a/src/layout-manager.h b/src/layout-manager.h
+index 36c9a912..1a1d5d14 100644
+--- a/src/layout-manager.h
++++ b/src/layout-manager.h
+@@ -25,4 +25,9 @@ void                         phosh_layout_manager_get_box_shifts       (PhoshLay
+                                                                         guint *network_shift,
+                                                                         guint *indicators_shift,
+                                                                         guint *settings_shift);
++guint                        phosh_layout_manager_get_side_box_shift   (PhoshLayoutManager *self);
++void                         phosh_layout_manager_set_top_bar_widths   (PhoshLayoutManager *self,
++                                                                        int clock,
++                                                                        int network,
++                                                                        int indicators);
+ G_END_DECLS
+diff --git a/src/top-panel.c b/src/top-panel.c
+index 6fed4838..9b3eb042 100644
+--- a/src/top-panel.c
++++ b/src/top-panel.c
+@@ -90,6 +90,9 @@ typedef struct _PhoshTopPanel {
+ 
+   GtkWidget *top_bar_bin;
+   GtkWidget *box_top_bar;
++  GtkWidget *box_network;    /* Plinius: measured for the layout around the notch */
++  GtkWidget *box_indicators;
++  guint      report_widths_id;
+   GtkWidget *lbl_clock;      /* top-bar clock */
+   GtkWidget *lbl_lang;
+   PhoshStatusIconsBox *status_icons_box;
+@@ -896,6 +899,7 @@ phosh_top_panel_dispose (GObject *object)
+   }
+   g_clear_pointer (&self->background, phosh_cp_widget_destroy);
+   g_clear_object (&self->cutout_css_provider);
++  g_clear_handle_id (&self->report_widths_id, g_source_remove);
+ 
+   G_OBJECT_CLASS (phosh_top_panel_parent_class)->dispose (object);
+ }
+@@ -1013,6 +1017,8 @@ phosh_top_panel_class_init (PhoshTopPanelClass *klass)
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, box);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, box_clock);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, box_top_bar);
++  gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, box_network);
++  gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, box_indicators);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, btn_lock);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, btn_power);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, click_gesture);
+@@ -1111,6 +1117,7 @@ static void
+ set_margin (PhoshTopPanel *self, PhoshLayoutManager *layout_manager)
+ {
+   guint network_box_shift = 0, indicators_box_shift = 0, launch_settings_revealer_shift = 0;
++  guint side_box_shift, network_side_shift = 0, indicators_side_shift = 0;
+   g_autofree char *css = NULL;
+   g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
+ 
+@@ -1119,20 +1126,45 @@ set_margin (PhoshTopPanel *self, PhoshLayoutManager *layout_manager)
+                                        &indicators_box_shift,
+                                        &launch_settings_revealer_shift);
+ 
+-  g_debug ("Shifting UI elements %u,%u pixels to center ",
++  /* Plinius: the icon box next to a clock at the side moves past the notch */
++  side_box_shift = phosh_layout_manager_get_side_box_shift (layout_manager);
++  switch (phosh_layout_manager_get_clock_pos (layout_manager)) {
++  case PHOSH_LAYOUT_CLOCK_POS_LEFT:
++    network_side_shift = side_box_shift;
++    break;
++  case PHOSH_LAYOUT_CLOCK_POS_RIGHT:
++    indicators_side_shift = side_box_shift;
++    break;
++  case PHOSH_LAYOUT_CLOCK_POS_CENTER:
++  default:
++    break;
++  }
++
++  g_debug ("Shifting UI elements %u,%u pixels to center, side box %u",
+            network_box_shift,
+-           indicators_box_shift);
++           indicators_box_shift,
++           side_box_shift);
+ 
++  /* The first/last-child rules win over the named boxes, so the clock in the center
++   * keeps upstream's behaviour */
+   css = g_strdup_printf ("#top-bar > :first-child {"
+                          "  padding-left: %dpx;"
+                          "}"
+                          "#top-bar > :last-child {"
+                          "  padding-right: %dpx;"
+                          "}"
++                         "#top-bar-network {"
++                         "  padding-left: %dpx;"
++                         "}"
++                         "#top-bar-indicators {"
++                         "  padding-right: %dpx;"
++                         "}"
+                          "#settings-gear {"
+                          "  padding-right: %dpx;"
+                          "}",
+-                         network_box_shift, indicators_box_shift, launch_settings_revealer_shift);
++                         network_box_shift, indicators_box_shift,
++                         network_side_shift, indicators_side_shift,
++                         launch_settings_revealer_shift);
+   gtk_css_provider_load_from_data (provider, css, -1, NULL);
+   gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
+                                              GTK_STYLE_PROVIDER (provider),
+@@ -1141,6 +1173,64 @@ set_margin (PhoshTopPanel *self, PhoshLayoutManager *layout_manager)
+ }
+ 
+ 
++/* Plinius: width of a box's visible children (the box's own padding is the layout's) */
++static int
++get_content_width (GtkWidget *box)
++{
++  g_autoptr (GList) children = gtk_container_get_children (GTK_CONTAINER (box));
++  int spacing = gtk_box_get_spacing (GTK_BOX (box));
++  int width = 0, n = 0;
++
++  for (GList *l = children; l; l = l->next) {
++    int nat;
++
++    if (!gtk_widget_get_visible (l->data))
++      continue;
++
++    gtk_widget_get_preferred_width (l->data, NULL, &nat);
++    width += nat;
++    n++;
++  }
++
++  return n > 1 ? width + (n - 1) * spacing : width;
++}
++
++
++/*
++ * Plinius: tell the layout manager what the clock and the icon boxes need. Runs after
++ * every allocation of the top bar; the layout only changes when the sizes do. The clock
++ * is measured by its text so the paddings the layout adds don't feed back.
++ */
++static void
++report_widths (gpointer data)
++{
++  PhoshTopPanel *self = PHOSH_TOP_PANEL (data);
++  PhoshLayoutManager *layout_manager = phosh_shell_get_layout_manager (phosh_shell_get_default ());
++  PangoLayout *layout = gtk_label_get_layout (GTK_LABEL (self->lbl_clock));
++  int clock = 0;
++
++  self->report_widths_id = 0;
++  if (layout)
++    pango_layout_get_pixel_size (layout, &clock, NULL);
++
++  phosh_layout_manager_set_top_bar_widths (layout_manager,
++                                           clock,
++                                           get_content_width (self->box_network),
++                                           get_content_width (self->box_indicators));
++}
++
++
++/* Plinius: the children are in place now, measure them once the allocation is done */
++static void
++on_top_bar_size_allocate (PhoshTopPanel *self)
++{
++  if (self->report_widths_id)
++    return;
++
++  self->report_widths_id = g_idle_add_once (report_widths, self);
++}
++
++
+ static void
+ on_layout_changed (PhoshTopPanel *self, PhoshLayoutManager *layout_manager)
+ {
+@@ -1172,6 +1262,8 @@ phosh_top_panel_init (PhoshTopPanel *self)
+                            self,
+                            G_CONNECT_SWAPPED);
+   on_layout_changed (self, layout_manager);
++  g_signal_connect_swapped (self->box_top_bar, "size-allocate",
++                            G_CALLBACK (on_top_bar_size_allocate), self);
+ 
+   self->custom_status_icons_settings = g_settings_new (CUSTOM_STATUS_ICONS_SCHEMA);
+   self->custom_status_icons_loader = phosh_plugin_loader_new ((GStrv) plugin_dirs,
+diff --git a/src/ui/top-panel.ui b/src/ui/top-panel.ui
+index 2b45e03a..4ec7d0cb 100644
+--- a/src/ui/top-panel.ui
++++ b/src/ui/top-panel.ui
+@@ -221,6 +221,8 @@
+                     <child>
+                       <object class="GtkBox" id="box_network">
+                         <property name="visible">1</property>
++                        <!-- Plinius: padded past the notch by the layout manager -->
++                        <property name="name">top-bar-network</property>
+                         <child>
+                           <object class="PhoshRevealer">
+                             <property name="visible">1</property>
+@@ -279,6 +281,8 @@
+                     <child>
+                       <object class="GtkBox" id="box_indicators">
+                         <property name="visible">1</property>
++                        <!-- Plinius: padded past the notch by the layout manager -->
++                        <property name="name">top-bar-indicators</property>
+                         <style>
+                           <class name="indicators"/>
+                         </style>

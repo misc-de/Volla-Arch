@@ -1,0 +1,506 @@
+#!/usr/bin/python3 -I
+"""What an update needs to take effect, and the restart that brings it.
+
+After an update, programs that were already running keep the files they started with: pacman
+replaces a library or program by a new file, the old one stays mapped (/proc/PID/maps shows it
+as "(deleted)"). Each such process is sorted by its control group:
+
+  apps    an app (its own app-*.scope or app-*.slice): close and open it again
+  ui      the shell, the keyboard and the session's background services
+          (user units): restart them in place, the session and the apps stay
+  reboot  the system's services, the compositor, the user's service manager or the session
+          bus: only a restart of the phone brings them up to date
+
+The highest level any process needs is the one offered; a restart of the user interface also
+restarts the apps, a reboot everything.
+
+Usage:
+  plinius-restart snapshot                 digests of the unit files, before an update
+  plinius-restart check [--packages FILE] [--units-before FILE]
+                                           (root) prints the result as JSON
+  plinius-restart apply apps|ui RESULT     (the session user) restarts what is listed
+
+The result:
+  {"level": "none"|"apps"|"ui"|"reboot",
+   "apps":  [{"id": DESKTOP-ID, "unit": UNIT, "uid": UID, "desktop": PATH}],
+   "units": [{"unit": UNIT, "uid": UID, "kind": "service"|"helper", "desktop": PATH|null}],
+   "reboot": [TEXT, ...]}     why a reboot is needed (English, shown under "Details")
+"""
+
+import argparse
+import configparser
+import hashlib
+import json
+import os
+import pwd
+import re
+import subprocess
+import time
+
+# Session parts that cannot restart in place: without them the session ends, or apps lose
+# their connection for good (session bus, keyring with the unlocked secrets, accessibility bus)
+SESSION_CORE = re.compile(r"^(init\.scope|dbus-broker\.service|dbus\.service|gnome-session.*|"
+                          r"gnome-keyring-daemon\.service|at-spi-dbus-bus\.service|"
+                          r"dbus-:[^-]+-org\.freedesktop\.secrets@.*)$")
+# Files that only take effect at boot; plinius-kernel keeps its kernels and modules under
+# /usr/lib/plinius, plinius-crypt-ramdisk the password prompt of the Halium ramdisk under
+# /usr/lib/plinius-crypt/ramdisk
+BOOT_FILES = re.compile(r"^/(boot/|usr/lib/modules/|usr/lib/firmware/|usr/lib/initcpio/|"
+                        r"usr/lib/plinius/kernel/|usr/lib/plinius/modules/|usr/lib/plinius-crypt/ramdisk/)")
+# Set by plinius-kernel-install while a new kernel waits for its trial start
+KERNEL_TRIAL = "/var/lib/plinius-kernel/trial"
+# Set by halium-rebuild (plinius-crypt) while a new password prompt waits for its trial start, or
+# for the end of a kernel trial before its own
+RAMDISK_TRIAL = "/var/lib/plinius-crypt/halium/trial"
+RAMDISK_WAITING = "/var/lib/plinius-crypt/halium/waiting"
+# Interpreters whose script is a command line argument (the script itself is not mapped)
+INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|bash|sh|dash|ruby|lua[0-9.]*|gjs.*|node)$")
+APP_DIRS = ["/usr/share/applications", "/usr/local/share/applications",
+            "/var/lib/flatpak/exports/share/applications"]
+USER_APP_DIRS = [".local/share/applications", ".local/share/flatpak/exports/share/applications"]
+AUTOSTART_DIRS = ["/etc/xdg/autostart"]
+USER_AUTOSTART_DIRS = [".config/autostart"]
+
+
+def read(path, mode="r"):
+    try:
+        with open(path, mode) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def unescape(name):
+    """systemd unit name escaping: \\x2d is "-" and so on."""
+    return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), name)
+
+
+def desktop_entry(path):
+    """The [Desktop Entry] group of a desktop file, or None."""
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    try:
+        parser.read(path, encoding="utf-8")
+        return parser["Desktop Entry"]
+    except (configparser.Error, KeyError, UnicodeDecodeError):
+        return None
+
+
+def find_desktop(desktop_id, uid, autostart=False):
+    """Path of DESKTOP-ID.desktop for this user, in the order the session looks it up."""
+    try:
+        home = pwd.getpwuid(uid).pw_dir
+    except KeyError:
+        home = None
+    dirs = (USER_AUTOSTART_DIRS if autostart else USER_APP_DIRS)
+    dirs = [os.path.join(home, d) for d in dirs] if home else []
+    dirs += AUTOSTART_DIRS if autostart else APP_DIRS
+    for d in dirs:
+        path = os.path.join(d, desktop_id + ".desktop")
+        if os.path.isfile(path):
+            entry = desktop_entry(path)
+            if entry is not None and entry.get("Hidden", "false") != "true":
+                return path
+    return None
+
+
+def app_id_of(unit, parents):
+    """The application ID in a unit or slice name (systemd's naming of desktop apps):
+    app-LAUNCHER-ID-RANDOM.scope, app-LAUNCHER-ID@RANDOM.service, app-dbus-:1.3-ID.slice"""
+    for name in [unit] + parents[::-1]:
+        name = unescape(name)
+        m = re.match(r"^app-dbus-:[0-9.]+-(.+)\.slice$", name)
+        if m:
+            return m.group(1)
+        m = re.match(r"^app-[^-]+-(.+?)(-[0-9]+\.scope|@[^.]*\.service)$", name)
+        if m:
+            return m.group(1)
+        m = re.match(r"^dbus-:[0-9.]+-(.+)@[0-9]+\.service$", name)
+        if m:
+            return m.group(1)
+    return None
+
+
+def boot_time():
+    for line in read("/proc/stat").splitlines():
+        if line.startswith("btime "):
+            return int(line.split()[1])
+    return 0
+
+
+def start_time(pid, btime):
+    """When the process started (seconds since the epoch)."""
+    stat = read(f"/proc/{pid}/stat")
+    if not stat:
+        return None
+    fields = stat.rsplit(")", 1)[1].split()
+    return btime + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+
+
+def flatpak_stale(pid):
+    """A Flatpak app whose app or runtime was updated while it ran: the deployment it started
+    from is no longer the active one."""
+    info = read(f"/proc/{pid}/root/.flatpak-info")
+    if not info:
+        return None
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        parser.read_string(info)
+    except configparser.Error:
+        return None
+    for key in ("app-path", "runtime-path"):
+        files = parser.get("Instance", key, fallback=None)
+        if not files:
+            continue
+        deploy = os.path.dirname(files)
+        active = os.path.join(os.path.dirname(deploy), "active")
+        if os.path.exists(active) and os.path.realpath(active) != os.path.realpath(deploy):
+            return f"{key.split('-')[0]} updated"
+    return None
+
+
+def stale_reason(pid, btime):
+    """Why the process runs outdated files, or None."""
+    exe = read_link(f"/proc/{pid}/exe")
+    if exe is None:
+        return None                       # kernel thread, or gone
+    if exe.endswith(" (deleted)") and exe.startswith("/usr/"):
+        return exe[:-10]
+    # Only code counts (executable mappings): data files such as gschemas.compiled or icon
+    # caches are rewritten by many updates, and the old copy does no harm
+    maps = read(f"/proc/{pid}/maps")
+    for line in (maps or "").splitlines():
+        if line.endswith(" (deleted)"):
+            fields = line.split(None, 5)
+            if len(fields) < 6 or "x" not in fields[1]:
+                continue
+            path = fields[5][:-10]
+            if path.startswith("/usr/") or path.startswith("/app/"):
+                return path
+    reason = flatpak_stale(pid)
+    if reason:
+        return reason
+    # A script started by an interpreter: the script file is newer than the process
+    if INTERPRETERS.match(os.path.basename(exe)):
+        cmdline = (read(f"/proc/{pid}/cmdline") or "").split("\0")[1:]
+        started = start_time(pid, btime)
+        for arg in cmdline:
+            if arg.startswith("-"):
+                continue
+            if arg.startswith("/usr/") and os.path.isfile(arg):
+                try:
+                    if started is not None and os.stat(arg).st_ctime > started + 1:
+                        return arg
+                except OSError:
+                    pass
+            break
+    return None
+
+
+def read_link(path):
+    try:
+        return os.readlink(path)
+    except OSError:
+        return None
+
+
+def remote_session(scope):
+    """True for a session from the network (ssh): it ends with its connection."""
+    m = re.match(r"^session-(.+)\.scope$", scope)
+    if not m:
+        return False
+    data = read(f"/run/systemd/sessions/{m.group(1)}") or ""
+    return "REMOTE=1" in data.splitlines() or "TYPE=tty" in data.splitlines()
+
+
+def ancestors_excluded(pid, excluded, parents):
+    while pid > 1:
+        if pid in excluded:
+            return True
+        pid = parents.get(pid, 0)
+    return False
+
+
+UNIT_DIRS = {"system": "/usr/lib/systemd/system", "user": "/usr/lib/systemd/user"}
+
+
+def unit_digests():
+    """sha256 of every unit file and drop-in the packages ship, by path."""
+    digests = {}
+    for kind, top in UNIT_DIRS.items():
+        for root, _dirs, files in os.walk(top):
+            for name in files:
+                path = os.path.join(root, name)
+                if os.path.islink(path) or not os.path.isfile(path):
+                    continue
+                try:
+                    with open(path, "rb") as f:
+                        digests[path] = hashlib.sha256(f.read()).hexdigest()
+                except OSError:
+                    pass
+    return digests
+
+
+def changed_units(after, before):
+    """(path, (kind, unit)) for each unit file or drop-in that is new, changed or gone."""
+    for path in set(after) | set(before):
+        if after.get(path) == before.get(path):
+            continue
+        for kind, top in UNIT_DIRS.items():
+            m = re.match(re.escape(top) + r"/([^/]+?)(\.d/[^/]+)?$", path)
+            if m and re.search(r"\.(service|socket|timer|path|mount)$", m.group(1)) and "@." not in m.group(1):
+                yield path, (kind, m.group(1))
+
+
+def session_uids():
+    top = "/sys/fs/cgroup/user.slice"
+    uids = []
+    for name in os.listdir(top) if os.path.isdir(top) else []:
+        m = re.match(r"^user-(\d+)\.slice$", name)
+        if m:
+            uids.append(int(m.group(1)))
+    return uids
+
+
+def user_unit_running(uid, unit):
+    """True if the user's service manager has a control group for the unit."""
+    base = f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service"
+    return any(os.path.isdir(os.path.join(base, s, unit)) for s in ("session.slice", "app.slice", "background.slice"))
+
+
+def add(items, text):
+    if text not in items:
+        items.append(text)
+
+
+def check(changed_file=None, units_before=None):
+    btime = boot_time()
+    result = {"level": "none", "apps": [], "units": [], "reboot": []}
+    apps, units, reboot = {}, {}, []
+
+    # Files of the updated packages that only take effect at boot
+    if changed_file:
+        names = [n for n in (read(changed_file) or "").split() if n]
+        files = subprocess.run(["pacman", "-Qlq", *names], capture_output=True, text=True).stdout if names else ""
+        for path in files.splitlines():
+            if BOOT_FILES.match(path) and not path.endswith("/"):
+                reboot.append(f"boot file updated: {path}")
+                break
+    # A kernel that waits for its trial start runs only after a reboot, whatever was updated
+    if os.path.exists(KERNEL_TRIAL):
+        add(reboot, f"a new kernel waits for its trial start ({(read(KERNEL_TRIAL) or '').strip() or 'unknown'})")
+    if os.path.exists(RAMDISK_TRIAL) or os.path.exists(RAMDISK_WAITING):
+        add(reboot, "a new password prompt for the startup waits for its trial start")
+
+    # Units that changed (their file or a drop-in) while they ran: the change applies at their
+    # next start
+    if units_before:
+        before = json.loads(read(units_before) or "{}")
+        after = unit_digests()
+        changed = {unit for path, unit in changed_units(after, before)}
+        for kind, unit in sorted(changed):
+            if kind == "system":
+                if subprocess.run(["systemctl", "--quiet", "is-active", unit]).returncode == 0:
+                    add(reboot, f"system: {unit} runs with its old unit file")
+                continue
+            for uid in session_uids():
+                if not user_unit_running(uid, unit):
+                    continue
+                if SESSION_CORE.match(unit):
+                    add(reboot, f"session: {unit} runs with its old unit file")
+                else:
+                    units.setdefault(unit, {"unit": unit, "uid": uid, "kind": "service", "desktop": None,
+                                            "reasons": []})["reasons"].append("unit file changed")
+
+    # This operation and its callers (pkexec, the relay of plinius-pkg) end on their own
+    own_cgroup = (read("/proc/self/cgroup") or "").strip().split("::", 1)[-1]
+    parents, comms = {}, {}
+    pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+    for pid in pids:
+        stat = read(f"/proc/{pid}/stat")
+        if stat:
+            comms[pid] = stat[stat.index("(") + 1:stat.rindex(")")]
+            parents[pid] = int(stat.rsplit(")", 1)[1].split()[1])
+    excluded = {pid for pid, comm in comms.items() if comm in ("plinius-pkg", "pkexec", "plinius-restart")}
+    excluded.add(os.getpid())
+
+    for pid in pids:
+        if pid not in comms or ancestors_excluded(pid, excluded, parents):
+            continue
+        cgroup = (read(f"/proc/{pid}/cgroup") or "").strip().split("::", 1)[-1]
+        if not cgroup or cgroup == own_cgroup:
+            continue
+        reason = stale_reason(pid, btime)
+        if not reason:
+            continue
+        comm = comms[pid]
+        parts = cgroup.strip("/").split("/")
+        m = re.match(r"^user-(\d+)\.slice$", parts[1]) if len(parts) > 2 and parts[0] == "user.slice" else None
+        if pid == 1 or not m:
+            unit = parts[1] if len(parts) > 1 else cgroup
+            add(reboot, f"system: {unescape(unit)} ({comm}) uses {reason}")
+            continue
+        uid = int(m.group(1))
+        if not parts[2].startswith("user@"):
+            # A login session: the graphical one holds the compositor
+            if not remote_session(parts[2]):
+                add(reboot, f"session: {comm} uses {reason}")
+            continue
+        rest = parts[3:]
+        if not rest:
+            add(reboot, f"session: {comm} uses {reason}")
+            continue
+        unit = rest[-1]
+        if SESSION_CORE.match(unescape(unit)):
+            add(reboot, f"session: {unescape(unit)} ({comm}) uses {reason}")
+            continue
+        app_id = app_id_of(unit, rest[:-1])
+        # The unit to stop: for D-Bus activated apps the service in the app's slice
+        if app_id:
+            autostart = find_desktop(app_id, uid, autostart=True)
+            desktop = find_desktop(app_id, uid)
+            if desktop and not autostart:
+                apps.setdefault(unit, {"id": app_id, "unit": unit, "uid": uid, "desktop": desktop,
+                                       "reasons": []})["reasons"].append(f"{comm} uses {reason}")
+                continue
+            if autostart:
+                units.setdefault(unit, {"unit": unit, "uid": uid, "kind": "helper", "desktop": autostart,
+                                        "reasons": []})["reasons"].append(f"{comm} uses {reason}")
+                continue
+        if unit.endswith(".scope"):
+            # Started by hand or by an app: nothing could start it again
+            add(reboot, f"session: {unescape(unit)} ({comm}) uses {reason}")
+            continue
+        units.setdefault(unit, {"unit": unit, "uid": uid, "kind": "service", "desktop": None,
+                                "reasons": []})["reasons"].append(f"{comm} uses {reason}")
+
+    result["apps"] = sorted(apps.values(), key=lambda a: a["id"])
+    result["units"] = sorted(units.values(), key=lambda u: u["unit"])
+    result["reboot"] = reboot
+    if reboot:
+        result["level"] = "reboot"
+    elif units:
+        result["level"] = "ui"
+    elif apps:
+        result["level"] = "apps"
+    return result
+
+
+# --- Restart (as the session user) ---------------------------------------------------------
+
+DRY_RUN = False
+
+
+def systemctl(*args):
+    return subprocess.run(["systemctl", "--user", "--quiet", *args], capture_output=True, text=True)
+
+
+def act(*args):
+    """systemctl --user with an effect (only printed with --dry-run)."""
+    if DRY_RUN:
+        print("systemctl --user", *args)
+        return
+    systemctl(*args)
+
+
+def unit_active(unit):
+    return systemctl("is-active", unit).returncode == 0
+
+
+def wait_inactive(unit, seconds):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if not unit_active(unit):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def launch(desktop, desktop_id, n):
+    """Open an app again in a scope of its own, named like the session names it (app-gnome-ID-N),
+    so that it counts as an app again and does not end with this helper."""
+    scope = "app-gnome-" + desktop_id.replace("-", "\\x2d") + f"-{os.getpid()}{n}.scope"
+    args = ["systemd-run", "--user", "--scope", "--collect", "--quiet", f"--unit={scope}", "--"]
+    if desktop_id == "org.gnome.Settings":
+        # Back on the page the restart was started from
+        args += ["gnome-control-center", "updates"]
+    else:
+        args += ["gio", "launch", desktop]
+    if DRY_RUN:
+        print(*args)
+        return
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def restart_unit(unit):
+    """Restart a user unit in place. Units that refuse a manual stop (the shell) come back
+    through their Restart=on-failure, like "Restart Phosh" in the power menu."""
+    props = dict(line.split("=", 1) for line in
+                 systemctl("show", "-p", "RefuseManualStop,Restart", unit).stdout.splitlines() if "=" in line)
+    if props.get("RefuseManualStop") == "yes":
+        if props.get("Restart", "no") in ("on-failure", "on-abnormal", "always"):
+            act("kill", "--kill-whom=main", "--signal=SIGKILL", unit)
+        return
+    if unit.endswith(".scope") or unit.startswith("dbus-:"):
+        # D-Bus activated services start again on their next call
+        act("stop", unit)
+    else:
+        act("restart", unit)
+
+
+def apply(level, result_file):
+    with open(result_file) as f:
+        result = json.load(f)
+    uid = os.getuid()
+    apps = [a for a in result.get("apps", []) if a.get("uid") == uid and unit_active(a["unit"])]
+    units = [u for u in result.get("units", []) if u.get("uid") == uid and unit_active(u["unit"])] \
+        if level == "ui" else []
+    # Settings, which started this, comes last
+    apps.sort(key=lambda a: a["id"] == "org.gnome.Settings")
+    shell = [u for u in units if u["unit"] == "mobi.phosh.Shell.service"]
+    units = [u for u in units if u not in shell]
+
+    for u in units:
+        if u["kind"] == "helper":
+            act("stop", u["unit"])
+            DRY_RUN or wait_inactive(u["unit"], 5)
+            launch(u["desktop"], os.path.basename(u["desktop"])[:-8], len(apps) + units.index(u))
+        else:
+            restart_unit(u["unit"])
+    for n, a in enumerate(apps):
+        act("stop", "--no-block", a["unit"])
+        if not DRY_RUN and not wait_inactive(a["unit"], 10):
+            act("kill", "--signal=SIGKILL", a["unit"])
+            wait_inactive(a["unit"], 2)
+        launch(a["desktop"], a["id"], n)
+    # The shell last: it locks the screen, everything else is back by then
+    for u in shell:
+        DRY_RUN or time.sleep(1)
+        restart_unit(u["unit"])
+
+
+def main():
+    parser = argparse.ArgumentParser(description="What an update needs to take effect")
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("snapshot", help="print the digests of the unit files (before an update)")
+    p = sub.add_parser("check", help="print what needs a restart, as JSON (root)")
+    p.add_argument("--packages", help="file with the names of the updated packages")
+    p.add_argument("--units-before", help="output of snapshot from before the update")
+    p = sub.add_parser("apply", help="restart the apps, or the user interface and the apps")
+    p.add_argument("level", choices=("apps", "ui"))
+    p.add_argument("result", help="output of check")
+    p.add_argument("--dry-run", action="store_true", help="only print what would be done")
+    args = parser.parse_args()
+    if args.command == "snapshot":
+        print(json.dumps(unit_digests()))
+    elif args.command == "check":
+        print(json.dumps(check(args.packages, args.units_before), indent=1))
+    else:
+        global DRY_RUN
+        DRY_RUN = args.dry_run
+        apply(args.level, args.result)
+
+
+if __name__ == "__main__":
+    main()

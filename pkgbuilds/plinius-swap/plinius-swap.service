@@ -1,0 +1,14 @@
+# Turns on the swap file and sets vm.swappiness at boot, once Android has turned on zram (see
+# plinius-swap-set). Type=exec: the wait for zram holds up no other unit. Started through the
+# package's own link in multi-user.target.wants (no [Install]: nothing to enable by hand).
+[Unit]
+Description=Swap file and swappiness
+After=local-fs.target lxc-android-config.service
+RequiresMountsFor=/home
+
+[Service]
+Type=exec
+RemainAfterExit=yes
+# No room on the storage, or no suitable storage: a state of this phone, not a failed boot
+SuccessExitStatus=4 5
+ExecStart=/usr/lib/plinius-swap/plinius-swap-set apply

@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in. Starting profile in complain mode: it logs what the service does
+# beyond these rules; the rules are completed from those messages (tools/aa-denials.sh) before
+# the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# geoclue: location from GNSS and the network. Enforced since 0.1-3: the rules below hold everything
+# it did in complain mode over three boots (11.–12.11.2026: the cgroup of its clients).
+profile plinius.geoclue flags=(attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/openssl>
+  include <abstractions/ssl_certs>
+  # The Wi-Fi source (beaconDB, Settings › Location) asks over HTTPS through libsoup and GnuTLS,
+  # which finds the system trust through p11-kit's trust module. Never tried in complain mode
+  # (the source is off by default); plinius.dnsfilter's list downloads failed on the same gap
+  include <abstractions/p11-kit>
+  include <abstractions/dbus-strict>
+  network inet stream, network inet6 stream, network inet dgram, network inet6 dgram,
+  /usr/lib/geoclue mr,
+  /etc/geoclue/{,**} r,
+  /var/lib/geoclue/{,**} rwk,
+  # The phone's GNSS: gnss-nmea-bridge's socket ([network-nmea] nmea-socket=). Missing from
+  # 0.1-3 to 0.1-6: no app asked for a position in complain mode, so enforce refused the connect
+  # and no app got a location (measured 2026-11-14).
+  /run/gnss-nmea-bridge/nmea.sock rw,
+  unix (connect, send, receive) type=stream peer=(label=plinius.gnss-nmea-bridge),
+  # Which app asks: geoclue reads the client's cgroup for its app ID (agent and permission store)
+  @{PROC}/[0-9]*/cgroup r,
+}

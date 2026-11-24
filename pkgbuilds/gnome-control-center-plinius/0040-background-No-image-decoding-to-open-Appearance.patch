@@ -1,0 +1,44 @@
+From 4438c558a0cc1bc8219fe5ac0ad0f2e2baf3d202 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:12:32 +0100
+Subject: [PATCH] background: No image decoding to open Appearance
+
+Plinius: opening Appearance loaded the current background with
+cc_background_item_load(), which read the picture's dimensions with
+gdk_pixbuf_get_file_info(). For JPEG XL and SVG, GNOME's wallpapers,
+that decodes the whole 4096x4096 picture (through glycin, on all
+cores): ~630 ms on the phone, while the page waited to be shown.
+
+The dimensions only go into the "size" property, which nothing on the
+page reads and which reads them itself (update_size()). The longest
+stall of the main loop when the page opens drops from ~770 ms to none
+above 20 ms.
+---
+ panels/background/cc-background-item.c | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/panels/background/cc-background-item.c b/panels/background/cc-background-item.c
+index 41c7159b9..da74fdcfc 100644
+--- a/panels/background/cc-background-item.c
++++ b/panels/background/cc-background-item.c
+@@ -414,13 +414,10 @@ cc_background_item_load (CcBackgroundItem *item, GFileInfo *info)
+         || !(g_str_has_prefix (item->mime_type, "image/") || strcmp (item->mime_type, "application/xml") == 0))
+         return FALSE;
+ 
+-    /* FIXME we should handle XML files as well */
+-    if (item->mime_type != NULL && g_str_has_prefix (item->mime_type, "image/")) {
+-        g_autofree gchar *filename = NULL;
+-
+-        filename = g_filename_from_uri (item->uri, NULL, NULL);
+-        gdk_pixbuf_get_file_info (filename, &item->width, &item->height);
+-    }
++    /* Plinius: no image dimensions here. Only the "size" property shows them, and it reads them
++     * itself (update_size()). For a JPEG XL or SVG wallpaper gdk_pixbuf_get_file_info() decodes
++     * the whole 4096x4096 image, ~630 ms on the phone's main thread at every opening of the
++     * Appearance page. */
+ 
+     return TRUE;
+ }
+-- 
+2.55.0
+

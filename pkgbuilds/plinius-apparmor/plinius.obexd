@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in (here a user unit). Starting profile in complain mode: it logs what the
+# service does beyond these rules; the rules are completed from those messages (tools/aa-denials.sh)
+# before the profile goes to enforce. attach_disconnected: as for the system services.
+abi <abi/4.0>,
+include <tunables/global>
+
+# obexd (bluez-obex-plinius): OBEX over Bluetooth for paired devices, the phone book (PBAP) from
+# evolution-data-server and file transfers. Data from other devices: added 12.11.2026.
+profile plinius.obexd flags=(complain, attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/nameservice-strict>
+  include <abstractions/dbus-strict>
+  include <abstractions/dbus-session-strict>
+  network bluetooth stream, network bluetooth seqpacket,
+  /usr/lib/bluetooth/obexd mr,
+  # The logind plugin: whether the user's session is active (sd_uid_get_state), each time
+  # logind's user state changes (13.11.2026, 237 times in 25 minutes after a boot)
+  /run/systemd/users/@{uid} r,
+  # Which device may read the contacts (patch 0004), and the helper that asks the user
+  owner @{HOME}/.local/share/plinius/bluetooth-contacts r,
+  /usr/lib/bluetooth/plinius-pbap-ask Cx -> pbap_ask,
+  # Transfers (the root folder of the OBEX server)
+  owner @{HOME}/.cache/obexd/{,**} rw,
+  owner @{HOME}/Downloads/{,**} rw,
+
+  profile pbap_ask flags=(complain) {
+    include <abstractions/base>
+    include <abstractions/python>
+    include <abstractions/dbus-strict>
+    include <abstractions/dbus-session-strict>
+    /usr/bin/python3* ix,
+    /usr/lib/bluetooth/plinius-pbap-ask r,
+    owner @{HOME}/.local/share/plinius/ rw,
+    owner @{HOME}/.local/share/plinius/bluetooth-contacts{,.*} rw,
+  }
+}

@@ -1,0 +1,336 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:03:28 +0100
+Subject: [PATCH] lockshield: Unlock on the phone or with the PIN on a second
+ screen
+
+A second screen (e.g. a virtual one over VNC) only showed an empty
+shield while the phone was locked, without a hint what to do. It now
+shows the time and a card asking to unlock on the phone with the
+fingerprint or the face, and takes the PIN itself; a right PIN unlocks
+the session like the lock screen does. With an unlock pattern only the
+hint is shown, as the lock screen then takes no PIN.
+
+The shield takes keyboard input: phoc still gives the keyboard to the
+lock screen of the first output (the phone), a click on the shield
+brings it there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/lockscreen-manager.c |  10 ++
+ src/lockshield.c         | 236 ++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 244 insertions(+), 2 deletions(-)
+
+diff --git a/src/lockscreen-manager.c b/src/lockscreen-manager.c
+index 6c39b072..a15a31a9 100644
+--- a/src/lockscreen-manager.c
++++ b/src/lockscreen-manager.c
+@@ -263,6 +263,14 @@ on_lockscreen_wakeup_output (PhoshLockscreenManager *self, PhoshLockscreen *lock
+ }
+ 
+ 
++static void
++on_shield_unlock (PhoshLockscreenManager *self)
++{
++  if (self->lockscreen)
++    on_lockscreen_unlock (self, PHOSH_LOCKSCREEN (self->lockscreen));
++}
++
++
+ /* Lock a non primary monitor bringing up a shield */
+ static void
+ lock_monitor (PhoshLockscreenManager *self,
+@@ -280,6 +288,8 @@ lock_monitor (PhoshLockscreenManager *self,
+   shield = phosh_lockshield_new (phosh_wayland_get_zwlr_layer_shell_v1 (wl), monitor);
+ 
+   g_object_set_data (G_OBJECT (shield), "phosh-monitor", monitor);
++  /* Plinius: the PIN entered on a second screen unlocks like on the lock screen */
++  g_signal_connect_object (shield, "unlock", G_CALLBACK (on_shield_unlock), self, G_CONNECT_SWAPPED);
+ 
+   g_ptr_array_add (self->shields, shield);
+   gtk_widget_set_visible (shield, TRUE);
+diff --git a/src/lockshield.c b/src/lockshield.c
+index edc7a2a5..666e80b1 100644
+--- a/src/lockshield.c
++++ b/src/lockshield.c
+@@ -10,24 +10,231 @@
+ 
+ #include "phosh-config.h"
+ 
++#include "auth.h"
+ #include "lockshield.h"
+ 
++#include <glib/gi18n.h>
++
++/* Same file as the lock screen: with a pattern the PIN is not accepted */
++#define PATTERN_FILE ".config/plinius/unlock-pattern"
++
+ /**
+  * PhoshLockshield:
+  *
+  * Lock shield for non primary screens
+  *
+  * The #PhoshLockshield is displayed on lock screens
+- * which are not the primary one.
++ * which are not the primary one. Plinius: on a second screen (e.g. a
++ * virtual one over VNC) it tells to unlock on the phone and takes the PIN
++ * itself; #PhoshLockshield::unlock is emitted once that was right.
+  */
++
++enum {
++  UNLOCK,
++  N_SIGNALS
++};
++static guint signals[N_SIGNALS];
++
+ struct _PhoshLockshield
+ {
+   PhoshLayerSurface parent;
++
++  GtkWidget        *clock;
++  GtkWidget        *entry;
++  GtkWidget        *status;
++  guint             clock_id;
++  PhoshAuth        *auth;
+ };
+ 
+ G_DEFINE_TYPE(PhoshLockshield, phosh_lockshield, PHOSH_TYPE_LAYER_SURFACE)
+ 
+ 
++static const char shield_css[] =
++  ".phosh-lockshield {"
++  "  background: linear-gradient(160deg, #10141c 0%, #05070a 100%);"
++  "}"
++  ".plinius-shield-card {"
++  "  background-color: rgba(255, 255, 255, 0.06);"
++  "  border: 1px solid rgba(255, 255, 255, 0.10);"
++  "  border-radius: 28px;"
++  "  padding: 40px 56px;"
++  "}"
++  ".plinius-shield-clock {"
++  "  font-size: 72px;"
++  "  font-weight: 200;"
++  "}"
++  ".plinius-shield-title {"
++  "  font-size: 20px;"
++  "  font-weight: 600;"
++  "}"
++  ".plinius-shield-hint {"
++  "  opacity: 0.75;"
++  "}"
++  ".plinius-shield-entry {"
++  "  min-width: 260px;"
++  "  min-height: 44px;"
++  "  border-radius: 22px;"
++  "  font-size: 18px;"
++  "}"
++  ".plinius-shield-status {"
++  "  color: #ff7b72;"
++  "}";
++
++
++static void
++add_style (void)
++{
++  static gboolean added;
++  g_autoptr (GtkCssProvider) provider = NULL;
++
++  if (added)
++    return;
++
++  provider = gtk_css_provider_new ();
++  gtk_css_provider_load_from_data (provider, shield_css, -1, NULL);
++  gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
++                                             GTK_STYLE_PROVIDER (provider),
++                                             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
++  added = TRUE;
++}
++
++
++static gboolean
++update_clock (gpointer user_data)
++{
++  PhoshLockshield *self = PHOSH_LOCKSHIELD (user_data);
++  g_autoptr (GDateTime) now = g_date_time_new_now_local ();
++  g_autofree char *text = g_date_time_format (now, "%H:%M");
++
++  gtk_label_set_text (GTK_LABEL (self->clock), text);
++  return G_SOURCE_CONTINUE;
++}
++
++
++static void
++on_auth_ready (GObject *source_object, GAsyncResult *result, gpointer user_data)
++{
++  g_autoptr (PhoshLockshield) self = PHOSH_LOCKSHIELD (user_data);
++  g_autoptr (GError) err = NULL;
++  PhoshAuth *auth = PHOSH_AUTH (source_object);
++  gboolean authenticated;
++  const char *message;
++
++  authenticated = phosh_auth_authenticate_finish (auth, result, &err);
++  if (err) {
++    g_warning ("Auth failed unexpected: %s", err->message);
++    authenticated = FALSE;
++  }
++
++  if (authenticated) {
++    g_clear_object (&self->auth);
++    g_signal_emit (self, signals[UNLOCK], 0);
++    return;
++  }
++
++  message = phosh_auth_get_message (auth);
++  gtk_label_set_text (GTK_LABEL (self->status),
++                      message && *message ? message : _("Wrong PIN, try again"));
++  gtk_widget_set_visible (self->status, TRUE);
++  gtk_entry_set_text (GTK_ENTRY (self->entry), "");
++  gtk_widget_set_sensitive (self->entry, TRUE);
++  gtk_widget_grab_focus (self->entry);
++  g_clear_object (&self->auth);
++}
++
++
++static void
++on_entry_activate (PhoshLockshield *self)
++{
++  const char *pin = gtk_entry_get_text (GTK_ENTRY (self->entry));
++
++  if (pin == NULL || *pin == '\0' || self->auth)
++    return;
++
++  gtk_widget_set_sensitive (self->entry, FALSE);
++  gtk_widget_set_visible (self->status, FALSE);
++  self->auth = PHOSH_AUTH (phosh_auth_new ());
++  phosh_auth_authenticate_async (self->auth, pin, NULL, on_auth_ready, g_object_ref (self));
++}
++
++
++/*
++ * phoc gives the keyboard to the lock screen of the first output (the
++ * phone) and to a keyboard interactive layer surface that is clicked: a
++ * click on the shield takes the keyboard there, a tap on the phone back.
++ */
++static gboolean
++on_button_press (PhoshLockshield *self)
++{
++  if (self->entry)
++    gtk_widget_grab_focus (self->entry);
++  return GDK_EVENT_PROPAGATE;
++}
++
++
++static void
++build_card (PhoshLockshield *self)
++{
++  g_autofree char *pattern = g_build_filename (g_get_home_dir (), PATTERN_FILE, NULL);
++  gboolean with_pin = !g_file_test (pattern, G_FILE_TEST_EXISTS);
++  GtkWidget *card, *icon, *title, *hint;
++
++  add_style ();
++
++  card = gtk_box_new (GTK_ORIENTATION_VERTICAL, 14);
++  gtk_widget_set_halign (card, GTK_ALIGN_CENTER);
++  gtk_widget_set_valign (card, GTK_ALIGN_CENTER);
++  gtk_style_context_add_class (gtk_widget_get_style_context (card), "plinius-shield-card");
++
++  self->clock = gtk_label_new (NULL);
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->clock), "plinius-shield-clock");
++  gtk_container_add (GTK_CONTAINER (card), self->clock);
++
++  icon = gtk_image_new_from_icon_name ("system-lock-screen-symbolic", GTK_ICON_SIZE_DIALOG);
++  gtk_image_set_pixel_size (GTK_IMAGE (icon), 40);
++  gtk_widget_set_margin_top (icon, 8);
++  gtk_container_add (GTK_CONTAINER (card), icon);
++
++  title = gtk_label_new (_("Unlock on your phone"));
++  gtk_style_context_add_class (gtk_widget_get_style_context (title), "plinius-shield-title");
++  gtk_container_add (GTK_CONTAINER (card), title);
++
++  hint = gtk_label_new (with_pin ? _("Use your fingerprint or face there, or enter your PIN here") :
++                                   _("Use your fingerprint, face or pattern there"));
++  gtk_style_context_add_class (gtk_widget_get_style_context (hint), "plinius-shield-hint");
++  gtk_label_set_line_wrap (GTK_LABEL (hint), TRUE);
++  gtk_label_set_justify (GTK_LABEL (hint), GTK_JUSTIFY_CENTER);
++  gtk_container_add (GTK_CONTAINER (card), hint);
++
++  if (with_pin) {
++    self->entry = gtk_entry_new ();
++    gtk_entry_set_visibility (GTK_ENTRY (self->entry), FALSE);
++    gtk_entry_set_input_purpose (GTK_ENTRY (self->entry), GTK_INPUT_PURPOSE_PIN);
++    gtk_entry_set_placeholder_text (GTK_ENTRY (self->entry), _("PIN"));
++    gtk_entry_set_alignment (GTK_ENTRY (self->entry), 0.5);
++    gtk_widget_set_halign (self->entry, GTK_ALIGN_CENTER);
++    gtk_widget_set_margin_top (self->entry, 12);
++    gtk_style_context_add_class (gtk_widget_get_style_context (self->entry), "plinius-shield-entry");
++    g_signal_connect_swapped (self->entry, "activate", G_CALLBACK (on_entry_activate), self);
++    gtk_container_add (GTK_CONTAINER (card), self->entry);
++
++    self->status = gtk_label_new (NULL);
++    gtk_style_context_add_class (gtk_widget_get_style_context (self->status), "plinius-shield-status");
++    gtk_widget_set_no_show_all (self->status, TRUE);
++    gtk_container_add (GTK_CONTAINER (card), self->status);
++  }
++
++  gtk_widget_show_all (card);
++  gtk_container_add (GTK_CONTAINER (self), card);
++
++  gtk_widget_add_events (GTK_WIDGET (self), GDK_BUTTON_PRESS_MASK);
++  g_signal_connect_swapped (self, "button-press-event", G_CALLBACK (on_button_press), self);
++
++  update_clock (self);
++  self->clock_id = g_timeout_add_seconds (10, update_clock, self);
++}
++
++
+ static void
+ phosh_lockshield_constructed (GObject *object)
+ {
+@@ -38,6 +245,20 @@ phosh_lockshield_constructed (GObject *object)
+   gtk_style_context_add_class (
+       gtk_widget_get_style_context (GTK_WIDGET (self)),
+       "phosh-lockshield");
++
++  build_card (self);
++}
++
++
++static void
++phosh_lockshield_dispose (GObject *object)
++{
++  PhoshLockshield *self = PHOSH_LOCKSHIELD (object);
++
++  g_clear_handle_id (&self->clock_id, g_source_remove);
++  g_clear_object (&self->auth);
++
++  G_OBJECT_CLASS (phosh_lockshield_parent_class)->dispose (object);
+ }
+ 
+ 
+@@ -47,6 +268,17 @@ phosh_lockshield_class_init (PhoshLockshieldClass *klass)
+   GObjectClass *object_class = (GObjectClass *)klass;
+ 
+   object_class->constructed = phosh_lockshield_constructed;
++  object_class->dispose = phosh_lockshield_dispose;
++
++  /**
++   * PhoshLockshield::unlock:
++   *
++   * The PIN entered on this shield was right
++   */
++  signals[UNLOCK] = g_signal_new ("unlock",
++                                  G_TYPE_FROM_CLASS (klass),
++                                  G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL,
++                                  G_TYPE_NONE, 0);
+ }
+ 
+ 
+@@ -68,7 +300,7 @@ phosh_lockshield_new (struct zwlr_layer_shell_v1 *layer_shell,
+                                  ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+                                  ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+                        "layer", ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+-                       "kbd-interactivity", FALSE,
++                       "kbd-interactivity", TRUE,
+                        "exclusive-zone", -1,
+                        "namespace", "phosh lockshield",
+                        NULL);

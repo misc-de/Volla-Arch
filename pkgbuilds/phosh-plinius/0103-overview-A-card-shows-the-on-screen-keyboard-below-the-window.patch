@@ -1,0 +1,591 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 09:20:00 +0100
+Subject: [PATCH] overview: A card shows the on-screen keyboard below the window
+
+Plinius: with the on-screen keyboard up, an app's window is shortened
+by it, and so is its thumbnail: the card's lower third stayed empty, as
+if the app were broken (screenshots on the phone, 2026-11-20, Text
+Editor). The keyboard stays up when the overview opens, only covered by
+it (sm.puri.OSK0 Visible was true with the overview open), so returning
+to the app shows the keyboard again.
+
+The card now shows the keyboard there, as it was on screen: once the
+keyboard has come up, or the overview went back to an app with the
+keyboard up, the bottom of the usable area (where the keyboard sits) is
+copied from the screen after 600 ms (wlr-screencopy, before the overview
+covers it; phoc on the phone gives ABGR8888). A card whose window is
+shorter than the card draws the bottom of that copy below the window, in
+one rounded shape. When the keyboard is hidden, the copy goes and the
+cards' thumbnails are asked for again after 400 ms: the windows have
+their full height again, and in the overview no new thumbnail was asked
+for otherwise.
+
+The keyboard's visibility comes from the property: libphosh-tool (tests
+and tools) has no osk-manager.c; the tests' stub shell has no keyboard
+manager and no shell-state.
+---
+diff --git a/src/activity.c b/src/activity.c
+index 228b090..81203e2 100644
+--- a/src/activity.c
++++ b/src/activity.c
+@@ -85,6 +85,11 @@ typedef struct {
+   int              plinius_card_height;
+   int              plinius_card_radius;
+   int              plinius_card_scale;
++  /* Plinius: the on-screen keyboard as on screen (from the overview), drawn below a window that
++   * the keyboard shortened; the card's height without it, and the keyboard the card was made with */
++  cairo_surface_t *plinius_keyboard;
++  int              plinius_card_window_height;
++  cairo_surface_t *plinius_card_keyboard;
+ 
+   gboolean         hovering;
+   guint            remove_timeout_id;
+@@ -333,7 +338,8 @@ draw_rounded_rect (cairo_t *ctx, double x, double y,  double width, double heigh
+  * change.
+  */
+ static cairo_surface_t *
+-plinius_get_card (PhoshActivity *self, GtkWidget *area, int width, int height, int radius)
++plinius_get_card (PhoshActivity *self, GtkWidget *area, int width, int window_height, int height,
++                  int radius)
+ {
+   PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
+   int scale_factor = gtk_widget_get_scale_factor (area);
+@@ -342,6 +348,8 @@ plinius_get_card (PhoshActivity *self, GtkWidget *area, int width, int height, i
+ 
+   if (priv->plinius_card &&
+       priv->plinius_card_width == width && priv->plinius_card_height == height &&
++      priv->plinius_card_window_height == window_height &&
++      priv->plinius_card_keyboard == priv->plinius_keyboard &&
+       priv->plinius_card_radius == radius && priv->plinius_card_scale == scale_factor)
+     return priv->plinius_card;
+ 
+@@ -359,15 +367,50 @@ plinius_get_card (PhoshActivity *self, GtkWidget *area, int width, int height, i
+   priv->plinius_card_height = height;
+   priv->plinius_card_radius = radius;
+   priv->plinius_card_scale = scale_factor;
++  priv->plinius_card_window_height = window_height;
++  priv->plinius_card_keyboard = priv->plinius_keyboard;
+ 
+-  /* What draw_cb () did for every frame, now once */
+   scale = get_scale (self);
+   cr = cairo_create (priv->plinius_card);
+-  cairo_scale (cr, scale, scale);
+-  draw_rounded_rect (cr, 0, 0, cairo_image_surface_get_width (priv->surface),
+-                     cairo_image_surface_get_height (priv->surface), radius);
+-  cairo_set_source_surface (cr, priv->surface, 0, 0);
+-  cairo_fill (cr);
++  if (height > window_height && priv->plinius_keyboard) {
++    /*
++     * Plinius: the window is shorter than the card, the on-screen keyboard took the rest of the
++     * screen and is still up (it stays when the overview opens, only covered). The keyboard as
++     * it was on screen goes below the window, its bottom at the card's bottom, both in one
++     * rounded shape, so that the card shows the screen as one returns to it, not an empty third.
++     */
++    cairo_surface_t *keyboard = priv->plinius_keyboard;
++    double window_bottom = cairo_image_surface_get_height (priv->surface) * scale;
++    double kb_scale_x, kb_scale_y, kb_width, kb_height, kb_to_card;
++
++    draw_rounded_rect (cr, 0, 0, width, height, radius * scale);
++    cairo_clip (cr);
++
++    cairo_save (cr);
++    cairo_scale (cr, scale, scale);
++    cairo_set_source_surface (cr, priv->surface, 0, 0);
++    cairo_paint (cr);
++    cairo_restore (cr);
++
++    cairo_surface_get_device_scale (keyboard, &kb_scale_x, &kb_scale_y);
++    kb_width = cairo_image_surface_get_width (keyboard) / kb_scale_x;
++    kb_height = cairo_image_surface_get_height (keyboard) / kb_scale_y;
++    kb_to_card = width / kb_width;
++    cairo_rectangle (cr, 0, window_bottom, width, height - window_bottom);
++    cairo_clip (cr);
++    cairo_translate (cr, 0, height - kb_height * kb_to_card);
++    cairo_scale (cr, kb_to_card, kb_to_card);
++    cairo_set_source_surface (cr, keyboard, 0, 0);
++    cairo_pattern_set_filter (cairo_get_source (cr), CAIRO_FILTER_GOOD);
++    cairo_paint (cr);
++  } else {
++    /* What draw_cb () did for every frame, now once */
++    cairo_scale (cr, scale, scale);
++    draw_rounded_rect (cr, 0, 0, cairo_image_surface_get_width (priv->surface),
++                       cairo_image_surface_get_height (priv->surface), radius);
++    cairo_set_source_surface (cr, priv->surface, 0, 0);
++    cairo_fill (cr);
++  }
+   cairo_destroy (cr);
+ 
+   return priv->plinius_card;
+@@ -378,7 +421,7 @@ static gboolean
+ draw_cb (PhoshActivity *self, cairo_t *cairo, GtkDrawingArea *area)
+ {
+   int width, height, image_width, image_height, border_radius;
+-  int card_width, card_height;
++  int card_width, card_height, window_height;
+   double x;
+   float scale;
+   PhoshActivityPrivate *priv;
+@@ -404,7 +447,9 @@ draw_cb (PhoshActivity *self, cairo_t *cairo, GtkDrawingArea *area)
+ 
+   scale = get_scale (self);
+   card_width = ceil (image_width * scale);
+-  card_height = ceil (image_height * scale);
++  window_height = ceil (image_height * scale);
++  /* Plinius: below a window the keyboard shortened, the keyboard (plinius_get_card ()) */
++  card_height = priv->plinius_keyboard && height - window_height > 1 ? height : window_height;
+   x = (width - image_width * scale) / 2.0;
+ 
+   gtk_style_context_get (context,
+@@ -412,7 +457,8 @@ draw_cb (PhoshActivity *self, cairo_t *cairo, GtkDrawingArea *area)
+                          GTK_STYLE_PROPERTY_BORDER_RADIUS, &border_radius,
+                          NULL);
+ 
+-  card = plinius_get_card (self, GTK_WIDGET (area), card_width, card_height, border_radius);
++  card = plinius_get_card (self, GTK_WIDGET (area), card_width, window_height, card_height,
++                           border_radius);
+   if (!card)
+     return FALSE;
+ 
+@@ -481,6 +527,7 @@ phosh_activity_dispose (GObject *object)
+ 
+   g_clear_pointer (&priv->surface, cairo_surface_destroy);
+   g_clear_pointer (&priv->plinius_card, cairo_surface_destroy);
++  g_clear_pointer (&priv->plinius_keyboard, cairo_surface_destroy);
+   g_clear_object (&priv->thumbnail);
+   g_clear_object (&priv->app_info);
+ 
+@@ -1188,3 +1235,32 @@ phosh_activity_set_swipe_downwards (PhoshActivity *self, gboolean downwards)
+ 
+   phosh_swipe_away_bin_set_downwards (PHOSH_SWIPE_AWAY_BIN (priv->swipe_bin), downwards);
+ }
++
++
++/**
++ * phosh_activity_plinius_set_keyboard:
++ * @self: The activity
++ * @keyboard: (nullable): The on-screen keyboard as on screen, its device scale making its size
++ *   the logical one, or %NULL when the keyboard is hidden
++ *
++ * Plinius: a window shorter than the card (the keyboard took the rest of the screen) gets the
++ * keyboard drawn below it.
++ */
++void
++phosh_activity_plinius_set_keyboard (PhoshActivity *self, cairo_surface_t *keyboard)
++{
++  PhoshActivityPrivate *priv;
++
++  g_return_if_fail (PHOSH_IS_ACTIVITY (self));
++  priv = phosh_activity_get_instance_private (self);
++
++  if (priv->plinius_keyboard == keyboard)
++    return;
++
++  g_clear_pointer (&priv->plinius_keyboard, cairo_surface_destroy);
++  if (keyboard)
++    priv->plinius_keyboard = cairo_surface_reference (keyboard);
++  /* Made anew: a new keyboard may have the old one's address */
++  g_clear_pointer (&priv->plinius_card, cairo_surface_destroy);
++  gtk_widget_queue_draw (priv->preview);
++}
+diff --git a/src/activity.h b/src/activity.h
+index 167e863..b76bc6b 100644
+--- a/src/activity.h
++++ b/src/activity.h
+@@ -24,3 +24,4 @@ void        phosh_activity_get_thumbnail_allocation (PhoshActivity *self,
+ gboolean    phosh_activity_get_has_thumbnail (PhoshActivity *self);
+ GAppInfo *  phosh_activity_get_app_info (PhoshActivity *self);
+ void        phosh_activity_set_swipe_downwards (PhoshActivity *self, gboolean downwards);
++void        phosh_activity_plinius_set_keyboard (PhoshActivity *self, cairo_surface_t *keyboard);
+diff --git a/src/overview.c b/src/overview.c
+index d02e6cf..412d03c 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -19,10 +19,12 @@
+ #include "toplevel-manager.h"
+ #include "toplevel-thumbnail.h"
+ #include "util.h"
++#include "wl-buffer.h"
+ 
+ #include <gio/gdesktopappinfo.h>
+ 
+ #include <math.h>
++#include <string.h>
+ 
+ #include <handy.h>
+ 
+@@ -77,6 +79,12 @@ typedef struct {
+   double              plinius_move_grab;
+   guint               plinius_edge_id;
+   guint               plinius_tick_id;
++  /* The thumbnails asked for again once the on-screen keyboard is gone */
++  guint               plinius_osk_refresh_id;
++  /* The on-screen keyboard as on screen, for the cards (NULL while it is hidden) */
++  cairo_surface_t    *plinius_keyboard;
++  guint               plinius_osk_capture_id;
++  struct _PliniusOskCapture *plinius_osk_capture;
+ } PhoshOverviewPrivate;
+ 
+ 
+@@ -464,6 +472,8 @@ create_new_activity (PhoshOverview *self,
+ 
+   /* Plinius: below the app grid a swipe down closes the app */
+   phosh_activity_set_swipe_downwards (activity, priv->plinius_bottom);
++  /* Plinius: the keyboard below a window it shortened, see plinius_capture_osk () */
++  phosh_activity_plinius_set_keyboard (activity, priv->plinius_keyboard);
+ 
+   if (pos)
+     hdy_carousel_insert (priv->carousel_running_activities, GTK_WIDGET (activity), pos);
+@@ -954,6 +964,295 @@ on_toplevel_added (PhoshOverview *self, PhoshToplevel *toplevel)
+ }
+ 
+ 
++/*
++ * Plinius: a card shows the window as it was when its thumbnail was taken, with the on-screen
++ * keyboard up shortened by it. Once the keyboard is hidden phoc gives the window its full height
++ * again (it also lets a hidden window draw once after a resize), but in the overview a thumbnail
++ * is not asked for again: on_toplevel_changed () returns there, and the card's size does not
++ * change. So once the keyboard is hidden, the cards' thumbnails are asked for again, after the
++ * windows had the time to draw themselves at their full size.
++ */
++#define PLINIUS_OSK_THUMBNAIL_DELAY_MS 400
++
++static gboolean
++plinius_refresh_after_osk (gpointer data)
++{
++  PhoshOverview *self = PHOSH_OVERVIEW (data);
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  g_autoptr (GList) children = NULL;
++
++  priv->plinius_osk_refresh_id = 0;
++  /* Back in an app meanwhile: its card gets a new thumbnail when the overview opens */
++  if (!(phosh_shell_get_state (phosh_shell_get_default ()) & PHOSH_STATE_OVERVIEW))
++    return G_SOURCE_REMOVE;
++
++  children = gtk_container_get_children (GTK_CONTAINER (priv->carousel_running_activities));
++  for (GList *l = children; l; l = l->next) {
++    PhoshActivity *activity = PHOSH_ACTIVITY (l->data);
++    PhoshToplevel *toplevel = g_object_get_data (G_OBJECT (activity), "toplevel");
++
++    /* A card of an app still starting has no window yet */
++    if (PHOSH_IS_TOPLEVEL (toplevel))
++      request_thumbnail (activity, toplevel);
++  }
++
++  return G_SOURCE_REMOVE;
++}
++
++
++/*
++ * Plinius: the on-screen keyboard stays up when the overview opens, only covered by it, and the
++ * window it shortened is shorter than its card: the card's lower third stayed empty, as if the
++ * app were broken. The cards show the keyboard there, as it was on screen: whenever the keyboard
++ * has come up or the overview went back to an app with the keyboard up, the bottom of the usable
++ * area (where the keyboard sits) is copied from the screen once it has settled. The overview
++ * covers the keyboard as soon as it opens, so the copy is made before.
++ */
++#define PLINIUS_OSK_CAPTURE_DELAY_MS 600
++
++typedef struct _PliniusOskCapture {
++  PhoshOverview                   *overview;
++  struct zwlr_screencopy_frame_v1 *frame;
++  PhoshWlBuffer                   *buffer;
++  uint32_t                         flags;
++  int                              width, height;  /* logical */
++} PliniusOskCapture;
++
++
++static void
++plinius_osk_capture_free (PliniusOskCapture *capture)
++{
++  g_clear_pointer (&capture->buffer, phosh_wl_buffer_destroy);
++  g_clear_pointer (&capture->frame, zwlr_screencopy_frame_v1_destroy);
++  g_free (capture);
++}
++
++
++static void
++plinius_set_keyboard (PhoshOverview *self, cairo_surface_t *keyboard)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  g_autoptr (GList) children = NULL;
++
++  g_clear_pointer (&priv->plinius_keyboard, cairo_surface_destroy);
++  if (keyboard)
++    priv->plinius_keyboard = cairo_surface_reference (keyboard);
++
++  children = gtk_container_get_children (GTK_CONTAINER (priv->carousel_running_activities));
++  for (GList *l = children; l; l = l->next)
++    phosh_activity_plinius_set_keyboard (PHOSH_ACTIVITY (l->data), keyboard);
++}
++
++
++static void
++plinius_osk_frame_buffer (void *data, struct zwlr_screencopy_frame_v1 *frame, uint32_t format,
++                          uint32_t width, uint32_t height, uint32_t stride)
++{
++  PliniusOskCapture *capture = data;
++
++  capture->buffer = phosh_wl_buffer_new (format, width, height, stride);
++  if (capture->buffer)
++    zwlr_screencopy_frame_v1_copy (frame, capture->buffer->wl_buffer);
++}
++
++
++static void
++plinius_osk_frame_flags (void *data, struct zwlr_screencopy_frame_v1 *frame, uint32_t flags)
++{
++  PliniusOskCapture *capture = data;
++
++  capture->flags = flags;
++}
++
++
++static void
++plinius_osk_frame_ready (void *data, struct zwlr_screencopy_frame_v1 *frame,
++                         uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec)
++{
++  PliniusOskCapture *capture = data;
++  PhoshOverview *self = capture->overview;
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  PhoshWlBuffer *buffer = capture->buffer;
++  cairo_surface_t *surface;
++  cairo_format_t format;
++  gboolean swap_red_blue = FALSE;
++  unsigned char *dst;
++  int dst_stride;
++
++  priv->plinius_osk_capture = NULL;
++
++  /* Little endian ARGB8888 is cairo's ARGB32: rows are copied as they are. phoc on the phone
++   * offers ABGR8888 (measured 2026-11-20): red and blue swapped */
++  switch (buffer ? (uint32_t) buffer->format : 0) {
++  case WL_SHM_FORMAT_ARGB8888:
++    format = CAIRO_FORMAT_ARGB32;
++    break;
++  case WL_SHM_FORMAT_XRGB8888:
++    format = CAIRO_FORMAT_RGB24;
++    break;
++  case WL_SHM_FORMAT_ABGR8888:
++    format = CAIRO_FORMAT_ARGB32;
++    swap_red_blue = TRUE;
++    break;
++  case WL_SHM_FORMAT_XBGR8888:
++    format = CAIRO_FORMAT_RGB24;
++    swap_red_blue = TRUE;
++    break;
++  default:
++    g_warning ("Keyboard copy in an unknown format 0x%x", buffer ? (uint32_t) buffer->format : 0);
++    plinius_osk_capture_free (capture);
++    return;
++  }
++
++  surface = cairo_image_surface_create (format, buffer->width, buffer->height);
++  cairo_surface_flush (surface);
++  dst = cairo_image_surface_get_data (surface);
++  dst_stride = cairo_image_surface_get_stride (surface);
++  for (uint32_t y = 0; y < buffer->height; y++) {
++    uint32_t row = capture->flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT ? buffer->height - 1 - y : y;
++
++    unsigned char *line = dst + y * dst_stride;
++
++    memcpy (line, (unsigned char *) buffer->data + row * buffer->stride, buffer->width * 4);
++    if (swap_red_blue) {
++      for (uint32_t x = 0; x < buffer->width; x++) {
++        unsigned char red = line[x * 4];
++
++        line[x * 4] = line[x * 4 + 2];
++        line[x * 4 + 2] = red;
++      }
++    }
++  }
++  cairo_surface_mark_dirty (surface);
++  /* Device pixels per logical pixel: the cards draw it in logical units */
++  cairo_surface_set_device_scale (surface, (double) buffer->width / capture->width,
++                                  (double) buffer->height / capture->height);
++
++  plinius_set_keyboard (self, surface);
++  cairo_surface_destroy (surface);
++  plinius_osk_capture_free (capture);
++}
++
++
++static void
++plinius_osk_frame_failed (void *data, struct zwlr_screencopy_frame_v1 *frame)
++{
++  PliniusOskCapture *capture = data;
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (capture->overview);
++
++  g_debug ("Could not copy the keyboard from the screen");
++  priv->plinius_osk_capture = NULL;
++  plinius_osk_capture_free (capture);
++}
++
++
++static const struct zwlr_screencopy_frame_v1_listener plinius_osk_frame_listener = {
++  .buffer = plinius_osk_frame_buffer,
++  .flags = plinius_osk_frame_flags,
++  .ready = plinius_osk_frame_ready,
++  .failed = plinius_osk_frame_failed,
++};
++
++
++static gboolean
++plinius_osk_visible (void)
++{
++  PhoshOskManager *osk = phosh_shell_get_osk_manager (phosh_shell_get_default ());
++  gboolean visible = FALSE;
++
++  /* The property, not phosh_osk_manager_get_visible (): libphosh-tool (tests, tools) has no
++   * osk-manager.c */
++  if (osk)
++    g_object_get (osk, "visible", &visible, NULL);
++  return visible;
++}
++
++
++static gboolean
++plinius_capture_osk (gpointer data)
++{
++  PhoshOverview *self = PHOSH_OVERVIEW (data);
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  PhoshShell *shell = phosh_shell_get_default ();
++  struct zwlr_screencopy_manager_v1 *screencopy;
++  PliniusOskCapture *capture;
++  PhoshMonitor *monitor;
++  int x, y, width, height, copy_height;
++
++  priv->plinius_osk_capture_id = 0;
++
++  /* Only the keyboard over an app: not under the overview or the lock screen */
++  if (priv->plinius_osk_capture || !plinius_osk_visible () ||
++      (phosh_shell_get_state (shell) & PHOSH_STATE_OVERVIEW) || phosh_shell_get_locked (shell))
++    return G_SOURCE_REMOVE;
++
++  screencopy = phosh_wayland_get_zwlr_screencopy_manager_v1 (phosh_wayland_get_default ());
++  monitor = phosh_shell_get_primary_monitor (shell);
++  if (!screencopy || !monitor || !monitor->wl_output)
++    return G_SOURCE_REMOVE;
++
++  /* The keyboard sits at the bottom of the usable area; two thirds of it hold it also when the
++   * phone lies on its side. A card draws as much of it as the window left free. */
++  phosh_shell_get_usable_area (shell, &x, &y, &width, &height);
++  copy_height = height * 2 / 3;
++  if (width <= 0 || copy_height <= 0)
++    return G_SOURCE_REMOVE;
++
++  capture = g_new0 (PliniusOskCapture, 1);
++  capture->overview = self;
++  capture->width = width;
++  capture->height = copy_height;
++  capture->frame = zwlr_screencopy_manager_v1_capture_output_region (screencopy, FALSE, monitor->wl_output,
++                                                                     x, y + height - copy_height,
++                                                                     width, copy_height);
++  zwlr_screencopy_frame_v1_add_listener (capture->frame, &plinius_osk_frame_listener, capture);
++  priv->plinius_osk_capture = capture;
++
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++plinius_schedule_osk_capture (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++
++  g_clear_handle_id (&priv->plinius_osk_capture_id, g_source_remove);
++  priv->plinius_osk_capture_id = g_timeout_add (PLINIUS_OSK_CAPTURE_DELAY_MS, plinius_capture_osk, self);
++  g_source_set_name_by_id (priv->plinius_osk_capture_id, "[phosh] plinius_capture_osk");
++}
++
++
++/* Back from the overview to an app: the keyboard may look different now (layout, case) */
++static void
++plinius_on_shell_state_changed (PhoshOverview *self)
++{
++  if (!(phosh_shell_get_state (phosh_shell_get_default ()) & PHOSH_STATE_OVERVIEW) && plinius_osk_visible ())
++    plinius_schedule_osk_capture (self);
++}
++
++
++static void
++plinius_on_osk_visible_changed (PhoshOverview *self, GParamSpec *pspec, GObject *osk)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  gboolean visible;
++
++  g_object_get (osk, "visible", &visible, NULL);
++  if (visible) {
++    plinius_schedule_osk_capture (self);
++    return;
++  }
++
++  /* No keyboard below the windows any more */
++  g_clear_handle_id (&priv->plinius_osk_capture_id, g_source_remove);
++  plinius_set_keyboard (self, NULL);
++  g_clear_handle_id (&priv->plinius_osk_refresh_id, g_source_remove);
++  priv->plinius_osk_refresh_id = g_timeout_add (PLINIUS_OSK_THUMBNAIL_DELAY_MS, plinius_refresh_after_osk, self);
++  g_source_set_name_by_id (priv->plinius_osk_refresh_id, "[phosh] plinius_refresh_after_osk");
++}
++
++
+ static void
+ on_toplevel_changed (PhoshOverview *self, PhoshToplevel *toplevel)
+ {
+@@ -1259,6 +1558,11 @@ phosh_overview_dispose (GObject *object)
+ 
+   g_clear_object (&priv->plinius_settings);
+   g_clear_handle_id (&priv->plinius_edge_id, g_source_remove);
++  g_clear_handle_id (&priv->plinius_osk_refresh_id, g_source_remove);
++  g_clear_handle_id (&priv->plinius_osk_capture_id, g_source_remove);
++  /* A copy still on its way: no callback into a disposed overview */
++  g_clear_pointer (&priv->plinius_osk_capture, plinius_osk_capture_free);
++  g_clear_pointer (&priv->plinius_keyboard, cairo_surface_destroy);
+   g_clear_weak_pointer (&priv->plinius_moving);
+   if (priv->plinius_tick_id) {
+     gtk_widget_remove_tick_callback (GTK_WIDGET (self), priv->plinius_tick_id);
+@@ -1275,6 +1579,7 @@ phosh_overview_constructed (GObject *object)
+   PhoshOverview *self = PHOSH_OVERVIEW (object);
+   PhoshToplevelManager *toplevel_manager =
+     phosh_shell_get_toplevel_manager (phosh_shell_get_default ());
++  PhoshOskManager *osk_manager = phosh_shell_get_osk_manager (phosh_shell_get_default ());
+ 
+   G_OBJECT_CLASS (phosh_overview_parent_class)->constructed (object);
+ 
+@@ -1284,6 +1589,17 @@ phosh_overview_constructed (GObject *object)
+                     "swapped-object-signal::toplevel-missing", on_toplevel_missing, self,
+                     NULL);
+ 
++  /* Plinius: new thumbnails once the keyboard is gone, see plinius_refresh_after_osk () (no
++   * keyboard in the tests' stub shell) */
++  if (osk_manager)
++    g_signal_connect_object (osk_manager, "notify::visible",
++                             G_CALLBACK (plinius_on_osk_visible_changed), self, G_CONNECT_SWAPPED);
++  /* Plinius: the keyboard copied again after a return from the overview (not on the tests'
++   * stub shell, which has no such property) */
++  if (g_object_class_find_property (G_OBJECT_GET_CLASS (phosh_shell_get_default ()), "shell-state"))
++    g_signal_connect_object (phosh_shell_get_default (), "notify::shell-state",
++                             G_CALLBACK (plinius_on_shell_state_changed), self, G_CONNECT_SWAPPED);
++
+   get_running_activities (self);
+ }
+ 
+diff --git a/tests/stubs/phosh.c b/tests/stubs/phosh.c
+index a248de3..6d78c33 100644
+--- a/tests/stubs/phosh.c
++++ b/tests/stubs/phosh.c
+@@ -119,6 +119,14 @@ phosh_shell_get_lockscreen_manager (PhoshShell *self)
+ }
+ 
+ 
++/* Plinius: the overview listens for the keyboard (0103); the stub shell has none */
++PhoshOskManager *
++phosh_shell_get_osk_manager (PhoshShell *self)
++{
++  return NULL;
++}
++
++
+ PhoshBackgroundManager *
+ phosh_shell_get_background_manager (PhoshShell *self)
+ {

@@ -1,0 +1,455 @@
+#!/usr/bin/python3
+"""One desktop session over VNC, started by the first connection to plinius-desktop.socket, or on
+a TV (--cast, plinius-desktop-cast.service, started by Schwupp's cast quick setting).
+
+Nothing changes at the phone until a viewer has logged in: wayvnc takes the socket and checks the
+login (PAM, see /etc/pam.d/wayvnc). Only then the virtual screen comes up in phoc, with the bar on
+it. When the last viewer is gone for GRACE seconds (a reconnect or a short drop does not count),
+everything goes away again in reverse order; phoc moves the windows to the phone and systemd
+listens on the port again. phoc also removes the screen by itself if this process dies, because
+it watches the bus connection that asked for it.
+
+On a TV there is no server: the session makes the virtual screen in Full HD with the bar on it
+and tells systemd it is ready (Type=notify); Schwupp then shares that screen with the TV and stops
+the unit when the TV is done.
+
+phoc has one virtual screen. The session that makes it owns it: the bar, the app menu, the layout
+and, over VNC, the sound to the viewer's PC. A second session (VNC while the TV shows the desktop,
+or the other way round) shows the same screen and ends when it is gone, so the first one to end
+ends the desktop for both.
+
+Standby: while a viewer is connected and the phone has external power, a logind block inhibitor
+keeps it awake. On battery it may sleep as always once its display is off; the connection waits,
+and the phone wakes as always from the phone itself (power button, double tap).
+"""
+import gettext
+import json
+import os
+import queue
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+import desk_common as common  # noqa: E402
+
+_ = gettext.translation("plinius-desktop", fallback=True).gettext
+
+# The viewer that started this has this long to log in; a port scan ends here too
+LOGIN_WAIT = 60.0
+GRACE = 10.0
+# Right of the phone even in landscape (1058 logical pixels wide)
+POSITION = (1100, 0)
+# How long wayvnc may take to learn the new screen's name
+SWITCH_WAIT = 5.0
+# Frames per second to the viewer: wayvnc's default of 30 makes a dragged window stutter
+MAX_FPS = 60
+SWITCH_RETRY = 0.1
+LAYOUT_POLL = 2.0
+POWER_POLL = 10.0
+# What every TV takes
+CAST_RESOLUTION = "1920x1080"
+
+WAYBAR_TEMPLATE = "/usr/share/plinius-desktop/waybar.jsonc"
+# On a TV the clock shows the seconds: the screencast only gets a frame when something on the
+# screen changes, and an idle desktop changed only once a minute, so the TV stayed black that long
+CLOCK_MINUTES = '"clock": { "format": "{:%a %d %b  %H:%M}", "tooltip": false }'
+CLOCK_SECONDS = '"clock": { "format": "{:%a %d %b  %H:%M:%S}", "interval": 1, "tooltip": false }'
+WAYBAR_STYLE = "/usr/share/plinius-desktop/waybar.css"
+# The app menu, started hidden with the bar so its button opens it at once
+APPS_MENU = "/usr/lib/plinius-desktop/desk-apps.py"
+KEYS_TOOL = "/usr/lib/plinius-desktop/plinius-desktop-keys"
+
+
+def log(*args):
+    print(*args, flush=True)
+
+
+class Session:
+    def __init__(self, mode="vnc"):
+        self.mode = mode
+        # Whether this session made the virtual screen
+        self.owner = False
+        self.events = queue.Queue()
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.system_bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.wayvnc = None
+        self.waybar = None
+        self.apps_menu = None
+        self.output = None
+        self.inhibitor = None
+        self.notification = 0
+        self.stopping = threading.Event()
+
+    # -- Server ---------------------------------------------------------------------------
+
+    def write_config(self):
+        """wayvnc's file: encryption and the login are not optional."""
+        state = os.path.join(GLib.get_user_state_dir(), "plinius-desktop")
+        path = os.path.join(common.RUNTIME_DIR, "wayvnc.config")
+        with open(path, "w") as f:
+            f.write("enable_auth=true\nenable_pam=true\n"
+                    f"private_key_file={state}/tls_key.pem\n"
+                    f"certificate_file={state}/tls_cert.pem\n"
+                    f"rsa_private_key_file={state}/rsa_key.pem\n")
+        return path
+
+    def start_wayvnc(self):
+        """wayvnc with the socket systemd handed over as fd 3. It captures nothing before a
+        viewer has logged in."""
+        if os.environ.get("LISTEN_FDS") != "1":
+            sys.exit("plinius-desktop-session: needs the socket of plinius-desktop.socket")
+        subprocess.run([KEYS_TOOL], check=True, stdout=subprocess.DEVNULL)
+        env = dict(os.environ)
+        for name in ("LISTEN_FDS", "LISTEN_PID", "LISTEN_FDNAMES"):
+            env.pop(name, None)
+        self.wayvnc = subprocess.Popen(
+            ["wayvnc", "-C", self.write_config(), "-S", common.CTL_SOCKET,
+             "-n", GLib.get_host_name(), "-k", common.load()["keyboard"],
+             "-f", str(MAX_FPS), "-x", "3"],
+            pass_fds=(3,), env=env)
+        threading.Thread(target=self.watch_wayvnc, daemon=True).start()
+        threading.Thread(target=self.read_events, daemon=True).start()
+
+    def watch_wayvnc(self):
+        self.wayvnc.wait()
+        self.events.put({"method": "wayvnc-exited"})
+
+    def read_events(self):
+        """wayvnc's events; -w waits for its control socket, -r follows a restart."""
+        with subprocess.Popen(["wayvncctl", "-S", common.CTL_SOCKET, "-w", "-r", "-j", "event-receive"],
+                              stdout=subprocess.PIPE, text=True) as events:
+            self.events_process = events
+            for line in events.stdout:
+                try:
+                    self.events.put(json.loads(line))
+                except ValueError:
+                    pass
+
+    # -- Screen ---------------------------------------------------------------------------
+
+    def virtual_call(self, method, args, reply=None):
+        return self.bus.call_sync("mobi.phosh.Phoc.VirtualOutput", "/mobi/phosh/Phoc/VirtualOutput",
+                                  "mobi.phosh.Phoc.VirtualOutput", method, args,
+                                  GLib.VariantType.new(reply) if reply else None,
+                                  Gio.DBusCallFlags.NONE, 10000, None)
+
+    def acquire_screen(self, width, height, scale):
+        """The virtual screen: a new one, or the one the other desktop session made. None when
+        there is neither."""
+        try:
+            name = self.virtual_call(
+                "Create", GLib.Variant("(uudii)", (width, height, scale, *POSITION)),
+                "(s)").unpack()[0]
+        except GLib.Error as error:
+            name = common.virtual_output()
+            if "already exists" not in error.message or not name:
+                log("Create:", error.message)
+                return None
+            log("sharing the screen", name)
+            return name
+        self.owner = True
+        os.makedirs(common.SCREEN_DIR, mode=0o700, exist_ok=True)
+        with open(common.OUTPUT_FILE, "w") as f:
+            f.write(name)
+        log("virtual screen", name)
+        return name
+
+    def screen_on(self):
+        settings = common.load()
+        width, height = (int(v) for v in settings["resolution"].split("x"))
+        self.output = self.acquire_screen(width, height, float(settings["scale"]))
+        if not self.output or not self.capture_screen():
+            # Better no picture than the phone's screen in place of the desktop
+            self.events.put({"method": "stop"})
+            return
+        if self.owner:
+            self.start_desktop()
+            if settings["sound"] == "desktop":
+                common.set_sound("desktop")
+        else:
+            threading.Thread(target=self.watch_screen, daemon=True).start()
+        threading.Thread(target=self.keep_awake, daemon=True).start()
+
+    def start_desktop(self):
+        """What the owner of the screen puts on it."""
+        self.start_bar()
+        threading.Thread(target=self.watch_bar_position, daemon=True).start()
+        threading.Thread(target=self.keep_layout, daemon=True).start()
+
+    def watch_screen(self):
+        """A shared screen goes when the session that made it ends: this one ends with it."""
+        while not self.stopping.wait(LAYOUT_POLL):
+            if self.output not in common.outputs():
+                log("screen gone", self.output)
+                self.events.put({"method": "screen-gone"})
+                return
+
+    def capture_screen(self):
+        """Point wayvnc at the new screen. It knows a screen by name only after the compositor's
+        "done" event, so right after Create the switch can fail with "No such output"."""
+        deadline = time.monotonic() + SWITCH_WAIT
+        while True:
+            result = subprocess.run(["wayvncctl", "-S", common.CTL_SOCKET, "output-set", self.output],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                    check=False)
+            if result.returncode == 0:
+                log("capturing", self.output)
+                return True
+            if time.monotonic() >= deadline or self.stopping.wait(SWITCH_RETRY):
+                log("cannot capture", self.output + ":", result.stdout.strip())
+                return False
+
+    def start_bar(self):
+        """waybar on the virtual screen, at the edge set in GNOME Settings › Remote Access."""
+        position = common.bar_position()
+        path = os.path.join(common.SCREEN_DIR, "waybar.jsonc")
+        with open(WAYBAR_TEMPLATE) as template, open(path, "w") as config:
+            text = template.read().replace("@OUTPUT@", self.output)
+            if self.mode == "cast":
+                text = text.replace(CLOCK_MINUTES, CLOCK_SECONDS)
+            config.write(text.replace("@POSITION@", position))
+        log("bar at the", position)
+        self.waybar = subprocess.Popen(["waybar", "-c", path, "-s", WAYBAR_STYLE])
+        # It places itself at the bar's edge once, so it starts again with the bar
+        self.apps_menu = subprocess.Popen([APPS_MENU, "--resident"])
+
+    def move_bar(self):
+        """A new edge: the open menus belong to the old one, the bar starts again (waybar does
+        not reload its position)."""
+        if self.stopping.is_set() or self.waybar is None:
+            return
+        common.close_all_menus()
+        for process in (self.waybar, self.apps_menu):
+            if process is None:
+                continue
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        self.start_bar()
+
+    def watch_bar_position(self):
+        """gsettings monitor prints a line per change; this thread has no main loop for
+        GSettings' own signal. Without the schema there is nothing to follow."""
+        source = Gio.SettingsSchemaSource.get_default()
+        if source is None or source.lookup(common.SCHEMA, True) is None:
+            return
+        with subprocess.Popen(["gsettings", "monitor", common.SCHEMA, "bar-position"],
+                              stdout=subprocess.PIPE, text=True) as monitor:
+            self.monitor_process = monitor
+            for _line in monitor.stdout:
+                self.events.put({"method": "bar-moved"})
+
+    def keep_layout(self):
+        """The scale that keeps the configured desktop when the viewer resized the screen: a
+        window twice as large gets twice the scale, the same desktop only larger."""
+        while not self.stopping.wait(LAYOUT_POLL):
+            state = common.outputs().get(self.output)
+            if not state or not state["enabled"] or not state["mode"] or not state["scale"]:
+                continue
+            scale = wanted_scale(state["mode"], common.load())
+            # wlr-randr applies the whole layout, the phone's panel included: only on a change
+            if scale and abs(state["scale"] - scale) > 0.01:
+                log("scale", state["mode"], state["scale"], "->", scale)
+                common.run(["wlr-randr", "--output", self.output, "--scale", str(scale)])
+
+    # -- Standby --------------------------------------------------------------------------
+
+    def on_battery(self):
+        try:
+            result = self.system_bus.call_sync(
+                "org.freedesktop.UPower", "/org/freedesktop/UPower",
+                "org.freedesktop.DBus.Properties", "Get",
+                GLib.Variant("(ss)", ("org.freedesktop.UPower", "OnBattery")),
+                GLib.VariantType.new("(v)"), Gio.DBusCallFlags.NONE, 5000, None)
+            return result.unpack()[0]
+        except GLib.Error as error:
+            # Not known: as on battery, a phone that may sleep is the safe side
+            log("UPower:", error.message)
+            return True
+
+    def keep_awake(self):
+        """External power: no standby while connected. plinius-suspend asks logind for block
+        inhibitors before every suspend."""
+        while True:
+            wanted = not self.on_battery() and not self.stopping.is_set()
+            if wanted and self.inhibitor is None:
+                try:
+                    reply, fds = self.system_bus.call_with_unix_fd_list_sync(
+                        "org.freedesktop.login1", "/org/freedesktop/login1",
+                        "org.freedesktop.login1.Manager", "Inhibit",
+                        GLib.Variant("(ssss)", ("sleep", "Plinius Desktop",
+                                                "A viewer is connected and the phone has power", "block")),
+                        GLib.VariantType.new("(h)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+                    self.inhibitor = fds.get(reply.unpack()[0])
+                    log("standby blocked: external power")
+                except GLib.Error as error:
+                    log("inhibitor:", error.message)
+            elif not wanted and self.inhibitor is not None:
+                os.close(self.inhibitor)
+                self.inhibitor = None
+                log("standby allowed: on battery")
+            if self.stopping.wait(POWER_POLL):
+                if self.inhibitor is not None:
+                    os.close(self.inhibitor)
+                    self.inhibitor = None
+                return
+
+    # -- Telling the owner ----------------------------------------------------------------
+
+    def notify(self, address):
+        """Somebody controls this phone: that doesn't happen unnoticed. A tap closes it (not
+        resident: Phosh keeps a resident notification after its default action)."""
+        body = _("A computer at {address} is using this phone.").format(address=address or "?")
+        try:
+            self.notification = self.bus.call_sync(
+                "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                "org.freedesktop.Notifications", "Notify",
+                GLib.Variant("(susssasa{sv}i)", (_("Desktop"), 0, "video-display-symbolic",
+                                                 _("Desktop connected"), body, [], {}, 0)),
+                GLib.VariantType.new("(u)"), Gio.DBusCallFlags.NONE, 5000, None).unpack()[0]
+        except GLib.Error as error:
+            log("notification:", error.message)
+
+    def unnotify(self):
+        if not self.notification:
+            return
+        try:
+            self.bus.call_sync("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                               "org.freedesktop.Notifications", "CloseNotification",
+                               GLib.Variant("(u)", (self.notification,)), None,
+                               Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error:
+            pass
+
+    # -- The session ----------------------------------------------------------------------
+
+    def run(self):
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda *a: self.events.put({"method": "stop"}))
+        if self.mode == "cast":
+            return self.run_cast()
+        return self.run_vnc()
+
+    def run_cast(self):
+        """The desktop on a TV: until Schwupp stops the unit or the shared screen is gone."""
+        settings = common.load()
+        width, height = (int(v) for v in CAST_RESOLUTION.split("x"))
+        # The desktop as configured for VNC, in the TV's size
+        scale = wanted_scale(CAST_RESOLUTION, settings) or 1.0
+        self.output = self.acquire_screen(width, height, scale)
+        if not self.output:
+            return 1
+        if self.owner:
+            self.start_desktop()
+        else:
+            threading.Thread(target=self.watch_screen, daemon=True).start()
+        threading.Thread(target=self.keep_awake, daemon=True).start()
+        notify_ready()
+        while True:
+            name = self.events.get().get("method")
+            if name in ("stop", "screen-gone"):
+                log(name)
+                return 0
+
+    def run_vnc(self):
+        self.start_wayvnc()
+        deadline = time.monotonic() + LOGIN_WAIT
+        while True:
+            timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+            try:
+                event = self.events.get(timeout=timeout)
+            except queue.Empty:
+                log("no viewer: ending")
+                return
+            name = event.get("method")
+            params = event.get("params") or {}
+            if name in ("stop", "wayvnc-exited", "screen-gone"):
+                log(name)
+                return
+            if name == "client-connected":
+                deadline = None
+                # Only the first login brings the screen up; wayvnc checks it before this event
+                if self.output is None:
+                    self.screen_on()
+                    address = common.plain_address(params.get("address"))
+                    with open(common.CLIENT_FILE, "w") as f:
+                        f.write(address or "")
+                    self.notify(address)
+            elif name == "bar-moved":
+                self.move_bar()
+            elif name == "client-disconnected" and params.get("connection_count", 0) == 0:
+                deadline = time.monotonic() + GRACE
+
+    def stop(self):
+        """In reverse order; each step goes on after a failure of the one before."""
+        self.stopping.set()
+        for process in (self.waybar, self.apps_menu, self.wayvnc,
+                        getattr(self, "events_process", None),
+                        getattr(self, "monitor_process", None)):
+            if process and process.poll() is None:
+                process.terminate()
+        for process in (self.waybar, self.apps_menu, self.wayvnc):
+            if process:
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        common.close_all_menus()
+        if self.output and self.owner:
+            if self.mode == "vnc":
+                common.drop_desktop_sound()
+            for path in (common.OUTPUT_FILE, os.path.join(common.SCREEN_DIR, "waybar.jsonc")):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            try:
+                self.virtual_call("Destroy", None)
+            except GLib.Error as error:
+                log("Destroy:", error.message)
+        self.unnotify()
+
+
+def wanted_scale(mode, settings):
+    try:
+        width, height = (int(v) for v in mode.split("x"))
+        conf_w, conf_h = (int(v) for v in settings["resolution"].split("x"))
+        base = float(settings["scale"])
+    except (ValueError, AttributeError):
+        return None
+    return round(base * min(width / conf_w, height / conf_h), 3)
+
+
+def notify_ready():
+    """sd_notify(READY=1): systemd's start job of the cast unit ends here, Schwupp may share."""
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        sock.sendto(b"READY=1", address)
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    session = Session("cast" if "--cast" in argv else "vnc")
+    try:
+        code = session.run()
+    finally:
+        session.stop()
+    return code or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

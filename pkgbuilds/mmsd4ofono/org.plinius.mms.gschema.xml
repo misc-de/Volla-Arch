@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.plinius.mms" path="/org/plinius/mms/">
+    <key name="sims" type="as">
+      <default>[]</default>
+      <summary>SIM cards with MMS</summary>
+      <description>The ICCIDs of the SIM cards that send and receive MMS (Settings, Mobile Network, MMS). mmsd runs while the SIM for mobile data is one of them; MMS goes over that SIM only.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,213 @@
+From b098cc41b4c21ced90ea9d1a60e86a09ef788fd8 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 22:00:39 +0100
+Subject: [PATCH] output-shield: Show the device's logo instead of the spinner
+
+Plinius: when /usr/share/plinius/boot-logo has mark.png and wordmark.png,
+the shield shows them while the session starts, instead of the spinner:
+the mark turns like a coin, one turn every 2.4 s (half a spin cycle),
+above the wordmark. The spinner's size range grows to 512 for that.
+Without the images the spinner stays as it is.
+---
+ src/output-shield.c |  9 +++--
+ src/spinner.c       | 97 +++++++++++++++++++++++++++++++++++++++++++++++++++--
+ src/spinner.h       |  1 +
+ 3 files changed, 102 insertions(+), 5 deletions(-)
+
+diff --git a/src/output-shield.c b/src/output-shield.c
+index ec24e1b..eed2f7b 100644
+--- a/src/output-shield.c
++++ b/src/output-shield.c
+@@ -20,6 +20,8 @@
+ 
+ #define PHOC_ANIM_DURATION_SHIELD_MS 250 /* ms */
+ #define SPINNER_SIZE 32
++/* Plinius: room for a logo instead of the spinner, in logical pixels */
++#define LOGO_SIZE 220
+ 
+ enum {
+   PROP_0,
+@@ -176,11 +178,12 @@ start_render (PhocOutputShield *self, gboolean show_spinner)
+ 
+   if (show_spinner && !self->spinner) {
+     int lx, ly;
++    int size = phoc_spinner_has_logo () ? LOGO_SIZE : SPINNER_SIZE;
+ 
+-    lx = output_box.x + output_box.width * 0.5 - SPINNER_SIZE * 0.5;
+-    ly = output_box.y + output_box.height * 0.5 - SPINNER_SIZE * 0.5;
++    lx = output_box.x + output_box.width * 0.5 - size * 0.5;
++    ly = output_box.y + output_box.height * 0.5 - size * 0.5;
+ 
+-    self->spinner = phoc_spinner_new (PHOC_ANIMATABLE (self), lx, ly, SPINNER_SIZE);
++    self->spinner = phoc_spinner_new (PHOC_ANIMATABLE (self), lx, ly, size);
+   }
+ 
+   if (show_spinner)
+diff --git a/src/spinner.c b/src/spinner.c
+index a49ee87..abed0d2 100644
+--- a/src/spinner.c
++++ b/src/spinner.c
+@@ -21,6 +21,18 @@
+ 
+ #include <cairo.h>
+ 
++/* Plinius: a logo instead of the spinner, if the device ships one. The mark turns around its
++ * vertical axis like a coin, once per spin cycle; the wordmark below it stands still. Both are
++ * PNGs with alpha, the mark centred above the wordmark. */
++#define LOGO_DIR "/usr/share/plinius/boot-logo"
++#define LOGO_MARK LOGO_DIR "/mark.png"
++#define LOGO_WORDMARK LOGO_DIR "/wordmark.png"
++#define LOGO_GAP 4
++/* Opacity of the mark when seen edge-on: it looks darker while turned away */
++#define LOGO_EDGE_OPACITY 0.55
++/* Turns of the mark per spin cycle (1.2 s): one turn takes 2.4 s */
++#define LOGO_TURNS_PER_CYCLE 0.5
++
+ enum {
+   PROP_0,
+   PROP_LX,
+@@ -68,6 +80,8 @@ struct _PhocSpinner {
+   float               angle;
+   PhocCairoTexture   *texture;
+   gboolean            redraw_spinner; /* set whenever angle changes */
++  cairo_surface_t    *mark;
++  cairo_surface_t    *wordmark;
+ };
+ 
+ static void bling_interface_init (PhocBlingInterface *iface);
+@@ -198,6 +212,58 @@ draw_spinner (cairo_t *cr, double base_angle, double size)
+ }
+ 
+ 
++static cairo_surface_t *
++load_png (const char *path)
++{
++  cairo_surface_t *surface = cairo_image_surface_create_from_png (path);
++
++  if (cairo_surface_status (surface) == CAIRO_STATUS_SUCCESS)
++    return surface;
++
++  g_warning ("Cannot load %s: %s", path, cairo_status_to_string (cairo_surface_status (surface)));
++  cairo_surface_destroy (surface);
++  return NULL;
++}
++
++
++static void
++draw_logo (cairo_t *cr, double angle, double size, cairo_surface_t *mark, cairo_surface_t *wordmark)
++{
++  double mark_w = cairo_image_surface_get_width (mark);
++  double mark_h = cairo_image_surface_get_height (mark);
++  double word_w = cairo_image_surface_get_width (wordmark);
++  double word_h = cairo_image_surface_get_height (wordmark);
++  double width = MAX (mark_w, word_w);
++  double height = mark_h + LOGO_GAP + word_h;
++  double scale = size / MAX (width, height);
++  double turn = cos (angle * LOGO_TURNS_PER_CYCLE);
++
++  cairo_save (cr);
++  cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);
++  cairo_paint (cr);
++  cairo_restore (cr);
++
++  cairo_save (cr);
++  /* Fit the layout into the square, centred */
++  cairo_translate (cr, (size - width * scale) / 2, (size - height * scale) / 2);
++  cairo_scale (cr, scale, scale);
++
++  cairo_save (cr);
++  cairo_translate (cr, width / 2, mark_h / 2);
++  /* A negative factor mirrors: the back side */
++  cairo_scale (cr, ABS (turn) < 0.01 ? 0.01 : turn, 1);
++  cairo_set_source_surface (cr, mark, -mark_w / 2, -mark_h / 2);
++  cairo_pattern_set_filter (cairo_get_source (cr), CAIRO_FILTER_GOOD);
++  cairo_paint_with_alpha (cr, phoc_lerp (LOGO_EDGE_OPACITY, 1.0, ABS (turn)));
++  cairo_restore (cr);
++
++  cairo_set_source_surface (cr, wordmark, (width - word_w) / 2, mark_h + LOGO_GAP);
++  cairo_pattern_set_filter (cairo_get_source (cr), CAIRO_FILTER_GOOD);
++  cairo_paint (cr);
++  cairo_restore (cr);
++}
++
++
+ static void
+ bling_render (PhocBling *bling, PhocRenderContext *ctx)
+ {
+@@ -222,7 +288,12 @@ bling_render (PhocBling *bling, PhocRenderContext *ctx)
+ 
+   /* only redraw spinner if needed (angle property was changed since last render) */
+   if (self->redraw_spinner) {
+-    draw_spinner (phoc_cairo_texture_get_context (self->texture), self->angle, box.width);
++    if (self->mark && self->wordmark) {
++      draw_logo (phoc_cairo_texture_get_context (self->texture), self->angle, box.width,
++                 self->mark, self->wordmark);
++    } else {
++      draw_spinner (phoc_cairo_texture_get_context (self->texture), self->angle, box.width);
++    }
+     phoc_cairo_texture_update (self->texture);
+     self->redraw_spinner = false;
+   }
+@@ -265,6 +336,11 @@ bling_map (PhocBling *bling)
+   cairo_set_antialias (cr, CAIRO_ANTIALIAS_FAST);
+   cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
+ 
++  if (phoc_spinner_has_logo () && !self->mark) {
++    self->mark = load_png (LOGO_MARK);
++    self->wordmark = load_png (LOGO_WORDMARK);
++  }
++
+   phoc_bling_damage_box (PHOC_BLING (self));
+   phoc_timed_animation_play (self->animation);
+ }
+@@ -381,6 +457,8 @@ phoc_spinner_finalize (GObject *object)
+   phoc_bling_unmap (PHOC_BLING (self));
+   g_clear_object (&self->easer);
+   g_clear_object (&self->animation);
++  g_clear_pointer (&self->mark, cairo_surface_destroy);
++  g_clear_pointer (&self->wordmark, cairo_surface_destroy);
+ 
+   G_OBJECT_CLASS (phoc_spinner_parent_class)->finalize (object);
+ }
+@@ -464,7 +542,8 @@ phoc_spinner_class_init (PhocSpinnerClass *klass)
+   props[PROP_SIZE] =
+     g_param_spec_int ("size", "", "",
+                       16,
+-                      64,
++                      /* Plinius: room for a logo (output-shield.c), not only the spinner */
++                      512,
+                       16,
+                       G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
+ 
+@@ -485,6 +564,20 @@ phoc_spinner_init (PhocSpinner *self)
+ }
+ 
+ 
++/**
++ * phoc_spinner_has_logo:
++ *
++ * Plinius: whether the device ships a logo to show instead of the spinner.
++ *
++ * Returns: %TRUE if both images of the logo are there
++ */
++gboolean
++phoc_spinner_has_logo (void)
++{
++  return g_file_test (LOGO_MARK, G_FILE_TEST_EXISTS) && g_file_test (LOGO_WORDMARK, G_FILE_TEST_EXISTS);
++}
++
++
+ PhocSpinner*
+ phoc_spinner_new (PhocAnimatable *animatable, int lx, int ly, int size)
+ {
+diff --git a/src/spinner.h b/src/spinner.h
+index 06064c2..05b6149 100644
+--- a/src/spinner.h
++++ b/src/spinner.h
+@@ -16,5 +16,6 @@ G_BEGIN_DECLS
+ G_DECLARE_FINAL_TYPE (PhocSpinner, phoc_spinner, PHOC, SPINNER, GObject)
+ 
+ PhocSpinner *phoc_spinner_new (PhocAnimatable *animatable, int cx, int cy, int size);
++gboolean     phoc_spinner_has_logo (void);
+ 
+ G_END_DECLS

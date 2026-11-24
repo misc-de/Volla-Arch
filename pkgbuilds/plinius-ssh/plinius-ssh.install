@@ -1,0 +1,34 @@
+# pacman install script of plinius-ssh: applies /etc/plinius-ssh.conf right away (firewall rules,
+# sshd file), so an update never leaves the rules of an older version in place. On removal the
+# firewall chain and the generated sshd file go; SSH is then as the device package sets it
+# (USB only), and the local socket of systemd-ssh-generator listens again after a reboot.
+
+post_install() {
+	/usr/lib/plinius-ssh/plinius-ssh-set apply || true
+	# The socket of systemd-ssh-generator is masked by the package; it listens until stopped
+	systemctl daemon-reload 2>/dev/null || true
+	systemctl stop sshd-unix-local.socket 2>/dev/null || true
+}
+
+post_upgrade() {
+	post_install
+}
+
+pre_remove() {
+	local t p
+	rm -f /etc/ssh/sshd_config.d/40-plinius-ssh.conf
+	for t in iptables-legacy ip6tables-legacy; do
+		command -v "$t" >/dev/null || continue
+		# Every jump to the chain (one per sshd port), then the chain
+		while p=$("$t" -w -S INPUT 2>/dev/null | grep -m1 -- '-j plinius-ssh$'); do
+			# shellcheck disable=SC2086
+			"$t" -w ${p/-A /-D } || break
+		done
+		"$t" -w -F plinius-ssh 2>/dev/null || true
+		"$t" -w -X plinius-ssh 2>/dev/null || true
+	done
+	if systemctl -q is-active sshd.service 2>/dev/null; then
+		systemctl kill --kill-whom=main -s HUP sshd.service || true
+	fi
+	return 0
+}

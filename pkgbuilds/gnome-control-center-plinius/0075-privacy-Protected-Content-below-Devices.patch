@@ -1,0 +1,67 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] Privacy: Protected Content below Devices
+
+cc-plinius-widevine.c (a separate file of the package) is built with the
+Privacy panel, which adds its group "Protected Content" at the end of its
+page: Widevine (DRM for Netflix, Prime Video) from Google through
+plinius-widevine, off unless switched on. It was on the Settings tab of
+Apps; turning it on makes the phone ask Google once a day, so it belongs
+with privacy.
+---
+--- a/panels/privacy/meson.build
++++ b/panels/privacy/meson.build
+@@ -55,6 +55,7 @@
+   'location/cc-plinius-beacondb.c',
+   'cc-plinius-crypt.c',
+   'cc-plinius-security.c',
++  'cc-plinius-widevine.c',
+   'cc-privacy-panel.c',
+   'cc-security-panel.c',
+   'screen/cc-plinius-pinguard.c',
+--- a/panels/privacy/cc-privacy-panel.blp
++++ b/panels/privacy/cc-privacy-panel.blp
+@@ -8,7 +8,8 @@
+     [top]
+     Adw.HeaderBar {}
+ 
+-    content: Adw.PreferencesPage {
++    // Plinius: cc-privacy-panel.c adds Protected Content at the end
++    content: Adw.PreferencesPage privacy_page {
+       Adw.PreferencesGroup {
+         title: _("System");
+ 
+--- a/panels/privacy/cc-privacy-panel.c
++++ b/panels/privacy/cc-privacy-panel.c
+@@ -27,6 +27,7 @@
+ #endif
+ #include "camera/cc-camera-page.h"
+ #include "cc-list-row.h"
++#include "cc-plinius-widevine.h"
+ #include "cc-privacy-resources.h"
+ #include "diagnostics/cc-diagnostics-page.h"
+ #include "firmware-security/cc-firmware-security-page.h"
+@@ -41,6 +42,7 @@
+     CcListRow *location_row;
+     CcListRow *security_row;
+     GtkWidget *security_page;
++    AdwPreferencesPage *privacy_page;
+ };
+ 
+ CC_PANEL_REGISTER (CcPrivacyPanel, cc_privacy_panel)
+@@ -81,6 +83,7 @@
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, location_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, security_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, security_page);
++    gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, privacy_page);
+ 
+     g_type_ensure (CC_TYPE_CAMERA_PAGE);
+     g_type_ensure (CC_TYPE_DIAGNOSTICS_PAGE);
+@@ -121,4 +124,8 @@
+ 
+     /* Plinius: encryption and the phone's own security checks are on the Security panel
+      * (cc-security-panel.c); fwupd's Device Security has no row, its checks are made for PCs */
++
++    /* Plinius: Widevine (DRM) from Google through plinius-widevine, below Devices
++     * (cc-plinius-widevine.c, nothing without plinius-widevine) */
++    cc_plinius_widevine_add (self->privacy_page);
+ }

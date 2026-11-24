@@ -1,0 +1,18 @@
+# pacman install script of plinius-swap. In an image build (chroot) nothing runs: /proc/swaps and
+# swapon would be those of the build host. There the service makes the file at the first boot on
+# the phone, so the image stays small.
+
+running_system() {
+	[ -d /run/systemd/system ] && ! systemd-detect-virt -q --chroot
+}
+
+post_install() {
+	running_system || return 0
+	systemctl daemon-reload
+	systemctl start --no-block plinius-swap.service || true
+}
+
+pre_remove() {
+	running_system || return 0
+	/usr/lib/plinius-swap/plinius-swap-set remove || true
+}

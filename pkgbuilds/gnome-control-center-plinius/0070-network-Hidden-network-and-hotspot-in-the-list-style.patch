@@ -1,0 +1,392 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 07:00:00 +0100
+Subject: [PATCH] network: Hidden network and hotspot in the list style
+
+Plinius: the two Wi-Fi forms look like the other pages of Settings,
+rows in a boxed list instead of labels left of the fields:
+
+- Connect to Hidden Networks: our own page (cc-plinius-hidden-wifi.c,
+  a whole file copied in prepare()) with name, security (none, WPA &
+  WPA2 Personal, WPA3 Personal) and password as rows, libnma's labels
+  and translations, "Connect" below the form. Interfaces that only run
+  an access point are no choice. "Other Security" opens libnma's
+  dialog as before, for WEP, LEAP and 802.1X.
+- Wi-Fi hotspot: the explanation as the group's description, name and
+  password as entry rows (generating a password from a button in the
+  row), the hints below the list, "Turn On" below. The fields are
+  filled when the content is realized: as a page of the window the
+  dialog itself never is, so name and password stayed empty.
+---
+ panels/network/cc-wifi-hotspot-dialog.blp | 155 ++++++++++++------------------
+ panels/network/cc-wifi-hotspot-dialog.c   |  33 +++++--
+ panels/network/meson.build                |   1 +
+ panels/network/network-dialogs.c          |  11 +++
+ panels/network/network-dialogs.h          |   3 +
+ 5 files changed, 101 insertions(+), 102 deletions(-)
+diff --git a/panels/network/cc-wifi-hotspot-dialog.blp b/panels/network/cc-wifi-hotspot-dialog.blp
+index 038bffb5d..83f9716e2 100644
+--- a/panels/network/cc-wifi-hotspot-dialog.blp
++++ b/panels/network/cc-wifi-hotspot-dialog.blp
+@@ -4,76 +4,71 @@ using Adw 1;
+ template $CcWifiHotspotDialog: Adw.Dialog {
+   title: _("Turn On Wi-Fi Hotspot?");
+ 
+-  child: Adw.ToolbarView {
++  /* Plinius: a page of the window in the list style of the other pages: back (the arrow and the
++   * back swipe) cancels, name and password are rows, the confirming button sits below the form,
++   * where the thumb is */
++  child: Adw.ToolbarView toolbar_view {
+     [top]
+-    /* Plinius: a page of the window, so back (the arrow and the back swipe) cancels and the
+-     * confirming button sits below the form, where the thumb is */
+     Adw.HeaderBar {
+       show-start-title-buttons: false;
+       show-end-title-buttons: false;
+     }
+ 
+-    content: Box {
+-      orientation: vertical;
+-      margin-top: 30;
+-      margin-bottom: 30;
+-      margin-start: 30;
+-      margin-end: 30;
+-      spacing: 20;
+-
+-      Label label {
+-        wrap: true;
+-        max-width-chars: 50;
+-        label: _("Wi-Fi hotspot allows others to share your internet connection, by creating a Wi-Fi network that they can connect to. To do this, you must have an internet connection through a source other than Wi-Fi.");
+-        xalign: 0.0;
+-      }
++    content: Adw.PreferencesPage {
++      Adw.PreferencesGroup {
++        description: _("Wi-Fi hotspot allows others to share your internet connection, by creating a Wi-Fi network that they can connect to. To do this, you must have an internet connection through a source other than Wi-Fi.");
+ 
+-      Label connection_label {
+-        margin-bottom: 18;
+-        wrap: true;
+-        max-width-chars: 40;
+-        use-markup: true;
+-        xalign: 0.0;
+-      }
++        /* set while connected to a Wi-Fi network: that connection ends */
++        Label connection_label {
++          visible: false;
++          wrap: true;
++          use-markup: true;
++          xalign: 0.0;
+ 
+-      Grid {
+-        row-spacing: 6;
+-        column-spacing: 12;
++          styles [
++            "dim-label",
++          ]
++        }
++      }
+ 
+-        Label {
+-          label: _("Network Name");
+-          halign: end;
+-          mnemonic-widget: name_entry;
++      Adw.PreferencesGroup {
++        Adw.EntryRow name_entry {
++          title: _("Network Name");
++          changed => $hotspot_entry_changed_cb(template);
+ 
+-          layout {
+-            column: 0;
+-            row: 0;
++          accessibility {
++            error-message: name_error_label;
++            required: true;
+           }
+         }
+ 
+-        Entry name_entry {
+-          hexpand: true;
+-          max-length: 64;
++        Adw.EntryRow password_entry {
++          title: _("Password");
+           changed => $hotspot_entry_changed_cb(template);
+ 
+           accessibility {
+-            error-message: name_error_label;
+-            required: true;
++            error-message: password_error_label;
+           }
+ 
+-          layout {
+-            column: 1;
+-            row: 0;
++          [suffix]
++          Button {
++            valign: center;
++            icon-name: "view-refresh-symbolic";
++            tooltip-text: _("Generate Random Password");
++            clicked => $generate_password_clicked_cb(template);
++
++            styles [
++              "flat",
++            ]
+           }
+         }
+ 
++        /* below the list: what is wrong, or that an empty password is made up */
+         Label name_error_label {
+-          halign: start;
+-
+-          layout {
+-            column: 1;
+-            row: 1;
+-          }
++          visible: false;
++          margin-top: 6;
++          wrap: true;
++          xalign: 0.0;
+ 
+           styles [
+             "dim-label",
+@@ -81,42 +76,11 @@ template $CcWifiHotspotDialog: Adw.Dialog {
+           ]
+         }
+ 
+-        Label {
+-          label: _("Password");
+-          halign: end;
+-          mnemonic-widget: password_entry;
+-
+-          layout {
+-            column: 0;
+-            row: 2;
+-          }
+-        }
+-
+-        Entry password_entry {
+-          max-length: 64;
+-          secondary-icon-name: "view-refresh-symbolic";
+-          secondary-icon-tooltip-text: _("Generate Random Password");
+-          placeholder-text: _("Autogenerate Password");
+-          icon-press => $generate_password_clicked_cb(template);
+-          changed => $hotspot_entry_changed_cb(template);
+-
+-          accessibility {
+-            error-message: password_error_label;
+-          }
+-
+-          layout {
+-            column: 1;
+-            row: 2;
+-          }
+-        }
+-
+         Label password_error_label {
+-          halign: start;
+-
+-          layout {
+-            column: 1;
+-            row: 3;
+-          }
++          visible: false;
++          margin-top: 6;
++          wrap: true;
++          xalign: 0.0;
+ 
+           styles [
+             "dim-label",
+@@ -125,18 +89,19 @@ template $CcWifiHotspotDialog: Adw.Dialog {
+         }
+       }
+ 
+-      Button ok_button {
+-        halign: center;
+-        margin-top: 12;
+-        use-underline: true;
+-        label: _("_Turn On");
+-        receives-default: true;
+-        clicked => $on_turn_on_button_clicked_cb(template);
+-
+-        styles [
+-          "pill",
+-          "suggested-action",
+-        ]
++      Adw.PreferencesGroup {
++        Button ok_button {
++          halign: center;
++          use-underline: true;
++          label: _("_Turn On");
++          receives-default: true;
++          clicked => $on_turn_on_button_clicked_cb(template);
++
++          styles [
++            "pill",
++            "suggested-action",
++          ]
++        }
+       }
+     };
+   };
+diff --git a/panels/network/cc-wifi-hotspot-dialog.c b/panels/network/cc-wifi-hotspot-dialog.c
+index deb261036..d222c67f3 100644
+--- a/panels/network/cc-wifi-hotspot-dialog.c
++++ b/panels/network/cc-wifi-hotspot-dialog.c
+@@ -34,13 +34,18 @@
+ #include "panel-common.h"
+ #include "ui-helpers.h"
+ 
++/* Plinius: our own strings, in the gettext domain plinius-control-center (not GNOME's po/) */
++#define PLINIUS_DOMAIN "plinius-control-center"
++#define P_(String) g_dgettext (PLINIUS_DOMAIN, String)
++
+ struct _CcWifiHotspotDialog {
+     AdwDialog parent_instance;
+ 
++    AdwToolbarView *toolbar_view;
+     GtkLabel *connection_label;
+-    GtkEntry *name_entry;
++    AdwEntryRow *name_entry;
+     GtkLabel *name_error_label;
+-    GtkEntry *password_entry;
++    AdwEntryRow *password_entry;
+     GtkLabel *password_error_label;
+     GtkButton *ok_button;
+ 
+@@ -95,6 +100,7 @@ wifi_hotspot_dialog_update_main_label (CcWifiHotspotDialog *self)
+     g_assert (CC_IS_WIFI_HOTSPOT_DIALOG (self));
+ 
+     gtk_label_set_markup (self->connection_label, "");
++    gtk_widget_set_visible (GTK_WIDGET (self->connection_label), FALSE);
+ 
+     if (!self->device)
+         return;
+@@ -116,6 +122,7 @@ wifi_hotspot_dialog_update_main_label (CcWifiHotspotDialog *self)
+                              "and it will not be possible to access the internet through Wi-Fi."),
+                                ssid_text);
+     gtk_label_set_markup (self->connection_label, label);
++    gtk_widget_set_visible (GTK_WIDGET (self->connection_label), TRUE);
+ }
+ 
+ static void
+@@ -245,8 +252,15 @@ hotspot_entry_changed_cb (CcWifiHotspotDialog *self)
+         widget_set_error (GTK_WIDGET (self->password_entry));
+     }
+ 
++    /* Plinius: without the field's placeholder, the hint says what an empty password does */
++    if (valid_password && (!password || !*password))
++        password_error_label = P_("Left empty, a random password is made up.");
++
+     gtk_label_set_label (self->name_error_label, ssid_error_label);
+     gtk_label_set_label (self->password_error_label, password_error_label);
++    /* Plinius: below the list, only where there is something to say */
++    gtk_widget_set_visible (GTK_WIDGET (self->name_error_label), *ssid_error_label != '\0');
++    gtk_widget_set_visible (GTK_WIDGET (self->password_error_label), *password_error_label != '\0');
+     gtk_widget_set_sensitive (GTK_WIDGET (self->ok_button), valid_ssid && valid_password);
+ }
+ 
+@@ -355,10 +369,11 @@ cc_wifi_hotspot_dialog_finalize (GObject *object)
+     G_OBJECT_CLASS (cc_wifi_hotspot_dialog_parent_class)->finalize (object);
+ }
+ 
++/* Plinius: as a page of the window (shell/cc-plinius-dialog-pages.c) only the dialog's content is
++ * shown, the dialog itself is never realized: the fields are filled when the content is */
+ static void
+-cc_wifi_hotspot_dialog_realize (GtkWidget *widget)
++cc_wifi_hotspot_dialog_content_realize_cb (CcWifiHotspotDialog *self)
+ {
+-    CcWifiHotspotDialog *self = (CcWifiHotspotDialog *) widget;
+     g_warn_if_fail (self->device != NULL);
+ 
+     gtk_widget_grab_focus (GTK_WIDGET (self->ok_button));
+@@ -368,7 +383,8 @@ cc_wifi_hotspot_dialog_realize (GtkWidget *widget)
+         if (self->host_name)
+             gtk_editable_set_text (GTK_EDITABLE (self->name_entry), self->host_name);
+ 
+-    GTK_WIDGET_CLASS (cc_wifi_hotspot_dialog_parent_class)->realize (widget);
++    /* the hints below the fields from the start, not only after a change */
++    hotspot_entry_changed_cb (self);
+ }
+ 
+ static void
+@@ -407,14 +423,13 @@ cc_wifi_hotspot_dialog_class_init (CcWifiHotspotDialogClass *klass)
+ 
+     object_class->finalize = cc_wifi_hotspot_dialog_finalize;
+ 
+-    widget_class->realize = cc_wifi_hotspot_dialog_realize;
+-
+     gtk_widget_class_set_template_from_resource (widget_class,
+                                                  "/org/gnome/control-center/network/cc-wifi-hotspot-dialog.ui");
+ 
+     signals[SIGNAL_HOTSPOT_ENABLED] = g_signal_new ("hotspot-enabled", CC_TYPE_WIFI_HOTSPOT_DIALOG, G_SIGNAL_RUN_LAST,
+                                                     0, NULL, NULL, NULL, G_TYPE_NONE, 0, NULL);
+ 
++    gtk_widget_class_bind_template_child (widget_class, CcWifiHotspotDialog, toolbar_view);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiHotspotDialog, connection_label);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiHotspotDialog, name_entry);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiHotspotDialog, name_error_label);
+@@ -433,6 +448,10 @@ cc_wifi_hotspot_dialog_init (CcWifiHotspotDialog *self)
+     self->cancellable = g_cancellable_new ();
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
++
++    /* Plinius: realized as a dialog and as a page */
++    g_signal_connect_object (self->toolbar_view, "realize", G_CALLBACK (cc_wifi_hotspot_dialog_content_realize_cb),
++                             self, G_CONNECT_SWAPPED);
+ }
+ 
+ CcWifiHotspotDialog *
+diff --git a/panels/network/meson.build b/panels/network/meson.build
+index 8f89b8405..e102c21a1 100644
+--- a/panels/network/meson.build
++++ b/panels/network/meson.build
+@@ -56,6 +56,7 @@ sources = files(
+   'cc-qr-code.c',
+   'cc-qr-code-dialog.c',
+   'cc-network-panel.c',
++  'cc-plinius-hidden-wifi.c',
+   'cc-net-proxy-page.c',
+   'cc-wifi-connection-row.c',
+   'cc-wifi-connection-list.c',
+diff --git a/panels/network/network-dialogs.c b/panels/network/network-dialogs.c
+index 564261278..e58a2358a 100644
+--- a/panels/network/network-dialogs.c
++++ b/panels/network/network-dialogs.c
+@@ -26,6 +26,7 @@
+ #include <nma-mobile-wizard.h>
+ #include <nma-wifi-dialog.h>
+ 
++#include "cc-plinius-hidden-wifi.h"
+ #include "network-dialogs.h"
+ 
+ typedef struct {
+@@ -260,6 +261,16 @@ void
+ cc_network_panel_connect_to_hidden_network (GtkWidget *toplevel, NMClient *client)
+ {
+     g_debug ("connect to hidden wifi");
++    /* Plinius: a form page in the list style of the other pages (cc-plinius-hidden-wifi.c);
++     * libnma's dialog stays for WEP, LEAP and 802.1X, see below */
++    adw_dialog_present (cc_plinius_hidden_wifi_new (client), toplevel);
++}
++
++/* Plinius: libnma's dialog for a hidden network, for the kinds of security the page above
++ * does not offer ("Other Security") */
++void
++cc_network_panel_connect_to_hidden_network_other (GtkWidget *toplevel, NMClient *client)
++{
+     show_wireless_dialog (toplevel, client, nma_wifi_dialog_new_for_hidden (client));
+ }
+ 
+diff --git a/panels/network/network-dialogs.h b/panels/network/network-dialogs.h
+index d276275c5..f9352ad8e 100644
+--- a/panels/network/network-dialogs.h
++++ b/panels/network/network-dialogs.h
+@@ -26,6 +26,9 @@ void cc_network_panel_create_wifi_network (GtkWidget *toplevel, NMClient *client
+ 
+ void cc_network_panel_connect_to_hidden_network (GtkWidget *toplevel, NMClient *client);
+ 
++/* Plinius: libnma's dialog, for WEP, LEAP and 802.1X */
++void cc_network_panel_connect_to_hidden_network_other (GtkWidget *toplevel, NMClient *client);
++
+ void cc_network_panel_connect_to_8021x_network (GtkWidget *toplevel, NMClient *client, NMDevice *device,
+                                                 const gchar *arg_access_point);
+ 

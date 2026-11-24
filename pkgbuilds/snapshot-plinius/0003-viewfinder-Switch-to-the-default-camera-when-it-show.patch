@@ -1,0 +1,65 @@
+From 8b150f46155916340216a123bf82062e47602b95 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 15:44:58 +0100
+Subject: [PATCH] viewfinder: Switch to the default camera when it shows up
+ late
+
+PipeWire may announce the cameras one by one after the device provider
+started. The viewfinder then showed the first one and never the camera
+used last, about every other start on the Volla phone.
+---
+ aperture/src/device_provider.rs |  7 +++++++
+ aperture/src/viewfinder.rs      | 12 +++++++++++-
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/aperture/src/device_provider.rs b/aperture/src/device_provider.rs
+index 7ecd555..2966693 100644
+--- a/aperture/src/device_provider.rs
++++ b/aperture/src/device_provider.rs
+@@ -274,6 +274,13 @@ impl DeviceProvider {
+             .cloned()
+     }
+ 
++    /// Whether `camera` is the one the callback of [`start_with_default`] picks.
++    ///
++    /// [`start_with_default`]: Self::start_with_default
++    pub(crate) fn is_default_camera(&self, camera: &crate::Camera) -> bool {
++        self.imp().default_cb.get().is_some_and(|f| f(camera))
++    }
++
+     /// Gets a [`Camera`] object for the given camera index.
+     ///
+     /// # Returns
+diff --git a/aperture/src/viewfinder.rs b/aperture/src/viewfinder.rs
+index 7209cb5..3918671 100644
+--- a/aperture/src/viewfinder.rs
++++ b/aperture/src/viewfinder.rs
+@@ -361,7 +361,7 @@ mod imp {
+             devices.connect_camera_added(glib::clone!(
+                 #[weak]
+                 obj,
+-                move |_, camera| {
++                move |devices, camera| {
+                     if matches!(
+                         obj.state(),
+                         ViewfinderState::NoCameras
+@@ -370,6 +370,16 @@ mod imp {
+                     ) {
+                         obj.imp().set_state(ViewfinderState::Ready);
+                         obj.set_camera(Some(camera.clone()));
++                    } else if devices.is_default_camera(camera)
++                        && obj.state() == ViewfinderState::Ready
++                        && !obj.is_recording()
++                        && !obj.imp().is_taking_picture.get()
++                        && !obj.camera().is_some_and(|c| devices.is_default_camera(&c))
++                    {
++                        // PipeWire may announce the cameras one by one after the provider
++                        // started: the first one is shown at once, the default one is
++                        // switched to when it shows up
++                        obj.set_camera(Some(camera.clone()));
+                     }
+                 }
+             ));
+-- 
+2.55.0
+

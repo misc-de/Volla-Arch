@@ -1,0 +1,10 @@
+# Plinius: nothing here needs iBus. Stevia is the input method, and the only engines are the xkb
+# layouts that work without it, but gnome-control-center's keyboard page activated it, and
+# ibus-x11 then woke Xwayland. Same name as ibus' file in /usr/share/dbus-1/services; this one is
+# found first because /usr/share/plinius comes before /usr/share in XDG_DATA_DIRS
+# (50-plinius-callaudio.conf). The unit doesn't exist on purpose: the activation fails at once.
+# With an Exec that just exits, the broker would keep the request open and callers would time out.
+[D-BUS Service]
+Name=org.freedesktop.IBus
+Exec=/usr/bin/false
+SystemdService=plinius-no-ibus.service

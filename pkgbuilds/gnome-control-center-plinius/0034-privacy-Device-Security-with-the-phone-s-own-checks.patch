@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:00:00 +0100
+Subject: [PATCH] privacy: Device Security with the phone's own checks
+
+Plinius: the row "Device Security" opens our page instead of fwupd's (whose host
+security checks are made for PC firmware): screen lock, encryption, boot chain,
+software sources rated good / needs attention / at risk, the connections of each app
+(plinius-netlogd) and the known vulnerabilities of the installed packages
+(plinius-cve-update), see cc-plinius-security.c.
+---
+--- a/panels/privacy/cc-privacy-panel.blp
++++ b/panels/privacy/cc-privacy-panel.blp
+@@ -82,14 +82,15 @@
+           action-target: "'thunderbolt'";
+         }
+ 
+-        $CcListRow {
++        /* Plinius: visibility and target from cc-privacy-panel.c (our page, or fwupd's) */
++        $CcListRow security_row {
++          visible: false;
+           title: _("Device _Security");
+           subtitle: _("Hardware security status and information");
+           icon-name: "org.gnome.Settings-device-security-symbolic";
+           show-arrow: true;
+           action-name: "navigation.push";
+           action-target: "'device-security'";
+-          visible: bind security_page.visible;
+         }
+       }
+     };
+--- a/panels/privacy/cc-privacy-panel.c
++++ b/panels/privacy/cc-privacy-panel.c
+@@ -28,6 +28,7 @@
+ #include "camera/cc-camera-page.h"
+ #include "cc-list-row.h"
+ #include "cc-plinius-crypt.h"
++#include "cc-plinius-security.h"
+ #include "cc-privacy-resources.h"
+ #include "diagnostics/cc-diagnostics-page.h"
+ #include "firmware-security/cc-firmware-security-page.h"
+@@ -41,6 +42,8 @@
+     CcListRow *bolt_row;
+     CcListRow *encryption_row;
+     CcListRow *location_row;
++    CcListRow *security_row;
++    GtkWidget *security_page;
+ };
+ 
+ CC_PANEL_REGISTER (CcPrivacyPanel, cc_privacy_panel)
+@@ -80,6 +83,8 @@
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, bolt_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, encryption_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, location_row);
++    gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, security_row);
++    gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, security_page);
+ 
+     g_type_ensure (CC_TYPE_CAMERA_PAGE);
+     g_type_ensure (CC_TYPE_DIAGNOSTICS_PAGE);
+@@ -119,4 +124,11 @@
+         cc_panel_add_subpage (CC_PANEL (self), "encryption", encryption_page);
+         cc_plinius_crypt_row_setup (ADW_ACTION_ROW (self->encryption_row));
+     }
++
++    /* Plinius: Device Security with our checks (screen lock, encryption, connections, known
++     * vulnerabilities) instead of fwupd's host security checks, which are made for PCs */
++    if (cc_plinius_security_add_pages (CC_PANEL (self)))
++        cc_plinius_security_row_setup (ADW_ACTION_ROW (self->security_row));
++    else
++        g_object_bind_property (self->security_page, "visible", self->security_row, "visible", G_BINDING_SYNC_CREATE);
+ }
+--- a/panels/privacy/meson.build
++++ b/panels/privacy/meson.build
+@@ -46,6 +46,7 @@
+   'firmware-security/cc-firmware-security-utils.c',
+   'location/cc-location-page.c',
+   'cc-plinius-crypt.c',
++  'cc-plinius-security.c',
+   'cc-privacy-panel.c',
+   'screen/cc-screen-page.c',
+   'usage/cc-usage-page.c',
+@@ -94,6 +95,7 @@
+ ]
+ 
+ deps = deps + [
++  json_glib_dep,
+   polkit_gobject_dep,
+   m_dep,
+ ]

@@ -1,0 +1,221 @@
+From 8fa2f43f9e36ffc7dbcb8352dc09470f2e6f2242 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 10:48:08 +0100
+Subject: [PATCH] wifi-manager: Hotspot on an AP-only interface
+
+Some WLAN drivers cannot switch the client interface to AP mode and run
+the hotspot on an interface of its own (MediaTek gen4m: ap0 next to
+wlan0, as Android's ro.vendor.wifi.sap.interface). The hotspot quick
+setting started the hotspot on wlan0, where it never came up, and the
+first Wi-Fi device in the list could even be ap0, which finds no
+networks.
+
+Never use such an interface (ap followed by digits) as the Wi-Fi
+device, start the hotspot on it, and prefer the hotspot among several
+active Wi-Fi connections: the client connection stays up next to it.
+Pick channel 1, 6 or 11 for a new hotspot there: these drivers manage
+their regulatory domain themselves and offer channels 12 and 13, on
+which many stations do not see the hotspot.
+---
+ src/wifi-manager.c | 102 +++++++++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 83 insertions(+), 19 deletions(-)
+
+diff --git a/src/wifi-manager.c b/src/wifi-manager.c
+index c3d5203d..8926c907 100644
+--- a/src/wifi-manager.c
++++ b/src/wifi-manager.c
+@@ -69,12 +69,54 @@ struct _PhoshWifiManager {
+   NMDeviceWifi       *conn_dev;
+   /* The Wi-Fi device of the system */
+   NMDeviceWifi       *dev;
++  /* The interface the hotspot runs on if the driver has one of its own */
++  NMDeviceWifi       *ap_dev;
+   /* The list of available Wi-Fi networks */
+   GListStore         *networks; /* (element-type: PhoshWifiNetwork) */
+ };
+ G_DEFINE_TYPE (PhoshWifiManager, phosh_wifi_manager, G_TYPE_OBJECT);
+ 
+ 
++/*
++ * Some drivers cannot switch the client interface to AP mode and run the
++ * hotspot on an interface of its own (MediaTek: ap0 next to wlan0, as
++ * Android's ro.vendor.wifi.sap.interface). It finds no networks.
++ */
++static gboolean
++is_ap_only_device (NMDevice *dev)
++{
++  const char *iface = nm_device_get_iface (dev);
++
++  if (!NM_IS_DEVICE_WIFI (dev) || !iface || !g_str_has_prefix (iface, "ap") || !iface[2])
++    return FALSE;
++
++  for (iface += 2; *iface; iface++) {
++    if (!g_ascii_isdigit (*iface))
++      return FALSE;
++  }
++
++  return TRUE;
++}
++
++
++static gboolean
++is_shared_connection (NMActiveConnection *active)
++{
++  NMSettingIPConfig *ip4_setting;
++  NMRemoteConnection *c;
++
++  c = nm_active_connection_get_connection (active);
++  if (!c)
++    return FALSE;
++
++  ip4_setting = nm_connection_get_setting_ip4_config (NM_CONNECTION (c));
++
++  return ip4_setting &&
++    g_strcmp0 (nm_setting_ip_config_get_method (ip4_setting),
++               NM_SETTING_IP4_CONFIG_METHOD_SHARED) == 0;
++}
++
++
+ static gboolean
+ is_active_connection_hotspot_master (PhoshWifiManager *self)
+ {
+@@ -390,8 +432,9 @@ start_hotspot (PhoshWifiManager *self)
+   const GPtrArray *connections;
+   NMConnection *hotspot_conn = NULL;
+   NMSettingWireless *s_wifi;
++  NMDeviceWifi *dev = self->ap_dev ? self->ap_dev : self->dev;
+ 
+-  caps = nm_device_wifi_get_capabilities (self->dev);
++  caps = nm_device_wifi_get_capabilities (dev);
+   if (caps & NM_WIFI_DEVICE_CAP_AP) {
+     wifi_mode = NM_SETTING_WIRELESS_MODE_AP;
+   } else if (caps & NM_WIFI_DEVICE_CAP_ADHOC) {
+@@ -412,7 +455,7 @@ start_hotspot (PhoshWifiManager *self)
+     if (g_strcmp0 (nm_setting_wireless_get_mode (s_wifi), wifi_mode) != 0)
+       continue;
+ 
+-    if (!nm_device_connection_compatible (NM_DEVICE (self->dev), conn, NULL))
++    if (!nm_device_connection_compatible (NM_DEVICE (dev), conn, NULL))
+       continue;
+ 
+     hotspot_conn = conn;
+@@ -423,9 +466,21 @@ start_hotspot (PhoshWifiManager *self)
+     g_autoptr (NMConnection) new_hotspot_conn;
+     g_message ("Creating a new hotspot connection as no existing connection was found");
+     new_hotspot_conn = create_hotspot_connection ("Phosh Hotspot", wifi_mode, caps);
++    /* Such drivers manage their regulatory domain themselves and offer channels 12 and 13,
++     * on which many stations do not see the hotspot: pick 1, 6 or 11, stable for the name */
++    if (self->ap_dev) {
++      static const guint channels[] = { 1, 6, 11 };
++
++      s_wifi = nm_connection_get_setting_wireless (new_hotspot_conn);
++      g_object_set (s_wifi,
++                    NM_SETTING_WIRELESS_BAND, "bg",
++                    NM_SETTING_WIRELESS_CHANNEL,
++                    channels[g_str_hash (g_get_host_name ()) % G_N_ELEMENTS (channels)],
++                    NULL);
++    }
+     nm_client_add_and_activate_connection_async (self->nmclient,
+                                                  new_hotspot_conn,
+-                                                 NM_DEVICE (self->dev),
++                                                 NM_DEVICE (dev),
+                                                  NULL,
+                                                  self->cancel,
+                                                  on_hotspot_connection_add_and_activated,
+@@ -433,7 +488,7 @@ start_hotspot (PhoshWifiManager *self)
+   } else {
+     nm_client_activate_connection_async (self->nmclient,
+                                          hotspot_conn,
+-                                         NM_DEVICE (self->dev),
++                                         NM_DEVICE (dev),
+                                          NULL,
+                                          self->cancel,
+                                          on_hotspot_connection_activated,
+@@ -903,25 +958,32 @@ on_nmclient_active_connections_changed (PhoshWifiManager *self,
+                                         NMClient         *nmclient)
+ {
+   const GPtrArray *conns;
+-  NMActiveConnection *conn;
+-  gboolean found = FALSE;
++  NMActiveConnection *conn = NULL;
+ 
+   g_return_if_fail (PHOSH_IS_WIFI_MANAGER (self));
+   g_return_if_fail (NM_IS_CLIENT (nmclient));
+ 
+   conns = nm_client_get_active_connections (nmclient);
+ 
++  /* With a hotspot on an interface of its own, the client connection stays up next to it:
++   * prefer the hotspot then, it is what the quick setting switches */
+   for (int i = 0; i < conns->len; i++) {
+-    const char *type;
+-
+-    conn = g_ptr_array_index (conns, i);
+-    type = nm_active_connection_get_connection_type (conn);
++    NMActiveConnection *candidate = g_ptr_array_index (conns, i);
+ 
+     /* We only care about wireless connections */
+-    if (g_strcmp0 (type, NM_SETTING_WIRELESS_SETTING_NAME))
++    if (g_strcmp0 (nm_active_connection_get_connection_type (candidate),
++                   NM_SETTING_WIRELESS_SETTING_NAME))
+       continue;
+ 
+-    found = TRUE;
++    if (is_shared_connection (candidate)) {
++      conn = candidate;
++      break;
++    }
++    if (!conn)
++      conn = candidate;
++  }
++
++  if (conn) {
+     /* Is this still the same connection? */
+     if (conn != self->active) {
+       g_debug ("New active connection %p", conn);
+@@ -937,11 +999,8 @@ on_nmclient_active_connections_changed (PhoshWifiManager *self,
+                                              self->active);
+     }
+     check_connected_device (self);
+-    break;
+-  }
+-
+-  /* Clean up if there's no active Wi-Fi connection */
+-  if (!found) {
++  } else {
++    /* Clean up if there's no active Wi-Fi connection */
+     if (self->active)
+       g_signal_handlers_disconnect_by_data (self->active, self);
+     g_clear_object (&self->active);
+@@ -990,6 +1049,7 @@ on_nmclient_devices_changed (PhoshWifiManager *self, GParamSpec *pspec, NMClient
+   present = self->present;
+ 
+   devs = nm_client_get_devices (nmclient);
++  g_clear_object (&self->ap_dev);
+   if (!devs || !devs->len) {
+     update_properties (self);
+     cleanup_wifi_device (self);
+@@ -1001,11 +1061,14 @@ on_nmclient_devices_changed (PhoshWifiManager *self, GParamSpec *pspec, NMClient
+ 
+   for (int i = 0; i < devs->len; i++) {
+     dev = g_ptr_array_index (devs, i);
+-    if (NM_IS_DEVICE_WIFI (dev)) {
++    if (is_ap_only_device (dev)) {
++      /* Not a device of its own for the user, only where the hotspot runs */
++      if (!self->ap_dev)
++        self->ap_dev = g_object_ref (NM_DEVICE_WIFI (dev));
++    } else if (NM_IS_DEVICE_WIFI (dev) && !wifi_dev) {
+       g_debug ("Wi-Fi device connected at %d", i);
+       have_wifi_dev = TRUE;
+       wifi_dev = NM_DEVICE_WIFI (dev);
+-      break;
+     }
+   }
+ 
+@@ -1091,6 +1154,7 @@ phosh_wifi_manager_dispose (GObject *object)
+   g_clear_handle_id (&self->scanning_id, g_source_remove);
+   cleanup_connection_device (self);
+   cleanup_wifi_device (self);
++  g_clear_object (&self->ap_dev);
+ 
+   if (self->active) {
+     g_signal_handlers_disconnect_by_data (self->active, self);

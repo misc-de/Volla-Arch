@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 09:10:32 +0100
+Subject: [PATCH] view: An app started on the phone is maximized with a second
+ screen too
+
+phoc_view_want_auto_maximize() looks at the view's output during the first
+commit, when the view is still at the layout's origin. With a second screen
+the phone isn't there: the layout now has the virtual screen left of the
+phone. So the window floated, centered on the phone, instead of filling it.
+The placement on map knows the screen and maximizes it there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/view.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/view.c b/src/view.c
+index a7a762b..fa236b8 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -1818,6 +1818,15 @@ view_place_initially (PhocView *self)
+     return;
+   }
+ 
++  /* On the phone it is maximized. The auto-maximize of the first commit can't tell: the view is
++   * still at the layout's origin then, and that is not the phone's place with a second screen */
++  if (target && !self->parent && view_output_is_phone (target) &&
++      !phoc_view_is_fullscreen (self) && !phoc_desktop_get_auto_maximize (desktop) &&
++      PHOC_VIEW_GET_CLASS (self)->want_auto_maximize (self)) {
++    phoc_view_maximize (self, target);
++    return;
++  }
++
+   if (phoc_view_is_floating (self)) {
+     view_center (self, target);
+     return;

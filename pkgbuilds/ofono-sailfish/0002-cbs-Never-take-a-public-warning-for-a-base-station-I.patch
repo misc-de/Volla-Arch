@@ -1,0 +1,54 @@
+From d9638d4b84f45876f2fd2099805958aaba0e0db4 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 15:55:14 +0100
+Subject: [PATCH] cbs: Never take a public warning for a base station ID
+
+oFono treats every message with the "cell wide, immediate display"
+geographical scope as the cell's name and hands it to the network
+registration instead of reporting it. Only the geo-fencing trigger
+(0x1130) was exempt.
+
+Networks may send public warnings (CMAS/EU-Alert, e.g. DE-Alert) with
+that scope; such an alert would silently vanish. Keep the base station
+ID handling for the operator's own channels only and report every
+message identifier of the public warning range (0x1100-0x18FF, 3GPP TS
+23.041 9.4.1.2.2) as a broadcast.
+---
+ ofono/src/cbs.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/ofono/src/cbs.c b/ofono/src/cbs.c
+index 9562d0ad..13f702d1 100644
+--- a/ofono/src/cbs.c
++++ b/ofono/src/cbs.c
+@@ -43,6 +43,10 @@
+ 
+ static GSList *g_drivers = NULL;
+ 
++/* Message identifiers reserved for public warnings, 3GPP 23.041 9.4.1.2.2 */
++#define CBS_PWS_FIRST 0x1100
++#define CBS_PWS_LAST 0x18FF
++
+ enum etws_topic_type {
+ 	ETWS_TOPIC_TYPE_EARTHQUAKE =		4352,
+ 	ETWS_TOPIC_TYPE_TSUNAMI =		4353,
+@@ -442,9 +446,15 @@ void ofono_cbs_notify(struct ofono_cbs *cbs, const unsigned char *pdu,
+ 	/*
+ 	 * 3GPP 23.041: NOTE 5:	Code 00 is intended for use by the
+ 	 * network operators for base station IDs.
++	 *
++	 * Never for public warnings (3GPP 23.041 9.4.1.2.2: message
++	 * identifiers 0x1100-0x18FF, CMAS/EU-Alert, ETWS, geo-fencing):
++	 * networks may send them with the immediate display scope, and an
++	 * alert taken for a cell name would never reach the user.
+ 	 */
+ 	if (c->gs == CBS_GEO_SCOPE_CELL_IMMEDIATE &&
+-			c->message_identifier != 0x1130) {
++			!(c->message_identifier >= CBS_PWS_FIRST &&
++			  c->message_identifier <= CBS_PWS_LAST)) {
+ 		cbs_dispatch_base_station_id(cbs, message);
+ 		goto out;
+ 	}
+-- 
+2.56.0
+

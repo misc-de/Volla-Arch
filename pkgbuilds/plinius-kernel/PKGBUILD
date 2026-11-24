@@ -1,0 +1,175 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# plinius-build: cross
+
+# Own kernel for the Volla Phone Plinius (ansuz): UT's Halium kernel merged with the Android
+# Common Kernel android14-6.1 (6.1.177), so the phone gets the fixes of the stable kernel as a
+# normal package update. The kernel module interface (KMI) stays the one the prebuilt MediaTek
+# modules in vendor_boot and vendor_dlkm were built against; build() checks every CRC they import
+# (vendor-needs.txt, read from those modules with modprobe --dump-modversions) and fails on any
+# difference.
+#
+# Source: github.com/misc-de/plinius-kernel, one commit per kernel version with the complete tree
+# (its message names the ACK and Halium commits it was merged from; the merge history itself is
+# the branch plinius-6.1 of build/kernel-trial). While that repository is private, makepkg cannot
+# download it: tools/kernel-source.sh packs the same commit under the same name next to this file.
+# config: /proc/config.gz of UT's kernel 6.1.145, through olddefconfig.
+#
+# Built as a cross build in the x86_64 chroot (tools/build.sh, "plinius-build: cross" above):
+# under qemu-user the kernel would take many hours.
+#
+# In /usr/lib/plinius/kernel/<release>: boot.img for the boot partition (header v4, Image.gz only,
+# as UT's), Image.gz for boot menu entries on the memory card, and system_dlkm.img, the GKI modules
+# of this build for the Android container. Our out-of-tree modules (pkgbuilds/plinius-kmod) for this
+# kernel go to /usr/lib/plinius/modules/<release>, where plinius-kmod loads them; plinius-kmod keeps
+# those of UT's 6.1.145, which stays the fallback after the first update.
+# The pacman hook starts the new kernel as a trial from the boot menu on the memory card and writes
+# it to the boot partition once it came up, keeping the previous kernel as a menu entry
+# (plinius-kernel-install, like grub's previous entries); without the card it writes it at once.
+pkgname=plinius-kernel
+_kcommit=55c4a05f6635bccc6c57181446ab945d7a8b86e1
+pkgver=6.1.192
+pkgrel=22
+_krelease=$pkgver-plinius$pkgrel
+pkgdesc="Kernel for Volla Phone Plinius: Halium kernel on android14-6.1 with the prebuilt MediaTek modules' interface"
+arch=(aarch64)
+url="https://github.com/misc-de/plinius-kernel"
+license=(GPL-2.0-only)
+makedepends=(clang lld llvm bc bison flex python perl openssl pahole cpio xz kmod erofs-utils android-tools)
+options=(!strip !debug)
+depends=("plinius-kmod>=0.5-2" python util-linux e2fsprogs)
+# The tarball is the one tools/kernel-source.sh packs (git archive | gzip -n, the same bytes for
+# the same commit), checked like every other source. GitHub's archive of the commit has other
+# bytes: once the repository is public, switch to "git+$url.git#commit=$_kcommit" instead.
+source=("plinius-kernel-$_kcommit.tar.gz::$url/archive/$_kcommit.tar.gz"
+        config
+        vendor-needs.txt
+        system_dlkm-build.prop
+        system_dlkm-modules.load
+        plinius-kernel-install
+        90-plinius-kernel.hook
+        10-plinius-kernel-keep.hook
+        plinius-kernel-boot.service
+        mount-android-partitions-plinius-kernel.conf
+        Kbuild
+        plinius-backlight.c
+        plinius-novt.c
+        plinius-btsuspend.c)
+sha256sums=('c543c6732df1afc4706f9aefc0903672cf1ad5c7c3302e9cd23ffdd505c39114'
+            '00d3c30120119f4440872f67bbc4a0bf3b09183836808c1550dfad6dedda19b2'
+            'df1e4652b80fd5c4704a64eea6294c7530d8e21ab99426740095d5c7fed028b4'
+            '94dade8930576dbf267b40fa355fcf7068853f51ccc4f88b491a867cd98c07e3'
+            '460d5fc6fb341be6c72acf8b2d445e5c2650f5d7a1f9e8a393f83c7fd4a167b7'
+            'dcfda63c2ab29633c9aa6aaf1a7165d538f1ddca1611ee47e18116e6c4581df6'
+            '36ec058b4f86ed0cf29be04e19b33a38a541c2ac7af108bf6d392960c72f9330'
+            '265b4a8ff700dc57095c1ab0d27df2209bda064b5df05b14cea1a68b7acfd3f8'
+            '89a5e144d11003a353907a442631bcad9d4c31ea3f15c23fff80b4bc3100577d'
+            '87797466637fe4f16f8bfa21be7fcdb2d1033731f0579474a199e5d03fd4a313'
+            'fe99da3b4e6d5314c7c9d4afd375763c3f6d326eca55adcf4f828de9319178e1'
+            '04ca4ad3d4acfd5ec0e7b4a3254aa34c352dd9ebabc5db15e6fed8a48ea4a313'
+            '1e635c7d3c6cf779377eca7e08b674dc057960d8d40a2a261375a0950dfcc49f'
+            '858d2953ab665e1c0a820e2a4aac8b3deb168304ce1feddd1b0fbcd846ec9289')
+
+_make() {
+	make -C "$srcdir/plinius-kernel-$_kcommit" O="$srcdir/obj" ARCH=arm64 LLVM=1 \
+		LOCALVERSION=-plinius$pkgrel KBUILD_BUILD_USER=misc-de KBUILD_BUILD_HOST=plinius "$@"
+}
+
+prepare() {
+	install -d obj mod
+	cp config obj/.config
+	local s="plinius-kernel-$_kcommit/scripts/config" c=obj/.config
+	# The release is 6.1.177-plinius<pkgrel>, without a git suffix (the tarball has no history)
+	"$s" --file "$c" -d LOCALVERSION_AUTO --set-str LOCALVERSION ""
+	# Clang of Arch is much newer than the r487747c of the original build; its new warnings
+	# must not stop the build
+	"$s" --file "$c" -d WERROR
+	# Kernel log of 2 MB instead of 128 kB: the vendor drivers write about 1 MB up to the
+	# journal's start (measured 09.11.2026, with the password prompt), so the first seconds of a
+	# start were gone before anything could read them. No KMI type depends on it.
+	"$s" --file "$c" --set-val LOG_BUF_SHIFT 21
+	# Yama: ptrace only of a process's own descendants (kernel.yama.ptrace_scope 1, its
+	# default), so an app running as the user cannot read the keyring daemon, the shell or the
+	# browser. UT's config had it off; it adds LSM hooks only, no KMI type changes. io_uring is
+	# off at run time instead (kernel.io_uring_disabled 2 in the source): CONFIG_IO_URING itself
+	# changes struct task_struct, which the vendor modules use.
+	"$s" --file "$c" -e SECURITY_YAMA
+	# No f2fs: nothing on the phone uses it (only Android's unused metadata partition is f2fs),
+	# and its stable fixes stay out of this kernel to keep the KMI (not-taken.txt), so about 27
+	# known f2fs bugs would stay open. Any user could reach them without a PIN by mounting a
+	# prepared image through udisks (measured 11.11.2026). No vendor module uses an f2fs symbol;
+	# the f2fs vendor hooks are exported by drivers/android/vendor_hooks.c either way.
+	"$s" --file "$c" -d F2FS_FS
+	# POSIX ACLs on tmpfs, so also on devtmpfs (/dev): systemd's uaccess grants the user of the
+	# active session access to a device by an ACL on its node. Without it uaccess did nothing, and
+	# devices without a fixed group (FIDO keys, measured 11.11.2026 with a YubiKey: hidraw stayed
+	# root 0600) were out of reach. Selects TMPFS_XATTR; both only switch code in mm/shmem.c, no
+	# header or KMI type depends on them.
+	"$s" --file "$c" -e TMPFS_POSIX_ACL
+	# No BPF LSM (it was on in -18): on arm64, 6.1 cannot attach BPF to kernel functions, the LSM
+	# hooks included (bpf_arch_text_poke needs ftrace direct calls, arm64 has them from 6.4, and
+	# FUNCTION_TRACER stays off for the KMI), so it only added an empty call to every LSM hook.
+	# Per-app rules use cgroup BPF instead (plinius-appaccess, CGROUP_BPF). The source keeps
+	# CGROUP_LSM_NUM at 0 since plinius18, which is the value without BPF_LSM anyway.
+	cp Kbuild plinius-backlight.c plinius-novt.c plinius-btsuspend.c mod/
+	cp "plinius-kernel-$_kcommit/drivers/leds/uleds.c" "plinius-kernel-$_kcommit/net/ipv4/netfilter/ipt_ah.c" \
+		"plinius-kernel-$_kcommit/net/ipv6/netfilter/ip6t_ah.c" mod/
+}
+
+build() {
+	_make olddefconfig
+	local release
+	release=$(_make -s --no-print-directory kernelrelease)
+	[[ $release == "$_krelease" ]] || { echo "kernel release $release, expected $_krelease" >&2; return 1; }
+	_make -j"$(nproc)" -k Image.gz modules
+	_make M="$srcdir/mod" modules
+	# The interface of the prebuilt vendor modules: every symbol they import that this build
+	# exports must keep its CRC. Symbols the vendor modules export to each other are not here.
+	# vendor-needs.txt: "crc symbol"; Module.symvers: crc, symbol, module, export type
+	awk 'NR == FNR { crc[$2] = $1; next }
+		($2 in crc) && strtonum(crc[$2]) != strtonum($1) { print "CRC changed: " $2; bad++ }
+		($2 in crc) { n++ }
+		END { printf "vendor modules: %d imported symbols checked, %d changed\n", n, bad; exit bad > 0 }' \
+		vendor-needs.txt obj/Module.symvers
+}
+
+package() {
+	local d="$pkgdir/usr/lib/plinius/kernel/$_krelease" stage="$srcdir/system_dlkm" inst="$srcdir/modinst"
+	install -Dm644 obj/arch/arm64/boot/Image.gz -t "$d"
+	install -Dm644 obj/System.map obj/Module.symvers -t "$d"
+	install -Dm644 obj/.config "$d/config"
+	# The header values of UT's boot.img; lk reads only the kernel from it
+	mkbootimg --header_version 4 --os_version 14.0.0 --os_patch_level 2025-04 \
+		--kernel obj/arch/arm64/boot/Image.gz --output "$d/boot.img"
+
+	# system_dlkm.img in the layout of the original: flat lib/modules with Android's
+	# modules.load/.dep (absolute /system_dlkm paths), build.prop of the original partition
+	rm -rf "$inst" "$stage"
+	_make INSTALL_MOD_PATH="$inst" INSTALL_MOD_STRIP=1 modules_install
+	install -d "$stage/etc" "$stage/lib/modules"
+	install -m644 system_dlkm-build.prop "$stage/etc/build.prop"
+	: > "$stage/etc/fs_config_dirs"
+	: > "$stage/etc/fs_config_files"
+	find "$inst/lib/modules/$_krelease" -name '*.ko' -exec install -m644 -t "$stage/lib/modules" {} +
+	# The original list, without modules this kernel has built in (Bluetooth, rfkill)
+	local m
+	while read -r m; do
+		if [[ -e $stage/lib/modules/$m ]]; then echo "$m"; fi
+	done < system_dlkm-modules.load > "$stage/lib/modules/modules.load"
+	sed -E 's#(^|[ ])[^ :]*/([^/ :]+\.ko)#\1/system_dlkm/lib/modules/\2#g' \
+		"$inst/lib/modules/$_krelease/modules.dep" > "$stage/lib/modules/modules.dep"
+	cp "$inst/lib/modules/$_krelease/modules.alias" "$inst/lib/modules/$_krelease/modules.softdep" \
+		"$stage/lib/modules/"
+	mkfs.erofs -T "${SOURCE_DATE_EPOCH:-0}" --all-root "$d/system_dlkm.img" "$stage" >/dev/null
+
+	for m in plinius-backlight uleds plinius-novt plinius-btsuspend ipt_ah ip6t_ah; do
+		install -Dm644 "mod/$m.ko" -t "$pkgdir/usr/lib/plinius/modules/$_krelease"
+	done
+
+	install -Dm755 plinius-kernel-install -t "$pkgdir/usr/lib/plinius/kernel"
+	install -Dm644 90-plinius-kernel.hook 10-plinius-kernel-keep.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	install -Dm644 plinius-kernel-boot.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-kernel-boot.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 mount-android-partitions-plinius-kernel.conf \
+		"$pkgdir/usr/lib/systemd/system/mount-android-partitions.service.d/plinius-kernel.conf"
+}

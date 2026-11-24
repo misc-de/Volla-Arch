@@ -1,0 +1,480 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:30:00 +0100
+Subject: [PATCH] quick settings: Airplane mode in place of the battery tile
+
+Plinius: while "Show Battery Percentage" is on (org.gnome.desktop.interface
+show-battery-percentage) the top bar shows the percentage already and the
+battery tile only repeats it, so the tile hides then; the binding follows
+the key, no restart needed.
+
+Right after it comes an "Airplane Mode" tile, in the battery's place while
+that is hidden. Airplane mode leaves GNOME Settings' Wi-Fi panel, the tile
+is its switch. It sets gnome-settings-daemon's AirplaneMode
+(org.gnome.SettingsDaemon.Rfkill), which blocks all rfkill switches (Wi-Fi,
+Bluetooth) and switches NetworkManager's WwanEnabled off; NetworkManager
+then disables the modems through ModemManager, which ofono2mm turns into
+oFono's Online=false. The tile is on while AirplaneMode or
+HardwareAirplaneMode is, and can be tapped while gnome-settings-daemon
+runs and ShouldShowAirplaneMode is set. Like the other tiles since 0080 it
+says its name, the accent color says whether it is on.
+
+New string "Airplane Mode"; translations come with the po files.
+---
+ po/POTFILES.in           |   1 +
+ src/airplane-info.c      | 247 +++++++++++++++++++++++++++++++++++++++++++++++
+ src/airplane-info.h      |  23 +++++
+ src/meson.build          |   2 +
+ src/quick-settings.c     |  28 ++++++
+ src/ui/quick-settings.ui |  16 ++-
+ 6 files changed, 316 insertions(+), 1 deletion(-)
+
+diff --git a/po/POTFILES.in b/po/POTFILES.in
+index 6ccfeaf7..3e5acf89 100644
+--- a/po/POTFILES.in
++++ b/po/POTFILES.in
+@@ -23,6 +23,7 @@ plugins/wifi-hotspot-quick-setting/wifi-hotspot-quick-setting.desktop.in.in
+ 
+ # Source files
+ src/activity.c
++src/airplane-info.c
+ src/app-grid-button.c
+ src/app-grid.c
+ src/app-list-model.c
+diff --git a/src/airplane-info.c b/src/airplane-info.c
+new file mode 100644
+index 00000000..c3464f2a
+--- /dev/null
++++ b/src/airplane-info.c
+@@ -0,0 +1,247 @@
++/*
++ * Copyright (C) 2026 The Phosh Developers
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-airplane-info"
++
++#include "phosh-config.h"
++
++#include "airplane-info.h"
++#include "util.h"
++
++#include "dbus/gsd-rfkill-dbus.h"
++
++#include <glib/gi18n.h>
++
++#define BUS_NAME "org.gnome.SettingsDaemon.Rfkill"
++#define OBJECT_PATH "/org/gnome/SettingsDaemon/Rfkill"
++
++/**
++ * PhoshAirplaneInfo:
++ *
++ * A widget to display and switch airplane mode
++ *
++ * #PhoshAirplaneInfo follows gnome-settings-daemon's rfkill plugin. Its
++ * `AirplaneMode` blocks all rfkill switches (Wi-Fi, Bluetooth) and switches
++ * NetworkManager's `WwanEnabled` off, which disables the modems through
++ * ModemManager. #PhoshAirplaneInfo:enabled is whether airplane mode is on
++ * (in software or by a hardware switch), #PhoshAirplaneInfo:present whether
++ * gnome-settings-daemon offers it.
++ */
++
++enum {
++  PROP_0,
++  PROP_ENABLED,
++  PROP_PRESENT,
++  PROP_LAST_PROP
++};
++static GParamSpec *props[PROP_LAST_PROP];
++
++
++struct _PhoshAirplaneInfo {
++  PhoshStatusIcon  parent;
++
++  gboolean         enabled;
++  gboolean         present;
++  PhoshDBusRfkill *proxy;
++  GCancellable    *cancel;
++};
++G_DEFINE_TYPE (PhoshAirplaneInfo, phosh_airplane_info, PHOSH_TYPE_STATUS_ICON);
++
++
++static void
++phosh_airplane_info_get_property (GObject    *object,
++                                  guint       property_id,
++                                  GValue     *value,
++                                  GParamSpec *pspec)
++{
++  PhoshAirplaneInfo *self = PHOSH_AIRPLANE_INFO (object);
++
++  switch (property_id) {
++  case PROP_ENABLED:
++    g_value_set_boolean (value, self->enabled);
++    break;
++  case PROP_PRESENT:
++    g_value_set_boolean (value, self->present);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++
++static void
++sync_state (PhoshAirplaneInfo *self)
++{
++  g_autofree char *owner = NULL;
++  gboolean enabled, present;
++
++  owner = g_dbus_proxy_get_name_owner (G_DBUS_PROXY (self->proxy));
++  present = owner && phosh_dbus_rfkill_get_should_show_airplane_mode (self->proxy);
++  enabled = present &&
++    (phosh_dbus_rfkill_get_airplane_mode (self->proxy) ||
++     phosh_dbus_rfkill_get_hardware_airplane_mode (self->proxy));
++
++  g_debug ("Airplane mode present: %d, enabled: %d", present, enabled);
++
++  if (self->present != present) {
++    self->present = present;
++    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_PRESENT]);
++  }
++
++  if (self->enabled != enabled) {
++    self->enabled = enabled;
++    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ENABLED]);
++  }
++}
++
++
++static void
++on_proxy_new_for_bus_finish (GObject *source_object, GAsyncResult *res, gpointer user_data)
++{
++  PhoshAirplaneInfo *self;
++  PhoshDBusRfkill *proxy;
++  g_autoptr (GError) err = NULL;
++
++  proxy = phosh_dbus_rfkill_proxy_new_for_bus_finish (res, &err);
++  if (!proxy) {
++    phosh_dbus_service_error_warn (err, "Failed to get gsd rfkill proxy");
++    return;
++  }
++
++  self = PHOSH_AIRPLANE_INFO (user_data);
++  self->proxy = proxy;
++
++  g_object_connect (self->proxy,
++                    "swapped-object-signal::notify::airplane-mode",
++                    G_CALLBACK (sync_state), self,
++                    "swapped-object-signal::notify::hardware-airplane-mode",
++                    G_CALLBACK (sync_state), self,
++                    "swapped-object-signal::notify::should-show-airplane-mode",
++                    G_CALLBACK (sync_state), self,
++                    "swapped-object-signal::notify::g-name-owner",
++                    G_CALLBACK (sync_state), self,
++                    NULL);
++  sync_state (self);
++}
++
++
++static void
++phosh_airplane_info_idle_init (PhoshStatusIcon *icon)
++{
++  PhoshAirplaneInfo *self = PHOSH_AIRPLANE_INFO (icon);
++
++  phosh_dbus_rfkill_proxy_new_for_bus (G_BUS_TYPE_SESSION,
++                                       G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
++                                       BUS_NAME,
++                                       OBJECT_PATH,
++                                       self->cancel,
++                                       on_proxy_new_for_bus_finish,
++                                       self);
++}
++
++
++static void
++phosh_airplane_info_dispose (GObject *object)
++{
++  PhoshAirplaneInfo *self = PHOSH_AIRPLANE_INFO (object);
++
++  g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++
++  if (self->proxy) {
++    g_signal_handlers_disconnect_by_data (self->proxy, self);
++    g_clear_object (&self->proxy);
++  }
++
++  G_OBJECT_CLASS (phosh_airplane_info_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_airplane_info_class_init (PhoshAirplaneInfoClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  PhoshStatusIconClass *status_icon_class = PHOSH_STATUS_ICON_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_airplane_info_dispose;
++  object_class->get_property = phosh_airplane_info_get_property;
++
++  status_icon_class->idle_init = phosh_airplane_info_idle_init;
++
++  gtk_widget_class_set_css_name (widget_class, "phosh-airplane-info");
++
++  /**
++   * PhoshAirplaneInfo:enabled:
++   *
++   * Whether airplane mode is on
++   */
++  props[PROP_ENABLED] =
++    g_param_spec_boolean ("enabled", "", "",
++                          FALSE,
++                          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
++  /**
++   * PhoshAirplaneInfo:present:
++   *
++   * Whether airplane mode can be switched
++   */
++  props[PROP_PRESENT] =
++    g_param_spec_boolean ("present", "", "",
++                          FALSE,
++                          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
++
++  g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
++}
++
++
++static void
++phosh_airplane_info_init (PhoshAirplaneInfo *self)
++{
++  self->cancel = g_cancellable_new ();
++
++  phosh_status_icon_set_icon_name (PHOSH_STATUS_ICON (self), "airplane-mode-symbolic");
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), _("Airplane Mode"));
++}
++
++
++GtkWidget *
++phosh_airplane_info_new (void)
++{
++  return g_object_new (PHOSH_TYPE_AIRPLANE_INFO, NULL);
++}
++
++
++gboolean
++phosh_airplane_info_get_enabled (PhoshAirplaneInfo *self)
++{
++  g_return_val_if_fail (PHOSH_IS_AIRPLANE_INFO (self), FALSE);
++
++  return self->enabled;
++}
++
++/**
++ * phosh_airplane_info_set_enabled:
++ * @self: The airplane info
++ * @enabled: Whether to switch airplane mode on
++ *
++ * Switches airplane mode through gnome-settings-daemon: on blocks Wi-Fi and
++ * Bluetooth and disables the modems, off unblocks them again. The
++ * #PhoshAirplaneInfo:enabled property follows once gnome-settings-daemon
++ * reports the new state.
++ */
++void
++phosh_airplane_info_set_enabled (PhoshAirplaneInfo *self, gboolean enabled)
++{
++  g_return_if_fail (PHOSH_IS_AIRPLANE_INFO (self));
++
++  if (!self->proxy || !self->present)
++    return;
++
++  g_debug ("Switching airplane mode %s", enabled ? "on" : "off");
++  phosh_dbus_rfkill_set_airplane_mode (self->proxy, enabled);
++}
+diff --git a/src/airplane-info.h b/src/airplane-info.h
+new file mode 100644
+index 00000000..3b2fe80f
+--- /dev/null
++++ b/src/airplane-info.h
+@@ -0,0 +1,23 @@
++/*
++ * Copyright (C) 2026 The Phosh Developers
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "status-icon.h"
++
++#include <gtk/gtk.h>
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_AIRPLANE_INFO (phosh_airplane_info_get_type ())
++
++G_DECLARE_FINAL_TYPE (PhoshAirplaneInfo, phosh_airplane_info, PHOSH, AIRPLANE_INFO, PhoshStatusIcon)
++
++GtkWidget *phosh_airplane_info_new         (void);
++gboolean   phosh_airplane_info_get_enabled (PhoshAirplaneInfo *self);
++void       phosh_airplane_info_set_enabled (PhoshAirplaneInfo *self, gboolean enabled);
++
++G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index d29c6b18..6a317980 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -116,6 +116,7 @@ phosh_generated_headers = [phosh_glib_generated_headers, wl_proto_headers]
+ 
+ phosh_tool_headers = files(
+   'activity.h',
++  'airplane-info.h',
+   'ambient.h',
+   'animation.h',
+   'app-auth-prompt.h',
+@@ -199,6 +200,7 @@ phosh_tool_headers = files(
+ # Available in tools and unit tests:
+ phosh_tool_sources = files(
+   'activity.c',
++  'airplane-info.c',
+   'ambient.c',
+   'animation.c',
+   'app-auth-prompt.c',
+diff --git a/src/quick-settings.c b/src/quick-settings.c
+index c36d42e9..ab582d5d 100644
+--- a/src/quick-settings.c
++++ b/src/quick-settings.c
+@@ -12,6 +12,7 @@
+ 
+ #include "quick-settings.h"
+ 
++#include "airplane-info.h"
+ #include "bt-status-page.h"
+ #include "feedback-status-page.h"
+ #include "plugin-loader.h"
+@@ -23,6 +24,9 @@
+ #define CUSTOM_QUICK_SETTINGS_SCHEMA "mobi.phosh.shell.plugins"
+ #define CUSTOM_QUICK_SETTINGS_KEY "quick-settings"
+ 
++#define INTERFACE_SETTINGS_SCHEMA "org.gnome.desktop.interface"
++#define SHOW_BATTERY_PERCENTAGE_KEY "show-battery-percentage"
++
+ /**
+  * PhoshQuickSettings:
+  *
+@@ -39,7 +43,9 @@ struct _PhoshQuickSettings {
+   GtkBin parent;
+ 
+   PhoshQuickSettingsBox *box;
++  PhoshQuickSetting *battery_quick_setting;
+ 
++  GSettings *interface_settings;
+   GSettings *plugin_settings;
+   PhoshPluginLoader *plugin_loader;
+   GPtrArray *custom_quick_settings;
+@@ -106,6 +112,18 @@ on_battery_clicked (PhoshQuickSettings *self, PhoshQuickSetting *child)
+ }
+ 
+ 
++static void
++on_airplane_clicked (PhoshQuickSettings *self, PhoshQuickSetting *child)
++{
++  PhoshAirplaneInfo *info;
++
++  info = PHOSH_AIRPLANE_INFO (phosh_quick_setting_get_status_icon (child));
++  g_return_if_fail (PHOSH_IS_AIRPLANE_INFO (info));
++
++  phosh_airplane_info_set_enabled (info, !phosh_airplane_info_get_enabled (info));
++}
++
++
+ static void
+ on_rotate_clicked (PhoshQuickSettings *self, PhoshQuickSetting *child)
+ {
+@@ -254,6 +272,7 @@ phosh_quick_settings_dispose (GObject *object)
+ {
+   PhoshQuickSettings *self = PHOSH_QUICK_SETTINGS (object);
+ 
++  g_clear_object (&self->interface_settings);
+   g_clear_object (&self->plugin_settings);
+   g_clear_object (&self->plugin_loader);
+   if (self->custom_quick_settings) {
+@@ -276,6 +295,7 @@ phosh_quick_settings_class_init (PhoshQuickSettingsClass *klass)
+   g_type_ensure (PHOSH_TYPE_QUICK_SETTINGS_BOX);
+   g_type_ensure (PHOSH_TYPE_QUICK_SETTING);
+ 
++  g_type_ensure (PHOSH_TYPE_AIRPLANE_INFO);
+   g_type_ensure (PHOSH_TYPE_BT_STATUS_PAGE);
+   g_type_ensure (PHOSH_TYPE_FEEDBACK_STATUS_PAGE);
+   g_type_ensure (PHOSH_TYPE_WIFI_STATUS_PAGE);
+@@ -284,11 +304,13 @@ phosh_quick_settings_class_init (PhoshQuickSettingsClass *klass)
+                                                "/mobi/phosh/ui/quick-settings.ui");
+ 
+   gtk_widget_class_bind_template_child (widget_class, PhoshQuickSettings, box);
++  gtk_widget_class_bind_template_child (widget_class, PhoshQuickSettings, battery_quick_setting);
+ 
+   gtk_widget_class_bind_template_callback (widget_class, on_wwan_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_wifi_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_bt_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_battery_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_airplane_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_rotate_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_rotate_long_pressed);
+   gtk_widget_class_bind_template_callback (widget_class, on_feedback_clicked);
+@@ -309,6 +331,12 @@ phosh_quick_settings_init (PhoshQuickSettings *self)
+                           self->box, "can-show-status",
+                           G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
+ 
++  /* Plinius: the battery tile only repeats the percentage the top bar shows already */
++  self->interface_settings = g_settings_new (INTERFACE_SETTINGS_SCHEMA);
++  g_settings_bind (self->interface_settings, SHOW_BATTERY_PERCENTAGE_KEY,
++                   self->battery_quick_setting, "visible",
++                   G_SETTINGS_BIND_GET | G_SETTINGS_BIND_INVERT_BOOLEAN);
++
+   self->plugin_settings = g_settings_new (CUSTOM_QUICK_SETTINGS_SCHEMA);
+   self->plugin_loader = phosh_plugin_loader_new ((GStrv) plugin_dirs,
+                                                  PHOSH_EXTENSION_POINT_QUICK_SETTING_WIDGET);
+diff --git a/src/ui/quick-settings.ui b/src/ui/quick-settings.ui
+index 3427915a..ffc0ac3a 100644
+--- a/src/ui/quick-settings.ui
++++ b/src/ui/quick-settings.ui
+@@ -40,7 +40,8 @@
+           </object>
+         </child>
+         <child>
+-          <object class="PhoshQuickSetting">
++          <!-- Plinius: hidden while the top bar shows the battery percentage, see phosh_quick_settings_init () -->
++          <object class="PhoshQuickSetting" id="battery_quick_setting">
+             <property name="visible">1</property>
+             <property name="sensitive" bind-source="batteryinfo" bind-property="present" bind-flags="sync-create"/>
+             <property name="status-icon">batteryinfo</property>
+@@ -49,6 +50,15 @@
+             <signal name="clicked" handler="on_battery_clicked" object="PhoshQuickSettings" swapped="yes"/>
+           </object>
+         </child>
++        <child>
++          <!-- Plinius: airplane mode after the battery, in its place while that is hidden -->
++          <object class="PhoshQuickSetting">
++            <property name="visible">1</property>
++            <property name="sensitive" bind-source="airplaneinfo" bind-property="present" bind-flags="sync-create"/>
++            <property name="status-icon">airplaneinfo</property>
++            <signal name="clicked" handler="on_airplane_clicked" object="PhoshQuickSettings" swapped="yes"/>
++          </object>
++        </child>
+         <child>
+           <object class="PhoshQuickSetting">
+             <property name="visible">1</property>
+@@ -114,6 +124,10 @@
+     <property name="visible">1</property>
+     <property name="pixel-size">16</property>
+   </object>
++  <object class="PhoshAirplaneInfo" id="airplaneinfo">
++    <property name="visible">1</property>
++    <property name="pixel-size">16</property>
++  </object>
+   <object class="PhoshRotateInfo" id="rotateinfo">
+     <property name="visible">1</property>
+     <property name="pixel-size">16</property>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- GNOME Settings › System › Self-Test runs "pkexec plinius-rollback run" (unattended, as a unit)
+     when a check failed after an update. Taking back an update changes many packages at once,
+     so the PIN is asked every time (auth_admin, not _keep). -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <action id="org.plinius.rollback.run">
+    <description>Take back the last system update</description>
+    <description xml:lang="de">Letztes Systemupdate zurücknehmen</description>
+    <description xml:lang="es">Deshacer la última actualización del sistema</description>
+    <description xml:lang="fr">Annuler la dernière mise à jour du système</description>
+    <description xml:lang="it">Annullare l’ultimo aggiornamento del sistema</description>
+    <description xml:lang="nl">Laatste systeemupdate terugdraaien</description>
+    <description xml:lang="pl">Cofnięcie ostatniej aktualizacji systemu</description>
+    <description xml:lang="pt">Anular a última atualização do sistema</description>
+    <description xml:lang="ru">Отменить последнее обновление системы</description>
+    <message>Authentication is required to take back the last system update</message>
+    <message xml:lang="de">Zum Zurücknehmen des letzten Systemupdates ist eine Legitimierung erforderlich</message>
+    <message xml:lang="es">Se necesita autenticación para deshacer la última actualización del sistema</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour annuler la dernière mise à jour du système</message>
+    <message xml:lang="it">È richiesta l’autenticazione per annullare l’ultimo aggiornamento del sistema</message>
+    <message xml:lang="nl">Om de laatste systeemupdate terug te draaien is authenticatie vereist</message>
+    <message xml:lang="pl">Cofnięcie ostatniej aktualizacji systemu wymaga uwierzytelnienia</message>
+    <message xml:lang="pt">É necessária autenticação para anular a última atualização do sistema</message>
+    <message xml:lang="ru">Для отмены последнего обновления системы требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/plinius-rollback</annotate>
+  </action>
+</policyconfig>

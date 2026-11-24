@@ -1,0 +1,32 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=vibrator-ff-bridge
+pkgver=0.4
+pkgrel=3
+pkgdesc="Force-feedback input device for feedbackd, backed by the vendor haptics FF device, sysfs or the AIDL vibrator HAL"
+arch=(aarch64 x86_64)
+license=(MIT)
+depends=(glib2 libgbinder)
+optdepends=('feedbackd: haptic feedback in Phosh and apps')
+source=(vibrator-ff-bridge.c
+	vibrator-ff-bridge.service
+	72-vibrator-ff-bridge.rules
+	LICENSE)
+sha256sums=('42e8ed21b568372119aebb9eddf17a5136e3c926b093b2b989312ab91652650c'
+	'3072514ac051ba9314c3439ad2ba48231cc27267cf5234e60e09dd1ae2fcfbe1'
+	'4b816ddef57f9ac081531e8097e93c9a229beb64263e35030629351179e9aadc'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o vibrator-ff-bridge vibrator-ff-bridge.c \
+		$(pkg-config --cflags --libs glib-2.0 libgbinder) $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 vibrator-ff-bridge -t "$pkgdir/usr/bin"
+	install -Dm644 vibrator-ff-bridge.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 72-vibrator-ff-bridge.rules -t "$pkgdir/usr/lib/udev/rules.d"
+}

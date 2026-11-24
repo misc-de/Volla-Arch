@@ -1,0 +1,2020 @@
+From 2dfadfe5350782c4e2c6643d0f1d5427c51aeb90 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 07:51:30 +0100
+Subject: [PATCH] plugins: Contact card quick setting
+
+Plinius: the own contact card for another phone, and cards from others,
+through plinius-cardshare (org.plinius.CardShare on the session bus).
+"Share My Card" offers the card for 30 s over NFC (the phone emulates a
+Type 4 tag) and as a QR code on the status page, for phones without NFC
+and iPhones; "Receive a Card" waits for an NFC tag with a card and for a
+card pushed over Bluetooth. Received cards are listed until added to the
+contacts or dismissed; "+30 s" and "Stop" below a progress bar.
+
+The service does the work and puts NFC and Bluetooth back as they were;
+the tile shows the time left. Nothing starts while the phone is locked.
+A long press and the footer open Settings > NFC > Contact Card, where the
+own contact and its fields are chosen.
+---
+ .../cardshare-quick-setting.c                      | 551 +++++++++++++++++++++
+ .../cardshare-quick-setting.desktop.in.in          |   8 +
+ .../cardshare-quick-setting.h                      |  17 +
+ .../icons/cardshare-quick-setting-symbolic.svg     |   9 +
+ .../icons/contact-card-symbolic.svg                |   9 +
+ plugins/cardshare-quick-setting/meson.build        |  48 ++
+ .../phosh-plugin-cardshare-quick-setting.c         |  39 ++
+ ...h-plugin-cardshare-quick-setting.gresources.xml |   7 +
+ plugins/cardshare-quick-setting/qs.ui              | 214 ++++++++
+ plugins/meson.build                                |   1 +
+ po/POTFILES.in                                     |   2 +
+ po/de.po                                           | 103 ++++
+ po/es.po                                           | 103 ++++
+ po/fr.po                                           | 103 ++++
+ po/it.po                                           | 103 ++++
+ po/nl.po                                           | 103 ++++
+ po/pl.po                                           | 103 ++++
+ po/pt.po                                           | 103 ++++
+ po/pt_BR.po                                        | 103 ++++
+ po/ru.po                                           | 103 ++++
+ 20 files changed, 1832 insertions(+)
+
+diff --git a/plugins/cardshare-quick-setting/cardshare-quick-setting.c b/plugins/cardshare-quick-setting/cardshare-quick-setting.c
+new file mode 100644
+index 00000000..04b6c59f
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/cardshare-quick-setting.c
+@@ -0,0 +1,551 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * The QR code drawing is taken from the Wi-Fi hotspot status page (from GNOME Control Center).
++ */
++
++#include "cardshare-quick-setting.h"
++#include "plugin-shell.h"
++#include "quick-setting.h"
++#include "status-icon.h"
++#include "status-page.h"
++
++#include <handy.h>
++#include <glib/gi18n.h>
++#include <qrcodegen.h>
++
++#define CARDSHARE_BUS_NAME "org.plinius.CardShare"
++#define CARDSHARE_OBJECT_PATH "/org/plinius/CardShare"
++#define CARDSHARE_INTERFACE "org.plinius.CardShare"
++
++/* Large enough for a phone camera at arm's length, small enough for the status page to keep
++ * its footer on a 360 x 800 screen */
++#define QR_CODE_SIZE 176
++
++G_DEFINE_AUTOPTR_CLEANUP_FUNC (cairo_t, cairo_destroy)
++G_DEFINE_AUTOPTR_CLEANUP_FUNC (cairo_surface_t, cairo_surface_destroy)
++
++/**
++ * PhoshCardshareQuickSetting:
++ *
++ * The own contact card for another phone, and cards from others, through plinius-cardshare
++ * (org.plinius.CardShare on the session bus). "Share My Card" offers the card for a while
++ * over NFC (the phone emulates a tag) and as a QR code on the status page; "Receive a Card"
++ * waits for an NFC tag with a card and for a card pushed over Bluetooth. Received cards are
++ * listed until added to the contacts or dismissed.
++ *
++ * The service does the work and puts NFC and Bluetooth back as they were; the tile shows
++ * its state. Nothing starts while the phone is locked. A long press and the footer open
++ * the page in GNOME Settings where the own contact and its fields are chosen.
++ */
++struct _PhoshCardshareQuickSetting {
++  PhoshQuickSetting  parent;
++
++  PhoshStatusIcon   *info;
++  PhoshStatusPage   *status_page;
++  GtkStack          *stack;
++  GtkListBox        *choices;
++  HdyActionRow      *share_row;
++  HdyActionRow      *receive_row;
++  GtkImage          *qr_image;
++  GtkLabel          *share_hint;
++  GtkLabel          *receive_hint;
++  GtkWidget         *session_box;
++  GtkProgressBar    *progress;
++  GtkLabel          *remaining_label;
++  GtkListBox        *received_list;
++  GtkLabel          *locked_label;
++  GtkLabel          *message_label;
++
++  GDBusProxy        *proxy;
++  GCancellable      *cancel;
++  /* What the QR code shows, to draw it only when the card changes */
++  char              *qr_text;
++  /* Last result of an action (added to contacts, card read), shown below the page */
++  char              *message;
++};
++G_DEFINE_TYPE (PhoshCardshareQuickSetting, phosh_cardshare_quick_setting, PHOSH_TYPE_QUICK_SETTING);
++
++
++static cairo_surface_t *
++qr_from_text (const char *text, int size, int scale)
++{
++  uint8_t qr_code[qrcodegen_BUFFER_LEN_FOR_VERSION (qrcodegen_VERSION_MAX)];
++  uint8_t temp_buf[qrcodegen_BUFFER_LEN_FOR_VERSION (qrcodegen_VERSION_MAX)];
++  g_autoptr (cairo_t) cr = NULL;
++  cairo_surface_t *surface;
++  int pixel_size, qr_size, padding;
++
++  if (!qrcodegen_encodeText (text, temp_buf, qr_code, qrcodegen_Ecc_LOW,
++                             qrcodegen_VERSION_MIN, qrcodegen_VERSION_MAX,
++                             qrcodegen_Mask_AUTO, FALSE))
++    return NULL;
++
++  surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24, size * scale, size * scale);
++  cairo_surface_set_device_scale (surface, scale, scale);
++  cr = cairo_create (surface);
++  cairo_set_antialias (cr, CAIRO_ANTIALIAS_NONE);
++
++  /* White, also in the dark style: scanners expect dark modules on light ground */
++  cairo_set_source_rgba (cr, 1, 1, 1, 1);
++  cairo_rectangle (cr, 0, 0, size, size);
++  cairo_fill (cr);
++
++  qr_size = qrcodegen_getSize (qr_code);
++  pixel_size = MAX (1, size / qr_size);
++  padding = (size - qr_size * pixel_size) / 2;
++  /* Keep a quiet zone of a few modules around the code */
++  if (pixel_size > 2 && padding < 2 * pixel_size) {
++    pixel_size--;
++    padding = (size - qr_size * pixel_size) / 2;
++  }
++
++  cairo_set_source_rgba (cr, 0, 0, 0, 1);
++  for (int row = 0; row < qr_size; row++) {
++    for (int column = 0; column < qr_size; column++) {
++      if (qrcodegen_getModule (qr_code, column, row)) {
++        cairo_rectangle (cr, column * pixel_size + padding, row * pixel_size + padding,
++                         pixel_size, pixel_size);
++      }
++    }
++  }
++  cairo_fill (cr);
++
++  return surface;
++}
++
++
++static char *
++get_string (PhoshCardshareQuickSetting *self, const char *name)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, name);
++  if (!value || !g_variant_is_of_type (value, G_VARIANT_TYPE_STRING))
++    return g_strdup ("");
++  return g_variant_dup_string (value, NULL);
++}
++
++
++static guint
++get_uint (PhoshCardshareQuickSetting *self, const char *name)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, name);
++  if (!value || !g_variant_is_of_type (value, G_VARIANT_TYPE_UINT32))
++    return 0;
++  return g_variant_get_uint32 (value);
++}
++
++
++static GStrv
++get_strv (PhoshCardshareQuickSetting *self, const char *name)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, name);
++  if (!value || !g_variant_is_of_type (value, G_VARIANT_TYPE_STRING_ARRAY))
++    return g_new0 (char *, 1);
++  return g_variant_dup_strv (value, NULL);
++}
++
++
++static void
++set_message (PhoshCardshareQuickSetting *self, const char *message)
++{
++  g_free (self->message);
++  self->message = g_strdup (message);
++}
++
++
++static void on_import_clicked (GtkButton *button, PhoshCardshareQuickSetting *self);
++static void on_dismiss_clicked (GtkButton *button, PhoshCardshareQuickSetting *self);
++
++
++static void
++update_received (PhoshCardshareQuickSetting *self)
++{
++  g_autoptr (GVariant) value = NULL;
++  g_autoptr (GList) rows = gtk_container_get_children (GTK_CONTAINER (self->received_list));
++  GVariantIter iter;
++  const char *id, *name, *detail;
++  gboolean any = FALSE;
++
++  for (GList *l = rows; l; l = l->next)
++    gtk_widget_destroy (l->data);
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, "Received");
++  if (value && g_variant_is_of_type (value, G_VARIANT_TYPE ("a(sss)"))) {
++    g_variant_iter_init (&iter, value);
++    while (g_variant_iter_next (&iter, "(&s&s&s)", &id, &name, &detail)) {
++      GtkWidget *row = hdy_action_row_new ();
++      /* Icon buttons: the name needs the room of the row */
++      GtkWidget *add = gtk_button_new_from_icon_name ("list-add-symbolic", GTK_ICON_SIZE_BUTTON);
++      GtkWidget *dismiss = gtk_button_new_from_icon_name ("window-close-symbolic",
++                                                          GTK_ICON_SIZE_BUTTON);
++
++      hdy_preferences_row_set_title (HDY_PREFERENCES_ROW (row), name);
++      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), detail);
++      hdy_action_row_set_icon_name (HDY_ACTION_ROW (row), "avatar-default-symbolic");
++
++      gtk_widget_set_valign (add, GTK_ALIGN_CENTER);
++      gtk_widget_set_tooltip_text (add, _("Add to Contacts"));
++      gtk_style_context_add_class (gtk_widget_get_style_context (add), "suggested-action");
++      g_object_set_data_full (G_OBJECT (add), "card-id", g_strdup (id), g_free);
++      g_signal_connect (add, "clicked", G_CALLBACK (on_import_clicked), self);
++
++      gtk_widget_set_valign (dismiss, GTK_ALIGN_CENTER);
++      gtk_widget_set_tooltip_text (dismiss, _("Dismiss"));
++      gtk_style_context_add_class (gtk_widget_get_style_context (dismiss), "flat");
++      g_object_set_data_full (G_OBJECT (dismiss), "card-id", g_strdup (id), g_free);
++      g_signal_connect (dismiss, "clicked", G_CALLBACK (on_dismiss_clicked), self);
++
++      gtk_container_add (GTK_CONTAINER (row), add);
++      gtk_container_add (GTK_CONTAINER (row), dismiss);
++      gtk_widget_show_all (row);
++      gtk_container_add (GTK_CONTAINER (self->received_list), row);
++      any = TRUE;
++    }
++  }
++  gtk_widget_set_visible (GTK_WIDGET (self->received_list), any);
++}
++
++
++static void
++update (PhoshCardshareQuickSetting *self)
++{
++  g_autofree char *state = get_string (self, "State");
++  g_autofree char *card_name = get_string (self, "CardName");
++  g_autofree char *card_text = get_string (self, "CardText");
++  g_autofree char *bt_name = get_string (self, "BluetoothName");
++  g_autofree char *error = get_string (self, "Error");
++  g_autofree char *remaining_text = NULL;
++  g_auto (GStrv) channels = get_strv (self, "Channels");
++  guint remaining = get_uint (self, "Remaining");
++  guint duration = get_uint (self, "Duration");
++  gboolean locked = phosh_shell_get_locked (phosh_shell_get_default ());
++  gboolean sharing = g_strcmp0 (state, "sharing") == 0;
++  gboolean receiving = g_strcmp0 (state, "receiving") == 0;
++  gboolean nfc = g_strv_contains ((const char * const *) channels, "nfc");
++  gboolean bluetooth = g_strv_contains ((const char * const *) channels, "bluetooth");
++  const char *message;
++
++  /* Tile: what runs, and for how long */
++  phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), sharing || receiving);
++  if (sharing || receiving) {
++    /* Translators: the tile while sharing or receiving, short (the tile is narrow) */
++    g_autofree char *text = g_strdup_printf (_("%u s left"), remaining);
++    phosh_status_icon_set_info (self->info, text);
++  } else {
++    /* Translators: the tile, short (the tile is narrow) */
++    phosh_status_icon_set_info (self->info, _("My Card"));
++  }
++
++  /* Status page */
++  gtk_stack_set_visible_child_name (self->stack, sharing ? "sharing" :
++                                    receiving ? "receiving" : "idle");
++  hdy_action_row_set_subtitle (self->share_row,
++                               *card_name ? card_name : _("No card chosen yet"));
++  gtk_widget_set_sensitive (GTK_WIDGET (self->choices), !locked);
++  gtk_widget_set_visible (GTK_WIDGET (self->locked_label), locked && !sharing && !receiving);
++
++  if (sharing && g_strcmp0 (card_text, self->qr_text) != 0) {
++    g_autoptr (cairo_surface_t) surface = NULL;
++
++    g_free (self->qr_text);
++    self->qr_text = g_strdup (card_text);
++    surface = qr_from_text (card_text, QR_CODE_SIZE,
++                            gtk_widget_get_scale_factor (GTK_WIDGET (self->qr_image)));
++    gtk_image_set_from_surface (self->qr_image, surface);
++  } else if (!sharing && self->qr_text) {
++    g_clear_pointer (&self->qr_text, g_free);
++    gtk_image_clear (self->qr_image);
++  }
++  gtk_label_set_text (self->share_hint, nfc ?
++                      _("Hold the other phone to the back of this one, or let it scan the code") :
++                      _("Let the other phone scan the code"));
++
++  if (bluetooth) {
++    g_autofree char *hint = NULL;
++
++    /* Translators: %s is the phone's Bluetooth name */
++    hint = g_strdup_printf (_("Hold an NFC card to the back of the phone. From another phone, "
++                              "share the contact over Bluetooth to “%s”."), bt_name);
++    gtk_label_set_text (self->receive_hint, hint);
++  } else if (nfc) {
++    gtk_label_set_text (self->receive_hint, _("Hold an NFC card to the back of the phone"));
++  } else {
++    gtk_label_set_text (self->receive_hint, _("Neither NFC nor Bluetooth is available"));
++  }
++
++  gtk_widget_set_visible (self->session_box, sharing || receiving);
++  gtk_progress_bar_set_fraction (self->progress,
++                                 duration ? (double) remaining / duration : 0.0);
++  /* Translators: seconds left while sharing or receiving */
++  remaining_text = g_strdup_printf (_("%u s left"), remaining);
++  gtk_label_set_text (self->remaining_label, remaining_text);
++
++  /* A problem of the service first, then the last result */
++  message = *error ? error : self->message;
++  gtk_label_set_text (self->message_label, message ? message : "");
++  gtk_widget_set_visible (GTK_WIDGET (self->message_label), message && *message);
++}
++
++
++static void
++on_properties_changed (PhoshCardshareQuickSetting *self, GVariant *changed, GStrv invalidated)
++{
++  g_autoptr (GVariant) received = g_variant_lookup_value (changed, "Received", NULL);
++  g_autoptr (GVariant) state = g_variant_lookup_value (changed, "State", NULL);
++
++  /* A new session starts without the result of the last one; the end of a session keeps
++   * it (e.g. "Your card was read", which comes just before) */
++  if (state && g_strcmp0 (g_variant_get_string (state, NULL), "idle") != 0)
++    set_message (self, NULL);
++  if (received)
++    update_received (self);
++  update (self);
++}
++
++
++static void
++on_name_owner_changed (PhoshCardshareQuickSetting *self)
++{
++  update_received (self);
++  update (self);
++}
++
++
++static void
++on_call_done (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), res, &err);
++  PhoshCardshareQuickSetting *self;
++
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  self = PHOSH_CARDSHARE_QUICK_SETTING (user_data);
++  if (err) {
++    g_dbus_error_strip_remote_error (err);
++    g_warning ("Contact card: %s", err->message);
++    set_message (self, err->message);
++  } else if (reply && g_variant_is_of_type (reply, G_VARIANT_TYPE ("(s)"))) {
++    /* Import: the name of the added contact */
++    const char *name;
++    g_autofree char *text = NULL;
++
++    g_variant_get (reply, "(&s)", &name);
++    /* Translators: %s is the name of a received contact */
++    text = g_strdup_printf (_("“%s” added to Contacts"), name);
++    set_message (self, text);
++  }
++  update (self);
++}
++
++
++static void
++call (PhoshCardshareQuickSetting *self, const char *method, GVariant *params)
++{
++  if (!self->proxy) {
++    if (params)
++      g_variant_unref (g_variant_ref_sink (params));
++    return;
++  }
++
++  set_message (self, NULL);
++  /* Share and Receive switch NFC on and wait until it polls: a few seconds */
++  g_dbus_proxy_call (self->proxy, method, params, G_DBUS_CALL_FLAGS_NONE, 20000,
++                     self->cancel, on_call_done, self);
++}
++
++
++static void
++on_import_clicked (GtkButton *button, PhoshCardshareQuickSetting *self)
++{
++  const char *id = g_object_get_data (G_OBJECT (button), "card-id");
++
++  gtk_widget_set_sensitive (GTK_WIDGET (button), FALSE);
++  call (self, "Import", g_variant_new ("(s)", id));
++}
++
++
++static void
++on_dismiss_clicked (GtkButton *button, PhoshCardshareQuickSetting *self)
++{
++  const char *id = g_object_get_data (G_OBJECT (button), "card-id");
++
++  call (self, "Dismiss", g_variant_new ("(s)", id));
++}
++
++
++static void
++on_choice_activated (PhoshCardshareQuickSetting *self, GtkListBoxRow *row)
++{
++  if (row == GTK_LIST_BOX_ROW (self->share_row))
++    call (self, "Share", NULL);
++  else if (row == GTK_LIST_BOX_ROW (self->receive_row))
++    call (self, "Receive", NULL);
++}
++
++
++static void
++on_extend_clicked (PhoshCardshareQuickSetting *self)
++{
++  call (self, "Extend", NULL);
++}
++
++
++static void
++on_stop_clicked (PhoshCardshareQuickSetting *self)
++{
++  call (self, "Stop", NULL);
++}
++
++
++static void
++on_clicked (PhoshCardshareQuickSetting *self)
++{
++  /* A tap on the running tile stops it, otherwise it offers the two choices */
++  if (phosh_quick_setting_get_active (PHOSH_QUICK_SETTING (self))) {
++    call (self, "Stop", NULL);
++    return;
++  }
++  g_signal_emit_by_name (self, "show-status");
++}
++
++
++static void
++on_signal (PhoshCardshareQuickSetting *self, const char *sender, const char *signal_name,
++           GVariant *params)
++{
++  if (g_strcmp0 (signal_name, "CardRead") == 0) {
++    set_message (self, _("Your card was read"));
++    update (self);
++  }
++}
++
++
++static void
++on_showing_status (PhoshCardshareQuickSetting *self)
++{
++  if (!self->proxy || !phosh_quick_setting_get_showing_status (PHOSH_QUICK_SETTING (self)))
++    return;
++
++  /* The service exits when idle; a ping starts it so the page shows the chosen card */
++  g_dbus_proxy_call (self->proxy, "org.freedesktop.DBus.Peer.Ping", NULL,
++                     G_DBUS_CALL_FLAGS_NONE, 5000, self->cancel, NULL, NULL);
++}
++
++
++static void
++on_proxy_ready (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  PhoshCardshareQuickSetting *self;
++  g_autoptr (GError) err = NULL;
++  GDBusProxy *proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
++
++  if (!proxy) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("Failed to create the plinius-cardshare proxy: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_CARDSHARE_QUICK_SETTING (user_data);
++  self->proxy = proxy;
++  g_signal_connect_object (proxy, "g-properties-changed", G_CALLBACK (on_properties_changed),
++                           self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "g-signal", G_CALLBACK (on_signal), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "notify::g-name-owner", G_CALLBACK (on_name_owner_changed),
++                           self, G_CONNECT_SWAPPED);
++  on_name_owner_changed (self);
++  on_showing_status (self);
++}
++
++
++static void
++phosh_cardshare_quick_setting_dispose (GObject *object)
++{
++  PhoshCardshareQuickSetting *self = PHOSH_CARDSHARE_QUICK_SETTING (object);
++
++  g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++  g_clear_object (&self->proxy);
++
++  G_OBJECT_CLASS (phosh_cardshare_quick_setting_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_cardshare_quick_setting_finalize (GObject *object)
++{
++  PhoshCardshareQuickSetting *self = PHOSH_CARDSHARE_QUICK_SETTING (object);
++
++  g_free (self->qr_text);
++  g_free (self->message);
++
++  G_OBJECT_CLASS (phosh_cardshare_quick_setting_parent_class)->finalize (object);
++}
++
++
++static void
++phosh_cardshare_quick_setting_class_init (PhoshCardshareQuickSettingClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_cardshare_quick_setting_dispose;
++  object_class->finalize = phosh_cardshare_quick_setting_finalize;
++
++  gtk_widget_class_set_template_from_resource (widget_class,
++                                               "/mobi/phosh/plugins/cardshare-quick-setting/qs.ui");
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, info);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, status_page);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, stack);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, choices);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, share_row);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, receive_row);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, qr_image);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, share_hint);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, receive_hint);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, session_box);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, progress);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, remaining_label);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, received_list);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, locked_label);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCardshareQuickSetting, message_label);
++  gtk_widget_class_bind_template_callback (widget_class, on_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_choice_activated);
++  gtk_widget_class_bind_template_callback (widget_class, on_extend_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_stop_clicked);
++}
++
++
++static void
++phosh_cardshare_quick_setting_init (PhoshCardshareQuickSetting *self)
++{
++  gtk_widget_init_template (GTK_WIDGET (self));
++  gtk_icon_theme_add_resource_path (gtk_icon_theme_get_default (),
++                                    "/mobi/phosh/plugins/cardshare-quick-setting/icons");
++
++  g_signal_connect_object (phosh_shell_get_default (), "notify::locked", G_CALLBACK (update),
++                           self, G_CONNECT_SWAPPED);
++  g_signal_connect (self, "notify::showing-status", G_CALLBACK (on_showing_status), NULL);
++
++  self->cancel = g_cancellable_new ();
++  update (self);
++  /* Auto-start allowed: the service starts on the first call and exits when idle */
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SESSION,
++                            G_DBUS_PROXY_FLAGS_NONE,
++                            NULL, CARDSHARE_BUS_NAME, CARDSHARE_OBJECT_PATH,
++                            CARDSHARE_INTERFACE,
++                            self->cancel, on_proxy_ready, self);
++}
+diff --git a/plugins/cardshare-quick-setting/cardshare-quick-setting.desktop.in.in b/plugins/cardshare-quick-setting/cardshare-quick-setting.desktop.in.in
+new file mode 100644
+index 00000000..f88aa7af
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/cardshare-quick-setting.desktop.in.in
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=Contact Card
++Types=quick-setting;
++Comment=Share the own contact card over NFC and a QR code, receive cards over NFC and Bluetooth (plinius-cardshare)
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=cardshare-quick-setting
+diff --git a/plugins/cardshare-quick-setting/cardshare-quick-setting.h b/plugins/cardshare-quick-setting/cardshare-quick-setting.h
+new file mode 100644
+index 00000000..e8231bca
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/cardshare-quick-setting.h
+@@ -0,0 +1,17 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "quick-setting.h"
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_CARDSHARE_QUICK_SETTING phosh_cardshare_quick_setting_get_type ()
++G_DECLARE_FINAL_TYPE (PhoshCardshareQuickSetting, phosh_cardshare_quick_setting,
++                      PHOSH, CARDSHARE_QUICK_SETTING, PhoshQuickSetting)
++
++G_END_DECLS
+diff --git a/plugins/cardshare-quick-setting/icons/cardshare-quick-setting-symbolic.svg b/plugins/cardshare-quick-setting/icons/cardshare-quick-setting-symbolic.svg
+new file mode 100644
+index 00000000..6a72a67d
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/icons/cardshare-quick-setting-symbolic.svg
+@@ -0,0 +1,9 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <g fill="#222">
++    <path d="M2.5 2.5A2 2 0 0 0 .5 4.5v7a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2zm0 1.5h11a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5z"/>
++    <circle cx="5.5" cy="6.75" r="1.5"/>
++    <path d="M3 11c0-1.4 1.1-2.25 2.5-2.25S8 9.6 8 11z"/>
++    <rect x="9.25" y="5.75" width="3.5" height="1.25" rx=".6"/>
++    <rect x="9.25" y="8.25" width="2.5" height="1.25" rx=".6"/>
++  </g>
++</svg>
+diff --git a/plugins/cardshare-quick-setting/icons/contact-card-symbolic.svg b/plugins/cardshare-quick-setting/icons/contact-card-symbolic.svg
+new file mode 100644
+index 00000000..6a72a67d
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/icons/contact-card-symbolic.svg
+@@ -0,0 +1,9 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <g fill="#222">
++    <path d="M2.5 2.5A2 2 0 0 0 .5 4.5v7a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2zm0 1.5h11a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5z"/>
++    <circle cx="5.5" cy="6.75" r="1.5"/>
++    <path d="M3 11c0-1.4 1.1-2.25 2.5-2.25S8 9.6 8 11z"/>
++    <rect x="9.25" y="5.75" width="3.5" height="1.25" rx=".6"/>
++    <rect x="9.25" y="8.25" width="2.5" height="1.25" rx=".6"/>
++  </g>
++</svg>
+diff --git a/plugins/cardshare-quick-setting/meson.build b/plugins/cardshare-quick-setting/meson.build
+new file mode 100644
+index 00000000..08853ed9
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/meson.build
+@@ -0,0 +1,48 @@
++# Plinius: the own contact card over NFC, QR code and Bluetooth, through plinius-cardshare (org.plinius.CardShare)
++name = 'cardshare-quick-setting'
++
++cardshare_quick_setting_resources = gnome.compile_resources(
++  'phosh-plugin-cardshare-quick-setting-resources',
++  'phosh-plugin-cardshare-quick-setting.gresources.xml',
++  c_name: 'phosh_plugin_cardshare_quick_setting',
++)
++
++cardshare_quick_setting_plugin_sources = files(
++  'cardshare-quick-setting.c',
++  'phosh-plugin-cardshare-quick-setting.c',
++)
++
++phosh_cardshare_quick_setting_plugin = shared_module(
++  'phosh-plugin-cardshare-quick-setting',
++  cardshare_quick_setting_plugin_sources,
++  cardshare_quick_setting_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: [plugin_dep, dependency('qrcodegen')],
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: meson.project_source_root() / 'po',
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/cardshare-quick-setting-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+diff --git a/plugins/cardshare-quick-setting/phosh-plugin-cardshare-quick-setting.c b/plugins/cardshare-quick-setting/phosh-plugin-cardshare-quick-setting.c
+new file mode 100644
+index 00000000..d83fecd0
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/phosh-plugin-cardshare-quick-setting.c
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Based on the location quick setting plugin
++ */
++
++#include "cardshare-quick-setting.h"
++#include "phosh-plugin.h"
++
++#include <gio/gio.h>
++#include <gtk/gtk.h>
++
++char **g_io_phosh_plugin_cardshare_quick_setting_query (void);
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET,
++                                  PHOSH_TYPE_CARDSHARE_QUICK_SETTING,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++char **
++g_io_phosh_plugin_cardshare_quick_setting_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+diff --git a/plugins/cardshare-quick-setting/phosh-plugin-cardshare-quick-setting.gresources.xml b/plugins/cardshare-quick-setting/phosh-plugin-cardshare-quick-setting.gresources.xml
+new file mode 100644
+index 00000000..47958fc6
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/phosh-plugin-cardshare-quick-setting.gresources.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/cardshare-quick-setting/">
++    <file preprocess="xml-stripblanks">qs.ui</file>
++    <file compressed="true">icons/contact-card-symbolic.svg</file>
++  </gresource>
++</gresources>
+diff --git a/plugins/cardshare-quick-setting/qs.ui b/plugins/cardshare-quick-setting/qs.ui
+new file mode 100644
+index 00000000..a6f13c4c
+--- /dev/null
++++ b/plugins/cardshare-quick-setting/qs.ui
+@@ -0,0 +1,214 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <requires lib="gtk+" version="3.24"/>
++  <template class="PhoshCardshareQuickSetting" parent="PhoshQuickSetting">
++    <property name="status-icon">info</property>
++    <property name="status-page">status_page</property>
++    <signal name="clicked" handler="on_clicked" object="PhoshCardshareQuickSetting" swapped="yes"/>
++    <!-- The Contact Card page of GNOME Settings: which contact, which fields -->
++    <property name="long-press-action-name">panel.launch-panel</property>
++    <property name="long-press-action-target">(&quot;contact-card&quot;, [&lt;&quot;&quot;&gt;])</property>
++  </template>
++  <object class="PhoshStatusIcon" id="info">
++    <property name="visible">1</property>
++    <property name="pixel-size">16</property>
++    <property name="icon-name">contact-card-symbolic</property>
++    <property name="info" translatable="yes">My Card</property>
++  </object>
++  <object class="PhoshStatusPage" id="status_page">
++    <property name="visible">1</property>
++    <property name="title" translatable="yes">Contact Card</property>
++    <property name="content">content</property>
++    <property name="footer">footer</property>
++  </object>
++  <object class="GtkBox" id="content">
++    <property name="visible">1</property>
++    <property name="orientation">vertical</property>
++    <property name="spacing">12</property>
++    <child>
++      <object class="GtkStack" id="stack">
++        <property name="visible">1</property>
++        <property name="vhomogeneous">0</property>
++        <property name="transition-type">crossfade</property>
++        <!-- Nothing runs: the two choices -->
++        <child>
++          <object class="GtkListBox" id="choices">
++            <property name="visible">1</property>
++            <property name="selection-mode">none</property>
++            <property name="hexpand">1</property>
++            <signal name="row-activated" handler="on_choice_activated" object="PhoshCardshareQuickSetting" swapped="yes"/>
++            <style>
++              <class name="content"/>
++            </style>
++            <child>
++              <object class="HdyActionRow" id="share_row">
++                <property name="visible">1</property>
++                <property name="activatable">1</property>
++                <property name="icon-name">send-to-symbolic</property>
++                <property name="title" translatable="yes">Share My Card</property>
++                <property name="subtitle-lines">1</property>
++              </object>
++            </child>
++            <child>
++              <object class="HdyActionRow" id="receive_row">
++                <property name="visible">1</property>
++                <property name="activatable">1</property>
++                <property name="icon-name">contact-new-symbolic</property>
++                <property name="title" translatable="yes">Receive a Card</property>
++                <property name="subtitle" translatable="yes">Over NFC or Bluetooth</property>
++              </object>
++            </child>
++          </object>
++          <packing>
++            <property name="name">idle</property>
++          </packing>
++        </child>
++        <!-- Sharing: the card as a QR code, NFC at the same time -->
++        <child>
++          <object class="GtkBox">
++            <property name="visible">1</property>
++            <property name="orientation">vertical</property>
++            <property name="spacing">12</property>
++            <child>
++              <object class="GtkImage" id="qr_image">
++                <property name="visible">1</property>
++                <property name="halign">center</property>
++                <style>
++                  <class name="cardshare-qr"/>
++                </style>
++              </object>
++            </child>
++            <child>
++              <object class="GtkLabel" id="share_hint">
++                <property name="visible">1</property>
++                <property name="wrap">1</property>
++                <property name="justify">center</property>
++              </object>
++            </child>
++          </object>
++          <packing>
++            <property name="name">sharing</property>
++          </packing>
++        </child>
++        <!-- Receiving: NFC and Bluetooth wait for a card -->
++        <child>
++          <object class="GtkBox">
++            <property name="visible">1</property>
++            <property name="orientation">vertical</property>
++            <property name="spacing">12</property>
++            <child>
++              <object class="GtkImage">
++                <property name="visible">1</property>
++                <property name="icon-name">contact-card-symbolic</property>
++                <property name="pixel-size">64</property>
++                <style>
++                  <class name="dim-label"/>
++                </style>
++              </object>
++            </child>
++            <child>
++              <object class="GtkLabel" id="receive_hint">
++                <property name="visible">1</property>
++                <property name="wrap">1</property>
++                <property name="justify">center</property>
++              </object>
++            </child>
++          </object>
++          <packing>
++            <property name="name">receiving</property>
++          </packing>
++        </child>
++      </object>
++    </child>
++    <!-- Time left, more time, stop -->
++    <child>
++      <object class="GtkBox" id="session_box">
++        <property name="visible">0</property>
++        <property name="orientation">vertical</property>
++        <property name="spacing">6</property>
++        <child>
++          <object class="GtkProgressBar" id="progress">
++            <property name="visible">1</property>
++          </object>
++        </child>
++        <child>
++          <object class="GtkBox">
++            <property name="visible">1</property>
++            <property name="spacing">6</property>
++            <child>
++              <object class="GtkLabel" id="remaining_label">
++                <property name="visible">1</property>
++                <property name="hexpand">1</property>
++                <property name="xalign">0</property>
++                <style>
++                  <class name="dim-label"/>
++                  <class name="numeric"/>
++                </style>
++              </object>
++            </child>
++            <child>
++              <object class="GtkButton">
++                <property name="visible">1</property>
++                <property name="label" translatable="yes">+30 s</property>
++                <signal name="clicked" handler="on_extend_clicked" object="PhoshCardshareQuickSetting" swapped="yes"/>
++              </object>
++            </child>
++            <child>
++              <object class="GtkButton">
++                <property name="visible">1</property>
++                <property name="label" translatable="yes">Stop</property>
++                <signal name="clicked" handler="on_stop_clicked" object="PhoshCardshareQuickSetting" swapped="yes"/>
++              </object>
++            </child>
++          </object>
++        </child>
++      </object>
++    </child>
++    <!-- Cards that came in, until added or dismissed -->
++    <child>
++      <object class="GtkListBox" id="received_list">
++        <property name="visible">0</property>
++        <property name="selection-mode">none</property>
++        <property name="hexpand">1</property>
++        <style>
++          <class name="content"/>
++        </style>
++      </object>
++    </child>
++    <child>
++      <object class="GtkLabel" id="locked_label">
++        <property name="visible">0</property>
++        <property name="wrap">1</property>
++        <property name="xalign">0</property>
++        <property name="label" translatable="yes">Unlock the phone to share or receive a card</property>
++        <style>
++          <class name="dim-label"/>
++        </style>
++      </object>
++    </child>
++    <child>
++      <object class="GtkLabel" id="message_label">
++        <property name="visible">0</property>
++        <property name="wrap">1</property>
++        <property name="xalign">0</property>
++        <style>
++          <class name="dim-label"/>
++        </style>
++      </object>
++    </child>
++  </object>
++  <object class="GtkButton" id="footer">
++    <property name="visible">1</property>
++    <property name="hexpand">1</property>
++    <property name="focus-on-click">0</property>
++    <property name="action-name">panel.launch-panel</property>
++    <property name="action-target">(&quot;contact-card&quot;, [&lt;&quot;&quot;&gt;])</property>
++    <child>
++      <object class="GtkLabel">
++        <property name="visible">1</property>
++        <property name="ellipsize">end</property>
++        <property name="label" translatable="yes">Card Settings</property>
++      </object>
++    </child>
++  </object>
++</interface>
+diff --git a/plugins/meson.build b/plugins/meson.build
+index 184e944d..8825993b 100644
+--- a/plugins/meson.build
++++ b/plugins/meson.build
+@@ -69,6 +69,7 @@ lockscreen_plugins = [
+ 
+ quick_setting_plugins = [
+   'caffeine-quick-setting',
++  'cardshare-quick-setting',
+   'cast-quick-setting',
+   'dark-mode-quick-setting',
+   'desktop-vnc-quick-setting',
+diff --git a/po/POTFILES.in b/po/POTFILES.in
+index 6407fdb8..6ccfeaf7 100644
+--- a/po/POTFILES.in
++++ b/po/POTFILES.in
+@@ -124,6 +124,8 @@ plugins/caffeine-quick-setting/qs.ui
+ plugins/caffeine-quick-setting/prefs/caffeine-quick-setting-prefs.c
+ plugins/caffeine-quick-setting/prefs/prefs.ui
+ plugins/camera-status-icon/si.ui
++plugins/cardshare-quick-setting/cardshare-quick-setting.c
++plugins/cardshare-quick-setting/qs.ui
+ plugins/dark-mode-quick-setting/dark-mode-quick-setting.c
+ plugins/emergency-info/emergency-info.c
+ plugins/emergency-info/emergency-info.ui
+diff --git a/po/de.po b/po/de.po
+index 46fc8c77..3dbfe847 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1500,3 +1500,106 @@ msgstr "Lautstärke"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Lautstärke nach Art des Tons"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Visitenkarte"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Visitenkarte"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Visitenkarte teilen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Karte empfangen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Über NFC oder Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Stopp"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Entsperre das Telefon, um eine Karte zu teilen oder zu empfangen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Karteneinstellungen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Zu Kontakten hinzufügen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Verwerfen"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "noch %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Noch keine Karte gewählt"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Halte das andere Telefon an die Rückseite dieses Telefons oder lass es den Code scannen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Lass das andere Telefon den Code scannen"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Halte eine NFC-Karte an die Rückseite des Telefons. Von einem anderen Telefon teile den Kontakt über Bluetooth mit „%s“."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Halte eine NFC-Karte an die Rückseite des Telefons"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Weder NFC noch Bluetooth sind verfügbar"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "„%s“ zu Kontakten hinzugefügt"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Deine Karte wurde gelesen"
+diff --git a/po/es.po b/po/es.po
+index ab5b42b5..f70107c5 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -814,3 +814,106 @@ msgstr "Volumen"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Volumen de cada tipo de sonido"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Mi tarjeta"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Tarjeta de contacto"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Compartir mi tarjeta"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Recibir una tarjeta"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Por NFC o Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Detener"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Desbloquea el teléfono para compartir o recibir una tarjeta"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Ajustes de la tarjeta"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Añadir a Contactos"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Descartar"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "quedan %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Aún no hay tarjeta elegida"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Acerca el otro teléfono a la parte trasera de este o deja que escanee el código"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Deja que el otro teléfono escanee el código"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Acerca una tarjeta NFC a la parte trasera del teléfono. Desde otro teléfono, comparte el contacto por Bluetooth con «%s»."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Acerca una tarjeta NFC a la parte trasera del teléfono"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Ni NFC ni Bluetooth están disponibles"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "«%s» añadido a Contactos"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Se ha leído tu tarjeta"
+diff --git a/po/fr.po b/po/fr.po
+index e4649758..f566a982 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1162,3 +1162,106 @@ msgstr "Volume"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Volume de chaque type de son"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Ma carte"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Carte de visite"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Partager ma carte"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Recevoir une carte"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Par NFC ou Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Arrêter"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Déverrouillez le téléphone pour partager ou recevoir une carte"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Réglages de la carte"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Ajouter aux contacts"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Ignorer"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "encore %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Aucune carte choisie"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Approchez l’autre téléphone du dos de celui-ci ou laissez-le scanner le code"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Laissez l’autre téléphone scanner le code"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Approchez une carte NFC du dos du téléphone. Depuis un autre téléphone, partagez le contact par Bluetooth avec « %s »."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Approchez une carte NFC du dos du téléphone"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Ni le NFC ni le Bluetooth ne sont disponibles"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "« %s » ajouté aux contacts"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Votre carte a été lue"
+diff --git a/po/it.po b/po/it.po
+index 7966502d..6ac43357 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -896,3 +896,106 @@ msgstr "Volume"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Volume di ogni tipo di suono"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Il mio biglietto"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Biglietto da visita"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Condividi il mio biglietto"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Ricevi un biglietto"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Tramite NFC o Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Ferma"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Sblocca il telefono per condividere o ricevere un biglietto"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Impostazioni del biglietto"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Aggiungi ai contatti"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Scarta"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "ancora %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Nessun biglietto scelto"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Avvicina l’altro telefono al retro di questo o lascia che scansioni il codice"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Lascia che l’altro telefono scansioni il codice"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Avvicina una carta NFC al retro del telefono. Da un altro telefono, condividi il contatto tramite Bluetooth con «%s»."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Avvicina una carta NFC al retro del telefono"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Né NFC né Bluetooth sono disponibili"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "«%s» aggiunto ai contatti"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Il tuo biglietto è stato letto"
+diff --git a/po/nl.po b/po/nl.po
+index cb3c3481..814d1291 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1507,3 +1507,106 @@ msgstr "Volume"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Volume per soort geluid"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Mijn kaartje"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Visitekaartje"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Mijn kaartje delen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Kaartje ontvangen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Via NFC of Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Stoppen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Ontgrendel de telefoon om een kaartje te delen of te ontvangen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Kaartinstellingen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Toevoegen aan Contacten"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Negeren"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "nog %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Nog geen kaartje gekozen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Houd de andere telefoon tegen de achterkant van deze of laat hem de code scannen"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Laat de andere telefoon de code scannen"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Houd een NFC-kaart tegen de achterkant van de telefoon. Deel vanaf een andere telefoon het contact via Bluetooth met ‘%s’."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Houd een NFC-kaart tegen de achterkant van de telefoon"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "NFC en Bluetooth zijn allebei niet beschikbaar"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "‘%s’ toegevoegd aan Contacten"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Je kaartje is gelezen"
+diff --git a/po/pl.po b/po/pl.po
+index 16f34857..4887e0c8 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1471,3 +1471,106 @@ msgstr "Głośność"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Głośność każdego rodzaju dźwięku"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Moja wizytówka"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Wizytówka"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Udostępnij moją wizytówkę"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Odbierz wizytówkę"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Przez NFC lub Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Zatrzymaj"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Odblokuj telefon, aby udostępnić lub odebrać wizytówkę"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Ustawienia wizytówki"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Dodaj do kontaktów"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Odrzuć"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "jeszcze %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Nie wybrano wizytówki"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Przyłóż drugi telefon do tyłu tego lub pozwól mu zeskanować kod"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Pozwól drugiemu telefonowi zeskanować kod"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Przyłóż kartę NFC do tyłu telefonu. Z innego telefonu udostępnij kontakt przez Bluetooth do „%s”."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Przyłóż kartę NFC do tyłu telefonu"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Ani NFC, ani Bluetooth nie są dostępne"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "Dodano „%s” do kontaktów"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Twoja wizytówka została odczytana"
+diff --git a/po/pt.po b/po/pt.po
+index 6da0a876..355ba144 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1457,3 +1457,106 @@ msgstr "Volume"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Volume de cada tipo de som"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "O meu cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Cartão de visita"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Partilhar o meu cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Receber um cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Por NFC ou Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Parar"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Desbloqueie o telemóvel para partilhar ou receber um cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Definições do cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Adicionar aos contactos"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Descartar"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "faltam %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Nenhum cartão escolhido"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Encoste o outro telemóvel à parte de trás deste ou deixe-o ler o código"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Deixe o outro telemóvel ler o código"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Encoste um cartão NFC à parte de trás do telemóvel. Noutro telemóvel, partilhe o contacto por Bluetooth com «%s»."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Encoste um cartão NFC à parte de trás do telemóvel"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Nem o NFC nem o Bluetooth estão disponíveis"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "«%s» adicionado aos contactos"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "O seu cartão foi lido"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 05d1e80a..86d2282b 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1549,3 +1549,106 @@ msgstr "Volume"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Volume de cada tipo de som"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Meu cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Cartão de visita"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Compartilhar meu cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Receber um cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "Por NFC ou Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Parar"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Desbloqueie o celular para compartilhar ou receber um cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Configurações do cartão"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Adicionar aos contatos"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Descartar"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "faltam %u s"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Nenhum cartão escolhido"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Encoste o outro celular na parte de trás deste ou deixe-o ler o código"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Deixe o outro celular ler o código"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Encoste um cartão NFC na parte de trás do celular. Em outro celular, compartilhe o contato por Bluetooth com “%s”."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Encoste um cartão NFC na parte de trás do celular"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Nem o NFC nem o Bluetooth estão disponíveis"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "“%s” adicionado aos contatos"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Seu cartão foi lido"
+diff --git a/po/ru.po b/po/ru.po
+index 1d528765..b3a01c48 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1568,3 +1568,106 @@ msgstr "Громкость"
+ #: src/volume-osd.c
+ msgid "Volume of each kind of sound"
+ msgstr "Громкость для каждого типа звука"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "My Card"
++msgstr "Моя визитка"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Contact Card"
++msgstr "Визитка"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Share My Card"
++msgstr "Поделиться визиткой"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Receive a Card"
++msgstr "Получить визитку"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Over NFC or Bluetooth"
++msgstr "По NFC или Bluetooth"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "+30 s"
++msgstr "+30 с"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Stop"
++msgstr "Стоп"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Unlock the phone to share or receive a card"
++msgstr "Разблокируйте телефон, чтобы поделиться визиткой или получить её"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/qs.ui
++msgid "Card Settings"
++msgstr "Настройки визитки"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Add to Contacts"
++msgstr "Добавить в контакты"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Dismiss"
++msgstr "Отклонить"
++
++#. Plinius: contact card quick setting; the tile while sharing or receiving, short (the tile is narrow)
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "%u s left"
++msgstr "ещё %u с"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "No card chosen yet"
++msgstr "Визитка не выбрана"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold the other phone to the back of this one, or let it scan the code"
++msgstr "Приложите другой телефон к задней стороне этого или дайте ему отсканировать код"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Let the other phone scan the code"
++msgstr "Дайте другому телефону отсканировать код"
++
++#. Plinius: contact card quick setting; %s is the phone's Bluetooth name
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "Hold an NFC card to the back of the phone. From another phone, share the contact over Bluetooth to “%s”."
++msgstr "Приложите NFC-карту к задней стороне телефона. С другого телефона отправьте контакт по Bluetooth на «%s»."
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Hold an NFC card to the back of the phone"
++msgstr "Приложите NFC-карту к задней стороне телефона"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Neither NFC nor Bluetooth is available"
++msgstr "Ни NFC, ни Bluetooth недоступны"
++
++#. Plinius: contact card quick setting; %s is the name of a received contact
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++#, c-format
++msgid "“%s” added to Contacts"
++msgstr "«%s» добавлен в контакты"
++
++#. Plinius: contact card quick setting
++#: plugins/cardshare-quick-setting/cardshare-quick-setting.c
++msgid "Your card was read"
++msgstr "Ваша визитка прочитана"

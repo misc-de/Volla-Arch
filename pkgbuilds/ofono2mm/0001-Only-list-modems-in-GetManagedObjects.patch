@@ -1,0 +1,52 @@
+From fd5bd799aca3ace2d5836b1d96d9e7ad10034f9b Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 09:47:45 +0100
+Subject: [PATCH] Only list modems in GetManagedObjects
+
+ModemManager's ObjectManager only lists modems; SIMs, bearers, calls and
+SMS are plain objects. dbus-next lists every exported object below the
+path, so libmm-glib turned SIMs into modem objects without a Modem
+interface. Clients that track the first object, like Phosh, then showed
+no modem at random, depending on the hash order.
+---
+ main.py | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/main.py b/main.py
+index ff7d102..9a3c3f3 100755
+--- a/main.py
++++ b/main.py
+@@ -15,6 +15,21 @@ from ofono2mm.utils import async_locked
+ 
+ has_bus = False
+ 
++class ModemManagerBus(MessageBus):
++    # ModemManager's ObjectManager only lists modems; SIMs, bearers, calls and SMS are plain
++    # objects next to it. dbus-next lists every object below the path, and libmm-glib takes
++    # each of them for a modem: clients that track the first one (Phosh) may get a SIM and
++    # then see no modem at all. Answer GetManagedObjects with the modems only.
++    def _default_get_managed_objects_handler(self, msg, send_reply):
++        exports = self._path_exports
++        self._path_exports = {path: interfaces for path, interfaces in exports.items()
++                              if path.startswith('/org/freedesktop/ModemManager1/Modem/')}
++        try:
++            # Collects the objects synchronously, only property values may arrive later
++            super()._default_get_managed_objects_handler(msg, send_reply)
++        finally:
++            self._path_exports = exports
++
+ class MMInterface(ServiceInterface):
+     def __init__(self, loop, bus):
+         super().__init__('org.freedesktop.ModemManager1')
+@@ -159,7 +174,7 @@ async def main():
+ 
+     Logger.DEBUG = args.debug
+ 
+-    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
++    bus = await ModemManagerBus(bus_type=BusType.SYSTEM).connect()
+     loop = asyncio.get_running_loop()
+     mm_manager_interface = MMInterface(loop, bus)
+     bus.export('/org/freedesktop/ModemManager1', mm_manager_interface)
+-- 
+2.55.0
+

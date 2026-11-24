@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1793d1"/>
+      <stop offset="1" stop-color="#1072a6"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="12" width="112" height="108" rx="24" fill="#0b4f75"/>
+  <rect x="8" y="8" width="112" height="106" rx="24" fill="url(#bg)"/>
+  <!-- A floppy disk with a DOS prompt on its label -->
+  <path d="M34 22h56l10 10v60a6 6 0 0 1-6 6H34a6 6 0 0 1-6-6V28a6 6 0 0 1 6-6z" fill="#241f31"/>
+  <rect x="44" y="22" width="38" height="24" fill="#c0bfbc"/>
+  <rect x="68" y="26" width="8" height="16" fill="#241f31"/>
+  <rect x="36" y="56" width="56" height="36" rx="3" fill="#fff"/>
+  <path d="M45 65l8 7-8 7" fill="none" stroke="#1793d1" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="57" y="77" width="15" height="4.5" rx="1" fill="#1793d1"/>
+</svg>

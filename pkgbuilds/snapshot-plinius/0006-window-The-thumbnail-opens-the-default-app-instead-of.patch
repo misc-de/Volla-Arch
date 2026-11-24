@@ -1,0 +1,79 @@
+From 83177e1656ae20820a116f8e7df3314020d3df30 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 18:36:27 +0100
+Subject: [PATCH] window: The thumbnail opens the default app instead of the
+ gallery
+
+The thumbnail next to the shutter button opened Snapshot's own gallery.
+Where a separate gallery app handles pictures and videos, open the newest
+item with the default app for its type instead, as "Open in" in the
+gallery already does, and no longer show the built-in gallery. Without an
+app for the type a toast says so.
+
+The gallery widget stays: it keeps the list of items the thumbnail shows.
+---
+ src/widgets/gallery.rs | 17 +++++++++++++++++
+ src/widgets/window.rs  | 19 +++++++------------
+ 2 files changed, 24 insertions(+), 12 deletions(-)
+
+diff --git a/src/widgets/gallery.rs b/src/widgets/gallery.rs
+index 1496c6b..4470a4c 100644
+--- a/src/widgets/gallery.rs
++++ b/src/widgets/gallery.rs
+@@ -239,6 +239,23 @@ impl Gallery {
+         }
+     }
+ 
++    /// Opens the newest picture or video with the system's default app for its type,
++    /// e.g. a separate gallery app. Fails if there is no item or no app for it.
++    pub async fn open_newest_with_system(&self) -> anyhow::Result<()> {
++        let imp = self.imp();
++
++        let Some(item) = imp.sliding_view.pages().into_iter().next() else {
++            anyhow::bail!("The gallery has no items");
++        };
++        let file = item.file();
++        let launcher = gtk::FileLauncher::new(Some(&file));
++        let root = self.root();
++        let window = root.and_downcast_ref::<gtk::Window>();
++        launcher.launch_future(window).await?;
++
++        Ok(())
++    }
++
+     pub fn items(&self) -> Vec<crate::GalleryItem> {
+         self.imp().sliding_view.pages()
+     }
+diff --git a/src/widgets/window.rs b/src/widgets/window.rs
+index 2f8e65c..c5d98dc 100644
+--- a/src/widgets/window.rs
++++ b/src/widgets/window.rs
+@@ -119,18 +119,13 @@ mod imp {
+             klass.install_action("win.about", None, |window, _, _| {
+                 window.show_about_dialog();
+             });
+-            klass.install_action("win.toggle-gallery", None, |window, _, _| {
+-                let imp = window.imp();
+-
+-                if imp
+-                    .navigation_view
+-                    .visible_page()
+-                    .is_some_and(|page| page == *imp.camera_page)
+-                {
+-                    imp.navigation_view.push(&*imp.gallery_page);
+-                    window.imp().gallery.open();
+-                } else {
+-                    imp.navigation_view.pop();
++            // The thumbnail opens the newest picture or video with the default app for
++            // its type; Snapshot's own gallery is no longer shown. The gallery widget
++            // still keeps the list of items for the thumbnail.
++            klass.install_action_async("win.toggle-gallery", None, async |window, _, _| {
++                if let Err(err) = window.imp().gallery.open_newest_with_system().await {
++                    log::error!("Could not open the newest item with the default app: {err}");
++                    window.send_toast(&gettext("No app to open pictures"));
+                 }
+             });
+             klass.install_action("win.toggle-guidelines", None, |window, _, _| {
+-- 
+2.56.0
+

@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 17:28:13 +0100
+Subject: [PATCH] input-method-relay: The OSK only for the phone's own panel
+
+With the desktop over VNC as a second screen the OSK showed up on that
+screen: the OSK's layer surface comes without an output, and phoc put it
+where the cursor was. A field on the desktop also unfolded the OSK, as
+GTK 4 asks for the input panel on a click as well, while that screen has
+a keyboard of its own.
+
+The OSK's layer surface (namespace "osk") without an output goes to the
+built-in panel now, and a text input only activates the input method
+when its surface is shown on the built-in panel. Without a built-in
+panel, or for a surface on no screen yet, nothing changes.
+---
+ src/input-method-relay.c | 34 ++++++++++++++++++++++++++++++++++
+ src/layer-shell.c        |  9 +++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/src/input-method-relay.c b/src/input-method-relay.c
+index 9811eac4..a43aa65a 100644
+--- a/src/input-method-relay.c
++++ b/src/input-method-relay.c
+@@ -2,6 +2,8 @@
+ 
+ #include "phoc-config.h"
+ 
++#include "desktop.h"
++#include "output.h"
+ #include "seat.h"
+ #include "server.h"
+ #include "input-method-relay.h"
+@@ -227,11 +229,43 @@ relay_send_im_done (PhocInputMethodRelay *relay, struct wlr_text_input_v3 *input
+ }
+ 
+ 
++/*
++ * The OSK is for fields on the phone's own panel. A field shown only on another screen (the
++ * desktop over VNC) is typed into with that screen's keyboard, and the OSK, which sits on the
++ * phone, would cover the phone for nothing. Without a built-in panel, or for a surface that is
++ * on no screen yet, everything stays as before.
++ */
++static gboolean
++surface_wants_osk (struct wlr_surface *surface)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  PhocOutput *builtin = phoc_desktop_get_builtin_output (desktop);
++  struct wlr_surface_output *surface_output;
++  gboolean elsewhere = FALSE;
++
++  if (!surface || !builtin)
++    return TRUE;
++
++  wl_list_for_each (surface_output, &surface->current_outputs, link) {
++    if (surface_output->output == builtin->wlr_output)
++      return TRUE;
++    elsewhere = TRUE;
++  }
++
++  return !elsewhere;
++}
++
++
+ static void
+ activate_osk (PhocTextInput *text_input)
+ {
+   PhocInputMethodRelay *relay = text_input->relay;
+ 
++  if (!surface_wants_osk (text_input->input->focused_surface)) {
++    g_debug ("Text input on another screen than the built-in panel, no OSK");
++    return;
++  }
++
+   wlr_input_method_v2_send_activate (relay->input_method);
+   relay_send_im_done (relay, text_input->input);
+ 
+diff --git a/src/layer-shell.c b/src/layer-shell.c
+index 0d96a598..c06d2b0d 100644
+--- a/src/layer-shell.c
++++ b/src/layer-shell.c
+@@ -397,6 +397,15 @@ phoc_handle_layer_shell_surface (struct wl_listener *listener, void *data)
+   PhocDesktop *desktop = wl_container_of (listener, desktop, layer_shell_surface);
+   PhocLayerSurface *self;
+ 
++  /* The OSK belongs to the phone's own panel: with a second screen (the desktop over VNC) the
++   * cursor can be over that one, but nobody taps keys there */
++  if (!wlr_layer_surface->output && g_strcmp0 (wlr_layer_surface->namespace, "osk") == 0) {
++    PhocOutput *builtin = phoc_desktop_get_builtin_output (desktop);
++
++    if (builtin && builtin->wlr_output->enabled)
++      wlr_layer_surface->output = builtin->wlr_output;
++  }
++
+   if (!wlr_layer_surface->output) {
+     PhocSeat *seat = phoc_server_get_last_active_seat (phoc_server_get_default ());
+     g_assert (PHOC_IS_SEAT (seat)); /* Technically speaking we should handle this case */
+-- 
+2.56.0
+

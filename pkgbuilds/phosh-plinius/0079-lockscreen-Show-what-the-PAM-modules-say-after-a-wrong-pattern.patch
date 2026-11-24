@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 09 Nov 2026 12:59:08 +0100
+Subject: [PATCH] lockscreen: Show what the PAM modules say after a wrong
+ pattern
+
+Plinius: wrong patterns now count with plinius-pinguard like wrong PINs.
+After a wrong pattern the lock screen showed "Wrong Pattern" and two
+seconds later "Draw Pattern" again, also while a wait ran in which no
+pattern is checked. Like for the PIN (0013) it now shows what the PAM
+modules said, e.g. "Wrong pattern. Next try in 30 seconds." or "Too many
+wrong tries. Next try in 5 minutes.", and keeps it in view.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/lockscreen.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index b51f0ed2..ec2a150c 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -503,10 +503,15 @@ on_auth_authenticate_ready (GObject *source_object, GAsyncResult *result, gpoint
+   if (authenticated) {
+     g_signal_emit (self, signals[LOCKSCREEN_UNLOCK], 0);
+   } else if (priv->pattern_mode) {
+-    phosh_lockscreen_set_unlock_status (self, g_dgettext (PLINIUS_DOMAIN, "Wrong Pattern"));
++    /* Plinius: what the PAM modules said, e.g. the wait after too many wrong tries */
++    const char *message = phosh_auth_get_message (auth);
++
++    phosh_lockscreen_set_unlock_status (self, message ? message : g_dgettext (PLINIUS_DOMAIN, "Wrong Pattern"));
+     phosh_pattern_pad_show_error (PHOSH_PATTERN_PAD (priv->pattern_pad));
+     g_clear_handle_id (&priv->pattern_status_id, g_source_remove);
+-    priv->pattern_status_id = g_timeout_add_seconds (PATTERN_STATUS_SECONDS, restore_pattern_status, self);
++    /* A wait stays in view: "Draw Pattern" would ask for tries that are not checked */
++    if (message == NULL)
++      priv->pattern_status_id = g_timeout_add_seconds (PATTERN_STATUS_SECONDS, restore_pattern_status, self);
+     /* For a PIN the end of the shake animation does this (finish_shake_entry) */
+     gtk_widget_set_sensitive (GTK_WIDGET (self), TRUE);
+   } else {

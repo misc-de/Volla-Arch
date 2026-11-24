@@ -1,0 +1,266 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 09:40:00 +0100
+Subject: [PATCH] emergency-menu: A swipe sideways closes it
+
+The way back to the lock screen was a small button in the corner. A swipe sideways
+on the dial pad now closes the menu, and on the contacts leads back to the dial pad.
+It goes by the distance, so a tap is never taken for a swipe.
+
+The carousel no longer follows the finger: its position jumped around while it did
+(measured 0.57, 0.83, 1.0, 0.71, 0.39, ...), which flickered between the two pages.
+Moved by the swipe it animates smoothly.
+
+That swipe of the carousel was also all that kept a finger sliding across a contact
+from calling that number when lifted on the row. So a row and the call button now
+compare where the finger went down and came up, and a swipe never places a call.
+
+PhoshSwipeAwayBin only ignored a swipe when disabled, its tracker went on watching
+the touch points. Now it really is out of the way, as it is for this dialog.
+
+The contacts button gets more room, and the emergency button on the lock screen is
+a transparent red: it is seen when looked for and doesn't shout on every unlock.
+---
+ src/emergency-menu.c      | 95 +++++++++++++++++++++++++++++++++++++++++++++++
+ src/stylesheet/common.css | 21 +++++++++++
+ src/swipe-away-bin.c      |  2 +
+ src/system-modal-dialog.c |  5 +++
+ src/ui/emergency-menu.ui  |  2 +
+ 5 files changed, 125 insertions(+)
+
+diff --git a/src/emergency-menu.c b/src/emergency-menu.c
+index 0c2dd15f..79641342 100644
+--- a/src/emergency-menu.c
++++ b/src/emergency-menu.c
+@@ -55,6 +55,10 @@ struct _PhoshEmergencyMenu {
+   PhoshEmergencyCallsManager   *manager;
+ 
+   HdyCarousel                  *emergency_carousel;
++  GtkGesture                   *swipe_gesture;
++  gboolean                      has_press;
++  double                        press_x;
++  double                        press_y;
+   GtkBox                       *emergency_dialpad_box;
+   GtkBox                       *emergency_info_box;
+   GtkListBox                   *emergency_contacts_list_box;
+@@ -192,13 +196,44 @@ emergency_menu_dispose (GObject *object)
+   PhoshEmergencyMenu *self = PHOSH_EMERGENCY_MENU (object);
+ 
+   g_clear_object (&self->actions);
++  g_clear_object (&self->swipe_gesture);
+ 
+   G_OBJECT_CLASS (phosh_emergency_menu_parent_class)->dispose (object);
+ }
+ 
++/* In logical pixels, how far a swipe has to go, and how far a finger may move for a tap. A swipe
++ * goes by the way and not by the speed, so that a tap is never taken for one. */
++#define SWIPE_DISTANCE    120
++#define TAP_MOVES_AT_MOST  32
++
++
++/*
++ * Plinius: a row or the call button takes a finger lifted anywhere on it for a tap, and a swipe
++ * across them must not place an emergency call. This looks at where the finger went down and came
++ * up, so it holds whatever the gestures made of the touch. The key that activates a row without a
++ * finger has no such position.
++ */
++static gboolean
++was_swipe (PhoshEmergencyMenu *self)
++{
++  g_autoptr (GdkEvent) event = gtk_get_current_event ();
++  double x, y;
++
++  if (!event || !self->has_press || !gdk_event_get_root_coords (event, &x, &y))
++    return FALSE;
++
++  return MAX (ABS (x - self->press_x), ABS (y - self->press_y)) > TAP_MOVES_AT_MOST;
++}
++
++
+ static void
+ on_dialpad_dialed (PhoshEmergencyMenu *self, const char *number)
+ {
++  if (was_swipe (self)) {
++    g_debug ("Not dialing, the finger moved away");
++    return;
++  }
++
+   set_dialing (self, TRUE);
+   phosh_emergency_calls_manager_call (self->manager, number);
+ }
+@@ -212,6 +247,11 @@ on_dialpad_dialed (PhoshEmergencyMenu *self, const char *number)
+ static void
+ on_emergency_contacts_list_box_activated (PhoshEmergencyMenu *self, PhoshEmergencyContactRow* row, GtkListBox* list)
+ {
++  if (was_swipe (self)) {
++    g_debug ("Not calling the contact, the finger moved away");
++    return;
++  }
++
+   set_dialing (self, TRUE);
+   phosh_emergency_contact_row_call (row, self->manager);
+ }
+@@ -315,6 +355,53 @@ fit_dial_pad (GtkWidget *widget, gpointer unused)
+ }
+ 
+ 
++static gboolean
++close_idle_cb (gpointer data)
++{
++  g_signal_emit (data, signals[DONE], 0);
++
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++on_swipe_begin (PhoshEmergencyMenu *self)
++{
++  GtkGestureSingle *single = GTK_GESTURE_SINGLE (self->swipe_gesture);
++  const GdkEvent *event;
++
++  self->has_press = FALSE;
++  event = gtk_gesture_get_last_event (self->swipe_gesture,
++                                      gtk_gesture_single_get_current_sequence (single));
++  if (event)
++    self->has_press = gdk_event_get_root_coords (event, &self->press_x, &self->press_y);
++}
++
++
++/*
++ * A swipe sideways, either way, closes the dial pad and leads back from the contacts to it. The
++ * carousel doesn't follow the finger: measured on the Plinius its position jumps around while it
++ * does (0.57, 0.83, 1.0, 0.71, 0.39, ...), which is what flickered, while it animates smoothly.
++ */
++static void
++on_swipe_end (PhoshEmergencyMenu *self, double x, double y)
++{
++  if (ABS (x) < SWIPE_DISTANCE || ABS (x) < 2 * ABS (y))
++    return;
++
++  if (!gtk_widget_get_sensitive (GTK_WIDGET (self->emergency_carousel)))
++    return;
++
++  if (hdy_carousel_get_position (self->emergency_carousel) >= 0.5) {
++    hdy_carousel_scroll_to (self->emergency_carousel, GTK_WIDGET (self->emergency_dialpad_box));
++    return;
++  }
++
++  /* Closing destroys the menu, not from within the event that is going on */
++  g_idle_add_full (G_PRIORITY_DEFAULT, close_idle_cb, g_object_ref (self), g_object_unref);
++}
++
++
+ static void
+ phosh_emergency_menu_init (PhoshEmergencyMenu *self)
+ {
+@@ -326,6 +413,14 @@ phosh_emergency_menu_init (PhoshEmergencyMenu *self)
+   gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (self->emergency_dialpad_box)),
+                                "phosh-emergency-dial");
+ 
++  /* Capture: it sees a swipe that starts on a key or a row too, a tap goes on to them as ever */
++  hdy_carousel_set_interactive (self->emergency_carousel, FALSE);
++  self->swipe_gesture = gtk_gesture_drag_new (GTK_WIDGET (self));
++  gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (self->swipe_gesture),
++                                              GTK_PHASE_CAPTURE);
++  g_signal_connect_swapped (self->swipe_gesture, "drag-begin", G_CALLBACK (on_swipe_begin), self);
++  g_signal_connect_swapped (self->swipe_gesture, "drag-end", G_CALLBACK (on_swipe_end), self);
++
+   self->actions = g_simple_action_group_new ();
+   g_action_map_add_action_entries (G_ACTION_MAP (self->actions),
+                                    entries, G_N_ELEMENTS (entries),
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index eb8aa1a6..8da35ffc 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -599,6 +599,27 @@ phosh-lockscreen button.pin-emergency {
+   padding: 16px 20px;
+ }
+ 
++/* Plinius: 5px more than a button has by itself, the contacts stand alone in the menu */
++.phosh-emergency-dial .emergency-contacts-button {
++  padding: 10px 19px;
++}
++
++/* Plinius: there when needed, without shouting on every unlock */
++phosh-lockscreen button.pin-emergency,
++phosh-lockscreen button.pin-emergency:hover,
++phosh-lockscreen button.pin-emergency:focus,
++phosh-lockscreen button.pin-emergency:focus:hover {
++  background-image: none;
++  background-color: alpha(@phosh_emergency_button_bg_color, 0.35);
++  box-shadow: none;
++  color: @phosh_emergency_button_fg_color;
++}
++
++phosh-lockscreen button.pin-emergency:active {
++  background-image: none;
++  background-color: alpha(@phosh_emergency_button_bg_color, 0.6);
++}
++
+ phosh-lockscreen button.pin-submit > label {
+   /* We have contrast due to the fb-color mixin above so 0.3 is enough */
+   text-shadow: 1px 1px 1.1px rgba(0, 0, 0, 0.3);
+diff --git a/src/swipe-away-bin.c b/src/swipe-away-bin.c
+index bf9d3c46..d587b0c6 100644
+--- a/src/swipe-away-bin.c
++++ b/src/swipe-away-bin.c
+@@ -524,6 +524,8 @@ phosh_swipe_away_bin_set_enabled (PhoshSwipeAwayBin *self,
+     return;
+ 
+   self->enabled = enabled;
++  /* Plinius: not only ignore a swipe, a disabled bin must not be in the way of its content */
++  hdy_swipe_tracker_set_enabled (self->tracker, enabled);
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ENABLED]);
+ }
+ 
+diff --git a/src/system-modal-dialog.c b/src/system-modal-dialog.c
+index 3a57f834..f3c30ea0 100644
+--- a/src/system-modal-dialog.c
++++ b/src/system-modal-dialog.c
+@@ -90,6 +90,7 @@ typedef struct {
+   GtkWidget      *lbl_title;
+   GtkWidget      *box_dialog;
+   GtkWidget      *clamp;
++  GtkWidget      *swipe_bin;
+   GtkWidget      *box_buttons;
+ 
+   gboolean        fade_out;
+@@ -218,6 +219,7 @@ phosh_system_modal_dialog_class_init (PhoshSystemModalDialogClass *klass)
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, lbl_title);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, box_dialog);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, clamp);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, swipe_bin);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, box_buttons);
+   gtk_widget_class_bind_template_callback (widget_class, on_removed_by_swipe);
+ 
+@@ -401,6 +403,9 @@ phosh_system_modal_dialog_fill_screen (PhoshSystemModalDialog *self)
+   gtk_widget_set_margin_top (priv->box_dialog, 0);
+   gtk_widget_set_margin_bottom (priv->box_dialog, 0);
+   gtk_style_context_add_class (gtk_widget_get_style_context (priv->box_dialog), "fullscreen");
++
++  /* It has no card left to be moved away. A dialog like this closes in its own way. */
++  phosh_swipe_away_bin_set_enabled (PHOSH_SWIPE_AWAY_BIN (priv->swipe_bin), FALSE);
+ }
+ 
+ 
+diff --git a/src/ui/emergency-menu.ui b/src/ui/emergency-menu.ui
+index a7df74fc..3003ba6a 100644
+--- a/src/ui/emergency-menu.ui
++++ b/src/ui/emergency-menu.ui
+@@ -62,6 +62,7 @@
+                 <signal name="clicked" handler="on_emergency_contacts_button_clicked" swapped="yes"/>
+                 <style>
+                   <class name="circular"/>
++                  <class name="emergency-contacts-button"/>
+                 </style>
+               </object>
+             </child>
+@@ -111,6 +112,7 @@
+             </child>
+             <child>
+               <object class="GtkScrolledWindow">
++                <property name="hscrollbar-policy">never</property>
+                 <property name="visible">1</property>
+                 <child>
+                   <object class="GtkBox">

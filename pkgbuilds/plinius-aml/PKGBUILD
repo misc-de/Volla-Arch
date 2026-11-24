@@ -1,0 +1,36 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-aml
+pkgver=0.1
+pkgrel=1
+pkgdesc="Advanced Mobile Location (ETSI TS 103 625): sends the GNSS position of an emergency call to the emergency services by SMS"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# Listens to oFono for outgoing emergency calls, reads GNSS from gnss-nmea-bridge (its socket
+# belongs to the group geoclue) and sends a data SMS through oFono's SendDataMessage, which only
+# the Sailfish fork has. Countries without an agreed destination get nothing (aml.conf).
+depends=(glib2 ofono-sailfish gnss-nmea-bridge geoclue)
+backup=(etc/plinius-aml/aml.conf)
+source=(plinius-aml.c
+	plinius-aml.service
+	aml.conf
+	LICENSE)
+sha256sums=('fe5d48d320b1b5e07d997456d15be0859a05813f8d00b64e570bc7f1bea155bc'
+	'cfed6d7c8334b514e14ee22a5cca8609abc3fb8940c08e90bb99c44ebb758edc'
+	'56c0214f741ac4aedc4901b2da61439b80380187fa5edd2f5801c32291a5fd73'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-aml plinius-aml.c $(pkg-config --cflags --libs gio-unix-2.0) -lm $LDFLAGS
+}
+
+package() {
+	install -Dm755 plinius-aml -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-aml.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-aml.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 aml.conf -t "$pkgdir/etc/plinius-aml"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

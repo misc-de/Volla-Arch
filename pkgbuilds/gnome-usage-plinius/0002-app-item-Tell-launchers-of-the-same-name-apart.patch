@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 20:10:00 +0100
+Subject: [PATCH] app-item: Tell launchers of the same name apart
+
+The backends of the desktop portal all ship a hidden launcher named
+"Portal" (xdg-desktop-portal-gtk, -phosh, -phrosh, -gnome). With several
+of them running the list showed "Portal" three times and there was no
+way to know which was which.
+
+Launchers that share a name and whose desktop IDs share a beginning now
+get the rest of their ID appended: "Portal-gtk", "Portal-phosh". IDs
+without anything in common (org.mozilla.Thunderbird and a userapp-
+launcher of it) are left alone, the names would only get noisier.
+---
+ src/app-item.vala | 71 +++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 69 insertions(+), 2 deletions(-)
+
+diff --git a/src/app-item.vala b/src/app-item.vala
+index f350a51..31b3635 100644
+--- a/src/app-item.vala
++++ b/src/app-item.vala
+@@ -57,14 +57,18 @@ public class Usage.AppItem : Object {
+     private static HashTable<Process, AppItem> app_for_process;
+     private static HashTable<string, AppInfo> apps_info;
+     private static HashTable<string, AppInfo> appid_map;
++    /* Desktop ID -> the part that tells launchers of the same name apart */
++    private static HashTable<string, string> name_suffix;
+     private AppInfo? app_info = null;
+ 
+     public static void init () {
+         app_for_process = new HashTable<Process, AppItem> (int_hash, int_equal);
+         apps_info = new HashTable<string, AppInfo> (str_hash, str_equal);
+         appid_map = new HashTable<string, AppInfo> (str_hash, str_equal);
++        name_suffix = new HashTable<string, string> (str_hash, str_equal);
+ 
+         var _apps_info = AppInfo.get_all ();
++        find_name_suffixes (_apps_info);
+ 
+         foreach (AppInfo info in _apps_info) {
+             GLib.DesktopAppInfo? dai = info as GLib.DesktopAppInfo;
+@@ -159,6 +163,62 @@ public class Usage.AppItem : Object {
+         return id;
+     }
+ 
++    /* Several launchers can share one name: the backends of the desktop portal
++     * are all called "Portal". Each of them gets the part of its desktop ID
++     * that differs from the others ("xdg-desktop-portal-gtk" -> "gtk"), so
++     * the list shows "Portal-gtk", "Portal-phosh", ... */
++    private static void find_name_suffixes (List<AppInfo> infos) {
++        var by_name = new HashTable<string, GenericArray<string>> (str_hash, str_equal);
++
++        foreach (AppInfo info in infos) {
++            string? id = info.get_id ();
++            string? name = info.get_display_name ();
++
++            if (id == null || name == null)
++                continue;
++            if (((!) id).has_suffix (".desktop"))
++                id = ((!) id).substring (0, ((!) id).length - 8);
++
++            var ids = by_name[(!) name];
++            if (ids == null) {
++                ids = new GenericArray<string> ();
++                by_name.insert ((!) name, ids);
++            }
++            ids.add ((!) id);
++        }
++
++        by_name.foreach ((name, ids) => {
++            if (ids.length < 2)
++                return;
++
++            /* Longest common prefix of the IDs, cut back to a separator */
++            string prefix = ids[0];
++            for (int i = 1; i < ids.length; i++) {
++                int n = 0;
++                while (n < prefix.length && n < ids[i].length && prefix[n] == ids[i][n])
++                    n++;
++                prefix = prefix.substring (0, n);
++            }
++            int cut = prefix.length;
++            while (cut > 0) {
++                char c = prefix[cut - 1];
++                if (c == '-' || c == '.' || c == '_')
++                    break;
++                cut--;
++            }
++            /* Nothing in common (org.mozilla.Thunderbird and a userapp-
++             * launcher of it): the IDs would only add noise */
++            if (cut == 0)
++                return;
++
++            foreach (string id in ids.data) {
++                string suffix = id.substring (cut);
++                if (suffix != "")
++                    name_suffix.insert (id, suffix);
++            }
++        });
++    }
++
+     public static AppItem? app_item_for_process (Process process) {
+         return app_for_process.@get (process);
+     }
+@@ -294,9 +354,16 @@ public class Usage.AppItem : Object {
+     }
+ 
+     private string find_display_name () {
+-        if (app_info != null)
++        if (app_info != null) {
++            string? id = app_info.get_id ();
++            if (id != null && ((!) id).has_suffix (".desktop"))
++                id = ((!) id).substring (0, ((!) id).length - 8);
++
++            string? suffix = id != null ? name_suffix[(!) id] : null;
++            if (suffix != null)
++                return "%s-%s".printf (app_info.get_display_name (), (!) suffix);
+             return app_info.get_display_name ();
+-        else
++        } else
+             return representative_cmdline;
+     }
+ 
+-- 
+2.56.0
+

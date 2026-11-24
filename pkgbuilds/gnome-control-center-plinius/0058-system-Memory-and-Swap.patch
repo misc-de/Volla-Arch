@@ -1,0 +1,75 @@
+Plinius: "Memory and Swap" in System.
+
+A row above Hardware opens a page with the switch and size of the swap file, the threshold
+(swappiness), what RAM and swap hold, the largest processes and a button that moves swap back into
+RAM. The page (cc-plinius-swap.*) lives as a separate file in the package directory and is copied
+to panels/system/ in prepare(); without plinius-swap the row stays hidden.
+
+diff --git a/panels/system/cc-system-panel.blp b/panels/system/cc-system-panel.blp
+index 6c48dd071..0882c6aac 100644
+--- a/panels/system/cc-system-panel.blp
++++ b/panels/system/cc-system-panel.blp
+@@ -47,6 +47,14 @@ template $CcSystemPanel: $CcPanel {
+           activated => $on_secure_shell_row_clicked(template);
+         }
+ 
++        // Plinius: title, subtitle and target in cc_plinius_swap_row_setup ()
++        $CcListRow swap_row {
++          icon-name: "drive-harddisk-symbolic";
++          show-arrow: true;
++          action-name: "navigation.push";
++          visible: false;
++        }
++
+         // Plinius: title, subtitle and target in cc_plinius_hardware_row_setup ()
+         $CcListRow hardware_row {
+           icon-name: "phone-symbolic";
+diff --git a/panels/system/cc-system-panel.c b/panels/system/cc-system-panel.c
+index bb4241869..88dddae95 100644
+--- a/panels/system/cc-system-panel.c
++++ b/panels/system/cc-system-panel.c
+@@ -25,6 +25,7 @@
+ 
+ #include "cc-list-row.h"
+ #include "cc-plinius-hardware.h"
++#include "cc-plinius-swap.h"
+ #include "cc-system-panel.h"
+ #include "cc-system-resources.h"
+ #include "cc-systemd-service.h"
+@@ -43,6 +44,7 @@ struct _CcSystemPanel {
+     AdwActionRow *hardware_row;
+     AdwActionRow *region_row;
+     AdwActionRow *remote_desktop_row;
++    AdwActionRow *swap_row;
+ 
+     CcSecureShellPage *secure_shell_dialog;
+     AdwPreferencesGroup *software_updates_group;
+@@ -136,6 +138,7 @@ cc_system_panel_class_init (CcSystemPanelClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, hardware_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, region_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, remote_desktop_row);
++    gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, swap_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, software_updates_group);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, cc_system_page_open_software_update);
+@@ -171,4 +174,8 @@ cc_system_panel_init (CcSystemPanel *self)
+     /* Plinius: chips and firmware versions from the device package */
+     if (cc_plinius_hardware_add_page (CC_PANEL (self)))
+         cc_plinius_hardware_row_setup (self->hardware_row);
++
++    /* Plinius: swap file, threshold and what RAM and swap hold (plinius-swap) */
++    if (cc_plinius_swap_add_page (CC_PANEL (self)))
++        cc_plinius_swap_row_setup (self->swap_row);
+ }
+diff --git a/panels/system/meson.build b/panels/system/meson.build
+index 865c95cbb..5a03f97a9 100644
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -39,6 +39,7 @@ blueprints += custom_target(
+ sources = files(
+   'cc-password-utils.c',
+   'cc-plinius-hardware.c',
++  'cc-plinius-swap.c',
+   'cc-system-panel.c',
+   'cc-systemd-service.c',
+   'about/cc-about-page.c',

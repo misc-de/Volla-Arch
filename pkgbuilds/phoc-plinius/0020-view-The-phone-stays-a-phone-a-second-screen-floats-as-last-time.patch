@@ -1,0 +1,319 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:57:45 +0100
+Subject: [PATCH] view: The phone stays a phone, a second screen floats as last
+ time
+
+With a second screen Phosh switches auto-maximize off for all screens,
+so a window brought from that screen to the phone kept its desktop size,
+and an app started on the second screen opened maximized when it asked
+for it (Firefox restores its last state, often from the phone).
+
+Now each screen keeps its own way:
+
+- The phone's own panel (DSI/DPI) shows toplevels maximized even while
+  docked, like without a second screen.
+- On a second screen a new window of an app floats with the size and
+  position the app's window had there the last time, else with its own
+  size, centered. This is remembered per app id when such a window
+  closes, moves to the phone or loses its screen (e.g. VNC ends), in
+  $XDG_STATE_HOME/phoc/window-geometry.ini.
+- Moving a window to the phone maximizes it, moving it back floats it
+  with the remembered geometry.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/desktop.c |   2 +
+ src/view.c    | 201 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ src/view.h    |   1 +
+ 3 files changed, 199 insertions(+), 5 deletions(-)
+
+diff --git a/src/desktop.c b/src/desktop.c
+index ceda3bf..5596056 100644
+--- a/src/desktop.c
++++ b/src/desktop.c
+@@ -434,6 +434,8 @@ move_to_layout_space_iter (PhocDesktop *self, PhocView *view, gpointer user_data
+   if (wlr_output_layout_intersects (self->layout, NULL, &box))
+     return TRUE;
+ 
++  /* Its screen went away (e.g. the virtual one when VNC ends): keep its geometry there */
++  phoc_view_remember_geometry (view);
+   phoc_view_move (view, data->center_x - box.width / 2, data->center_y - box.height / 2);
+   return TRUE;
+ }
+diff --git a/src/view.c b/src/view.c
+index fb87122..e998f55 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -1165,6 +1165,165 @@ phoc_view_set_fullscreen (PhocView *self, bool fullscreen, PhocOutput *output)
+ }
+ 
+ 
++static bool view_center (PhocView *self, PhocOutput *output);
++
++/* The phone's own panel (DSI/DPI), as opposed to a laptop panel or a second screen */
++static gboolean
++view_output_is_phone (PhocOutput *output)
++{
++  const char *name;
++
++  if (output == NULL)
++    return FALSE;
++
++  name = phoc_output_get_name (output);
++  return name && (g_str_has_prefix (name, "DSI-") || g_str_has_prefix (name, "DPI-"));
++}
++
++/*
++ * Size and position of each app's window on a second screen, kept across
++ * sessions in $XDG_STATE_HOME/phoc/window-geometry.ini (one group per
++ * app id, layout coordinates of the window geometry).
++ */
++static GKeyFile *
++view_geometry_file (const char **path_out)
++{
++  static GKeyFile *file;
++  static char *path;
++
++  if (file == NULL) {
++    path = g_build_filename (g_get_user_state_dir (), "phoc", "window-geometry.ini", NULL);
++    file = g_key_file_new ();
++    g_key_file_load_from_file (file, path, G_KEY_FILE_NONE, NULL);
++  }
++
++  if (path_out)
++    *path_out = path;
++
++  return file;
++}
++
++/**
++ * phoc_view_remember_geometry:
++ * @self: The view
++ *
++ * Remembers the size and position of a floating toplevel for its app id,
++ * to open the app's next window the same way. Callers make sure the view
++ * is on a second screen, not on the phone.
++ */
++void
++phoc_view_remember_geometry (PhocView *self)
++{
++  PhocViewPrivate *priv = phoc_view_get_instance_private (self);
++  g_autoptr (GError) err = NULL;
++  g_autofree char *dir = NULL;
++  const char *app_id = phoc_view_get_app_id (self);
++  const char *path;
++  struct wlr_box geom;
++  GKeyFile *file;
++
++  if (app_id == NULL || *app_id == '\0' || self->parent || !phoc_view_is_floating (self))
++    return;
++
++  if (self->box.width <= 0 || self->box.height <= 0)
++    return;
++
++  phoc_view_get_geometry (self, &geom);
++  file = view_geometry_file (&path);
++  g_key_file_set_integer (file, app_id, "x", self->box.x + geom.x * priv->scale);
++  g_key_file_set_integer (file, app_id, "y", self->box.y + geom.y * priv->scale);
++  g_key_file_set_integer (file, app_id, "width", self->box.width);
++  g_key_file_set_integer (file, app_id, "height", self->box.height);
++
++  dir = g_path_get_dirname (path);
++  g_mkdir_with_parents (dir, 0700);
++  if (!g_key_file_save_to_file (file, path, &err))
++    g_warning ("Failed to save window geometry to %s: %s", path, err->message);
++}
++
++/* The remembered box of the view's app, kept inside the given output */
++static gboolean
++view_lookup_geometry (PhocView *self, PhocOutput *output, struct wlr_box *box)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  const char *app_id = phoc_view_get_app_id (self);
++  struct wlr_box out;
++  GKeyFile *file;
++
++  if (app_id == NULL || *app_id == '\0')
++    return FALSE;
++
++  file = view_geometry_file (NULL);
++  if (!g_key_file_has_group (file, app_id))
++    return FALSE;
++
++  box->x = g_key_file_get_integer (file, app_id, "x", NULL);
++  box->y = g_key_file_get_integer (file, app_id, "y", NULL);
++  box->width = g_key_file_get_integer (file, app_id, "width", NULL);
++  box->height = g_key_file_get_integer (file, app_id, "height", NULL);
++  if (box->width <= 0 || box->height <= 0)
++    return FALSE;
++
++  wlr_output_layout_get_box (desktop->layout, output->wlr_output, &out);
++  if (wlr_box_empty (&out))
++    return FALSE;
++
++  /* A box that does not fit (other screen size, other position) comes centered */
++  box->width = MIN (box->width, out.width);
++  box->height = MIN (box->height, out.height);
++  if (box->x < out.x || box->y < out.y ||
++      box->x + box->width > out.x + out.width ||
++      box->y + box->height > out.y + out.height) {
++    box->x = out.x + (out.width - box->width) / 2;
++    box->y = out.y + (out.height - box->height) / 2;
++  }
++
++  return TRUE;
++}
++
++/*
++ * A window on a second screen floats: with the size and position its app
++ * had there the last time, else with its own size, centered.
++ */
++static void
++view_float_on_output (PhocView *self, PhocOutput *output)
++{
++  PhocViewPrivate *priv = phoc_view_get_instance_private (self);
++  gboolean known;
++  struct wlr_box box, geom;
++
++  known = view_lookup_geometry (self, output, &box);
++
++  if (phoc_view_is_maximized (self) || phoc_view_is_tiled (self)) {
++    priv->state = PHOC_VIEW_STATE_FLOATING;
++    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_STATE]);
++
++    if (priv->toplevel_handle)
++      wlr_foreign_toplevel_handle_v1_set_maximized (priv->toplevel_handle, false);
++
++    PHOC_VIEW_GET_CLASS (self)->set_maximized (self, false);
++    PHOC_VIEW_GET_CLASS (self)->set_tiled (self, false);
++
++    if (!known) {
++      /* Let the client pick its size, center it once it did */
++      phoc_view_resize (self, 0, 0);
++      self->pending_centering = true;
++      return;
++    }
++  }
++
++  if (known) {
++    phoc_view_get_geometry (self, &geom);
++    phoc_view_move_resize (self,
++                           box.x - geom.x * priv->scale,
++                           box.y - geom.y * priv->scale,
++                           box.width, box.height);
++  } else {
++    view_center (self, output);
++  }
++}
++
++
+ bool
+ phoc_view_move_to_next_output (PhocView *self, enum wlr_direction direction)
+ {
+@@ -1199,6 +1358,7 @@ void
+ phoc_view_move_to_output (PhocView *self, PhocOutput *output)
+ {
+   PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  PhocOutput *current;
+   const struct wlr_output_layout_output *l_output;
+   struct wlr_output *new_output;
+   struct wlr_box usable_area;
+@@ -1207,6 +1367,7 @@ phoc_view_move_to_output (PhocView *self, PhocOutput *output)
+   g_assert (PHOC_IS_VIEW (self));
+   g_assert (PHOC_IS_OUTPUT (output));
+ 
++  current = phoc_view_get_output (self);
+   new_output = output->wlr_output;
+   usable_area = output->usable_area;
+   l_output = wlr_output_layout_get (desktop->layout, new_output);
+@@ -1225,6 +1386,22 @@ phoc_view_move_to_output (PhocView *self, PhocOutput *output)
+     return;
+   }
+ 
++  /* With a second screen the phone still shows its windows maximized, the
++   * second screen floating, as each would on its own */
++  if (PHOC_VIEW_GET_CLASS (self)->want_auto_maximize (self) &&
++      !phoc_desktop_get_auto_maximize (desktop)) {
++    if (view_output_is_phone (output)) {
++      if (!view_output_is_phone (current))
++        phoc_view_remember_geometry (self);
++      phoc_view_maximize (self, output);
++      return;
++    }
++    if (view_output_is_phone (current)) {
++      view_float_on_output (self, output);
++      return;
++    }
++  }
++
+   phoc_view_arrange (self, output, TRUE);
+ }
+ 
+@@ -1561,6 +1738,9 @@ phoc_view_unmap (PhocView *self)
+ 
+   bool was_visible = phoc_desktop_view_check_visibility (desktop, self);
+ 
++  if (!desktop->maximize && !view_output_is_phone (phoc_view_get_output (self)))
++    phoc_view_remember_geometry (self);
++
+   phoc_view_damage_whole (self);
+ 
+   wl_list_remove (&priv->surface_new_subsurface.link);
+@@ -1614,20 +1794,29 @@ phoc_view_set_initial_focus (PhocView *self)
+ static void
+ view_place_initially (PhocView *self)
+ {
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+   PhocInput *input = phoc_server_get_input (phoc_server_get_default ());
+-  PhocOutput *target = NULL;
++  PhocOutput *target;
+ 
+   if (self->parent)
+     target = phoc_view_get_output (self->parent);
++  else
++    target = view_output_of_last_press (phoc_input_get_last_active_seat (input));
++
++  /* An app's own window on a second screen floats, as it was there the last
++   * time, even if it asks to start maximized (it may have been on the phone) */
++  if (target && !self->parent && !view_output_is_phone (target) &&
++      !phoc_view_is_fullscreen (self) && !phoc_desktop_get_auto_maximize (desktop) &&
++      PHOC_VIEW_GET_CLASS (self)->want_auto_maximize (self)) {
++    view_float_on_output (self, target);
++    return;
++  }
+ 
+   if (phoc_view_is_floating (self)) {
+     view_center (self, target);
+     return;
+   }
+ 
+-  if (!target)
+-    target = view_output_of_last_press (phoc_input_get_last_active_seat (input));
+-
+   if (target && target != phoc_view_get_output (self))
+     phoc_view_move_to_output (self, target);
+ }
+@@ -2638,7 +2827,9 @@ phoc_view_want_auto_maximize (PhocView *self)
+   PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+   g_assert (PHOC_IS_VIEW (self));
+ 
+-  if (!desktop->maximize)
++  /* With a second screen (docked) the phone's own panel still shows its
++   * windows maximized */
++  if (!desktop->maximize && !view_output_is_phone (phoc_view_get_output (self)))
+     return false;
+ 
+   return PHOC_VIEW_GET_CLASS (self)->want_auto_maximize (self);
+diff --git a/src/view.h b/src/view.h
+index 5831ce9..c00e686 100644
+--- a/src/view.h
++++ b/src/view.h
+@@ -171,6 +171,7 @@ PhocView *            phoc_view_get_root (PhocView *self);
+ void                  phoc_view_move (PhocView *self, double x, double y);
+ bool                  phoc_view_move_to_next_output (PhocView *self, enum wlr_direction direction);
+ void                  phoc_view_move_to_output (PhocView *self, PhocOutput *output);
++void                  phoc_view_remember_geometry (PhocView *self);
+ void                  phoc_view_move_to_corner (PhocView *self, PhocViewCorner corner);
+ void                  phoc_view_move_resize (PhocView *self,
+                                              double    x,

@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 11:30:00 +0100
+Subject: [PATCH] printers: Printer options without options say so and keep
+ back
+
+Plinius: a printer found on the network whose queue CUPS has not set up
+yet, or one that does not answer, gave the options no attributes at all:
+the page stayed empty without a word, and the NULL table of attributes
+tripped an assertion in g_hash_table_ref(). A status page says so now.
+
+The dialog is shown as a page of the window, which hides its back button
+when the header bar brings start buttons of its own (meant for "Cancel").
+"Test Page" sat there, so the page could only be left by a swipe. It is
+at the end of the header bar now.
+---
+ panels/printers/pp-options-dialog.blp | 12 +++++++++++-
+ panels/printers/pp-options-dialog.c   | 15 ++++++++++++++-
+ 2 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/panels/printers/pp-options-dialog.blp b/panels/printers/pp-options-dialog.blp
+index ca288c1..b63fb44 100644
+--- a/panels/printers/pp-options-dialog.blp
++++ b/panels/printers/pp-options-dialog.blp
+@@ -11,7 +11,8 @@ template $PpOptionsDialog: Adw.Dialog {
+ 
+     [top]
+     Adw.HeaderBar {
+-      [start]
++      /* Plinius: "Test Page" at the end, so that the page keeps its back button */
++      [end]
+       Button {
+         /* Translators: This button triggers the printing of a test page. */
+         label: _("_Test Page");
+@@ -38,6 +39,15 @@ template $PpOptionsDialog: Adw.Dialog {
+         child: Adw.Spinner {};
+       }
+ 
++      StackPage {
++        name: "empty-page";
++
++        /* Plinius: no options at all says so; title and text are set in the code */
++        child: Adw.StatusPage empty_page {
++          icon-name: "printer-symbolic";
++        };
++      }
++
+       StackPage {
+         name: "pp-options-page";
+ 
+diff --git a/panels/printers/pp-options-dialog.c b/panels/printers/pp-options-dialog.c
+index 4f50b13..7005aa5 100644
+--- a/panels/printers/pp-options-dialog.c
++++ b/panels/printers/pp-options-dialog.c
+@@ -45,6 +45,7 @@ struct _PpOptionsDialog {
+ 
+     GtkNotebook *notebook;
+     GtkStack *stack;
++    AdwStatusPage *empty_page;
+     AdwWindowTitle *title_widget;
+ 
+     gchar *printer_name;
+@@ -484,6 +485,16 @@ populate_options_real (PpOptionsDialog *self)
+ 
+     /* Show the first option group */
+     gtk_notebook_set_current_page (self->notebook, 0);
++
++    /* Plinius: CUPS gave nothing (a printer found on the network whose queue is not set up yet,
++     * one that cannot be reached): say so instead of an empty page */
++    if (gtk_notebook_get_n_pages (self->notebook) == 0) {
++        adw_status_page_set_title (self->empty_page, g_dgettext ("plinius-control-center", "No Printer Options"));
++        adw_status_page_set_description (self->empty_page,
++                                         g_dgettext ("plinius-control-center",
++                                                     "The printer did not answer. Its options appear once it has been set up, for example by printing a test page."));
++        gtk_stack_set_visible_child_name (self->stack, "empty-page");
++    }
+ }
+ 
+ static void
+@@ -528,7 +539,8 @@ get_ipp_attributes_cb (GHashTable *table, gpointer user_data)
+     if (self->ipp_attributes)
+         g_hash_table_unref (self->ipp_attributes);
+ 
+-    self->ipp_attributes = g_hash_table_ref (table);
++    /* Plinius: NULL when the printer has no queue or does not answer */
++    self->ipp_attributes = table ? g_hash_table_ref (table) : NULL;
+     self->ipp_attributes_set = TRUE;
+ 
+     if (self->ppd_filename_set && self->destination_set) {
+@@ -696,6 +708,7 @@ pp_options_dialog_class_init (PpOptionsDialogClass *klass)
+ 
+     gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, notebook);
+     gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, stack);
++    gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, empty_page);
+     gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, title_widget);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, test_page_cb);
+-- 
+2.56.0
+

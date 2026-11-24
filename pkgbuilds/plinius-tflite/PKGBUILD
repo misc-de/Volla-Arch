@@ -1,0 +1,75 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-tflite
+pkgver=0.1
+pkgrel=1
+_tfver=2.21.0
+pkgdesc="TensorFlow Lite with the Plinius NPU (vendor NNAPI support library through libhybris), C interface"
+arch=(aarch64 x86_64)  # x86_64 only on the CPU, for the KVM preview
+url="https://github.com/tensorflow/tensorflow"
+# Own code MIT; statically inside: TensorFlow Lite, abseil, flatbuffers, gemmlowp, ruy, ml_dtypes,
+# KleidiAI (Apache-2.0), XNNPACK (BSD-3-Clause), cpuinfo, pthreadpool (BSD-2-Clause), FP16,
+# FXdiv, farmhash (MIT), Eigen (MPL-2.0), OouraFFT (own permissive license)
+license=(MIT Apache-2.0 BSD-3-Clause BSD-2-Clause MPL-2.0 LicenseRef-OouraFFT)
+depends=(gcc-libs glibc)
+depends_aarch64=(libhybris)
+makedepends=(cmake ninja git python)
+# No LTO: TFLite with XNNPACK has thousands of files, LTO multiplies time and memory for little
+options=(!lto)
+# TFLite's CMake fetches its dependencies at configure time (FetchContent), each pinned to a commit
+# in tensorflow/lite/tools/cmake/modules; that needs the network in build().
+source=("tensorflow-$_tfver.tar.gz::$url/archive/refs/tags/v$_tfver.tar.gz"
+	0001-lite-allow-the-NNAPI-delegate-outside-of-Android.patch
+	CMakeLists.txt
+	plinius-tflite.h
+	plinius-tflite.cc
+	plinius-tflite-bench.c
+	plinius-tflite.pc.in
+	LICENSE)
+sha256sums=('ef3568bb4865d6c1b2564fb5689c19b6b9a5311572cd1f2ff9198636a8520921'
+	'3aa409cb44e2420d3971099e7f977a9d900badace437767d06ca14eaec2acdee'
+	'9bdc78c8bf810d4226cf542134501eb29737f371d44970ad4287960a8d816e84'
+	'eac047b0f05dda5b14d1721fbe7953e6e2313dc0611fe8d6ea320605f2e9d4d6'
+	'f3fa9db37b08861d6c38130cd1f362f6aa9da8c73211d1c8308d50d70e23527b'
+	'a7ed9989e44f0cf4a5543df2860f244a66e4b0722abf9b2891412f6805e9b6b8'
+	'd4e1b602c8f91dfd2543b228cd99b1d6887958e473b8a7c5e1c48ed4ba58e040'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+prepare() {
+	cd "tensorflow-$_tfver"
+	patch -Np1 -i ../0001-lite-allow-the-NNAPI-delegate-outside-of-Android.patch
+}
+
+build() {
+	local hybris=OFF
+	[[ $CARCH == aarch64 ]] && hybris=ON
+	# CMAKE_POLICY_VERSION_MINIMUM: neon2sse (x86_64 only) still asks for CMake < 3.5, which
+	# CMake 4 no longer accepts
+	cmake -B build -S . -G Ninja \
+		-DCMAKE_BUILD_TYPE=None \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-DTENSORFLOW_SOURCE_DIR="$srcdir/tensorflow-$_tfver" \
+		-DPLTFL_WITH_HYBRIS=$hybris \
+		-DTFLITE_ENABLE_NNAPI=ON \
+		-DTFLITE_ENABLE_XNNPACK=ON \
+		-DTFLITE_ENABLE_GPU=OFF \
+		-DTFLITE_ENABLE_EXTERNAL_DELEGATE=OFF
+	cmake --build build --target plinius-tflite plinius-tflite-bench
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm644 "tensorflow-$_tfver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/tensorflow"
+	# Licenses of the statically linked dependencies, as CMake fetched them into the build tree
+	local dir name file
+	for dir in build/*/ build/_deps/*-src/; do
+		name=$(basename "$dir")
+		name=${name%-src}
+		for file in "$dir"LICENSE* "$dir"COPYING* "$dir"readme2d.txt; do
+			[[ -f $file ]] || continue
+			install -Dm644 "$file" "$pkgdir/usr/share/licenses/$pkgname/$name-$(basename "$file")"
+		done
+	done
+}

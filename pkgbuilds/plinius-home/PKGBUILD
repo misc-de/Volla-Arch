@@ -1,0 +1,29 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-home
+pkgver=0.1
+pkgrel=1
+pkgdesc="/home on the data partition of this system, not on the first Linux home partition of the card"
+arch=(any)
+license=(MIT)
+# plinius-home-move: rsync copies, psmisc's fuser sees who still uses /home
+depends=(systemd rsync psmisc)
+source=(home.mount
+	plinius-home-init.service
+	plinius-home-init
+	plinius-home-move
+	LICENSE)
+sha256sums=('0ba147901f4e941913c04e734852313dbeb2365bc0cf4d077c1abccc7b4c9a5f'
+	'98d34a4384107df675534239e90ebe75e7b9291751bf29030ab98bfa3955ce94'
+	'6e0836925d46d6117330a6dc645908e5b3734012e6be4fcf97e84e20cac1b6ae'
+	'e3fe6e0430ffc98c35bb26f8b6c25d6f688705bd0b3108a5daa81d41ff5e3bf8'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	# Not enabled here: on a phone that already runs, /home would be empty after the next start.
+	# image/mkimage.sh enables it for new systems, plinius-home-move after copying the data.
+	install -Dm644 home.mount plinius-home-init.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm755 plinius-home-init "$pkgdir/usr/lib/plinius-home/init"
+	install -Dm755 plinius-home-move -t "$pkgdir/usr/bin"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

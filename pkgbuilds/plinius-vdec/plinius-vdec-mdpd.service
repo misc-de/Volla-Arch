@@ -1,0 +1,42 @@
+# The MDP for the GStreamer plugin plinius-vdec, as a user of its own: only this user may open
+# /dev/mtk_mdp and /dev/mdp_sync (73-plinius-vdec.rules), not every program of the session.
+[Unit]
+Description=MDP colour conversion for hardware video decoding
+Requires=plinius-vdec-mdpd.socket
+
+[Service]
+ExecStart=/usr/lib/plinius-vdec/plinius-vdec-mdpd
+User=plinius-vdec
+Group=plinius-vdec
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateIPC=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
+# Only the MDP and the vendor dma-heaps libdpframework allocates from (/dev/null and friends
+# stay); measured with a 1080p H.264 file, bit-exact against the decoder in the app
+DevicePolicy=closed
+DeviceAllow=/dev/mtk_mdp rw
+DeviceAllow=/dev/mdp_sync rw
+DeviceAllow=/dev/dma_heap/mtk_mm r
+DeviceAllow=/dev/dma_heap/mtk_mm-uncached r
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ProtectProc=invisible
+ProcSubset=pid

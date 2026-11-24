@@ -1,0 +1,25 @@
+Plinius: no Automatic Suspend on the Power page.
+
+plinius-suspend puts the phone to sleep whenever the display is off. The switches "On Battery
+Power" and "When Plugged In" set gsd-power's sleep-inactive-*-type, whose suspend goes through
+logind instead: a seat pause without a check of the display, and a suspend with the display on
+hangs the display driver (docs/STANDBY.md). The device package sets both keys to 'nothing'; the
+rows, their delays and the notice about higher power consumption are no longer shown.
+
+diff --git a/panels/power/cc-power-panel.c b/panels/power/cc-power-panel.c
+index d27b721..8931a44 100644
+--- a/panels/power/cc-power-panel.c
++++ b/panels/power/cc-power-panel.c
+@@ -865,6 +865,12 @@ setup_power_saving (CcPowerPanel *self)
+ static void
+ setup_automatic_suspend (CcPowerPanel *self)
+ {
++    /* Plinius: no automatic suspend here. plinius-suspend puts the phone to sleep as soon as the
++     * display is off; gsd-power's suspend after inactivity goes through logind (seat pause, no
++     * look at the display, a suspend with the display on hangs the display driver). The groups
++     * stay hidden (visible: false in the .blp) and their switches unbound. */
++    return;
++
+     /* Automatic suspend rows */
+     if (self->can_suspend == ACTION_AUTOMATIC && g_strcmp0 (self->chassis_type, "vm") != 0) {
+         gtk_widget_set_visible (GTK_WIDGET (self->suspend_on_ac_group), TRUE);

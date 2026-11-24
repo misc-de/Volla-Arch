@@ -1,0 +1,98 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=mobile-config-firefox
+pkgver=5.5.2
+pkgrel=9
+pkgdesc="Mobile and privacy friendly configuration for Firefox (postmarketOS)"
+arch=(any)
+url="https://gitlab.postmarketos.org/postmarketOS/mobile-config-firefox"
+license=(MPL-2.0 MIT)
+# Not an add-on: autoconfig, UI CSS and policies.json in /usr/lib/firefox. Upstream's defaults
+# stay (DuckDuckGo, no telemetry). The AUR is stuck at 4.6.0.
+# Firefox only optional: otherwise Firefox could not be removed in plinius-software while
+# this configuration (part of plinius-apps) is installed. Without Firefox it just lies idle.
+# uBlock Origin: the add-on signed by Mozilla (AMO) as a local file, so it is there offline on
+# the first start; Firefox updates it from AMO afterwards. Not firefox-ublock-origin: Arch
+# builds it unsigned, Firefox refuses it ("ERROR_SIGNEDSTATE_REQUIRED") and a new profile had
+# no uBlock at all.
+_ublock=1.75.4
+makedepends=(python)
+optdepends=('firefox: the browser it configures')
+# plinius-prefs.js: own defaults for start time, security and privacy.
+# swipe-gestures: edge swipes for back/forward (own add-on, signed by Mozilla), the copy
+# that WebApp Manager bundles (extension/swipe-gestures.xpi).
+# plinius-fullscreen.css: no light lines at the screen's edges in fullscreen (imported by the
+# release theme).
+# firefox-preload: reads Firefox into the page cache 45 s after login (user timer), so the
+# first start does not wait for the SD card: 7.1 s cold vs. 1.3-1.9 s warm until the window.
+source=("$url/-/archive/$pkgver/$pkgname-$pkgver.tar.gz"
+        plinius-prefs.js
+        swipe-gestures-0.2.10.xpi
+        "https://addons.mozilla.org/firefox/downloads/file/5203014/ublock_origin-$_ublock.xpi"
+        firefox-preload
+        firefox-preload.service
+        firefox-preload.timer
+        plinius-fullscreen.css)
+noextract=(swipe-gestures-0.2.10.xpi "ublock_origin-$_ublock.xpi")
+sha256sums=('3b69740272619d74c7bdada4ffe6284c40c7535821023afc178f56d55b8dd9ec'
+            'a0e6b301f0889f7a11bce8e7de2ef1e9102ec3a410853679e5ad8a8c4e08fafa'
+            'a6498b1694df7274e1bc18d46a85907fc479d3b4c50e9129658447f3f5588f83'
+            'e2df503cce7cf5069130618c349695f62bdddb9eb8c189156d027269ae4ae267'
+            'f8a0ff883113ca254e73066e51878dfa6c7b508224ab2e11f9b9864625ca113c'
+            '4a35eae7bbc5fdbdb87430282a81ec7d1e365aeb6ed582faa3594b558c554bac'
+            'dc591f0dcdee802f366f9e6c84654320ab367da5f94151c0eb811a25683ee461'
+            '25074b13616c5c7eb1b4fd5b80c583fa2fc4884cf94a48292f30b289ac2ac827')
+
+package() {
+	install -Dm644 plinius-prefs.js -t "$pkgdir/usr/lib/firefox/defaults/pref"
+	# Firefox finds system add-ons by their ID as file name
+	install -Dm644 swipe-gestures-0.2.10.xpi \
+		"$pkgdir/usr/lib/firefox/browser/extensions/swipe-gestures@de.cais.xpi"
+	# Outside browser/extensions: that path belongs to firefox-ublock-origin, if installed
+	install -Dm644 "ublock_origin-$_ublock.xpi" \
+		"$pkgdir/usr/share/mobile-config-firefox/uBlock0@raymondhill.net.xpi"
+
+	install -Dm755 firefox-preload -t "$pkgdir/usr/lib/mobile-config-firefox"
+	install -Dm644 firefox-preload.service firefox-preload.timer \
+		-t "$pkgdir/usr/lib/systemd/user"
+	install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../firefox-preload.timer "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+
+	cd "$pkgname-$pkgver"
+	make DESTDIR="$pkgdir" install
+
+	# Fullscreen without the content card's edges, after upstream's imports of the release theme
+	_theme="$pkgdir/usr/lib/mobile-config-firefox/themes/release"
+	install -Dm644 "$srcdir/plinius-fullscreen.css" -t "$_theme/chrome"
+	grep -q '^@import' "$_theme/main.css"
+	printf '@import "chrome://mobileconfigfirefox/content/themes/release/chrome/plinius-fullscreen.css";\n' \
+		>>"$_theme/main.css"
+
+	# uBlock Origin and the swipe gestures always on: upstream only offers uBlock
+	# (normal_installed, downloaded from AMO, can be disabled, not in private windows).
+	# Here both are forced, from the local files, and run in private windows too.
+	# Enhanced Tracking Protection "Strict", not locked (Settings can lower it).
+	# The rest of the policies stays as upstream has it.
+	python3 - "$pkgdir/usr/lib/firefox/distribution/policies.json" <<-'EOF'
+		import json, sys
+		path = sys.argv[1]
+		with open(path) as f:
+		    data = json.load(f)
+		extensions = data["policies"]["ExtensionSettings"]
+		extensions.setdefault("swipe-gestures@de.cais", {})
+		files = {
+		    "uBlock0@raymondhill.net": "/usr/share/mobile-config-firefox",
+		    "swipe-gestures@de.cais": "/usr/lib/firefox/browser/extensions",
+		}
+		for addon_id, folder in files.items():
+		    extensions[addon_id].update({
+		        "installation_mode": "force_installed",
+		        "install_url": f"file://{folder}/{addon_id}.xpi",
+		        "private_browsing": True,
+		    })
+		data["policies"]["EnableTrackingProtection"] = {"Category": "strict", "Locked": False}
+		with open(path, "w") as f:
+		    json.dump(data, f, indent=4)
+		    f.write("\n")
+	EOF
+}

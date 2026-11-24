@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=libnfcdef
+pkgver=1.1.0
+pkgrel=1
+pkgdesc="NFC data exchange format (NDEF) library from Sailfish OS"
+arch=(aarch64 x86_64)
+url="https://github.com/sailfishos/libnfcdef"
+license=(BSD-3-Clause)
+depends=(glib2 libglibutil)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('3cd255a14ce27feaaf8ec0e70fada2e3012d6464440438893da1f72e65406ca5')
+
+build() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib KEEP_SYMBOLS=1 release pkgconfig
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib DESTDIR="$pkgdir" install-dev
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

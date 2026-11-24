@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 08:38:23 +0100
+Subject: [PATCH] wwan-info: A satellite instead of the bars while on a
+ satellite
+
+Plinius: satellite services such as Starlink Direct to Cell are plain
+LTE seen from the phone, the signal bars look like those of any weak
+cell. plinius-satellite compares the network with a list of satellite
+networks, as Android does, and tells on the system bus
+(org.plinius.Satellite, property Active).
+
+While it says so, the cellular status icon shows a satellite and "SAT"
+instead of the access technology, in the top bar, on the lock screen
+and in the quick settings. Without plinius-satellite nothing changes.
+---
+ src/wwan-info.c | 81 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+
+diff --git a/src/wwan-info.c b/src/wwan-info.c
+index cbc32700..bb8cd169 100644
+--- a/src/wwan-info.c
++++ b/src/wwan-info.c
+@@ -24,7 +24,17 @@
+  * A good indicator whether to show the icon is the
+  * #PhoshWWanInfo:present property that indicates if
+  * hardware is present.
++ *
++ * Plinius: while the phone is connected through a satellite (Starlink Direct to Cell
++ * and alike), a satellite shows instead of the signal bars and "SAT" instead of the
++ * access technology. plinius-satellite tells it on the system bus
++ * (org.plinius.Satellite, property Active); without it nothing changes.
+  */
++
++#define SATELLITE_NAME      "org.plinius.Satellite"
++#define SATELLITE_PATH      "/org/plinius/Satellite"
++#define SATELLITE_INTERFACE "org.plinius.Satellite"
++#define SATELLITE_ICON      "plinius-satellite-symbolic"
+ enum {
+   PROP_0,
+   PROP_SHOW_DETAIL,
+@@ -40,6 +50,8 @@ struct _PhoshWWanInfo
+   PhoshStatusIcon  parent;
+ 
+   PhoshWWan       *wwan;
++  GDBusProxy      *satellite;
++  GCancellable    *cancel;
+   gboolean         present;
+   gboolean         enabled;
+   gboolean         show_detail;
+@@ -135,6 +147,20 @@ signal_quality_icon_name (guint quality, gboolean data_enabled)
+ }
+ 
+ 
++static gboolean
++satellite_active (PhoshWWanInfo *self)
++{
++  g_autoptr (GVariant) active = NULL;
++
++  if (!self->satellite)
++    return FALSE;
++
++  active = g_dbus_proxy_get_cached_property (self->satellite, "Active");
++  return active && g_variant_is_of_type (active, G_VARIANT_TYPE_BOOLEAN) &&
++    g_variant_get_boolean (active);
++}
++
++
+ static void
+ update_icon_data(PhoshWWanInfo *self, GParamSpec *psepc, PhoshWWan *wwan)
+ {
+@@ -176,6 +202,14 @@ update_icon_data(PhoshWWanInfo *self, GParamSpec *psepc, PhoshWWan *wwan)
+     return;
+   }
+ 
++  /* On a satellite the bars say little, the satellite says what matters */
++  if (satellite_active (self)) {
++    phosh_status_icon_set_icon_name (PHOSH_STATUS_ICON (self), SATELLITE_ICON);
++    gtk_label_set_text (GTK_LABEL (access_tec_widget), "SAT");
++    gtk_widget_set_visible (access_tec_widget, self->show_detail);
++    return;
++  }
++
+   /* Signal quality */
+   quality = phosh_wwan_get_signal_quality (self->wwan);
+   data_enabled = phosh_wwan_manager_get_data_enabled (PHOSH_WWAN_MANAGER (self->wwan));
+@@ -214,6 +248,37 @@ update_info (PhoshWWanInfo *self)
+ }
+ 
+ 
++static void
++on_satellite_changed (PhoshWWanInfo *self)
++{
++  update_icon_data (self, NULL, NULL);
++}
++
++
++static void
++on_satellite_proxy_ready (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  PhoshWWanInfo *self;
++  GDBusProxy *proxy;
++
++  proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
++  if (!proxy) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_debug ("No satellite state: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_WWAN_INFO (user_data);
++  self->satellite = proxy;
++  g_signal_connect_object (proxy, "g-properties-changed",
++                           G_CALLBACK (on_satellite_changed), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "notify::g-name-owner",
++                           G_CALLBACK (on_satellite_changed), self, G_CONNECT_SWAPPED);
++  update_icon_data (self, NULL, NULL);
++}
++
++
+ static void
+ phosh_wwan_info_idle_init (PhoshStatusIcon *icon)
+ {
+@@ -252,6 +317,18 @@ phosh_wwan_info_constructed (GObject *object)
+                             "notify::operator",
+                             G_CALLBACK (update_info),
+                             self);
++
++  /* Follows plinius-satellite when it comes later, and does nothing without it */
++  self->cancel = g_cancellable_new ();
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM,
++                            G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
++                            NULL,
++                            SATELLITE_NAME,
++                            SATELLITE_PATH,
++                            SATELLITE_INTERFACE,
++                            self->cancel,
++                            on_satellite_proxy_ready,
++                            self);
+ }
+ 
+ 
+@@ -260,6 +337,10 @@ phosh_wwan_info_dispose (GObject *object)
+ {
+   PhoshWWanInfo *self = PHOSH_WWAN_INFO(object);
+ 
++  g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++  g_clear_object (&self->satellite);
++
+   if (self->wwan) {
+     g_signal_handlers_disconnect_by_data (self->wwan, self);
+     g_clear_object (&self->wwan);

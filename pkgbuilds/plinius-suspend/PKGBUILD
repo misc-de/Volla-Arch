@@ -1,0 +1,32 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-suspend
+pkgver=0.4
+pkgrel=1
+pkgdesc="Suspend the Volla Phone Plinius whenever the display is off, as UT's repowerd (wakeup_count loop)"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# plinius-mce: display state; plinius-kmod: no VT switch and no Bluetooth host suspend, without
+# them every suspend wakes the display or is refused (docs/STANDBY.md)
+depends=(glib2 plinius-mce plinius-kmod)
+source=(plinius-suspend.c
+	plinius-suspend.service
+	LICENSE)
+sha256sums=('0084783f0625b25acf922fc91d00a641e3ce8690a0194d8648724f04896d7c22'
+	'33ce8a185ad0c0e8c19df4730f46c6bd2f4559038d9e66a9df7f0a0adb73c6b6'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-suspend plinius-suspend.c \
+		$(pkg-config --cflags --libs gio-2.0) $LDFLAGS
+}
+
+package() {
+	install -Dm755 plinius-suspend -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-suspend.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-suspend.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

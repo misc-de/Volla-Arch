@@ -1,0 +1,95 @@
+From 1a502ad023f781c2549799591b20eda24faf98c6 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 20:47:53 +0100
+Subject: [PATCH] Sounds and Vibration as a panel of its own below Sound
+
+Plinius: a panel "Sounds and Vibration" in the list right after Sound:
+for calls, messages, email, other notifications and alarms the sound
+(default, none, a system sound or an own one) and the vibration rhythm
+and strength, kept in a feedbackd theme of the user's own. The panel
+(cc-feedback-panel.*) and its desktop file come as separate files; it is
+only listed with feedbackd.
+---
+ panels/feedback/meson.build | 24 ++++++++++++++++++++++++
+ panels/meson.build          |  1 +
+ shell/cc-panel-list.c       |  1 +
+ shell/cc-panel-loader.c     |  4 ++++
+ 4 files changed, 30 insertions(+)
+ create mode 100644 panels/feedback/meson.build
+
+diff --git a/panels/feedback/meson.build b/panels/feedback/meson.build
+new file mode 100644
+index 000000000..e6c9159ce
+--- /dev/null
++++ b/panels/feedback/meson.build
+@@ -0,0 +1,24 @@
++# Plinius: Sounds and Vibration panel. The sources and the desktop file (with its translations)
++# come as separate files of gnome-control-center-plinius.
++panels_list += cappletname
++
++install_data(
++  'gnome-feedback-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
++cflags += [
++  '-DSOUND_DATA_DIR="@0@"'.format(join_paths(control_center_datadir, 'sounds')),
++]
++
++sources = files(
++  'cc-feedback-panel.c',
++)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps + [ dependency('gsound'), json_glib_dep ],
++  c_args: cflags,
++)
+diff --git a/panels/meson.build b/panels/meson.build
+index 937141a87..356d5906b 100644
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -11,6 +11,7 @@ panels = [
+   'color',
+   'desktop-vnc',
+   'display',
++  'feedback',
+   'hubs',
+   'mouse',
+   'multitasking',
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index a7bc730ff..282975624 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -351,6 +351,7 @@ static const gchar *const panel_order[] = {
+     "display",
+     "background",
+     "sound",
++    "feedback",
+     "power",
+     "keyboard",
+ 
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index e3c43dffc..c3d48cfc0 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -47,6 +47,8 @@ extern GType cc_desktop_vnc_panel_get_type (void);
+ extern void cc_desktop_vnc_panel_static_init_func (void);
+ extern GType cc_usb_panel_get_type (void);
+ extern void cc_usb_panel_static_init_func (void);
++extern GType cc_feedback_panel_get_type (void);
++extern void cc_feedback_panel_static_init_func (void);
+ extern GType cc_updates_panel_get_type (void);
+ extern void cc_updates_panel_static_init_func (void);
+ extern GType cc_background_panel_get_type (void);
+@@ -131,6 +133,8 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("search", cc_search_panel_get_type, NULL),
+     PANEL_TYPE ("sharing", cc_sharing_panel_get_type, cc_sharing_panel_static_init_func),
+     PANEL_TYPE ("sound", cc_sound_panel_get_type, NULL),
++    /* Plinius: Sounds and Vibration, below Sound */
++    PANEL_TYPE ("feedback", cc_feedback_panel_get_type, cc_feedback_panel_static_init_func),
+     PANEL_TYPE ("streaming", cc_streaming_panel_get_type, cc_streaming_panel_static_init_func),
+     PANEL_TYPE ("system", cc_system_panel_get_type, NULL),
+     PANEL_TYPE ("universal-access", cc_ua_panel_get_type, NULL),

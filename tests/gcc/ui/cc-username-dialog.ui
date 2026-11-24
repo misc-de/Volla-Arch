@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- pkgbuilds/gnome-control-center-plinius/cc-username-dialog.blp as GtkBuilder XML, written by
+     hand (tests/gcc: the host has no blueprint-compiler; test_gcc_blp_ui_match.py checks that the
+     ids, classes and signal handlers still match the .blp) -->
+<interface domain="plinius-control-center">
+  <requires lib="gtk" version="4.0"/>
+  <template class="CcUsernameDialog" parent="AdwDialog">
+    <property name="title" translatable="yes">Change Username</property>
+    <property name="content-width">500</property>
+    <property name="child">
+      <object class="AdwToastOverlay" id="toast_overlay">
+        <property name="child">
+          <object class="AdwToolbarView">
+            <child type="top">
+              <object class="AdwHeaderBar">
+                <property name="show-start-title-buttons">false</property>
+                <property name="show-end-title-buttons">false</property>
+                <child type="start">
+                  <object class="GtkButton">
+                    <property name="label" translatable="yes">_Cancel</property>
+                    <property name="use-underline">true</property>
+                    <property name="valign">center</property>
+                    <signal name="clicked" handler="adw_dialog_force_close" object="CcUsernameDialog" swapped="yes"/>
+                  </object>
+                </child>
+                <child type="end">
+                  <object class="GtkButton" id="rename_button">
+                    <property name="label" translatable="yes">_Rename</property>
+                    <property name="receives-default">true</property>
+                    <property name="use-underline">true</property>
+                    <property name="sensitive">false</property>
+                    <property name="valign">center</property>
+                    <signal name="clicked" handler="rename_button_clicked_cb" object="CcUsernameDialog" swapped="yes"/>
+                    <style>
+                      <class name="suggested-action"/>
+                    </style>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <property name="content">
+              <object class="AdwPreferencesPage">
+                <child>
+                  <object class="AdwPreferencesGroup">
+                    <property name="description" translatable="yes">The name you log in with. Your home folder, groups, automatic login and references in your settings are renamed along with it. Password and PIN stay the same. The renaming happens at the next restart, before login.</property>
+                    <child>
+                      <object class="AdwActionRow" id="current_row">
+                        <property name="title" translatable="yes">Current Username</property>
+                        <style>
+                          <class name="property"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="AdwEntryRow" id="username_row">
+                        <property name="title" translatable="yes">_New Username</property>
+                        <property name="use-underline">true</property>
+                        <property name="input-purpose">free-form</property>
+                        <signal name="changed" handler="username_changed_cb" object="CcUsernameDialog" swapped="yes"/>
+                        <signal name="entry-activated" handler="rename_button_clicked_cb" object="CcUsernameDialog" swapped="yes"/>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="CcEntryFeedback" id="username_feedback">
+                        <property name="entry">username_row</property>
+                        <property name="default-text" translatable="yes">Lower case letters, numbers, hyphens and underscores, starting with a letter, at most 32 characters.</property>
+                        <property name="default-icon-name">info-outline-symbolic</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="AdwPreferencesGroup" id="pending_group">
+                    <property name="visible">false</property>
+                    <child>
+                      <object class="AdwActionRow" id="pending_row">
+                        <property name="title" translatable="yes">Scheduled for the Next Restart</property>
+                        <child type="suffix">
+                          <object class="GtkButton">
+                            <property name="label" translatable="yes">_Undo</property>
+                            <property name="use-underline">true</property>
+                            <property name="valign">center</property>
+                            <signal name="clicked" handler="cancel_pending_cb" object="CcUsernameDialog" swapped="yes"/>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </property>
+          </object>
+        </property>
+      </object>
+    </property>
+  </template>
+  <object class="AdwAlertDialog" id="restart_dialog">
+    <property name="heading" translatable="yes">Restart Now?</property>
+    <property name="default-response">restart</property>
+    <property name="close-response">later</property>
+    <signal name="response::restart" handler="restart_response_cb" object="CcUsernameDialog" swapped="yes"/>
+    <responses>
+      <response id="later" translatable="yes">_Later</response>
+      <response id="restart" translatable="yes" appearance="suggested">_Restart</response>
+    </responses>
+  </object>
+</interface>

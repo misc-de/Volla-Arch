@@ -1,0 +1,50 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-cardshare
+pkgver=0.1
+pkgrel=2
+pkgdesc="Contact card for other phones over NFC (tag emulation), a QR code and Bluetooth, behind the quick setting My Card"
+arch=(any)
+license=(MIT)
+# nfcd's ndef-share emulates the NFC tag, obexd takes cards over Bluetooth, the address books are
+# evolution-data-server's. The tile is in phosh-plinius (0078), the settings are in
+# gnome-control-center-plinius (Settings > NFC > Contact Card).
+depends=(python python-gobject evolution-data-server glib2 nfcd bluez bluez-obex feedbackd)
+makedepends=(gettext)
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-cardshare.py
+	plinius-cardshare.service
+	org.plinius.CardShare.service
+	org.plinius.cardshare.gschema.xml
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('e43ac2d310a7a2c3bf4ab8254e35ecdfbfa01fabf637a87d1e6a9aa2553043e2'
+	'b1da956f26f6da7d31cd35d28209b2a6b8985af2cdc83584d8bcbaa6d8e8911d'
+	'6655c342abf36e9de7324d7246910b11eb9697b7cd3e20c2e3605d545e13381a'
+	'12da0d57a0688a024b4f9e690663f86c064cb88bde0b6c01d38f77221f836a67'
+	'e0c119ed55c075c3d21ebbc86478961f58bf98f1ce1d48b524249f6a42a8b449'
+	'0baf4825971ae5b63c1dc41d693451c6240d3ce376c267cfa086099d1a0a7b09'
+	'44b9594a6b99e67a722a0aa450b39c91332c565f9e8eec42660dd4f87d21d64d'
+	'23afa048bf99b41fc6b2c1c94059ee533e8bfd8fabbeffac33b981a839592325'
+	'a3a5b6ca39041f2decafd831f4cee3ae3b035513ac16b1d053e564d7dd82efad'
+	'80641926a54c4832bfa1a11a70d4114763ad5c674c3ac578071f673bdaea5f58'
+	'23e36b01b486eb405293c4d9f3fa66b5d4a24b629224dbc80da3efbdf11dd0f9'
+	'f6821b0aeae60343f7e88c5eb69e3837383ffcd7b96227beb1d402caf4179133'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm755 plinius-cardshare.py "$pkgdir/usr/bin/plinius-cardshare"
+	install -Dm644 -t "$pkgdir/usr/lib/systemd/user" plinius-cardshare.service
+	install -Dm644 -t "$pkgdir/usr/share/dbus-1/services" org.plinius.CardShare.service
+	install -Dm644 -t "$pkgdir/usr/share/glib-2.0/schemas" org.plinius.cardshare.gschema.xml
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-cardshare.mo"
+	done
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

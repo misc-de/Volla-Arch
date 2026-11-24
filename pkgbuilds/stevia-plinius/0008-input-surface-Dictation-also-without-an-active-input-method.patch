@@ -1,0 +1,189 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 07:30:00 +0100
+Subject: [PATCH] input-surface: Dictation also without an active input method
+
+The microphone key was only offered once a text field had activated the
+input method, and the recognized text only went through it. When the
+keyboard is opened by hand (e.g. from Phosh while the field has not
+activated the input method yet) the key was missing.
+
+Offer the key whenever no input method is active, as there is no
+purpose or hint to check then, and type the recognized text through the
+virtual keyboard the way emoji are sent: a temporary keymap with the
+text's characters, each pressed and released, then the layout's keymap
+again. Without surrounding text a space only goes between two
+utterances of the same dictation.
+
+Text that arrives while the keyboard is hidden is dropped, as nothing
+tells where it would go, and hiding the keyboard stops listening.
+---
+ src/pos-input-surface.c | 104 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 102 insertions(+), 2 deletions(-)
+
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index 60dd9ac..28e7ad9 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -186,6 +186,7 @@ struct _PosInputSurface {
+   gboolean                    dictate_shown;     /* microphone key visible */
+   gboolean                    dictating;         /* microphone on (or being switched on) */
+   gboolean                    dictate_accept;    /* text may still go to the focused field */
++  gboolean                    dictate_vk_typed;  /* text typed via the virtual keyboard since start */
+ };
+ 
+ 
+@@ -1656,6 +1657,7 @@ dictate_start (PosInputSurface *self)
+ 
+   self->dictating = TRUE;
+   self->dictate_accept = TRUE;
++  self->dictate_vk_typed = FALSE;
+   /* Light the key at once; the service confirms with StateChanged or the call fails */
+   set_dictation_active (self, TRUE);
+   g_clear_object (&self->dictate_cancel);
+@@ -1679,7 +1681,74 @@ dictate_activated (GSimpleAction *action, GVariant *parameter, gpointer data)
+ }
+ 
+ 
+-/* Recognized text: commit it to the focused field, with a space to the previous word */
++/* Different characters in one temporary keymap: it has room for about 200 keycodes */
++#define DICTATE_VK_CHUNK 64
++
++/* The next character of text as a symbol for the vk driver; control characters are skipped */
++static const char *
++dictate_vk_symbol (const char *p, char sym[7])
++{
++  gunichar c = g_utf8_get_char (p);
++
++  if (g_unichar_iscntrl (c))
++    return NULL;
++  sym[g_unichar_to_utf8 (c, sym)] = '\0';
++  return sym;
++}
++
++
++/*
++ * Type text through the virtual keyboard, the way emoji are sent without an input
++ * method (see send_emoji_via_vk()): a temporary keymap holds the characters of the
++ * text, each one is pressed and released, then the layout's keymap comes back.
++ * Longer texts with many different characters go in several keymaps.
++ */
++static void
++send_text_via_vk (PosInputSurface *self, const char *text)
++{
++  const char *p = text;
++
++  while (*p) {
++    g_autoptr (GPtrArray) symbols = g_ptr_array_new_with_free_func (g_free);
++    g_autoptr (GHashTable) seen = g_hash_table_new (g_str_hash, g_str_equal);
++    const char *start = p;
++    char sym[7];
++
++    /* As many characters as fit into one keymap */
++    for (; *p; p = g_utf8_next_char (p)) {
++      char *copy;
++
++      if (dictate_vk_symbol (p, sym) == NULL || g_hash_table_contains (seen, sym))
++        continue;
++      if (symbols->len == DICTATE_VK_CHUNK)
++        break;
++      copy = g_strdup (sym);
++      g_ptr_array_add (symbols, copy);
++      g_hash_table_add (seen, copy);
++    }
++    if (symbols->len == 0)
++      break;
++    g_ptr_array_add (symbols, NULL);
++
++    pos_vk_driver_set_overlay_keymap (self->keyboard_driver,
++                                      (const char * const *)symbols->pdata);
++    for (const char *q = start; q < p; q = g_utf8_next_char (q)) {
++      if (dictate_vk_symbol (q, sym) == NULL)
++        continue;
++      pos_vk_driver_key_down (self->keyboard_driver, sym, POS_KEYCODE_MODIFIER_NONE);
++      pos_vk_driver_key_up (self->keyboard_driver, sym);
++    }
++  }
++
++  set_keymap_delayed (self);
++}
++
++
++/*
++ * Recognized text: commit it to the focused field, with a space to the previous word.
++ * Without an active input method (the keyboard was opened by hand, or the app has no
++ * text input support) it is typed through the virtual keyboard instead.
++ */
+ static void
+ on_dictate_text (GDBusConnection *bus, const char *sender, const char *path, const char *iface,
+                  const char *signal, GVariant *params, gpointer data)
+@@ -1697,9 +1766,24 @@ on_dictate_text (GDBusConnection *bus, const char *sender, const char *path, con
+   g_variant_get (params, "(&s)", &recognized);
+ 
+   /* The field lost focus since dictation started: drop the text */
+-  if (!self->dictate_accept || !pos_input_method_get_active (self->input_method))
++  if (!self->dictate_accept)
+     return;
+ 
++  if (!pos_input_method_get_active (self->input_method)) {
++    gboolean vk_space;
++
++    /* Nothing tells where the text would go once the keyboard is gone */
++    if (self->surface_visible != TRUE)
++      return;
++    /* No surrounding text: a space only between two utterances of this dictation */
++    vk_space = self->dictate_vk_typed && !g_unichar_ispunct (g_utf8_get_char (recognized));
++    text = g_strconcat (vk_space ? " " : "", recognized, NULL);
++    g_debug ("Dictated via vk: '%s'", text);
++    send_text_via_vk (self, text);
++    self->dictate_vk_typed = TRUE;
++    return;
++  }
++
+   pos_input_surface_submit_current_preedit (self);
+ 
+   surrounding = pos_input_method_get_surrounding_text (self->input_method, &anchor, &cursor);
+@@ -1747,6 +1831,13 @@ dictation_allowed (PosInputSurface *self)
+       !g_settings_get_boolean (self->dictate_settings, "enabled"))
+     return FALSE;
+ 
++  /*
++   * The keyboard was opened by hand and no field reports itself: there is no purpose
++   * or hint to check, so the key is offered and the text is typed (see on_dictate_text())
++   */
++  if (!pos_input_method_get_active (self->input_method))
++    return TRUE;
++
+   purpose = pos_input_method_get_purpose (self->input_method);
+   if (purpose != POS_INPUT_METHOD_PURPOSE_NORMAL &&
+       purpose != POS_INPUT_METHOD_PURPOSE_ALPHA &&
+@@ -1802,6 +1893,9 @@ setup_dictation (PosInputSurface *self)
+     g_dbus_connection_signal_subscribe (self->session_bus, DICTATE_BUS_NAME, DICTATE_IFACE,
+                                         "StateChanged", DICTATE_PATH, NULL,
+                                         G_DBUS_SIGNAL_FLAGS_NONE, on_dictate_state, self, NULL);
++
++  /* Also offered before any field became active (keyboard opened by hand) */
++  update_dictation (self);
+ }
+ 
+ 
+@@ -1822,6 +1916,8 @@ on_im_active_changed (PosInputSurface *self, GParamSpec *pspec, PosInputMethod *
+   } else {
+     dictate_stop (self);
+     self->dictate_accept = FALSE;
++    /* The keyboard may stay open by hand: the key stays for typing via the vk */
++    update_dictation (self);
+   }
+ 
+   if (active) {
+@@ -2762,6 +2858,10 @@ pos_input_surface_set_visible (PosInputSurface *self, gboolean visible)
+   self->surface_visible = visible;
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_SURFACE_VISIBLE]);
+ 
++  /* A hidden keyboard does not listen */
++  if (!visible)
++    dictate_stop (self);
++
+   self->animation.show = visible;
+   self->animation.last_frame = -1;
+   self->animation.progress =

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Powers the NFC adapter once nfcd has found it, if the display is on. On Sailfish OS an mce
+# plugin of nfcd does this; here plinius-backlight-wake follows the display afterwards (hook
+# /usr/lib/plinius/display.d/50-nfc).
+[ "$(cat /sys/class/drm/card0-DSI-1/dpms 2>/dev/null)" = On ] || exit 0
+i=0
+while ! busctl set-property org.neard /nfc0 org.neard.Adapter Powered b true 2>/dev/null; do
+	i=$((i + 1))
+	[ "$i" -le 30 ] || { echo "no NFC adapter" >&2; exit 1; }
+	sleep 1
+done

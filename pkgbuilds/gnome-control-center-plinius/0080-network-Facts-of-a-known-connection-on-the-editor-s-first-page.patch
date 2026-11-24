@@ -1,0 +1,160 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 07:10:00 +0100
+Subject: [PATCH] network: Facts of a known connection on the editor's first
+ page
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plinius: the settings of a known network opened on a list of pages (Details,
+Identity, IPv4, IPv6, Security), and what one mostly wants to see there,
+signal, speed, security, addresses, DNS, route and when it was last used,
+was one page further down under Details. These facts now stand on the first
+page above the list; Details keeps only the options: connect automatically,
+available to other users, metered, and Forget (which asks first). A new
+connection has no facts; its Details page stays as it was.
+
+---
+diff --git a/panels/network/connection-editor/ce-page-details.c b/panels/network/connection-editor/ce-page-details.c
+index f6ca9816e..93fe12f78 100644
+--- a/panels/network/connection-editor/ce-page-details.c
++++ b/panels/network/connection-editor/ce-page-details.c
+@@ -41,6 +41,7 @@ struct _CEPageDetails {
+     AdwPreferencesGroup *forget_group;
+     AdwButtonRow *forget_row;
+     AdwActionRow *freq_row;
++    AdwPreferencesGroup *info_group;
+     AdwActionRow *ipv4_row;
+     AdwActionRow *ipv6_row;
+     AdwActionRow *last_used_row;
+@@ -514,6 +515,7 @@ ce_page_details_class_init (CEPageDetailsClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CEPageDetails, forget_group);
+     gtk_widget_class_bind_template_child (widget_class, CEPageDetails, forget_row);
+     gtk_widget_class_bind_template_child (widget_class, CEPageDetails, freq_row);
++    gtk_widget_class_bind_template_child (widget_class, CEPageDetails, info_group);
+     gtk_widget_class_bind_template_child (widget_class, CEPageDetails, ipv4_row);
+     gtk_widget_class_bind_template_child (widget_class, CEPageDetails, ipv6_row);
+     gtk_widget_class_bind_template_child (widget_class, CEPageDetails, last_used_row);
+@@ -531,6 +533,30 @@ ce_page_iface_init (CEPageInterface *iface)
+     iface->get_title = ce_page_details_get_title;
+ }
+ 
++/* Plinius: the facts (signal, speed, addresses …) of a known connection stand on the editor's
++ * first page, above the rows of its pages; "Details" keeps the options and Forget. Returns the
++ * group, taken out of this page (the caller owns it), or NULL when no fact has a value. */
++GtkWidget *
++ce_page_details_take_info (CEPageDetails *self)
++{
++    AdwActionRow *rows[] = { self->strength_row, self->speed_row, self->security_row, self->ipv4_row,
++                             self->ipv6_row, self->mac_row, self->freq_row, self->route_row,
++                             self->dns4_row, self->dns6_row, self->last_used_row };
++    GtkWidget *page, *group = GTK_WIDGET (self->info_group);
++    gboolean any = FALSE;
++
++    g_return_val_if_fail (CE_IS_PAGE_DETAILS (self), NULL);
++
++    for (gsize i = 0; i < G_N_ELEMENTS (rows); i++)
++        any = any || gtk_widget_get_visible (GTK_WIDGET (rows[i]));
++    page = gtk_widget_get_ancestor (group, ADW_TYPE_PREFERENCES_PAGE);
++    if (!any || !page)
++        return NULL;
++    g_object_ref (group);
++    adw_preferences_page_remove (ADW_PREFERENCES_PAGE (page), self->info_group);
++    return group;
++}
++
+ CEPageDetails *
+ ce_page_details_new (NMConnection *connection, NMDevice *device, NMAccessPoint *ap, NetConnectionEditor *editor,
+                      gboolean is_new_connection)
+diff --git a/panels/network/connection-editor/ce-page-details.h b/panels/network/connection-editor/ce-page-details.h
+index 13121c05b..56ff86a13 100644
+--- a/panels/network/connection-editor/ce-page-details.h
++++ b/panels/network/connection-editor/ce-page-details.h
+@@ -33,5 +33,6 @@ G_BEGIN_DECLS
+ G_DECLARE_FINAL_TYPE (CEPageDetails, ce_page_details, CE, PAGE_DETAILS, AdwBin);
+ CEPageDetails *ce_page_details_new (NMConnection *connection, NMDevice *device, NMAccessPoint *ap,
+                                     NetConnectionEditor *editor, gboolean is_new_connection);
++GtkWidget *ce_page_details_take_info (CEPageDetails *self);
+ 
+ G_END_DECLS
+diff --git a/panels/network/connection-editor/connection-editor.blp b/panels/network/connection-editor/connection-editor.blp
+index 5b7ecf369..64321b483 100644
+--- a/panels/network/connection-editor/connection-editor.blp
++++ b/panels/network/connection-editor/connection-editor.blp
+@@ -57,6 +57,11 @@ template $NetConnectionEditor: Adw.Dialog {
+                   orientation: vertical;
+                   spacing: 12;
+ 
++                  // The facts of a known connection, from its Details page (page_initialized)
++                  Adw.Bin info_page {
++                    visible: false;
++                  }
++
+                   Adw.Bin inline_page {
+                     visible: false;
+                   }
+diff --git a/panels/network/connection-editor/details-page.blp b/panels/network/connection-editor/details-page.blp
+index 176d35a3b..913dfcc05 100644
+--- a/panels/network/connection-editor/details-page.blp
++++ b/panels/network/connection-editor/details-page.blp
+@@ -4,9 +4,10 @@ using Adw 1;
+ template $CEPageDetails: Adw.Bin {
+   // Plinius: in the list style of the rest of Settings: the facts as rows (the title as on the
+   // other pages, the value below it), the options as switches and "Forget" as a button row of its
+-  // own at the end, instead of a grid of labels and check buttons that does not fit a phone
++  // own at the end, instead of a grid of labels and check buttons that does not fit a phone.
++  // The facts of a known connection go to the editor's first page (ce_page_details_take_info).
+   Adw.PreferencesPage {
+-    Adw.PreferencesGroup {
++    Adw.PreferencesGroup info_group {
+       Adw.ActionRow strength_row {
+         title: _("Signal Strength");
+         subtitle-selectable: true;
+diff --git a/panels/network/connection-editor/net-connection-editor.c b/panels/network/connection-editor/net-connection-editor.c
+index 91da4063d..4cc2ec502 100644
+--- a/panels/network/connection-editor/net-connection-editor.c
++++ b/panels/network/connection-editor/net-connection-editor.c
+@@ -62,6 +62,7 @@ struct _NetConnectionEditor {
+     AdwBin *inline_page;
+     AdwToastOverlay *toast_overlay;
+     GtkStack *toplevel_stack;
++    AdwBin *info_page;
+ 
+     /* Plinius: the settings pages (CEPage) in their order; each has a row in pages_list that
+      * pushes its own navigation page, instead of the notebook tabs */
+@@ -449,6 +450,7 @@ net_connection_editor_class_init (NetConnectionEditorClass *class)
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, inline_page);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toast_overlay);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toplevel_stack);
++    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, info_page);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, cancel_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, apply_clicked_cb);
+@@ -681,6 +683,17 @@ page_initialized (NetConnectionEditor *self, GError *error, CEPage *page)
+         return;
+     }
+ 
++    /* Plinius: what one wants to know of a known connection stands on the first page, one step
++     * up; "Details" keeps only the options and Forget */
++    if (CE_IS_PAGE_DETAILS (page) && !self->is_new_connection) {
++        g_autoptr(GtkWidget) info = ce_page_details_take_info (CE_PAGE_DETAILS (page));
++
++        if (info) {
++            adw_bin_set_child (self->info_page, info);
++            gtk_widget_set_visible (GTK_WIDGET (self->info_page), TRUE);
++        }
++    }
++
+     navigation_page = new_navigation_page (page);
+     row = adw_action_row_new ();
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), ce_page_get_title (page));
+@@ -1063,6 +1076,8 @@ navigation_popped_cb (NetConnectionEditor *self, AdwNavigationPage *page)
+     gtk_list_box_remove_all (self->pages_list);
+     adw_bin_set_child (self->inline_page, NULL);
+     gtk_widget_set_visible (GTK_WIDGET (self->inline_page), FALSE);
++    adw_bin_set_child (self->info_page, NULL);
++    gtk_widget_set_visible (GTK_WIDGET (self->info_page), FALSE);
+     g_clear_object (&self->connection);
+     g_clear_object (&self->orig_connection);
+     self->is_new_connection = FALSE;

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in. Starting profile in complain mode: it logs what the service does
+# beyond these rules; the rules are completed from those messages (tools/aa-denials.sh) before
+# the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# gnss-nmea-bridge: positions from the GNSS HAL (binder) for geoclue
+profile plinius.gnss-nmea-bridge flags=(complain, attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/dbus-strict>
+  /usr/bin/gnss-nmea-bridge mr,
+  /dev/binderfs/binder rw,
+  /dev/binder rw,
+  /run/gnss-nmea-bridge/{,**} rw,
+}

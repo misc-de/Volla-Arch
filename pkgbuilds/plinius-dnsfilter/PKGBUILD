@@ -1,0 +1,67 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-dnsfilter
+pkgver=0.1
+pkgrel=12
+pkgdesc="DNS filter of the Volla Phone Plinius: blocklists, own rules, own DNS servers (also DoT/DoH), statistics and a query log, for the phone, its hotspot and USB clients"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# glib-networking: TLS for DNS over TLS/HTTPS and list downloads. iptables-legacy: redirects
+# of hotspot/USB DNS (the GKI kernel has no nf_tables). NetworkManager: the network's servers.
+depends=(glib2 glib-networking libsoup3 iptables networkmanager systemd)
+install=plinius-dnsfilter.install
+source=(plinius-dnsfilter.c
+	appid.c
+	appid.h
+	dnsmsg.c
+	dnsmsg.h
+	filter.c
+	filter.h
+	test-dnsfilter.c
+	plinius-dnsfilter.service
+	org.plinius.DnsFilter.conf
+	org.plinius.DnsFilter.service
+	plinius-dnsfilter.tmpfiles
+	LICENSE)
+sha256sums=('fb2a702c2467f1291c2f1cdefa5d688ac96c0156e73937490250a76d8457ba16'
+	'7a32877b6a6f03dfd2b9b0cba38639c44e8073e1ee14938ee9d51153fbc187d2'
+	'9d5d757bcb5925653368fc4e34c6c3895362d06a1ee8605fa56140a54df6f699'
+	'0303b319de18a778ad8070fd9639410d61aa702fb13a86439aa0f316f7a9a7f0'
+	'29dbc0bd9b293fa04ac3abcd6b078bd6b448bb058cd4b17f6ff2607d2d1b8389'
+	'088f77d4e55fb88c4681efbc5e3a74d115f5b412c7b0fb58f92935ebe6e629af'
+	'05aad0486c749082f4323003dad74946f52ef498aeab3c8bfc0c1bbdd30ea4eb'
+	'29619139e773de77180aa01ef2e07fe0147040bf5b113b114c6a97e5da64e2ae'
+	'af2554ef4b4a21ab390eca51b840d1535b0fe808191ea40ac93b8ba487dca4c2'
+	'5eface621e9fe45b712229bf07fdad06863b030628b3fc5862122ebad5afd64e'
+	'ae00d994030c1d3b8cd2ca85e58271639c2f45d6b1bd3ea775602296aa8bcdd7'
+	'634d0091c37fc0d20135a5df65d6414518baae062479ff034f34855fcc20b719'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+_cflags() {
+	echo -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-type-limits
+}
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS $(_cflags) -o plinius-dnsfilter plinius-dnsfilter.c appid.c dnsmsg.c filter.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 libsoup-3.0) $LDFLAGS
+}
+
+check() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS $(_cflags) -o test-dnsfilter test-dnsfilter.c appid.c dnsmsg.c filter.c \
+		$(pkg-config --cflags --libs gio-2.0) $LDFLAGS
+	./test-dnsfilter
+}
+
+package() {
+	install -Dm755 plinius-dnsfilter -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-dnsfilter.service -t "$pkgdir/usr/lib/systemd/system"
+	# Enabled by the package; with the filter off it leaves after two minutes
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-dnsfilter.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 org.plinius.DnsFilter.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 org.plinius.DnsFilter.service -t "$pkgdir/usr/share/dbus-1/system-services"
+	install -Dm644 plinius-dnsfilter.tmpfiles "$pkgdir/usr/lib/tmpfiles.d/plinius-dnsfilter.conf"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

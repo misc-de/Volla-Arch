@@ -1,0 +1,25 @@
+# Halium overlay: the allocator as in the Android image, plus an early start. Android starts it with
+# all HALs at 'boot', which init.mt6878.rc holds back in post-fs-data until insmod_sh has loaded
+# every vendor module (about 3 s after the allocator could run). phoc waits for the allocator in
+# eglInitialize, so the session came up that much later.
+service vendor.gralloc-v2 /vendor/bin/hw/android.hardware.graphics.allocator-V2-service-mediatek
+    class hal animation
+    user system
+    group graphics drmrpc
+    capabilities SYS_NICE
+    onrestart restart surfaceflinger
+    onrestart restart vendor.hwcomposer-3-2
+    onrestart restart camerahalserver
+
+# Starts the allocator as soon as what it opens at its start exists: the protected dma-buf heaps
+# of mtk_sec_heap (loaded late by insmod_sh) and GED. A helper instead of 'wait' in late-fs, which
+# would block init and with it post-fs-data, the container's readiness and the login. If the
+# helper gives up after 10 s, 'class_start hal' starts the allocator as before.
+service vendor.gralloc-v2-early /system/bin/sh -c "/system/bin/timeout 10 /system/bin/sh -c 'until [ -e /dev/dma_heap/mtk_prot_region ] && [ -e /proc/ged ]; do /system/bin/sleep 0.05; done' && /system/bin/start vendor.gralloc-v2"
+    user root
+    group root
+    disabled
+    oneshot
+
+on late-fs
+    start vendor.gralloc-v2-early

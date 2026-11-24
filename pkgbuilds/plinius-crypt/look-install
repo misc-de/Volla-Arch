@@ -1,0 +1,38 @@
+#!/bin/bash
+# Root part of the look of the password prompt at startup, called by background-sync via pkexec
+# (polkit action org.plinius.crypt.look). Takes the look of the on-screen keyboard chosen in the
+# session and stores it for the mkinitcpio install hook plinius-crypt, then rebuilds the initramfs.
+# Accepts only exact values: the arguments end up in the unencrypted initramfs and no authentication
+# protects this helper within the active session.
+#
+# Usage: look-install glass|original '#rrggbb' LAYOUT
+#   LAYOUT is the first keyboard layout of the session; one unl0kr has no layout for is dropped,
+#   the install hook then takes the system keymap.
+set -euo pipefail
+
+dir=/var/lib/plinius-crypt
+dest=$dir/look
+
+if [[ $# -ne 3 || ! $1 =~ ^(glass|original)$ || ! $2 =~ ^#[0-9a-fA-F]{6}$ ]]; then
+	echo "look-install: expected glass|original, #rrggbb and a layout" >&2
+	exit 1
+fi
+style=$1 accent=$2 layout=
+# The layouts of unl0kr, as in the install hook
+case $3 in
+	us|de|es|fr|ru) layout=$3 ;;
+esac
+
+mkdir -p "$dir"
+tmp=$(mktemp "$dir/.look.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+printf 'style=%s\naccent=%s\nlayout=%s\n' "$style" "$accent" "$layout" > "$tmp"
+cmp -s "$tmp" "$dest" && exit 0
+chmod 644 "$tmp"
+mv "$tmp" "$dest"
+
+# Rebuild now only if this system's initramfs runs the plinius-crypt hook; otherwise the next
+# mkinitcpio run picks the look up
+if [[ -d /run/plinius-crypt ]]; then
+	systemctl start --no-block plinius-crypt-initramfs.service
+fi

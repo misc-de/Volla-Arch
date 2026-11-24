@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 23:28:24 +0100
+Subject: [PATCH] Poll passively for reading tags
+
+Reader/writer mode requested active polling for NFC-A and NFC-F as well.
+Tags only answer passive polling; active modes belong to peer-to-peer,
+which still adds them. The ST21NFC (NCI 2.0) in the Volla Phone Plinius
+rejects RF_DISCOVER_CMD with the active modes (status REJECTED), so no tag
+was ever found.
+---
+ src/nci_transition_idle_to_discovery.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/src/nci_transition_idle_to_discovery.c b/src/nci_transition_idle_to_discovery.c
+index 61484f2..4bab692 100644
+--- a/src/nci_transition_idle_to_discovery.c
++++ b/src/nci_transition_idle_to_discovery.c
+@@ -298,9 +298,14 @@ nci_transition_idle_to_discovery_discover(
+      */
+ 
+     if (sm->op_mode & NFC_OP_MODE_RW) {
+-        techs |= NCI_TECH_A_POLL |
++        /*
++         * Tags only answer passive polling. Active polling is for
++         * peer-to-peer (added below) and some NCI 2.0 controllers
++         * (e.g. ST21NFC) reject RF_DISCOVER_CMD with active modes.
++         */
++        techs |= NCI_TECH_A_POLL_PASSIVE |
+             NCI_TECH_B_POLL |
+-            NCI_TECH_F_POLL |
++            NCI_TECH_F_POLL_PASSIVE |
+             NCI_TECH_V_POLL;
+     }
+ 
+-- 
+2.55.0
+

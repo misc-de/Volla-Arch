@@ -1,0 +1,47 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+# Vulkan for glibc programs from the device's Android Vulkan driver (the "vulkan" HAL module),
+# as an ICD of the Khronos loader. The Android driver already keeps the loader's slot in its
+# dispatchable objects, so calls go to it directly; see hybris_vulkan.c. Window system
+# integration for Wayland (surface, swapchain on imported dma-bufs) is in wsi_wayland.c.
+pkgname=hybris-vulkan
+pkgver=0.2
+pkgrel=1
+pkgdesc="Vulkan ICD on Halium devices: the Android Vulkan driver through libhybris, with Wayland WSI"
+arch=(aarch64)
+license=(MIT)
+depends=(libhybris vulkan-icd-loader wayland)
+makedepends=(android-headers vulkan-headers wayland-protocols)
+optdepends=('vulkan-tools: vulkaninfo and vkcube to see the driver')
+source=(hybris_vulkan.c
+	hybris_vulkan.h
+	wsi_wayland.c
+	hybris_icd.json
+	LICENSE)
+sha256sums=('14577da303cb1f069150753082476e64736c9d93cc7791f36f9501a2bdbb44f0'
+	'af534e54f0b28458c71214f43a87c0d577a296ce0f6a12e73bf6a135b87d1acf'
+	'55e7cd58b1f9f6c2abf7f0839e69ec9fa1c8cee400ba0717193453c90b2a6d92'
+	'0c1a7d266043d035e67487abf673ccdf13d5c1b4235143ba08b87f8a694422e0'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	local xml
+	xml="$(pkg-config --variable=pkgdatadir wayland-protocols)/stable/linux-dmabuf/linux-dmabuf-v1.xml"
+	wayland-scanner client-header "$xml" linux-dmabuf-v1-client-protocol.h
+	wayland-scanner private-code "$xml" linux-dmabuf-v1-protocol.c
+	# -z nodelete: the loader dlcloses an ICD when its last instance is gone (vulkaninfo already
+	# after the extension query before the first instance). That took libhybris with it while the
+	# Mali driver's threads still ran in bionic code, and the process crashed (measured 2026-11-20).
+	# The driver cannot be unloaded anyway, so neither can this library.
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fPIC -shared \
+		-fvisibility=hidden -Wl,-soname,libvulkan_hybris.so -Wl,-z,nodelete -I. \
+		-o libvulkan_hybris.so hybris_vulkan.c wsi_wayland.c linux-dmabuf-v1-protocol.c \
+		$(pkg-config --cflags --libs libhardware wayland-client) -pthread $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 libvulkan_hybris.so -t "$pkgdir/usr/lib"
+	install -Dm644 hybris_icd.json "$pkgdir/usr/share/vulkan/icd.d/hybris_icd.aarch64.json"
+}

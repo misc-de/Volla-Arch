@@ -1,0 +1,45 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-usb\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-04 12:00+0100\n"
+"PO-Revision-Date: 2026-11-04 12:00+0100\n"
+"Last-Translator: plinius-usb\n"
+"Language-Team: none\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#: plinius-usb-prompt.c:86
+msgid "A pogo accessory and a USB-C device are connected, only one of them can carry data. Without an answer, Pogo stays active."
+msgstr "Подключены аксессуар Pogo и устройство USB-C, передавать данные может только одно из них. Без ответа останется активным Pogo."
+
+#: plinius-usb-prompt.c:88
+msgid "A pogo accessory and a USB-C device are connected, only one of them can carry data. Without an answer, USB-C stays active."
+msgstr "Подключены аксессуар Pogo и устройство USB-C, передавать данные может только одно из них. Без ответа останется активным USB-C."
+
+#: plinius-usb-prompt.c:91
+msgid "Which port should be active?"
+msgstr "Какой порт должен быть активным?"
+
+#: plinius-usb-prompt.c:108
+msgid "Pogo accessory active"
+msgstr "Аксессуар Pogo активен"
+
+#: plinius-usb-prompt.c:108
+msgid "USB-C carries no data until the accessory is removed."
+msgstr "USB-C не передаёт данные, пока аксессуар не будет отключён."
+
+#: plinius-usb-prompt.c:149
+msgid "Switching to Pogo"
+msgstr "Переключение на Pogo"
+
+#: plinius-usb-prompt.c:149
+msgid "Switching to USB-C"
+msgstr "Переключение на USB-C"
+
+#: plinius-usb-prompt.c:150
+msgid "This can take up to 10 seconds. It stays that way until the accessory or the cable is removed."
+msgstr "Это может занять до 10 секунд. Так и останется, пока аксессуар или кабель не будет отключён."

@@ -1,0 +1,640 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 21:30:00 +0100
+Subject: [PATCH] Forms with the button below, SIM Lock in the list style
+
+Plinius, for the phone's thumb and the look of the other pages:
+
+- Wi-Fi: libnma's dialogs (connect to a hidden network, create a network,
+  802.1X) as form pages: no large icon, no bold caption that repeats the
+  page's title, only the explaining sentence; "Connect" (or "Create") is a
+  pill below the form (CC_PLINIUS_CONFIRM_BELOW, shell/
+  cc-plinius-dialog-pages.c), not in the header bar.
+- Wi-Fi hotspot: no "Cancel", back (the arrow and the back swipe) cancels;
+  "Turn On" is a pill below the form.
+- Mobile Network, SIM Lock: one page in the list style instead of a
+  settings view and a PIN view. Below the switch the current PIN is asked
+  once the switch is turned; with the lock on and left on the PIN can be
+  changed (current, new, confirm). "Apply" below the form. The digit
+  filter and the length limit go to the rows' GtkText, as insert-text does
+  not reach the wrapping editable.
+---
+diff --git a/panels/network/cc-wifi-hotspot-dialog.blp b/panels/network/cc-wifi-hotspot-dialog.blp
+index 092c11bb2..038bffb5d 100644
+--- a/panels/network/cc-wifi-hotspot-dialog.blp
++++ b/panels/network/cc-wifi-hotspot-dialog.blp
+@@ -6,28 +6,11 @@ template $CcWifiHotspotDialog: Adw.Dialog {
+ 
+   child: Adw.ToolbarView {
+     [top]
++    /* Plinius: a page of the window, so back (the arrow and the back swipe) cancels and the
++     * confirming button sits below the form, where the thumb is */
+     Adw.HeaderBar {
+       show-start-title-buttons: false;
+       show-end-title-buttons: false;
+-
+-      [start]
+-      Button cancel_button {
+-        use-underline: true;
+-        label: _("_Cancel");
+-        clicked => $adw_dialog_close(template);
+-      }
+-
+-      [end]
+-      Button ok_button {
+-        use-underline: true;
+-        label: _("_Turn On");
+-        receives-default: true;
+-        clicked => $on_turn_on_button_clicked_cb(template);
+-
+-        styles [
+-          "suggested-action",
+-        ]
+-      }
+     }
+ 
+     content: Box {
+@@ -141,6 +124,20 @@ template $CcWifiHotspotDialog: Adw.Dialog {
+           ]
+         }
+       }
++
++      Button ok_button {
++        halign: center;
++        margin-top: 12;
++        use-underline: true;
++        label: _("_Turn On");
++        receives-default: true;
++        clicked => $on_turn_on_button_clicked_cb(template);
++
++        styles [
++          "pill",
++          "suggested-action",
++        ]
++      }
+     };
+   };
+ }
+diff --git a/panels/network/network-dialogs.c b/panels/network/network-dialogs.c
+index 6c72d34f0..564261278 100644
+--- a/panels/network/network-dialogs.c
++++ b/panels/network/network-dialogs.c
+@@ -159,6 +159,68 @@ done:
+  * that programs linking this file without the shell (tests) still link */
+ extern gboolean cc_plinius_gtk_dialog_present_as_page (GtkDialog *dialog, GtkWidget *parent) __attribute__ ((weak));
+ 
++/* Plinius: the widget with the GtkBuilder id @id in @widget's tree, depth first */
++static GtkWidget *
++find_buildable (GtkWidget *widget, const char *id)
++{
++    GtkWidget *child;
++
++    for (child = gtk_widget_get_first_child (widget); child; child = gtk_widget_get_next_sibling (child)) {
++        GtkWidget *found;
++
++        if (g_strcmp0 (gtk_buildable_get_buildable_id (GTK_BUILDABLE (child)), id) == 0)
++            return child;
++        found = find_buildable (child, id);
++        if (found)
++            return found;
++    }
++    return NULL;
++}
++
++/* Plinius: libnma's Wi-Fi dialog as a form page. Its large icon and the bold caption ("Hidden
++ * Wi-Fi network") only repeat the page's title, so they go; the explaining sentence stays,
++ * over the whole width. "Connect" (or "Create") moves below the form. The ids are libnma's
++ * wifi.ui; if they change, the dialog stays as it is. */
++static void
++tidy_wifi_dialog_page (GtkDialog *dialog)
++{
++    GtkWidget *content, *grid, *image, *caption;
++    g_autofree char *text = NULL;
++    const char *sentence;
++
++    /* read by cc_plinius_gtk_dialog_present_as_page() (CC_PLINIUS_CONFIRM_BELOW) */
++    g_object_set_data (G_OBJECT (dialog), "cc-plinius-confirm-below", GINT_TO_POINTER (TRUE));
++
++    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++    content = gtk_dialog_get_content_area (dialog);
++    G_GNUC_END_IGNORE_DEPRECATIONS
++    grid = find_buildable (content, "wifi_dialog");
++    image = find_buildable (content, "image1");
++    caption = find_buildable (content, "caption_label");
++    if (!GTK_IS_GRID (grid) || !GTK_IS_IMAGE (image) || !GTK_IS_LABEL (caption) ||
++        gtk_widget_get_parent (image) != grid || gtk_widget_get_parent (caption) != grid)
++        return;
++
++    gtk_grid_remove (GTK_GRID (grid), image);
++
++    /* "<b>caption</b>\n\nsentence": keep the sentence, as plain text */
++    text = g_strdup (gtk_label_get_text (GTK_LABEL (caption)));
++    sentence = g_strstr_len (text, -1, "\n\n");
++    if (sentence) {
++        gtk_label_set_use_markup (GTK_LABEL (caption), FALSE);
++        gtk_label_set_text (GTK_LABEL (caption), sentence + 2);
++    }
++
++    /* the column of the icon is gone: the sentence starts where the form starts */
++    g_object_ref (caption);
++    gtk_grid_remove (GTK_GRID (grid), caption);
++    gtk_widget_set_margin_start (caption, 0);
++    gtk_widget_set_margin_end (caption, 0);
++    gtk_widget_set_margin_top (caption, 0);
++    gtk_grid_attach (GTK_GRID (grid), caption, 0, 0, 2, 1);
++    g_object_unref (caption);
++}
++
+ static void
+ show_wireless_dialog (GtkWidget *toplevel, NMClient *client, GtkWidget *dialog)
+ {
+@@ -176,6 +238,8 @@ show_wireless_dialog (GtkWidget *toplevel, NMClient *client, GtkWidget *dialog)
+ 
+     /* Plinius: a page of the window with the back swipe, not a window of its own */
+     G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++    if (cc_plinius_gtk_dialog_present_as_page && NMA_IS_WIFI_DIALOG (dialog))
++        tidy_wifi_dialog_page (GTK_DIALOG (dialog));
+     if (cc_plinius_gtk_dialog_present_as_page &&
+         cc_plinius_gtk_dialog_present_as_page (GTK_DIALOG (dialog), toplevel))
+         return;
+diff --git a/panels/wwan/cc-wwan-sim-lock-dialog.blp b/panels/wwan/cc-wwan-sim-lock-dialog.blp
+index c7256c0e7..aa15905a7 100644
+--- a/panels/wwan/cc-wwan-sim-lock-dialog.blp
++++ b/panels/wwan/cc-wwan-sim-lock-dialog.blp
+@@ -2,7 +2,9 @@ using Gtk 4.0;
+ using Adw 1;
+ 
+ // Plinius: an AdwDialog, so that it opens as a page of the window (cc-plinius-dialog-pages.c)
+-// with the back arrow and the back swipe instead of "Cancel"
++// with the back arrow and the back swipe instead of "Cancel". One page in the usual list style:
++// the switch, below it the current PIN when the switch is turned, and with the lock on the
++// change of the PIN; the button below the form.
+ template $CcWwanSimLockDialog: Adw.Dialog {
+   content-height: 480;
+   content-width: 360;
+@@ -10,191 +12,59 @@ template $CcWwanSimLockDialog: Adw.Dialog {
+ 
+   child: Adw.ToolbarView {
+     [top]
+-    Adw.HeaderBar {
+-      [end]
+-      Stack button_stack {
+-        StackPage {
+-          name: "next";
++    Adw.HeaderBar {}
++
++    content: Adw.PreferencesPage {
++      Adw.PreferencesGroup {
++        Adw.SwitchRow lock_row {
++          use-underline: true;
++          title: _("_Lock SIM with PIN");
++          notify::active => $cc_wwan_sim_lock_changed_cb(template);
++        }
++      }
+ 
+-          child: Button next_button {
+-            sensitive: false;
+-            use-underline: true;
+-            label: _("_Next");
+-            clicked => $cc_wwan_pin_next_clicked_cb(template);
++      // title and description set in cc_wwan_sim_lock_update()
++      Adw.PreferencesGroup pin_group {
++        visible: false;
+ 
+-            styles [
+-              "suggested-action",
+-            ]
+-          };
++        Adw.PasswordEntryRow pin_entry {
++          input-purpose: pin;
++          input-hints: no_emoji;
++          notify::text => $cc_wwan_pin_entry_changed_cb(template);
++          entry-activated => $cc_wwan_pin_apply_clicked_cb(template);
+         }
+ 
+-        StackPage {
+-          name: "apply";
+-
+-          child: Button apply_button {
+-            use-underline: true;
+-            clicked => $cc_wwan_pin_apply_clicked_cb(template);
++        Adw.PasswordEntryRow new_pin_entry {
++          title: _("New PIN");
++          input-purpose: pin;
++          input-hints: no_emoji;
++          notify::text => $cc_wwan_pin_entry_changed_cb(template);
++          entry-activated => $cc_wwan_pin_apply_clicked_cb(template);
++        }
+ 
+-            styles [
+-              "suggested-action",
+-            ]
+-          };
++        Adw.PasswordEntryRow pin_confirm_entry {
++          title: _("Confirm");
++          input-purpose: pin;
++          input-hints: no_emoji;
++          notify::text => $cc_wwan_pin_entry_changed_cb(template);
++          entry-activated => $cc_wwan_pin_apply_clicked_cb(template);
+         }
+       }
+-    }
+-
+-    content: Box {
+-      Adw.Clamp {
+-        hexpand: true;
+-        margin-top: 32;
+-        margin-bottom: 32;
+-        margin-start: 18;
+-        margin-end: 18;
+-
+-        Adw.ToastOverlay toast_overlay {
+-          child: Stack pin_settings_stack {
+-            transition-type: slide_left;
+-
+-            StackPage {
+-              name: "pin-settings";
+-
+-              child: Box {
+-                orientation: vertical;
+-
+-                ListBox {
+-                  selection-mode: none;
+-                  margin-bottom: 18;
+-
+-                  styles [
+-                    "frame",
+-                  ]
+-
+-                  Adw.SwitchRow lock_row {
+-                    use-underline: true;
+-                    title: _("_Lock SIM with PIN");
+-                    notify::active => $cc_wwan_sim_lock_changed_cb(template);
+-                  }
+-                }
+-
+-                Grid lock_change_grid {
+-                  visible: false;
+-                  row-spacing: 18;
+-                  column-spacing: 12;
+-
+-                  Label lock_change_title {
+-                    label: _("Change PIN");
+-                    margin-bottom: 9;
+-                    xalign: 0.0;
+-
+-                    styles [
+-                      "heading",
+-                    ]
+-
+-                    layout {
+-                      column: 0;
+-                      row: 0;
+-                      column-span: 2;
+-                    }
+-                  }
+-
+-                  Label {
+-                    label: _("New PIN");
+-                    halign: end;
+-                    mnemonic-widget: new_pin_entry;
+-
+-                    layout {
+-                      column: 0;
+-                      row: 1;
+-                    }
+-                  }
+-
+-                  Entry new_pin_entry {
+-                    visibility: false;
+-                    input-purpose: password;
+-                    input-hints: no_emoji;
+-                    max-length: 8;
+-                    max-width-chars: 32;
+-                    notify::text => $cc_wwan_pin_entry_changed_cb(template);
+-                    insert-text => $cc_wwan_pin_entry_text_inserted_cb(template);
+-
+-                    layout {
+-                      column: 1;
+-                      row: 1;
+-                    }
+-                  }
+-
+-                  Label {
+-                    label: _("Confirm");
+-                    halign: end;
+-                    mnemonic-widget: pin_confirm_entry;
+-
+-                    layout {
+-                      column: 0;
+-                      row: 2;
+-                    }
+-                  }
+-
+-                  Entry pin_confirm_entry {
+-                    visibility: false;
+-                    input-purpose: password;
+-                    input-hints: no_emoji;
+-                    max-length: 8;
+-                    max-width-chars: 32;
+-                    notify::text => $cc_wwan_pin_entry_changed_cb(template);
+-                    insert-text => $cc_wwan_pin_entry_changed_cb(template);
+-
+-                    layout {
+-                      column: 1;
+-                      row: 2;
+-                    }
+-                  }
+-                }
+-              };
+-            }
+-
+-            StackPage {
+-              name: "pin-entry";
+-
+-              child: Box {
+-                orientation: vertical;
+-                hexpand: true;
+-                vexpand: true;
+-                valign: center;
+-                halign: center;
+-
+-                Image {
+-                  pixel-size: 128;
+-                  icon-name: "dialog-password-symbolic";
+-                }
+ 
+-                // Plinius: wrapped, as one line it made the page (the stack measures both
+-                // views) wider than the phone
+-                Label {
+-                  label: _("Enter current PIN to change SIM lock settings");
+-                  margin-bottom: 24;
+-                  halign: center;
+-                  wrap: true;
+-                  justify: center;
+-                  mnemonic-widget: pin_entry;
++      Adw.PreferencesGroup apply_group {
++        visible: false;
+ 
+-                  styles [
+-                    "dim-label",
+-                  ]
+-                }
++        Button apply_button {
++          halign: center;
++          use-underline: true;
++          label: _("_Apply");
++          sensitive: false;
++          clicked => $cc_wwan_pin_apply_clicked_cb(template);
+ 
+-                Entry pin_entry {
+-                  visibility: false;
+-                  input-purpose: password;
+-                  input-hints: no_emoji;
+-                  max-length: 8;
+-                  max-width-chars: 32;
+-                  notify::text => $cc_wwan_pin_entered_cb(template);
+-                  insert-text => $cc_wwan_pin_entry_text_inserted_cb(template);
+-                  activate => $cc_wwan_pin_apply_clicked_cb(template);
+-                }
+-              };
+-            }
+-          };
++          styles [
++            "pill",
++            "suggested-action",
++          ]
+         }
+       }
+     };
+diff --git a/panels/wwan/cc-wwan-sim-lock-dialog.c b/panels/wwan/cc-wwan-sim-lock-dialog.c
+index f55bdb929..55a7a19b7 100644
+--- a/panels/wwan/cc-wwan-sim-lock-dialog.c
++++ b/panels/wwan/cc-wwan-sim-lock-dialog.c
+@@ -39,20 +39,24 @@
+ #define PIN_MINIMUM_LENGTH 4
+ #define PIN_MAXIMUM_LENGTH 8
+ 
++/* Plinius: our own strings; the template keeps GNOME's domain */
++#define P_(s) g_dgettext ("plinius-control-center", s)
++
++/* Plinius: one page in the usual list style instead of a settings view and a PIN view:
++ * the switch, below it the current PIN once the switch is turned, and with the lock on the
++ * change of the PIN (current, new, confirm); the button below the form */
+ struct _CcWwanSimLockDialog {
+     AdwDialog parent_instance;
+ 
+     CcWwanDevice *device;
+ 
+     GtkButton *apply_button;
+-    GtkStack *button_stack;
+-    GtkGrid *lock_change_grid;
++    GtkWidget *apply_group;
+     AdwSwitchRow *lock_row;
+-    GtkEntry *new_pin_entry;
+-    GtkButton *next_button;
+-    GtkEntry *pin_confirm_entry;
+-    GtkEntry *pin_entry;
+-    GtkStack *pin_settings_stack;
++    AdwEntryRow *new_pin_entry;
++    AdwEntryRow *pin_confirm_entry;
++    AdwEntryRow *pin_entry;
++    AdwPreferencesGroup *pin_group;
+ };
+ 
+ G_DEFINE_FINAL_TYPE (CcWwanSimLockDialog, cc_wwan_sim_lock_dialog, ADW_TYPE_DIALOG)
+@@ -65,26 +69,49 @@ enum {
+ 
+ static GParamSpec *properties[N_PROPS];
+ 
++static gboolean
++pin_length_valid (AdwEntryRow *row)
++{
++    gsize len = strlen (gtk_editable_get_text (GTK_EDITABLE (row)));
++
++    return len >= PIN_MINIMUM_LENGTH && len <= PIN_MAXIMUM_LENGTH;
++}
++
++/* Shows what the switch asks for and whether it can be applied */
+ static void
+-cc_wwan_sim_lock_changed_cb (CcWwanSimLockDialog *self)
++cc_wwan_sim_lock_update (CcWwanSimLockDialog *self)
+ {
+-    gboolean row_enabled, lock_enabled;
++    gboolean lock_enabled, row_enabled, turned, change, ready;
++
++    if (!self->device)
++        return;
+ 
+     lock_enabled = cc_wwan_device_get_sim_lock (self->device);
+     row_enabled = adw_switch_row_get_active (self->lock_row);
+-
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->next_button), lock_enabled != row_enabled);
+-    gtk_widget_set_visible (GTK_WIDGET (self->lock_change_grid), row_enabled && lock_enabled);
++    /* turned: the current PIN turns the lock on or off; left on: the PIN can be changed */
++    turned = lock_enabled != row_enabled;
++    change = lock_enabled && row_enabled;
++
++    gtk_widget_set_visible (GTK_WIDGET (self->pin_group), turned || change);
++    gtk_widget_set_visible (self->apply_group, turned || change);
++    gtk_widget_set_visible (GTK_WIDGET (self->new_pin_entry), change);
++    gtk_widget_set_visible (GTK_WIDGET (self->pin_confirm_entry), change);
++    adw_preferences_group_set_title (self->pin_group, change ? _("Change PIN") : "");
++    adw_preferences_group_set_description (self->pin_group,
++                                           turned ? _("Enter current PIN to change SIM lock settings") : NULL);
++
++    ready = pin_length_valid (self->pin_entry);
++    if (change)
++        ready = ready && pin_length_valid (self->new_pin_entry) &&
++                g_str_equal (gtk_editable_get_text (GTK_EDITABLE (self->new_pin_entry)),
++                             gtk_editable_get_text (GTK_EDITABLE (self->pin_confirm_entry)));
++    gtk_widget_set_sensitive (GTK_WIDGET (self->apply_button), ready);
+ }
+ 
+ static void
+-cc_wwan_pin_next_clicked_cb (CcWwanSimLockDialog *self)
++cc_wwan_sim_lock_changed_cb (CcWwanSimLockDialog *self)
+ {
+-    gtk_stack_set_visible_child_name (self->pin_settings_stack, "pin-entry");
+-    gtk_editable_set_text (GTK_EDITABLE (self->pin_entry), "");
+-
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->apply_button), FALSE);
+-    gtk_stack_set_visible_child (self->button_stack, GTK_WIDGET (self->apply_button));
++    cc_wwan_sim_lock_update (self);
+ }
+ 
+ static void
+@@ -93,6 +120,11 @@ cc_wwan_pin_apply_clicked_cb (CcWwanSimLockDialog *self)
+     const gchar *pin, *new_pin;
+     gboolean row_enabled, lock_enabled;
+ 
++    /* Enter in a row before the form is complete */
++    if (!gtk_widget_get_visible (self->apply_group) ||
++        !gtk_widget_get_sensitive (GTK_WIDGET (self->apply_button)))
++        return;
++
+     /* Plinius: the page goes once the dialog is done; it is freed only after the page is gone,
+      * so the entries below can still be read */
+     adw_dialog_close (ADW_DIALOG (self));
+@@ -114,6 +146,7 @@ cc_wwan_pin_apply_clicked_cb (CcWwanSimLockDialog *self)
+     cc_wwan_device_change_pin (self->device, pin, new_pin, NULL, NULL, NULL);
+ }
+ 
++/* Connected to the rows' GtkText (insert-text does not reach the row itself): digits only */
+ static void
+ cc_wwan_pin_entry_text_inserted_cb (CcWwanSimLockDialog *self, gchar *new_text, gint new_text_length, gpointer position,
+                                     GtkEditable *editable)
+@@ -148,38 +181,7 @@ cc_wwan_pin_entry_text_inserted_cb (CcWwanSimLockDialog *self, gchar *new_text,
+ static void
+ cc_wwan_pin_entry_changed_cb (CcWwanSimLockDialog *self)
+ {
+-    const gchar *new_pin, *confirm_pin;
+-
+-    new_pin = gtk_editable_get_text (GTK_EDITABLE (self->new_pin_entry));
+-    confirm_pin = gtk_editable_get_text (GTK_EDITABLE (self->pin_confirm_entry));
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->next_button), FALSE);
+-
+-    /* A PIN should have a minimum length of 4 */
+-    if (!new_pin || !confirm_pin || strlen (new_pin) < 4)
+-        return;
+-
+-    if (g_str_equal (new_pin, confirm_pin))
+-        gtk_widget_set_sensitive (GTK_WIDGET (self->next_button), TRUE);
+-}
+-
+-static void
+-cc_wwan_pin_entered_cb (CcWwanSimLockDialog *self)
+-{
+-    const gchar *pin;
+-    gsize len;
+-    gboolean enable_apply;
+-
+-    pin = gtk_editable_get_text (GTK_EDITABLE (self->pin_entry));
+-
+-    if (!pin || !*pin) {
+-        gtk_widget_set_sensitive (GTK_WIDGET (self->apply_button), FALSE);
+-        return;
+-    }
+-
+-    len = strlen (pin);
+-    enable_apply = len >= PIN_MINIMUM_LENGTH && len <= PIN_MAXIMUM_LENGTH;
+-
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->apply_button), enable_apply);
++    cc_wwan_sim_lock_update (self);
+ }
+ 
+ static void
+@@ -207,23 +209,9 @@ cc_wwan_sim_lock_dialog_constructed (GObject *object)
+ 
+     G_OBJECT_CLASS (cc_wwan_sim_lock_dialog_parent_class)->constructed (object);
+ 
+-    gtk_editable_set_text (GTK_EDITABLE (self->pin_entry), "");
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->next_button), FALSE);
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->apply_button), FALSE);
+-
+     lock_enabled = cc_wwan_device_get_sim_lock (self->device);
+-    g_object_set (self->lock_row, "active", lock_enabled, NULL);
+-    gtk_widget_set_visible (GTK_WIDGET (self->lock_change_grid), lock_enabled);
+-
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->next_button), FALSE);
+-    gtk_stack_set_visible_child (self->button_stack, GTK_WIDGET (self->next_button));
+-    gtk_button_set_label (self->apply_button, _("_Set"));
+-
+-    gtk_stack_set_visible_child_name (self->pin_settings_stack, "pin-settings");
+-
+-    gtk_editable_set_text (GTK_EDITABLE (self->pin_entry), "");
+-    gtk_editable_set_text (GTK_EDITABLE (self->new_pin_entry), "");
+-    gtk_editable_set_text (GTK_EDITABLE (self->pin_confirm_entry), "");
++    adw_switch_row_set_active (self->lock_row, lock_enabled);
++    cc_wwan_sim_lock_update (self);
+ }
+ 
+ static void
+@@ -256,27 +244,40 @@ cc_wwan_sim_lock_dialog_class_init (CcWwanSimLockDialogClass *klass)
+                                                  "/org/gnome/control-center/wwan/cc-wwan-sim-lock-dialog.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, apply_button);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, button_stack);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, lock_change_grid);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, apply_group);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, lock_row);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, new_pin_entry);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, next_button);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, pin_confirm_entry);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, pin_entry);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, pin_settings_stack);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanSimLockDialog, pin_group);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_sim_lock_changed_cb);
+-    gtk_widget_class_bind_template_callback (widget_class, cc_wwan_pin_next_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_pin_apply_clicked_cb);
+-    gtk_widget_class_bind_template_callback (widget_class, cc_wwan_pin_entry_text_inserted_cb);
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_pin_entry_changed_cb);
+-    gtk_widget_class_bind_template_callback (widget_class, cc_wwan_pin_entered_cb);
+ }
+ 
+ static void
+ cc_wwan_sim_lock_dialog_init (CcWwanSimLockDialog *self)
+ {
++    AdwEntryRow *rows[3];
++
+     gtk_widget_init_template (GTK_WIDGET (self));
++
++    /* Plinius: rows instead of entries; the length limit and the digit filter go to their
++     * GtkText, the editable that hears the typing */
++    rows[0] = self->pin_entry;
++    rows[1] = self->new_pin_entry;
++    rows[2] = self->pin_confirm_entry;
++    for (guint i = 0; i < G_N_ELEMENTS (rows); i++) {
++        GtkEditable *text = gtk_editable_get_delegate (GTK_EDITABLE (rows[i]));
++
++        if (GTK_IS_TEXT (text))
++            gtk_text_set_max_length (GTK_TEXT (text), PIN_MAXIMUM_LENGTH);
++        if (text)
++            g_signal_connect_object (text, "insert-text", G_CALLBACK (cc_wwan_pin_entry_text_inserted_cb), self,
++                                     G_CONNECT_SWAPPED);
++    }
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->pin_entry), P_("Current PIN"));
+ }
+ 
+ AdwDialog *

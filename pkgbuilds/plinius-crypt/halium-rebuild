@@ -1,0 +1,842 @@
+#!/bin/bash
+# Keeps the password prompt in the phone's Halium ramdisk up to date (docs/PLAN-VERSCHLUESSELUNG.md):
+# the counterpart of mkinitcpio for systems that start through the Halium ramdisk. Called by
+# rebuild-initramfs when the look of the prompt changed, by the pacman hook of plinius-crypt-ramdisk
+# when its programs changed (--update), and at every start by plinius-crypt-halium.service (--boot).
+#
+# The ramdisk is put together from
+#  - UT's vendor_boot and init_boot of the installed system (/usr/share/plinius-boot, or its
+#    subdirectory ut/ when the image keeps the Plinius ones there for Plinius Boot)
+#  - the parts of plinius-crypt-ramdisk: programs.zst in front of vendor_boot's platform ramdisk,
+#    init.lz4 (hook and unlock script) behind init_boot's ramdisk
+#  - the firmware of the vibration motor (/vendor/firmware/haptic_ram.bin) and UT's scripts/halium
+#    with the call of the unlock script, both from the phone; boot-image makes the scripts (also
+#    init-top), so it counts as one of the parts: new scripts get a trial like new programs
+#  - an archive with what look-files takes from the system (wallpaper, look and accent of the
+#    keyboard, layout, language). The kernel unpacks the archives in a row, so later files replace
+#    the defaults of the same names.
+# The parts last known to start are kept in /var/lib/plinius-crypt/halium/confirmed, and a change of
+# the look uses those. New parts from the package first start from the memory card as a trial,
+# like a new kernel (plinius-kernel): the entry "plinius-crypt-trial" in the boot menu runs the
+# installed kernel with the new ramdisk. Once the system is up, the same images go into vendor_boot
+# and init_boot; if it does not come up, choosing "Arch Linux" in the menu starts the old ramdisk,
+# and the next start drops the trial. Without the card the new parts are written at once.
+# A system with the base of the earlier versions (below) and no confirmed parts keeps using that base
+# for a change of the look until its first trial is confirmed.
+#
+# Configuration in /var/lib/plinius-crypt/halium, all optional:
+#   target  where the bootloader loads the ramdisk from, one line:
+#           card PARTUUID ENTRY   a boot entry on the memory card: ENTRY/initrd.cpio.gz on the
+#                                 partition PARTUUID (abm_settings), e.g. rom3; no trial there,
+#                                 the entry is the system's own
+#           vendor_boot           vendor_boot and init_boot of the active slot in the phone's own
+#                                 storage
+#           Without it: vendor_boot if the data partition is in the phone's own storage; on the card
+#           the one boot entry whose ramdisk starts with the base (none or several: an error).
+#   base    the earlier way, without parts: what tools/crypt-ramdisk.sh made for that target
+#           (initrd.cpio.gz for the card, vendor_boot.img for vendor_boot), with the look appended.
+#           Without it: that file in /usr/share/plinius-boot.
+# State: confirmed/ (parts known to start), trial/ (parts and images on trial, the slot), failed (the
+# parts that did not come up: not tried again until new ones come, or --retry), waiting (new parts
+# wait for a kernel trial to end).
+#
+# Only a ramdisk of the same UT build is replaced: vendor_boot (or the card's entry) must hold UT's
+# platform ramdisk (at its start up to plinius-crypt 0.12, behind the programs since), init_boot
+# must start with UT's ramdisk, else nothing is written. With a base, the ramdisk must start with
+# that base instead. Before writing, the old image is kept as
+# <partition>.prev in the configuration directory, and written back should the partition not read back
+# as written; on the card the old ramdisk stays as initrd.cpio.gz.prev. Nothing is written when the
+# result equals what is there.
+#
+# Usage: halium-rebuild                 renew the look in the ramdisk at the target
+#        halium-rebuild --update        new parts of plinius-crypt-ramdisk: trial or write
+#        halium-rebuild --retry         the same, also for parts whose trial failed before
+#        halium-rebuild --boot          confirm or drop a trial (plinius-crypt-halium.service)
+#        halium-rebuild --status        what is confirmed, on trial, failed
+#        halium-rebuild --output FILE   only build what would be written into FILE (a dry run, and
+#                                       for tests); with the target vendor_boot, FILE.init_boot also
+#                                       gets init_boot when the parts are used
+# For tests: PLINIUS_CRYPT_HALIUM the configuration directory, PLINIUS_CRYPT_BOOT_FILES instead of
+# /usr/share/plinius-boot, PLINIUS_CRYPT_PARTS instead of the package's parts, PLINIUS_CRYPT_HAPTIC_FW
+# the firmware file, PLINIUS_CRYPT_INIT_BOOT the init_boot image to measure instead of the active
+# slot's partition (base only), PLINIUS_CRYPT_PARTITIONS a directory of files that stand in for
+# /dev/disk/by-partlabel (no card then), PLINIUS_CRYPT_CMDLINE instead of /proc/cmdline,
+# PLINIUS_CRYPT_KERNEL_TRIAL instead of plinius-kernel's trial file, PLINIUS_CRYPT_UP=yes|no instead
+# of asking systemd whether the system is up, PLINIUS_CRYPT_MAX_RAMDISK a lower limit than lk's
+set -euo pipefail
+
+conf=${PLINIUS_CRYPT_HALIUM:-/var/lib/plinius-crypt/halium}
+# look-files and boot-image lie next to this script, in the package as in the source tree
+lib=$(dirname "$(readlink -f "$0")")
+boot_files=${PLINIUS_CRYPT_BOOT_FILES:-/usr/share/plinius-boot}
+offered=${PLINIUS_CRYPT_PARTS:-/usr/lib/plinius-crypt/ramdisk}
+# The largest ramdisk (vendor_boot's and init_boot's together) lk loads with plinius-kernel's
+# 6.1.192: it copies the ramdisk to 0x66f00000 and has only 0x1500000 bytes mapped there, a larger
+# one ends in "data fault ... FAR 0x68400000" before the kernel (09.11.2026, expdb: 22,090,524
+# bytes from the card failed, 22,018,783 bytes from the phone's own storage started). With UT's
+# 6.1.145 lk loaded more (25,397,680 bytes from the card on 07.11., 30,218,566 bytes from the
+# phone's storage on 09.11.), so the limit follows the kernel. With 6.1.192-plinius17 the room
+# ended earlier: the trial of 0.1-3 of plinius-crypt-ramdisk (22,014,601 bytes from the card) ended
+# in "data fault: Write access ... FAR 0x683fd000" (13.11.2026, expdb), 0x14fd000 bytes behind the
+# start; 22,003,452 bytes start. That is the limit now, bootconfig included.
+MAX_RAMDISK=22007808
+# Tests only lower it (a ramdisk that fits only without the wallpaper)
+if [[ -n ${PLINIUS_CRYPT_MAX_RAMDISK:-} ]] && ((PLINIUS_CRYPT_MAX_RAMDISK < MAX_RAMDISK)); then
+	MAX_RAMDISK=$PLINIUS_CRYPT_MAX_RAMDISK
+fi
+# lk puts the bootconfig (09.11.2026: 612 and 620 bytes, plus 20 bytes of size, checksum and
+# "#BOOTCONFIG") right behind the ramdisk, in the same room; without space for it the kernel finds
+# none ("'bootconfig' found on command line, but no bootconfig found"), androidboot.slot_suffix is
+# missing and Android's boot control service aborts again and again (the trial of 0.13-7 with a
+# ramdisk of 22,019,589 bytes). So the ramdisk keeps this much free.
+BOOTCONFIG_ROOM=1024
+TRIAL=plinius-crypt-trial
+# The boot menu's entry of the system in the phone's own storage (Android Boot Manager)
+REAL=real
+KERNEL_TRIAL=${PLINIUS_CRYPT_KERNEL_TRIAL:-/var/lib/plinius-kernel/trial}
+# The kernel in boot<slot> as plinius-kernel-install notes it: a trial made with one kernel and
+# started after another one was confirmed is made again
+KERNEL_INSTALLED=$(dirname "$KERNEL_TRIAL")/installed
+# How long the start waits for a kernel trial to end before its own trial is set up (seconds)
+KERNEL_WAIT=${PLINIUS_CRYPT_KERNEL_WAIT:-900}
+partitions=${PLINIUS_CRYPT_PARTITIONS:-/dev/disk/by-partlabel}
+cmdline=${PLINIUS_CRYPT_CMDLINE:-/proc/cmdline}
+lock=/run/plinius-crypt-halium.lock
+[[ -z ${PLINIUS_CRYPT_PARTITIONS:-} ]] || lock=$conf/.lock
+
+log() { echo "halium-rebuild: $*" >&2; }
+die() { log "$*"; exit 1; }
+
+mode=look output="" retry=""
+case ${1:-} in
+	--output) output=${2:?usage: halium-rebuild [--output FILE]} ;;
+	--update) mode=update ;;
+	--retry) mode=update retry=1 ;;
+	--boot) mode=boot ;;
+	--status) mode=status ;;
+	"") ;;
+	*) die "usage: halium-rebuild [--update | --retry | --boot | --status | --output FILE]" ;;
+esac
+
+# scripts_of DIR: the boot-image whose halium-script makes the ramdisk scripts for DIR's parts
+# (scripts/halium, init-top). They change the start as much as the programs do, so they belong to
+# the parts: the offered parts go with this package's boot-image, confirmed and trial parts keep
+# a copy of theirs. Parts confirmed by an older plinius-crypt have none (empty).
+scripts_of() {
+	if [[ $1 == "$offered" ]]; then
+		echo "$lib/boot-image"
+	elif [[ -f $1/boot-image ]]; then
+		echo "$1/boot-image"
+	fi
+}
+
+# parts_id DIR: one checksum over the parts in DIR (empty if there are none). Without a boot-image
+# of their own, older confirmed parts differ from the offered ones: new scripts get a trial.
+parts_id() {
+	local scripts
+	[[ -f $1/programs.zst && -f $1/init.lz4 ]] || return 0
+	scripts=$(scripts_of "$1")
+	{ cat "$1/programs.zst" "$1/init.lz4"; [[ -z $scripts ]] || cat "$scripts"; } | sha256sum | cut -c1-16
+}
+
+# copy_parts FROM TO: the parts (and their versions) through a rename, so TO is never half there
+copy_parts() {
+	local scripts
+	rm -rf "$2.new"
+	mkdir -p "$2.new"
+	cp "$1/programs.zst" "$1/init.lz4" "$2.new/"
+	scripts=$(scripts_of "$1")
+	if [[ -n $scripts ]]; then
+		cp "$scripts" "$2.new/boot-image"
+		chmod 755 "$2.new/boot-image"
+	fi
+	[[ ! -f $1/versions ]] || cp "$1/versions" "$2.new/"
+	sync -f "$2.new/programs.zst"
+	rm -rf "$2"
+	mv "$2.new" "$2"
+}
+
+kernel_trial() { [[ -e $KERNEL_TRIAL ]]; }
+
+# The phone's Halium system: a target, or the data partition on /userdata (as rebuild-initramfs)
+halium_system() { [[ -f $conf/target ]] || findmnt -n /userdata > /dev/null; }
+
+# part NAME: the partition (a file in tests)
+part() { readlink -f "$partitions/$1"; }
+# is_part PATH: a block device, or in tests a file
+is_part() { [[ -b $1 || ( -n ${PLINIUS_CRYPT_PARTITIONS:-} && -f $1 ) ]]; }
+# part_size PATH: its size in bytes
+part_size() { if [[ -b $1 ]]; then blockdev --getsize64 "$1"; else stat -c %s "$1"; fi; }
+# vbmeta_offset PART: where the vbmeta block named by PART's AVB footer starts, or PART's size
+# without a footer
+vbmeta_offset() {
+	python3 - "$1" <<-'EOF'
+	import os, struct, sys
+	with open(sys.argv[1], 'rb') as f:
+	    size = f.seek(0, os.SEEK_END)
+	    f.seek(size - 64)
+	    footer = f.read(64)
+	print(struct.unpack_from('>Q', footer, 20)[0] if footer[:4] == b'AVBf' else size)
+	EOF
+}
+
+if [[ $mode == status ]]; then
+	echo "confirmed: $(parts_id "$conf/confirmed")"
+	[[ ! -f $conf/confirmed/versions ]] || sed 's/^/  /' "$conf/confirmed/versions"
+	echo "offered:   $(parts_id "$offered")"
+	echo "trial:     $(parts_id "$conf/trial")"
+	echo "failed:    $(cat "$conf/failed" 2>/dev/null || true)"
+	echo "waiting:   $([[ -e $conf/waiting ]] && echo yes || echo no)"
+	echo "base:      $([[ -s $conf/base ]] && echo "$conf/base" || echo none)"
+	exit 0
+fi
+
+# Not the phone's Halium system (the PC, the preview): its initramfs is mkinitcpio's
+if [[ $mode != look && -z $output ]] && ! halium_system; then
+	log "not started through the Halium ramdisk, nothing to do"
+	exit 0
+fi
+
+# --- where the ramdisk goes ---
+if [[ -e $conf/target ]]; then
+	read -r kind partuuid entry _ < "$conf/target" || die "$conf/target unreadable"
+else
+	# The disk under the data partition (through an opened LUKS mapping, if any)
+	data=$(findmnt -n -o SOURCE /userdata) || die "no $conf/target, and no /userdata"
+	disk=$(lsblk -n -s -o NAME "$data" | tail -n 1 | sed 's/^[^[:alnum:]]*//')
+	kind=vendor_boot
+	[[ $disk != mmcblk* ]] || kind=card-search
+fi
+
+# The slot this system started from, as the bootloader tells the kernel. A start from a card entry
+# comes without bootconfig, so the slot of a normal start is remembered.
+slot() {
+	local s
+	s=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' /proc/bootconfig 2>/dev/null || true)
+	[[ -n $s ]] || s=$(tr ' ' '\n' < "$cmdline" | sed -n 's/^androidboot\.slot_suffix=\(_[ab]\)$/\1/p')
+	if [[ $s == _a || $s == _b ]]; then
+		if [[ -z $output ]]; then
+			mkdir -p "$conf"
+			echo "$s" > "$conf/slot.new" && mv "$conf/slot.new" "$conf/slot"
+		fi
+	else
+		s=$(cat "$conf/slot" 2>/dev/null || true)
+	fi
+	echo "$s"
+}
+
+tmp=$(mktemp -d)
+mnt=""
+cleanup() {
+	if [[ -n $mnt ]]; then
+		umount "$mnt" 2>/dev/null || true
+		rmdir "$mnt" 2>/dev/null || true
+	fi
+	rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+# --- the parts of the ramdisk ---
+# ut_files: UT's vendor_boot and init_boot into $ut_vendor and $ut_init
+ut_files() {
+	local d
+	for d in "$boot_files/ut" "$boot_files"; do
+		if [[ -f $d/vendor_boot.img && -f $d/init_boot.img ]] &&
+			[[ $("$lib/boot-image" kind "$d/vendor_boot.img" 2>/dev/null) == ut ]]; then
+			ut_vendor=$d/vendor_boot.img ut_init=$d/init_boot.img
+			return
+		fi
+	done
+	die "UT's vendor_boot.img and init_boot.img are in neither $boot_files/ut nor $boot_files"
+}
+
+# look_archive: what look-files takes from the system as $tmp/look.lz4, and the same without the
+# wallpaper as $tmp/look-plain.lz4 (plain_look). newc cpio owned by root, lz4 legacy like the other
+# parts of the ramdisk. The same settings give the same bytes, so an unchanged look is recognized
+# as up to date.
+look_archive() {
+	local bg=$tmp/look-root/usr/share/plinius-crypt/glass-background.bin
+	rm -rf "$tmp/look-root"
+	mkdir "$tmp/look-root"
+	"$lib/look-files" "$tmp/look-root"
+	# The wallpaper at the small size of the ramdisk (boot-image SMALL_BACKGROUND): at 108x240 it
+	# is some 70 kB, at 27x60 some 6.5 kB; unl0kr scales it up smoothly. It takes the place of
+	# the package's default in the programs.
+	if [[ -f $bg ]] && ! "$lib/boot-image" shrink-background "$bg" "$tmp/small-background"; then
+		log "the wallpaper could not be made small: the prompt shows the default one"
+		rm -f "$tmp/small-background"
+	fi
+	rm -f "$bg"
+	"$lib/boot-image" cpio "$tmp/look-root" "$tmp/look.cpio"
+	lz4 -q -12 -l -c "$tmp/look.cpio" > "$tmp/look-plain.lz4"
+	if [[ -f $tmp/small-background ]]; then
+		install -m644 "$tmp/small-background" "$bg"
+		"$lib/boot-image" cpio "$tmp/look-root" "$tmp/look.cpio"
+		lz4 -q -12 -l -c "$tmp/look.cpio" > "$tmp/look.lz4"
+	else
+		cp "$tmp/look-plain.lz4" "$tmp/look.lz4"
+	fi
+}
+
+# plain_look: the look without the wallpaper as $tmp/look.lz4, for a ramdisk that would be too
+# large with it (MAX_RAMDISK); false if the look has no wallpaper, nothing to leave out then
+plain_look() {
+	cmp -s "$tmp/look.lz4" "$tmp/look-plain.lz4" && return 1
+	log "the ramdisk would be $size bytes with the wallpaper: without it, the prompt shows the default one"
+	cp "$tmp/look-plain.lz4" "$tmp/look.lz4"
+}
+
+# phone_archives PARTS_DIR: the firmware of the vibration motor ($tmp/fw.lz4, empty without it) and
+# UT's ramdisk scripts with the unlock call ($tmp/halium.lz4), made by the boot-image of the parts
+# (scripts_of): a change of the look keeps the confirmed scripts until new ones passed their trial
+phone_archives() {
+	local fw="" f scripts
+	for f in ${PLINIUS_CRYPT_HAPTIC_FW:-} /vendor/firmware/haptic_ram.bin; do
+		[[ -s $f ]] && { fw=$f; break; }
+	done
+	: > "$tmp/fw.lz4"
+	if [[ -n $fw ]]; then
+		# The driver loads it from firmware_class.path=/vendor/firmware, which the ramdisk does not
+		# have; /lib/firmware is among the paths the kernel tries after it
+		rm -rf "$tmp/fw-root"
+		install -D -m644 "$fw" "$tmp/fw-root/lib/firmware/haptic_ram.bin"
+		"$lib/boot-image" cpio "$tmp/fw-root" "$tmp/fw.cpio"
+		lz4 -q -12 -l -c "$tmp/fw.cpio" > "$tmp/fw.lz4"
+	else
+		log "no haptic_ram.bin: the keys of the prompt will not vibrate"
+	fi
+	rm -rf "$tmp/halium-root"
+	scripts=$(scripts_of "$1")
+	# Parts confirmed by an older plinius-crypt have no scripts of their own: this package's
+	"${scripts:-$lib/boot-image}" halium-script "$ut_init" "$tmp/halium-root"
+	"$lib/boot-image" cpio "$tmp/halium-root" "$tmp/halium.cpio"
+	lz4 -q -12 -l -c "$tmp/halium.cpio" > "$tmp/halium.lz4"
+}
+
+# assemble PARTS_DIR: $tmp/vendor_boot.img, $tmp/init_boot.img and the same ramdisks in a row for a
+# boot entry on the card ($tmp/initrd), from UT's images, the parts, the phone's files and the look
+assemble() {
+	local parts=$1 vsize isize archives
+	ut_files
+	phone_archives "$parts"
+	look_archive
+	archives=()
+	[[ ! -s $tmp/fw.lz4 ]] || archives+=("$tmp/fw.lz4")
+	archives+=("$tmp/look.lz4")
+	# The parts' scripts without their comment lines: some 2.8 kB, the room the look needs (MAX_RAMDISK)
+	"$lib/boot-image" slim "$parts/init.lz4" "$tmp/init.lz4"
+	isize=$("$lib/boot-image" build-init "$ut_init" "$tmp/init_boot.img" "$tmp/halium.lz4" "$tmp/init.lz4")
+	vsize=$("$lib/boot-image" build-vendor "$ut_vendor" "$tmp/vendor_boot.img" "$parts/programs.zst" "${archives[@]}")
+	size=$((vsize + isize))
+	if ((size + BOOTCONFIG_ROOM > MAX_RAMDISK)) && plain_look; then
+		vsize=$("$lib/boot-image" build-vendor "$ut_vendor" "$tmp/vendor_boot.img" "$parts/programs.zst" "${archives[@]}")
+		size=$((vsize + isize))
+	fi
+	"$lib/boot-image" ramdisk "$tmp/vendor_boot.img" "$tmp/initrd"
+	"$lib/boot-image" init-ramdisk "$tmp/init_boot.img" "$tmp/init-ramdisk"
+	cat "$tmp/init-ramdisk" >> "$tmp/initrd"
+	log "ramdisk $size bytes (look $(stat -c %s "$tmp/look.lz4"), parts $(parts_id "$parts"))"
+	((size + BOOTCONFIG_ROOM <= MAX_RAMDISK)) || die "the ramdisk ($size bytes) is larger than $((MAX_RAMDISK - BOOTCONFIG_ROOM)) bytes: lk loads $MAX_RAMDISK with the bootconfig"
+}
+
+# --- writing ---
+# starts_with FILE PREFIX: FILE begins with the bytes of PREFIX
+starts_with() { cmp -s -n "$(stat -c %s "$2")" "$2" "$1"; }
+
+# check_parts_target VENDOR_PART INIT_PART: both hold a ramdisk of this UT build, else nothing may be
+# written
+check_parts_target() {
+	"$lib/boot-image" platform "$ut_vendor" "$tmp/ut-platform"
+	"$lib/boot-image" ramdisk "$1" "$tmp/part-ramdisk" 2>/dev/null ||
+		die "${1##*/}: no vendor_boot with the one ramdisk of Plinius, left as it is"
+	"$lib/boot-image" contains "$tmp/part-ramdisk" "$tmp/ut-platform" ||
+		die "${1##*/} is not of the UT build in $ut_vendor, left as it is"
+	"$lib/boot-image" init-ramdisk "$ut_init" "$tmp/ut-init"
+	"$lib/boot-image" init-ramdisk "$2" "$tmp/part-init" 2>/dev/null ||
+		die "${2##*/}: not an init_boot image, left as it is"
+	starts_with "$tmp/part-init" "$tmp/ut-init" ||
+		die "${2##*/} is not of the UT build in $ut_init, left as it is"
+}
+
+# readback PART LENGTH FILE: the partition's first LENGTH bytes (a multiple of 4096) into FILE, past
+# the page cache
+readback() {
+	local direct=iflag=direct
+	# tmpfs (tests) does not do O_DIRECT
+	[[ -b $1 ]] || direct=
+	dd if="$1" of="$3" bs=4096 count=$(($2 / 4096)) $direct status=none
+}
+
+# write_image PART IMAGE OLD_LENGTH NAME [RESERVE]: the image onto the partition, flushed, read back;
+# the old image ($conf/NAME.prev) goes back should the new one not read back as written. Only the
+# image is written: the rest of the partition stays as it is, and RESERVE bytes at its end stay free
+# (vendor_boot: the AVB footer of the image that came with the system).
+write_image() {
+	local part=$1 img=$2 old_len=$3 name=$4 reserve=${5:-0} new_len prev
+	new_len=$(stat -c %s "$img")
+	((new_len % 4096 == 0)) || die "$name: image length $new_len is no multiple of 4096"
+	((new_len <= $(part_size "$part") - reserve)) || die "$name: the image does not fit into $part"
+	# With reserve (vendor_boot): the partition's vbmeta block, named by its AVB footer, must stay
+	# behind the image; lk loads nothing from a partition whose block is gone (see write_boot in
+	# plinius-kernel-install)
+	if ((reserve > 0)) && (($(vbmeta_offset "$part") < new_len)); then
+		die "$name: the image would overwrite the vbmeta block of $part"
+	fi
+	readback "$part" "$new_len" "$tmp/current"
+	if cmp -s "$img" "$tmp/current"; then
+		log "$name is up to date"
+		return
+	fi
+	((old_len % 4096 == 0 && old_len <= $(part_size "$part"))) ||
+		die "$name: unexpected image length $old_len"
+	prev=$conf/$name.prev
+	readback "$part" "$old_len" "$prev.new"
+	mv "$prev.new" "$prev"
+	dd if="$img" of="$part" bs=4096 conv=notrunc,fsync status=none
+	readback "$part" "$new_len" "$tmp/check"
+	if ! cmp -s "$img" "$tmp/check"; then
+		log "$name does not read back as written, writing the old image back"
+		dd if="$prev" of="$part" bs=4096 conv=notrunc,fsync status=none
+		readback "$part" "$old_len" "$tmp/check"
+		cmp -s "$prev" "$tmp/check" || die "$name: the old image does not read back either, restore $prev by hand"
+		die "$name unchanged"
+	fi
+	log "$name rewritten ($(sha256sum "$img" | cut -c1-12)), the old image is $prev"
+}
+
+# bootcheck_accept PATH...: what this script wrote is the new reference of plinius-bootcheck (only
+# these paths, and not those this start already reported as changed: --written), so a ramdisk
+# update or a change of the look raises no alarm at the next start
+bootcheck_accept() {
+	[[ -z ${PLINIUS_CRYPT_PARTITIONS:-} ]] || return 0
+	command -v plinius-bootcheck > /dev/null || return 0
+	plinius-bootcheck accept --written "$@" >&2 || log "plinius-bootcheck did not take $*"
+}
+
+# write_internal SLOT VENDOR_IMG INIT_IMG: both images into the partitions of SLOT, after the check
+write_internal() {
+	local s=$1 vpart ipart
+	vpart=$(part "vendor_boot$s")
+	ipart=$(part "init_boot$s")
+	is_part "$vpart" && is_part "$ipart" || die "no partitions vendor_boot$s and init_boot$s"
+	check_parts_target "$vpart" "$ipart"
+	exec 9> "$lock"
+	flock 9
+	# init_boot first: its unlock script works with the programs in either vendor_boot, an older
+	# script with newer programs as well (the other way round is not promised)
+	write_image "$ipart" "$3" "$(stat -c %s "$3")" "init_boot$s"
+	write_image "$vpart" "$2" "$("$lib/boot-image" length "$vpart")" "vendor_boot$s" 1048576
+	flock -u 9
+	bootcheck_accept "$partitions/init_boot$s" "$partitions/vendor_boot$s"
+}
+
+# write_card_entry PARTUUID ENTRY INITRD PART [start]: the ramdisk of a boot entry on the card, if that
+# entry holds the bytes of PART (with "start": begins with them)
+write_card_entry() {
+	local dev dir
+	[[ $1 =~ ^[0-9a-f-]{36}$ ]] || die "target: bad PARTUUID $1"
+	# One path component, as the bootloader names its entries
+	[[ $2 =~ ^[A-Za-z0-9_]+$ ]] || die "target: bad entry $2"
+	exec 9> "$lock"
+	flock 9
+	dev=/dev/disk/by-partuuid/$1
+	[[ -b $dev ]] || die "partition $1 not found (no card?)"
+	mnt=$(mktemp -d /run/plinius-crypt-halium.XXXXXX)
+	mount -o noexec,nosuid,nodev "$dev" "$mnt"
+	dir=$mnt/$2
+	[[ -f $dir/initrd.cpio.gz ]] || die "no boot entry $2 on $1"
+	if cmp -s "$3" "$dir/initrd.cpio.gz"; then
+		log "boot entry $2 is up to date"
+		return
+	fi
+	if [[ ${5:-} == start ]]; then
+		starts_with "$dir/initrd.cpio.gz" "$4" || die "boot entry $2 was not made from ${4##*/}, left as it is"
+	else
+		"$lib/boot-image" contains "$dir/initrd.cpio.gz" "$4" || die "boot entry $2 is not of the UT build in $ut_vendor, left as it is"
+	fi
+	# Written beside the old one and checked before it takes its place; the bootloader only ever
+	# sees a complete file
+	cp "$3" "$dir/initrd.cpio.gz.new"
+	# Owner and mode as the bootloader's tools left them (on the card: aid_system, 0600)
+	chown --reference="$dir/initrd.cpio.gz" "$dir/initrd.cpio.gz.new"
+	chmod --reference="$dir/initrd.cpio.gz" "$dir/initrd.cpio.gz.new"
+	sync -f "$dir/initrd.cpio.gz.new"
+	# Read back from the card, not from the page cache: drop the file's cached pages (written by now)
+	dd if="$dir/initrd.cpio.gz.new" iflag=nocache count=0 status=none
+	cmp -s "$3" "$dir/initrd.cpio.gz.new" || die "the ramdisk on the card differs from what was written"
+	ln -f "$dir/initrd.cpio.gz" "$dir/initrd.cpio.gz.prev"
+	mv "$dir/initrd.cpio.gz.new" "$dir/initrd.cpio.gz"
+	sync -f "$dir/initrd.cpio.gz"
+	log "boot entry $2 rewritten ($(sha256sum "$dir/initrd.cpio.gz" | cut -c1-12)), the old ramdisk is $2/initrd.cpio.gz.prev"
+	umount "$mnt"; rmdir "$mnt"; mnt=""
+	flock -u 9
+}
+
+# --- the boot menu on the card (as plinius-kernel-install does it) ---
+card_dev() { part abm_settings 2>/dev/null || true; }
+
+have_card() {
+	local dev
+	dev=$(card_dev)
+	[[ -b $dev && $dev == /dev/mmcblk* ]] && debugfs -c -R "stat /db/entries/$REAL.conf" "$dev" > /dev/null 2>&1
+}
+
+card_root=/run/plinius-crypt/card
+# card_mount: the card's boot menu partition, mounted (or where it is mounted already)
+card_mount() {
+	local dev at
+	dev=$(card_dev)
+	at=$(findmnt -rno TARGET -S "$dev" | head -n 1 || true)
+	if [[ -n $at ]]; then
+		echo "$at"
+		return
+	fi
+	install -d "$card_root"
+	mount -t ext4 -o nosuid,nodev,noexec "$dev" "$card_root"
+	echo "$card_root"
+}
+
+card_umount() {
+	sync
+	if findmnt -rno TARGET "$card_root" > /dev/null 2>&1; then umount "$card_root"; fi
+}
+
+# card_index NAME: the menu numbers its entries in the order they lie in db/entries (lwext4 reads the
+# directory blocks as they are); debugfs lists them the same way
+card_index() {
+	local i=0 e
+	sync
+	while read -r e; do
+		[[ $e == *.conf ]] || continue
+		if [[ $e == "$1.conf" ]]; then echo "$i"; return; fi
+		i=$((i + 1))
+	done < <(debugfs -c -R 'ls -p /db/entries' "$(card_dev)" 2>/dev/null | cut -d/ -f6)
+	die "no entry $1 on the card"
+}
+
+# card_order ROOT: db/entries in the order misc-de wants in the menu: real.conf, plinius-kernel's
+# plinius-previous.conf and plinius-trial.conf, then all others by name (so plinius-crypt-trial.conf
+# comes after plinius-trial.conf). Built anew and swapped in at once, as card_order of
+# plinius-kernel-install does it (keep both alike); the indexes change, so last_index is written
+# after it.
+card_order() {
+	local d=$1/db/entries new=$1/db/.entries.new f
+	rm -rf "$new"
+	install -d -m "$(stat -c %a "$d")" -o "$(stat -c %u "$d")" -g "$(stat -c %g "$d")" "$new"
+	for f in "$REAL.conf" plinius-previous.conf plinius-trial.conf; do
+		if [[ -e $d/$f ]]; then cp -p "$d/$f" "$new/"; fi
+	done
+	for f in "$d"/*; do
+		if [[ -e $f && ! -e $new/${f##*/} ]]; then cp -pr "$f" "$new/"; fi
+	done
+	sync
+	# One atomic swap (renameat2 RENAME_EXCHANGE): the menu never sees the directory missing
+	mv --exchange -T "$new" "$d"
+	rm -rf "$new"
+}
+
+# card_autostart NAME: the index the menu writes when an entry is chosen, as text in 128 bytes; the
+# index is read from the card right before, never kept
+card_autostart() {
+	local index root
+	card_umount
+	index=$(card_index "$1")
+	root=$(card_mount)
+	{ printf '%s' "$index"; head -c $((128 - ${#index})) /dev/zero; } > "$root/db/last_index.new"
+	mv "$root/db/last_index.new" "$root/db/last_index"
+	card_umount
+}
+
+# card_trial_entry SLOT INITRD: the entry $TRIAL with the kernel of boot<SLOT>, INITRD, and dtb and
+# command line of vendor_boot<SLOT>; the logo of "Arch Linux"
+card_trial_entry() {
+	local s=$1 root dir
+	root=$(card_mount)
+	dir=$root/$TRIAL
+	rm -rf "$dir.new"
+	install -d -m 700 "$dir.new"
+	"$lib/boot-image" kernel "$(part "boot$s")" "$dir.new/zImage"
+	"$lib/boot-image" dtb "$(part "vendor_boot$s")" "$dir.new/dtb.dtb"
+	cp "$2" "$dir.new/initrd.cpio.gz"
+	cat > "$dir.new/entry.conf" <<-EOF
+	title Arch Linux (new password prompt, trial)
+	linux $TRIAL/zImage
+	initrd $TRIAL/initrd.cpio.gz
+	dtb $TRIAL/dtb.dtb
+	options $("$lib/boot-image" cmdline "$(part "vendor_boot$s")") plinius.ramdisk=trial
+	logo $REAL/logo.bin
+	xtype UT
+	xpart $REAL
+	EOF
+	sync -f "$dir.new/initrd.cpio.gz"
+	rm -rf "$dir"
+	mv "$dir.new" "$dir"
+	# A new entry file goes in through a rename from outside db/entries, in one step
+	cp "$dir/entry.conf" "$root/db/$TRIAL.conf.new"
+	mv "$root/db/$TRIAL.conf.new" "$root/db/entries/$TRIAL.conf"
+	card_order "$root"
+	card_autostart "$TRIAL"
+	# A new own entry on the card would raise the alarm at the next start
+	bootcheck_accept "abm-entry:$TRIAL"
+}
+
+card_drop_trial() {
+	local root
+	have_card || return 0
+	root=$(card_mount)
+	rm -f "$root/db/entries/$TRIAL.conf"
+	rm -rf "${root:?}/$TRIAL"
+	card_order "$root"
+	card_autostart "$REAL"
+}
+
+# confirm_parts DIR: DIR's parts are known to start now; the base of the earlier way is not needed
+# any more
+confirm_parts() {
+	copy_parts "$1" "$conf/confirmed"
+	rm -f "$conf/base" "$conf/failed"
+}
+
+# --- the modes ---
+# update: new parts of the package
+cmd_update() {
+	local id s
+	[[ -f $offered/programs.zst && -f $offered/init.lz4 ]] || die "no parts in $offered (plinius-crypt-ramdisk)"
+	id=$(parts_id "$offered")
+	mkdir -p "$conf"
+	if [[ $id == "$(parts_id "$conf/confirmed")" ]]; then
+		rm -f "$conf/waiting"
+		log "parts $id are in use already"
+		cmd_look
+		return
+	fi
+	if [[ -z $retry && $id == "$(cat "$conf/failed" 2>/dev/null || true)" ]]; then
+		log "parts $id did not start in their trial; 'halium-rebuild --retry' tries them again"
+		return
+	fi
+	case $kind in
+	card)
+		# The system on the card starts from this entry: no other one to try it from
+		assemble "$offered"
+		ut_files
+		"$lib/boot-image" platform "$ut_vendor" "$tmp/ut-platform"
+		write_card_entry "$partuuid" "$entry" "$tmp/initrd" "$tmp/ut-platform"
+		confirm_parts "$offered"
+		;;
+	vendor_boot)
+		if kernel_trial; then
+			# Its entry carries the ramdisk of the partitions; one trial at a time
+			touch "$conf/waiting"
+			log "a new kernel is on trial; the new password prompt follows at the next start"
+			return
+		fi
+		rm -f "$conf/waiting"
+		s=$(slot)
+		[[ -n $s ]] || die "the active slot is unknown"
+		# Both packages call this after an upgrade (new programs, new scripts); one trial is enough
+		if have_card && [[ -f $conf/trial/slot && $(parts_id "$conf/trial") == "$id" ]]; then
+			log "parts $id are on trial already"
+			return
+		fi
+		assemble "$offered"
+		check_parts_target "$(part "vendor_boot$s")" "$(part "init_boot$s")"
+		if have_card; then
+			rm -rf "$conf/trial.new"
+			copy_parts "$offered" "$conf/trial.new"
+			cp "$tmp/vendor_boot.img" "$tmp/init_boot.img" "$conf/trial.new/"
+			echo "$s" > "$conf/trial.new/slot"
+			cat "$KERNEL_INSTALLED" > "$conf/trial.new/kernel" 2>/dev/null || : > "$conf/trial.new/kernel"
+			sync -f "$conf/trial.new/vendor_boot.img"
+			rm -rf "$conf/trial"
+			mv "$conf/trial.new" "$conf/trial"
+			card_trial_entry "$s" "$tmp/initrd"
+			log "the next start tries the new password prompt (parts $id) from the memory card; once"
+			log "the system is up, it goes into vendor_boot$s and init_boot$s. If it does not start,"
+			log "choose \"Arch Linux\" in the boot menu."
+		else
+			write_internal "$s" "$tmp/vendor_boot.img" "$tmp/init_boot.img"
+			confirm_parts "$offered"
+			log "new password prompt (parts $id) written, it starts with the next restart"
+		fi
+		;;
+	*) die "no trial of new parts for the target $kind (set $conf/target)" ;;
+	esac
+}
+
+# system_up: the start has ended, or at least the graphical session is up (a single job that hangs
+# keeps the state at "starting" for long, seen on the phone)
+system_up() {
+	case ${PLINIUS_CRYPT_UP:-} in
+		yes) return 0 ;;
+		no) return 1 ;;
+	esac
+	timeout 300 systemctl is-system-running --wait > /dev/null 2>&1 || true
+	case $(systemctl is-system-running 2>/dev/null || true) in
+		running|degraded) return 0 ;;
+	esac
+	systemctl -q is-active graphical.target
+}
+
+# boot: at every start, confirm or drop a trial; start the one that waited for a kernel trial
+cmd_boot() {
+	local id s
+	if [[ -e $conf/waiting && ! -d $conf/trial ]]; then
+		# plinius-kernel-boot.service confirms or drops its kernel once the system is up
+		local waited=0
+		while kernel_trial && ((waited < KERNEL_WAIT)); do
+			sleep 5
+			waited=$((waited + 5))
+		done
+		kernel_trial && { log "the kernel trial has not ended, the new password prompt waits on"; return 0; }
+		rm -f "$conf/waiting"
+		cmd_update
+		return
+	fi
+	[[ -d $conf/trial ]] || return 0
+	# A kernel on trial starts with the ramdisk of the partitions: says nothing about ours
+	grep -qw 'plinius\.kernel=trial' "$cmdline" && return 0
+	id=$(parts_id "$conf/trial")
+	if grep -qw 'plinius\.ramdisk=trial' "$cmdline"; then
+		if ! system_up; then
+			log "system not up, the password prompt $id stays on trial"
+			return 0
+		fi
+		s=$(cat "$conf/trial/slot")
+		ut_files
+		write_internal "$s" "$conf/trial/vendor_boot.img" "$conf/trial/init_boot.img"
+		confirm_parts "$conf/trial"
+		card_drop_trial
+		rm -rf "$conf/trial"
+		log "password prompt $id confirmed and written to vendor_boot$s and init_boot$s"
+		# The look may have changed during the trial
+		cmd_look
+	elif [[ $(cat "$conf/trial/kernel" 2>/dev/null || true) != "$(cat "$KERNEL_INSTALLED" 2>/dev/null || true)" ]]; then
+		# A new kernel was confirmed meanwhile, and its last step pointed the menu back to "Arch
+		# Linux": the trial never ran. Again, with that kernel.
+		log "the kernel changed while the password prompt $id waited for its trial; setting it up again"
+		card_drop_trial
+		rm -rf "$conf/trial"
+		retry=1
+		cmd_update
+	else
+		# Not started from the trial entry: it did not come up, or the menu was used
+		echo "$id" > "$conf/failed"
+		card_drop_trial
+		rm -rf "$conf/trial"
+		log "password prompt $id was not confirmed (this start came without it); trial entry removed"
+	fi
+}
+
+# look: the look changed (or nothing did): the confirmed parts, or else the base of the earlier way
+cmd_look() {
+	local s
+	if [[ -f $conf/confirmed/programs.zst && $kind != card-search ]]; then
+		assemble "$conf/confirmed"
+		if [[ -n $output ]]; then
+			if [[ $kind == card ]]; then
+				cp "$tmp/initrd" "$output"
+			else
+				cp "$tmp/vendor_boot.img" "$output"
+				cp "$tmp/init_boot.img" "$output.init_boot"
+			fi
+			return
+		fi
+		if [[ $kind == card ]]; then
+			"$lib/boot-image" platform "$ut_vendor" "$tmp/ut-platform"
+			write_card_entry "$partuuid" "$entry" "$tmp/initrd" "$tmp/ut-platform"
+		else
+			s=$(slot)
+			[[ -n $s ]] || die "the active slot is unknown"
+			write_internal "$s" "$tmp/vendor_boot.img" "$tmp/init_boot.img"
+		fi
+		return
+	fi
+	look_base
+}
+
+# with_look: $tmp/new, the base with $tmp/look.lz4 behind it, and the size of the ramdisk with it
+# (uses kind, base and s of the caller)
+with_look() {
+	local vendor init_boot
+	look=$(stat -c %s "$tmp/look.lz4")
+	if [[ $kind == card ]]; then
+		cat "$base" "$tmp/look.lz4" > "$tmp/new"
+		size=$(stat -c %s "$tmp/new")
+	else
+		# vendor_boot: the archive behind the ramdisk in its one entry. The bootloader adds
+		# init_boot's ramdisk of the same slot, so both count.
+		vendor=$("$lib/boot-image" append "$base" "$tmp/look.lz4" "$tmp/new")
+		init_boot=${PLINIUS_CRYPT_INIT_BOOT:-$(part "init_boot$s")}
+		size=$((vendor + $("$lib/boot-image" ramdisk-size "$init_boot")))
+	fi
+}
+
+# look_base: the earlier way: the look behind the base that tools/crypt-ramdisk.sh made
+look_base() {
+	local base settings search found f look vendor init_boot s part new_len part_len old_len
+	base=$conf/base
+	if [[ ! -s $base ]]; then
+		base=$boot_files/initrd.cpio.gz
+		[[ $kind != vendor_boot ]] || base=$boot_files/vendor_boot.img
+	fi
+	[[ -s $base ]] || die "no base: neither $conf/base nor $base"
+	if [[ $kind == card-search ]]; then
+		# The boot menu's partition on the card, and on it the entry made from this base
+		settings=$(card_dev)
+		[[ -b $settings && $settings == /dev/mmcblk* ]] || die "no $conf/target, and no boot menu on the card"
+		partuuid=$(lsblk -n -o PARTUUID "$settings")
+		search=$(mktemp -d /run/plinius-crypt-halium.XXXXXX)
+		mount -o ro,noexec,nosuid,nodev "$settings" "$search"
+		found=()
+		for f in "$search"/*/initrd.cpio.gz; do
+			[[ -f $f ]] && starts_with "$f" "$base" && found+=("$(basename "$(dirname "$f")")")
+		done
+		umount "$search"; rmdir "$search"
+		((${#found[@]} == 1)) || die "no $conf/target, and ${#found[@]} boot entries on the card start with $base"
+		kind=card entry=${found[0]}
+		log "boot entry $entry on the card"
+	fi
+	case $kind in
+		card) ;;
+		vendor_boot)
+			s=$(slot)
+			[[ -n $s || -n $output ]] || die "the active slot is unknown"
+			;;
+		*) die "target: unknown kind $kind" ;;
+	esac
+
+	look_archive
+	with_look
+	if ((size + BOOTCONFIG_ROOM > MAX_RAMDISK)) && plain_look; then
+		with_look
+	fi
+	log "look archive $look bytes, ramdisk $size bytes"
+	((size + BOOTCONFIG_ROOM <= MAX_RAMDISK)) || die "the ramdisk ($size bytes) is larger than $((MAX_RAMDISK - BOOTCONFIG_ROOM)) bytes: lk loads $MAX_RAMDISK with the bootconfig"
+	if [[ -n $output ]]; then
+		cp "$tmp/new" "$output"
+		return
+	fi
+	if [[ $kind == card ]]; then
+		write_card_entry "$partuuid" "$entry" "$tmp/new" "$base" start
+		return
+	fi
+
+	# vendor_boot of the active slot, if it was made from the base
+	part=$(part "vendor_boot$s")
+	is_part "$part" || die "no partition vendor_boot$s"
+	"$lib/boot-image" ramdisk "$part" "$tmp/part-ramdisk"
+	"$lib/boot-image" ramdisk "$base" "$tmp/base-ramdisk"
+	starts_with "$tmp/part-ramdisk" "$tmp/base-ramdisk" || die "vendor_boot$s was not made from $base, left as it is"
+	exec 9> "$lock"
+	flock 9
+	# The image there now, as long as its header says (it was written by Plinius or came with UT)
+	write_image "$part" "$tmp/new" "$("$lib/boot-image" length "$part")" "vendor_boot$s" 1048576
+	flock -u 9
+	bootcheck_accept "$partitions/vendor_boot$s"
+}
+
+case $mode in
+	update) cmd_update ;;
+	boot) cmd_boot ;;
+	look) cmd_look ;;
+esac

@@ -1,0 +1,80 @@
+From 9fe47eef99ef78ae7bdde2ca5d2062e3161cb95f Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 01:31:48 +0100
+Subject: [PATCH] app-tracker: A window of the app ends its splash
+
+The splash only ended when the app reported the startup id it was launched
+with. Thunderbird asks for a token of its own and others send none, so the
+splash stayed until the timeout, 30 s when the launcher tracks a PID, on top
+of a window that was up after 2 s. A new window of the app now counts as
+well, looked up the way launching a running app already does.
+---
+ src/app-tracker.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/src/app-tracker.c b/src/app-tracker.c
+index d070bc77..f988e791 100644
+--- a/src/app-tracker.c
++++ b/src/app-tracker.c
+@@ -119,6 +119,7 @@ struct _PhoshAppTracker {
+   struct phosh_private_startup_tracker *wl_tracker; /* PhoshPrivate wayland interface */
+   GHashTable      *apps; /* key: startup-id, value: app-state */
+   GCancellable    *cancel;
++  gboolean         tracks_toplevels;
+ };
+ G_DEFINE_TYPE (PhoshAppTracker, phosh_app_tracker, G_TYPE_OBJECT)
+ 
+@@ -957,6 +958,40 @@ phosh_app_tracker_new (void)
+   return PHOSH_APP_TRACKER (g_object_new (PHOSH_TYPE_APP_TRACKER, NULL));
+ }
+ 
++/*
++ * Not every app reports the startup id it was launched with: Thunderbird asks for a token of its
++ * own, others send none. The splash would stay until the timeout, on top of a window that is
++ * already there. That window says just as well that the app is up.
++ */
++static void
++on_toplevel_added (PhoshAppTracker *self, PhoshToplevel *toplevel)
++{
++  const char *app_id = phosh_toplevel_get_app_id (toplevel);
++  g_autoptr (GDesktopAppInfo) info = NULL;
++  GHashTableIter iter;
++  gpointer key, value;
++
++  if (!app_id)
++    return;
++
++  info = phosh_get_desktop_app_info_for_app_id (app_id);
++  if (!info)
++    return;
++
++  g_hash_table_iter_init (&iter, self->apps);
++  while (g_hash_table_iter_next (&iter, &key, &value)) {
++    PhoshAppState *state = value;
++
++    if (!g_app_info_equal (G_APP_INFO (info), G_APP_INFO (state->info)))
++      continue;
++
++    g_debug ("Toplevel of '%s' is up, startup id: '%s'", app_id, (const char *) key);
++    g_signal_emit (self, signals[APP_READY], 0, state->info, key);
++    g_hash_table_iter_remove (&iter);
++  }
++}
++
++
+ /**
+  * phosh_app_tracker_launch_app_info:
+  * @self: The app tracker
+@@ -980,6 +1015,12 @@ phosh_app_tracker_launch_app_info (PhoshAppTracker *self, GAppInfo *info)
+   app_id = phosh_strip_suffix_from_app_id (g_app_info_get_id (G_APP_INFO (info)));
+   g_debug ("Launching '%s'", app_id);
+ 
++  if (!self->tracks_toplevels) {
++    g_signal_connect_object (toplevel_manager, "toplevel-added",
++                             G_CALLBACK (on_toplevel_added), self, G_CONNECT_SWAPPED);
++    self->tracks_toplevels = TRUE;
++  }
++
+   for (guint i = 0; i < phosh_toplevel_manager_get_num_toplevels (toplevel_manager); i++) {
+     PhoshToplevel *toplevel = phosh_toplevel_manager_get_toplevel (toplevel_manager, i);
+     const char *window_id = phosh_toplevel_get_app_id (toplevel);

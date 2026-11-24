@@ -1,0 +1,16 @@
+# Boot chain of the Plinius for plinius-bootcheck (docs/SICHERHEIT.md, docs/BOOTKETTE.md).
+# Only what starts this installation: the partitions of the active slot ("@slot"). The other
+# slot holds the Volla OS of the delivery and is not judged, so its updates raise no alarm.
+/dev/disk/by-partlabel/lk@slot
+/dev/disk/by-partlabel/boot@slot
+/dev/disk/by-partlabel/vendor_boot@slot
+/dev/disk/by-partlabel/init_boot@slot
+/dev/disk/by-partlabel/dtbo@slot
+/dev/disk/by-partlabel/vbmeta@slot
+/dev/disk/by-partlabel/vbmeta_system@slot
+/dev/disk/by-partlabel/vbmeta_vendor@slot
+# Boot menu card (Android Boot Manager, abm_settings): its entries that start the system on the
+# phone's storage (real.conf, plinius-kernel's plinius-trial and plinius-previous) with their
+# kernel, ramdisk, dtb and logo. Entries for systems on card partitions (xpart N:M) are left alone.
+abm /dev/mmcblk0p1
+# Open: the preloader lives in the UFS boot area (not a partition) and is therefore still missing.

@@ -1,0 +1,50 @@
+#!/bin/sh
+# plinius-pinguard-set: switches the wait after wrong PINs on or off (GNOME Settings › Screen
+# Lock runs it through pkexec). Switching it on starts from a clean slate: the counters of wrong
+# PINs at the phone are removed, so switching on never inherits a wait from before it was off
+# (while it is off they are not kept up to date). "on" while it is on already changes nothing: it
+# needs no password, and must not clear a running wait.
+#
+# Only the counters at the phone (/var/lib/plinius-pinguard/<uid>) depend on the switch. Those of
+# logins over a network (<uid>.network) and of tries from another local account
+# (<uid>.from-<uid>) always count and are never cleared here: else anyone at the phone could
+# reset them by switching (attack review 2026-11-18, L13).
+#
+# polkit (org.plinius.pinguard.policy): "on" needs no password, it only makes the phone safer;
+# "off" asks for an administrator's PIN (auth_admin_keep): the switch is for every account on the
+# phone, so an account without administrator rights must not turn it off for the others. "off"
+# clears nothing; the next "on" does.
+#
+#   plinius-pinguard-set on|off|status
+#
+# SPDX-License-Identifier: MIT
+set -eu
+
+marker=/etc/plinius-pinguard/enabled
+state=/var/lib/plinius-pinguard
+
+clear_counters() {
+	# One file per uid, written by the daemon, named by the uid alone; the directory itself, the
+	# network counters and those of tries from other accounts stay
+	find "$state" -mindepth 1 -maxdepth 1 -type f -regextype posix-extended \
+		-regex '.*/[0-9]+' -delete 2>/dev/null || true
+}
+
+case "${1:-}" in
+on)
+	[ -e "$marker" ] && exit 0
+	mkdir -p "${marker%/*}"
+	clear_counters
+	: >"$marker"
+	;;
+off)
+	rm -f "$marker"
+	;;
+status)
+	if [ -e "$marker" ]; then echo on; else echo off; fi
+	;;
+*)
+	echo "Usage: plinius-pinguard-set on|off|status" >&2
+	exit 2
+	;;
+esac

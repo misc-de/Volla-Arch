@@ -1,0 +1,66 @@
+From 2c6ea8779725c8df95b77cb328a1f4fe606d34cf Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 14:17:21 +0100
+Subject: [PATCH] search: The phone's own searches on top of the Search page
+
+Plinius: a "Home Screen" group on top of the Search page turns the
+search from the camera notch on and off (org.plinius.display
+notch-search) and holds the search field of the app overview, which
+moves here from the Appearance page.
+---
+ panels/search/cc-search-panel.blp | 3 ++-
+ panels/search/cc-search-panel.c   | 6 ++++++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/panels/search/cc-search-panel.blp b/panels/search/cc-search-panel.blp
+index 90ffd39bc..8c2bf5eeb 100644
+--- a/panels/search/cc-search-panel.blp
++++ b/panels/search/cc-search-panel.blp
+@@ -9,7 +9,8 @@ template $CcSearchPanel: $CcPanel {
+     [top]
+     Adw.HeaderBar {}
+ 
+-    content: Adw.PreferencesPage {
++    // Plinius: the phone's own searches go on top (cc_plinius_display_setup_search)
++    content: Adw.PreferencesPage search_page {
+       Adw.PreferencesGroup {
+         Adw.SwitchRow app_search_row {
+           title: _("_App Search");
+diff --git a/panels/search/cc-search-panel.c b/panels/search/cc-search-panel.c
+index c7eccebe6..546ce644c 100644
+--- a/panels/search/cc-search-panel.c
++++ b/panels/search/cc-search-panel.c
+@@ -24,6 +24,7 @@
+ #include "cc-search-panel-row.h"
+ #include "cc-search-resources.h"
+ #include "cc-ui-util.h"
++#include "panels/common/cc-plinius-display.h"
+ 
+ #include <gio/gdesktopappinfo.h>
+ #include <glib/gi18n.h>
+@@ -31,6 +32,7 @@
+ struct _CcSearchPanel {
+     CcPanel parent_instance;
+ 
++    AdwPreferencesPage *search_page;
+     GtkWidget *list_box;
+     AdwSwitchRow *app_search_row;
+     GtkWidget *search_group;
+@@ -532,6 +534,9 @@ cc_search_panel_init (CcSearchPanel *self)
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
++    /* Plinius: search from the notch and in the app overview */
++    cc_plinius_display_setup_search (self->search_page);
++
+     gtk_list_box_set_sort_func (GTK_LIST_BOX (self->list_box), (GtkListBoxSortFunc) list_sort_func, self, NULL);
+ 
+     search_locations_available = cc_search_locations_page_is_available ();
+@@ -566,6 +571,7 @@ cc_search_panel_class_init (CcSearchPanelClass *klass)
+ 
+     gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/search/cc-search-panel.ui");
+ 
++    gtk_widget_class_bind_template_child (widget_class, CcSearchPanel, search_page);
+     gtk_widget_class_bind_template_child (widget_class, CcSearchPanel, list_box);
+     gtk_widget_class_bind_template_child (widget_class, CcSearchPanel, app_search_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSearchPanel, search_group);

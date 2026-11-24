@@ -1,0 +1,41 @@
+# pacman install script of plinius-widevine. Nothing is downloaded until GNOME Settings > Privacy >
+# Protected Content is switched on (the marker /etc/plinius-widevine/enabled); the
+# timer starts at boot (its link in timers.target.wants) and only checks the marker then.
+
+_apply() {
+	systemd-sysusers plinius-widevine.conf 2>/dev/null || true
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload 2>/dev/null || true
+		systemctl start plinius-widevine-update.timer 2>/dev/null || true
+	fi
+}
+
+post_install() {
+	_apply
+}
+
+post_upgrade() {
+	_apply
+	# 0.1 fetched without asking: a CDM already there stays on, as if the switch had been used
+	if [ "$(vercmp "$2" 0.2)" -lt 0 ] && [ -e /var/lib/plinius-widevine/current ]; then
+		mkdir -p /etc/plinius-widevine
+		: >/etc/plinius-widevine/enabled
+	fi
+	# 0.3: on arm64 the CDM of ChromeOS replaces Google's Linux one (Netflix refuses that); switched
+	# on, it comes now and not only with the daily timer. Websites that saw the old CDM may need
+	# Settings > Apps > Web Apps > Reset Website Data once.
+	if [ "$(vercmp "$2" 0.3)" -lt 0 ] && [ -e /etc/plinius-widevine/enabled ] && [ -d /run/systemd/system ]; then
+		systemctl start --no-block plinius-widevine-update.service 2>/dev/null || true
+	fi
+}
+
+pre_remove() {
+	if [ -d /run/systemd/system ]; then
+		systemctl stop plinius-widevine-update.timer plinius-widevine-update.service 2>/dev/null || true
+	fi
+}
+
+post_remove() {
+	# The CDM came from Google, not from the package: it goes with the package, the switch too
+	rm -rf /var/lib/plinius-widevine /etc/plinius-widevine
+}

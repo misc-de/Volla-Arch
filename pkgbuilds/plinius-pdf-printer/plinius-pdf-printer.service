@@ -1,0 +1,10 @@
+[Unit]
+Description=PDF printer, never the default next to a real printer
+After=cups.socket
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius/plinius-pdf-printer
+
+[Install]
+WantedBy=multi-user.target

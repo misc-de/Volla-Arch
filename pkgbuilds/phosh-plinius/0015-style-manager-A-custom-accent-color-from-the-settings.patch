@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:17:23 +0100
+Subject: [PATCH] style-manager: A custom accent color from the settings
+
+Plinius: GNOME's accent color can only be one of nine. GNOME Settings
+(gnome-control-center-plinius) also offers a color of the user's choice,
+stored as org.plinius.appearance accent-color ("#rrggbb"); when it is
+set, it is the shell's accent color, with dark text if it is too light
+for white. GNOME's key then holds the preset nearest to it. Without the
+schema nothing changes.
+---
+ src/style-manager.c | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 53 insertions(+), 2 deletions(-)
+
+diff --git a/src/style-manager.c b/src/style-manager.c
+index 152700ac..e13357c7 100644
+--- a/src/style-manager.c
++++ b/src/style-manager.c
+@@ -16,9 +16,15 @@
+ #include <gtk/gtk.h>
+ #include <gdesktop-enums.h>
+ 
++#include <math.h>
++
+ #define IF_KEY_ACCENT_COLOR     "accent-color"
+ #define IF_SCHEMA_NAME          "org.gnome.desktop.interface"
+ 
++/* Plinius: a custom accent color from GNOME Settings (gnome-control-center-plinius) */
++#define PLINIUS_SCHEMA_NAME     "org.plinius.appearance"
++#define PLINIUS_KEY_ACCENT_COLOR "accent-color"
++
+ /* Accent colors from gnome-shell src/st/st-theme-context.c */
+ #define ACCENT_COLOR_BLUE       "#3584e4"
+ #define ACCENT_COLOR_TEAL       "#2190a4"
+@@ -54,14 +60,37 @@ struct _PhoshStyleManager {
+   GtkCssProvider *accent_css_provider;
+ 
+   GSettings      *interface_settings;
++  GSettings      *plinius_settings;
+ };
+ G_DEFINE_TYPE (PhoshStyleManager, phosh_style_manager, G_TYPE_OBJECT)
+ 
+ 
++static double
++linear_channel (double c)
++{
++  return c <= 0.04045 ? c / 12.92 : pow ((c + 0.055) / 1.055, 2.4);
++}
++
++/* Text on a custom accent color: white as on GNOME's colors, unless the color is too light for
++ * it (GNOME's yellow, the lightest of them, has a contrast of 3.0 to white) */
++static const char *
++get_custom_foreground (const GdkRGBA *rgba)
++{
++  double luminance = 0.2126 * linear_channel (rgba->red) +
++                     0.7152 * linear_channel (rgba->green) +
++                     0.0722 * linear_channel (rgba->blue);
++
++  return 1.05 / (luminance + 0.05) >= 2.9 ? ACCENT_COLOR_FOREGROUND : "rgba(0, 0, 0, 0.8)";
++}
++
++
+ static void
+ on_accent_color_changed (PhoshStyleManager *self)
+ {
+   const char *color;
++  const char *foreground = ACCENT_COLOR_FOREGROUND;
++  g_autofree char *custom = NULL;
++  GdkRGBA rgba;
+   g_autofree char *css  = NULL;
+   g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
+ 
+@@ -104,12 +133,21 @@ on_accent_color_changed (PhoshStyleManager *self)
+     color = ACCENT_COLOR_BLUE;
+   }
+ 
++  /* Plinius: the custom color wins; GNOME's key then holds the color nearest to it */
++  if (self->plinius_settings) {
++    custom = g_settings_get_string (self->plinius_settings, PLINIUS_KEY_ACCENT_COLOR);
++    if (custom[0] != '\0' && gdk_rgba_parse (&rgba, custom)) {
++      color = custom;
++      foreground = get_custom_foreground (&rgba);
++    }
++  }
++
+   g_debug ("Setting accent bg color to %s, accent fg color to %s",
+-           color, ACCENT_COLOR_FOREGROUND);
++           color, foreground);
+ 
+   css = g_strdup_printf ("@define-color theme_selected_bg_color %s;\n"
+                          "@define-color theme_selected_fg_color %s;",
+-                         color, ACCENT_COLOR_FOREGROUND);
++                         color, foreground);
+   gtk_css_provider_load_from_data (provider, css, -1, NULL);
+   gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
+                                              GTK_STYLE_PROVIDER (provider),
+@@ -182,6 +220,7 @@ phosh_style_manager_dispose (GObject *object)
+   g_clear_object (&self->accent_css_provider);
+ 
+   g_clear_object (&self->interface_settings);
++  g_clear_object (&self->plinius_settings);
+ 
+   G_OBJECT_CLASS (phosh_style_manager_parent_class)->dispose (object);
+ }
+@@ -208,6 +247,8 @@ static void
+ phosh_style_manager_init (PhoshStyleManager *self)
+ {
+   GtkSettings *gtk_settings = gtk_settings_get_default ();
++  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++  g_autoptr (GSettingsSchema) schema = NULL;
+ 
+   g_object_set (G_OBJECT (gtk_settings), "gtk-application-prefer-dark-theme", TRUE, NULL);
+ 
+@@ -217,6 +258,16 @@ phosh_style_manager_init (PhoshStyleManager *self)
+                             "changed::" IF_KEY_ACCENT_COLOR,
+                             G_CALLBACK (on_accent_color_changed),
+                             self);
++  /* Plinius: only with the schema, which comes with phosh-plinius */
++  if (source)
++    schema = g_settings_schema_source_lookup (source, PLINIUS_SCHEMA_NAME, TRUE);
++  if (schema) {
++    self->plinius_settings = g_settings_new (PLINIUS_SCHEMA_NAME);
++    g_signal_connect_swapped (self->plinius_settings,
++                              "changed::" PLINIUS_KEY_ACCENT_COLOR,
++                              G_CALLBACK (on_accent_color_changed),
++                              self);
++  }
+   g_signal_connect_swapped (gtk_settings,
+                             "notify::gtk-theme-name",
+                             G_CALLBACK (on_gtk_theme_name_changed),

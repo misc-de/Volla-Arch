@@ -1,0 +1,678 @@
+From d2c28284ad900783e7ed5db9174c78716ddeb44b Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 09:47:15 +0100
+Subject: [PATCH] themes: add a glass look and a background image
+
+- bbx_theme gets an optional glass part: translucent keys, buttons, text
+  area, header and keyboard panel with translucent borders; the other
+  themes leave it zeroed and stay opaque
+- New theme plinius-glass: white glass over a wallpaper, yellow accent
+- New option [theme] background: an LVGL binary image (XRGB8888) scaled
+  once to cover the display, shown behind everything
+---
+ man/unl0kr.conf.5.scd |   8 +-
+ meson.build           |   1 +
+ shared/background.c   | 175 ++++++++++++++++++++++++++++++++++++++++++
+ shared/background.h   |  27 +++++++
+ shared/theme.c        |  30 ++++++--
+ shared/theme.h        |  16 ++++
+ shared/themes.c       | 168 +++++++++++++++++++++++++++++++++++++++-
+ shared/themes.h       |   1 +
+ unl0kr/config.c       |   4 +
+ unl0kr/config.h       |   2 +
+ unl0kr/main.c         |   6 ++
+ 11 files changed, 429 insertions(+), 9 deletions(-)
+ create mode 100644 shared/background.c
+ create mode 100644 shared/background.h
+
+diff --git a/man/unl0kr.conf.5.scd b/man/unl0kr.conf.5.scd
+index 4156d61..2d2e962 100644
+--- a/man/unl0kr.conf.5.scd
++++ b/man/unl0kr.conf.5.scd
+@@ -63,7 +63,7 @@ for and, if found, merged in the following order:
+ 	The character that will be used to obscure the password. Default: • (U+2022).
+ 
+ ## Theme
+-*default* = <adwaita-light|adwaita-dark|breezy-light|breezy-dark|nord-light|nord-dark|pmos-light|pmos-dark>
++*default* = <adwaita-light|adwaita-dark|breezy-light|breezy-dark|nord-light|nord-dark|pmos-light|pmos-dark|plinius-glass>
+ 	Selects the default theme on boot. Can be changed at runtime to the 
+ 	alternative theme. Default: breezy-light.
+ 
+@@ -71,6 +71,12 @@ for and, if found, merged in the following order:
+ 	Selects the alternative theme which the user can then choose on boot.
+ 	Default: breezy-dark.
+ 
++*background* = <path>
++	An image shown behind everything, scaled to cover the display: an LVGL
++	binary image in XRGB8888 format (lv_image_header_t followed by the pixels).
++	A small, blurred image is enough, it is scaled up once at start. Themes
++	with translucent surfaces (plinius-glass) need it. Default: none.
++
+ ## Input
+ *keyboard* = <true|false>
+ 	Enable or disable the use of hardware keyboards. Default: true.
+diff --git a/meson.build b/meson.build
+index cc2b681..bde5420 100644
+--- a/meson.build
++++ b/meson.build
+@@ -47,6 +47,7 @@ shared_sources = files(
+ )
+ 
+ shared_sources_ul_f0 = files(
++    'shared/background.c',
+     'shared/backends.c',
+     'shared/display.c',
+     'shared/header.c',
+diff --git a/shared/background.c b/shared/background.c
+new file mode 100644
+index 0000000..e800e26
+--- /dev/null
++++ b/shared/background.c
+@@ -0,0 +1,175 @@
++/**
++ * Copyright 2026 misc-de
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++
++#include "background.h"
++
++#include "log.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++
++/**
++ * Static variables
++ */
++
++/* The scaled background; referenced by the screen's style, so it must outlive it */
++static lv_image_dsc_t background;
++
++
++/**
++ * Static prototypes
++ */
++
++/**
++ * Read a whole file into memory.
++ *
++ * @param path path of the file
++ * @param size set to the number of bytes read
++ * @return the contents (to be freed by the caller) or NULL on failure
++ */
++static uint8_t *read_file(const char *path, size_t *size);
++
++/**
++ * Scale an XRGB8888 image to cover a larger area, centred and cropped (bilinear).
++ *
++ * @param src source pixels
++ * @param sw source width
++ * @param sh source height
++ * @param src_stride bytes per source row
++ * @param dw target width
++ * @param dh target height
++ * @return the target pixels (dw * dh, to be freed by the caller) or NULL on failure
++ */
++static uint32_t *scale_to_cover(const uint8_t *src, int32_t sw, int32_t sh, uint32_t src_stride,
++    int32_t dw, int32_t dh);
++
++
++/**
++ * Static functions
++ */
++
++static uint8_t *read_file(const char *path, size_t *size) {
++    FILE *file = fopen(path, "rb");
++    if (!file) {
++        return NULL;
++    }
++
++    uint8_t *data = NULL;
++    long length = -1;
++    if (fseek(file, 0, SEEK_END) == 0) {
++        length = ftell(file);
++    }
++    if (length > 0 && fseek(file, 0, SEEK_SET) == 0) {
++        data = malloc(length);
++        if (data && fread(data, 1, length, file) != (size_t)length) {
++            free(data);
++            data = NULL;
++        }
++    }
++    fclose(file);
++
++    *size = data ? (size_t)length : 0;
++    return data;
++}
++
++static uint32_t *scale_to_cover(const uint8_t *src, int32_t sw, int32_t sh, uint32_t src_stride,
++        int32_t dw, int32_t dh) {
++    uint32_t *dst = malloc((size_t)dw * dh * sizeof(uint32_t));
++    if (!dst) {
++        return NULL;
++    }
++
++    /* The larger of both factors covers the area; the source rectangle that remains visible is
++     * centred */
++    float scale = (float)dw / sw > (float)dh / sh ? (float)dw / sw : (float)dh / sh;
++    float offset_x = (sw - dw / scale) / 2;
++    float offset_y = (sh - dh / scale) / 2;
++
++    for (int32_t y = 0; y < dh; y++) {
++        float fy = (y + 0.5f) / scale + offset_y - 0.5f;
++        fy = fy < 0 ? 0 : (fy > sh - 1 ? sh - 1 : fy);
++        int32_t y0 = (int32_t)fy;
++        int32_t y1 = y0 + 1 < sh ? y0 + 1 : y0;
++        uint32_t wy = (uint32_t)((fy - y0) * 256);
++        const uint8_t *row0 = src + (size_t)y0 * src_stride;
++        const uint8_t *row1 = src + (size_t)y1 * src_stride;
++
++        for (int32_t x = 0; x < dw; x++) {
++            float fx = (x + 0.5f) / scale + offset_x - 0.5f;
++            fx = fx < 0 ? 0 : (fx > sw - 1 ? sw - 1 : fx);
++            int32_t x0 = (int32_t)fx;
++            int32_t x1 = x0 + 1 < sw ? x0 + 1 : x0;
++            uint32_t wx = (uint32_t)((fx - x0) * 256);
++
++            /* Blend the four neighbours per channel (B, G, R in memory order), X stays opaque */
++            uint32_t pixel = 0xFF000000;
++            for (int c = 0; c < 3; c++) {
++                uint32_t top = row0[x0 * 4 + c] * (256 - wx) + row0[x1 * 4 + c] * wx;
++                uint32_t bottom = row1[x0 * 4 + c] * (256 - wx) + row1[x1 * 4 + c] * wx;
++                uint32_t value = (top * (256 - wy) + bottom * wy) >> 16;
++                pixel |= value << (8 * c);
++            }
++            dst[(size_t)y * dw + x] = pixel;
++        }
++    }
++
++    return dst;
++}
++
++
++/**
++ * Public functions
++ */
++
++bool bbx_background_apply(lv_obj_t *screen, const char *path) {
++    size_t size = 0;
++    uint8_t *data = read_file(path, &size);
++    if (!data) {
++        bbx_log(BBX_LOG_LEVEL_WARNING, "Could not read background image %s", path);
++        return false;
++    }
++
++    lv_image_header_t header;
++    bool valid = size >= sizeof(header);
++    if (valid) {
++        memcpy(&header, data, sizeof(header));
++        valid = header.magic == LV_IMAGE_HEADER_MAGIC
++            && header.cf == LV_COLOR_FORMAT_XRGB8888
++            && header.w > 0 && header.h > 0
++            && header.stride >= header.w * 4
++            && size >= sizeof(header) + (size_t)header.stride * header.h;
++    }
++    if (!valid) {
++        bbx_log(BBX_LOG_LEVEL_WARNING, "Background image %s is not an XRGB8888 LVGL image", path);
++        free(data);
++        return false;
++    }
++
++    lv_display_t *disp = lv_obj_get_display(screen);
++    int32_t width = lv_display_get_horizontal_resolution(disp);
++    int32_t height = lv_display_get_vertical_resolution(disp);
++    uint32_t *pixels = scale_to_cover(data + sizeof(header), header.w, header.h, header.stride,
++        width, height);
++    free(data);
++    if (!pixels) {
++        bbx_log(BBX_LOG_LEVEL_WARNING, "Not enough memory for the background image");
++        return false;
++    }
++
++    memset(&background, 0, sizeof(background));
++    background.header.magic = LV_IMAGE_HEADER_MAGIC;
++    background.header.cf = LV_COLOR_FORMAT_XRGB8888;
++    background.header.w = width;
++    background.header.h = height;
++    background.header.stride = width * 4;
++    background.data_size = (uint32_t)width * height * 4;
++    background.data = (const uint8_t *)pixels;
++
++    lv_obj_set_style_bg_image_src(screen, &background, LV_PART_MAIN);
++    return true;
++}
+diff --git a/shared/background.h b/shared/background.h
+new file mode 100644
+index 0000000..98a32c8
+--- /dev/null
++++ b/shared/background.h
+@@ -0,0 +1,27 @@
++/**
++ * Copyright 2026 misc-de
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++
++#ifndef BBX_BACKGROUND_H
++#define BBX_BACKGROUND_H
++
++#include "lvgl/lvgl.h"
++
++#include <stdbool.h>
++
++/**
++ * Show an image file as the background of a screen, scaled to cover it.
++ *
++ * The file is an LVGL binary image (lv_image_header_t followed by XRGB8888 pixels), usually much
++ * smaller than the display, e.g. a blurred wallpaper. It is scaled up once (bilinear, centred,
++ * the overflow cropped) and kept in memory for the lifetime of the program.
++ *
++ * @param screen the screen object
++ * @param path path of the image file
++ * @return true on success, false if the file is missing or invalid (the screen keeps its colour)
++ */
++bool bbx_background_apply(lv_obj_t *screen, const char *path);
++
++#endif /* BBX_BACKGROUND_H */
+diff --git a/shared/theme.c b/shared/theme.c
+index c93e68a..9760ce5 100644
+--- a/shared/theme.c
++++ b/shared/theme.c
+@@ -85,6 +85,13 @@ static void keyboard_draw_task_added_cb(lv_event_t *event);
+  */
+ 
+ static void init_styles(const bbx_theme *theme) {
++    /* Glass look: translucent surfaces and borders over the background image */
++    const bool glass = theme->glass.enabled;
++    const lv_opa_t surface_opa = glass ? theme->glass.surface_opa : LV_OPA_COVER;
++    const lv_opa_t pressed_opa = glass ? theme->glass.pressed_opa : LV_OPA_COVER;
++    const lv_opa_t border_opa = glass ? theme->glass.border_opa : LV_OPA_COVER;
++    const lv_opa_t panel_opa = glass ? theme->glass.panel_opa : LV_OPA_COVER;
++
+     reset_style(&(styles.widget));
+     lv_style_set_text_font(&(styles.widget), &bbx_font_32);
+ 
+@@ -93,25 +100,28 @@ static void init_styles(const bbx_theme *theme) {
+     lv_style_set_bg_color(&(styles.window), lv_color_hex(theme->window.bg_color));
+ 
+     reset_style(&(styles.header));
+-    lv_style_set_bg_opa(&(styles.header), LV_OPA_COVER);
++    lv_style_set_bg_opa(&(styles.header), panel_opa);
+     lv_style_set_bg_color(&(styles.header), lv_color_hex(theme->header.bg_color));
+     lv_style_set_border_side(&(styles.header), LV_BORDER_SIDE_BOTTOM);
+     lv_style_set_border_width(&(styles.header), lv_dpx(theme->header.border_width));
+     lv_style_set_border_color(&(styles.header), lv_color_hex(theme->header.border_color));
++    lv_style_set_border_opa(&(styles.header), border_opa);
+     lv_style_set_pad_all(&(styles.header), lv_dpx(theme->header.pad));
+     lv_style_set_pad_gap(&(styles.header), lv_dpx(theme->header.gap));
+ 
+     reset_style(&(styles.keyboard));
+-    lv_style_set_bg_opa(&(styles.keyboard), LV_OPA_COVER);
++    lv_style_set_bg_opa(&(styles.keyboard), panel_opa);
+     lv_style_set_bg_color(&(styles.keyboard), lv_color_hex(theme->keyboard.bg_color));
+     lv_style_set_border_side(&(styles.keyboard), LV_BORDER_SIDE_TOP);
+     lv_style_set_border_width(&(styles.keyboard), lv_dpx(theme->keyboard.border_width));
+     lv_style_set_border_color(&(styles.keyboard), lv_color_hex(theme->keyboard.border_color));
++    lv_style_set_border_opa(&(styles.keyboard), border_opa);
+     lv_style_set_pad_all(&(styles.keyboard), lv_dpx(theme->keyboard.pad));
+     lv_style_set_pad_gap(&(styles.keyboard), lv_dpx(theme->keyboard.gap));
+ 
+     reset_style(&(styles.key));
+-    lv_style_set_bg_opa(&(styles.key), LV_OPA_COVER);
++    lv_style_set_bg_opa(&(styles.key), surface_opa);
++    lv_style_set_border_opa(&(styles.key), border_opa);
+     lv_style_set_border_side(&(styles.key), LV_BORDER_SIDE_FULL);
+     lv_style_set_border_width(&(styles.key), lv_dpx(theme->keyboard.keys.border_width));
+     lv_style_set_radius(&(styles.key), lv_dpx(theme->keyboard.keys.corner_radius));
+@@ -119,7 +129,8 @@ static void init_styles(const bbx_theme *theme) {
+ #if LV_USE_BUTTON
+     reset_style(&(styles.button));
+     lv_style_set_text_color(&(styles.button), lv_color_hex(theme->button.normal.fg_color));
+-    lv_style_set_bg_opa(&(styles.button), LV_OPA_COVER);
++    lv_style_set_bg_opa(&(styles.button), surface_opa);
++    lv_style_set_border_opa(&(styles.button), border_opa);
+     lv_style_set_bg_color(&(styles.button), lv_color_hex(theme->button.normal.bg_color));
+     lv_style_set_border_side(&(styles.button), LV_BORDER_SIDE_FULL);
+     lv_style_set_border_width(&(styles.button), lv_dpx(theme->button.border_width));
+@@ -130,12 +141,14 @@ static void init_styles(const bbx_theme *theme) {
+     reset_style(&(styles.button_pressed));
+     lv_style_set_text_color(&(styles.button_pressed), lv_color_hex(theme->button.pressed.fg_color));
+     lv_style_set_bg_color(&(styles.button_pressed), lv_color_hex(theme->button.pressed.bg_color));
++    lv_style_set_bg_opa(&(styles.button_pressed), pressed_opa);
+     lv_style_set_border_color(&(styles.button_pressed), lv_color_hex(theme->button.pressed.border_color));
+ #endif
+ 
+     reset_style(&(styles.textarea));
+     lv_style_set_text_color(&(styles.textarea), lv_color_hex(theme->textarea.fg_color));
+-    lv_style_set_bg_opa(&(styles.textarea), LV_OPA_COVER);
++    lv_style_set_bg_opa(&(styles.textarea), surface_opa);
++    lv_style_set_border_opa(&(styles.textarea), border_opa);
+     lv_style_set_bg_color(&(styles.textarea), lv_color_hex(theme->textarea.bg_color));
+     lv_style_set_border_side(&(styles.textarea), LV_BORDER_SIDE_FULL);
+     lv_style_set_border_width(&(styles.textarea), lv_dpx(theme->textarea.border_width));
+@@ -155,7 +168,8 @@ static void init_styles(const bbx_theme *theme) {
+ #if LV_USE_DROPDOWN
+     reset_style(&(styles.dropdown));
+     lv_style_set_text_color(&(styles.dropdown), lv_color_hex(theme->dropdown.button.normal.fg_color));
+-    lv_style_set_bg_opa(&(styles.dropdown), LV_OPA_COVER);
++    lv_style_set_bg_opa(&(styles.dropdown), surface_opa);
++    lv_style_set_border_opa(&(styles.dropdown), border_opa);
+     lv_style_set_bg_color(&(styles.dropdown), lv_color_hex(theme->dropdown.button.normal.bg_color));
+     lv_style_set_border_side(&(styles.dropdown), LV_BORDER_SIDE_FULL);
+     lv_style_set_border_width(&(styles.dropdown), lv_dpx(theme->dropdown.button.border_width));
+@@ -166,6 +180,7 @@ static void init_styles(const bbx_theme *theme) {
+     reset_style(&(styles.dropdown_pressed));
+     lv_style_set_text_color(&(styles.dropdown_pressed), lv_color_hex(theme->dropdown.button.pressed.fg_color));
+     lv_style_set_bg_color(&(styles.dropdown_pressed), lv_color_hex(theme->dropdown.button.pressed.bg_color));
++    lv_style_set_bg_opa(&(styles.dropdown_pressed), pressed_opa);
+     lv_style_set_border_color(&(styles.dropdown_pressed), lv_color_hex(theme->dropdown.button.pressed.border_color));
+ 
+     reset_style(&(styles.dropdown_list));
+@@ -350,6 +365,9 @@ static void keyboard_draw_task_added_cb(lv_event_t *event) {
+     lv_draw_fill_dsc_t *fill_dsc = lv_draw_task_get_fill_dsc(draw_task);
+     if (fill_dsc) {
+         fill_dsc->color = lv_color_hex((pressed ? key->pressed : key->normal).bg_color);
++        if (pressed && current_theme.glass.enabled) {
++            fill_dsc->opa = current_theme.glass.pressed_opa;
++        }
+     }
+ 
+     lv_draw_border_dsc_t *border_dsc = lv_draw_task_get_border_dsc(draw_task);
+diff --git a/shared/theme.h b/shared/theme.h
+index 0de3435..3feebc6 100644
+--- a/shared/theme.h
++++ b/shared/theme.h
+@@ -154,6 +154,21 @@ typedef struct {
+     bbx_theme_bar_indicator indicator;
+ } bbx_theme_bar;
+ 
++/* Glass look: surfaces become translucent over the window's background image. Themes without
++ * it leave this zeroed and keep opaque surfaces. */
++typedef struct {
++    /* If false, all surfaces are opaque and the other values are ignored */
++    bool enabled;
++    /* Opacity of keys, buttons, the text area and the dropdown button */
++    uint8_t surface_opa;
++    /* Opacity of pressed keys and buttons */
++    uint8_t pressed_opa;
++    /* Opacity of the borders of all surfaces */
++    uint8_t border_opa;
++    /* Opacity of the header and of the keyboard panel behind the keys */
++    uint8_t panel_opa;
++} bbx_theme_glass;
++
+ /* Full theme */
+ typedef struct {
+     char *name;
+@@ -166,6 +181,7 @@ typedef struct {
+     bbx_theme_label label;
+     bbx_theme_msgbox msgbox;
+     bbx_theme_bar bar;
++    bbx_theme_glass glass;
+ } bbx_theme;
+ 
+ /**
+diff --git a/shared/themes.c b/shared/themes.c
+index a8c0e15..e38d306 100644
+--- a/shared/themes.c
++++ b/shared/themes.c
+@@ -1111,11 +1111,174 @@ static const bbx_theme nord_dark = {
+ };
+ 
+ 
++/* Plinius glass: translucent white surfaces over the Phosh wallpaper (set as background in the
++ * unl0kr configuration), accent yellow as Phosh's on-screen keyboard Stevia */
++static const bbx_theme plinius_glass = {
++    .name = "plinius-glass",
++    .window = {
++        .bg_color = 0x1D1B2B
++    },
++    .header = {
++        .bg_color = 0x000000,
++        .border_width = 1,
++        .border_color = 0xFFFFFF,
++        .pad = 10,
++        .gap = 10
++    },
++    .keyboard = {
++        .bg_color = 0x000000,
++        .border_width = 1,
++        .border_color = 0xFFFFFF,
++        .pad = 20,
++        .gap = 10,
++        .keys = {
++            .border_width = 1,
++            .corner_radius = 10,
++            .key_char = {
++                .normal = {
++                    .fg_color = 0xFFFFFF,
++                    .bg_color = 0xFFFFFF,
++                    .border_color = 0xFFFFFF
++                },
++                .pressed = {
++                    .fg_color = 0xFFFFFF,
++                    .bg_color = 0xC88800,
++                    .border_color = 0xC88800
++                }
++            },
++            .key_non_char = {
++                .normal = {
++                    .fg_color = 0xFFFFFF,
++                    .bg_color = 0x000000,
++                    .border_color = 0xFFFFFF
++                },
++                .pressed = {
++                    .fg_color = 0xFFFFFF,
++                    .bg_color = 0xC88800,
++                    .border_color = 0xC88800
++                }
++            },
++            .key_mod_act = {
++                .normal = {
++                    .fg_color = 0xF6D32D,
++                    .bg_color = 0xFFFFFF,
++                    .border_color = 0xF6D32D
++                },
++                .pressed = {
++                    .fg_color = 0xFFFFFF,
++                    .bg_color = 0xC88800,
++                    .border_color = 0xC88800
++                }
++            },
++            .key_mod_inact = {
++                .normal = {
++                    .fg_color = 0xFFFFFF,
++                    .bg_color = 0x000000,
++                    .border_color = 0xFFFFFF
++                },
++                .pressed = {
++                    .fg_color = 0xFFFFFF,
++                    .bg_color = 0xC88800,
++                    .border_color = 0xC88800
++                }
++            }
++        }
++    },
++    .button = {
++        .border_width = 1,
++        .corner_radius = 14,
++        .pad = 8,
++        .normal = {
++            .fg_color = 0xFFFFFF,
++            .bg_color = 0xFFFFFF,
++            .border_color = 0xFFFFFF
++        },
++        .pressed = {
++            .fg_color = 0xFFFFFF,
++            .bg_color = 0xC88800,
++            .border_color = 0xC88800
++        }
++    },
++    .textarea = {
++        .fg_color = 0xFFFFFF,
++        .bg_color = 0x000000,
++        .border_width = 1,
++        .border_color = 0xFFFFFF,
++        .corner_radius = 12,
++        .pad = 8,
++        .placeholder_color = 0xC0BCCB,
++        .cursor = {
++            .width = 2,
++            .color = 0xFFFFFF,
++            .period = 700
++        }
++    },
++    .dropdown = {
++        .button = {
++            .border_width = 1,
++            .corner_radius = 10,
++            .pad = 8,
++            .normal = {
++                .fg_color = 0xFFFFFF,
++                .bg_color = 0xFFFFFF,
++                .border_color = 0xFFFFFF
++            },
++            .pressed = {
++                .fg_color = 0xFFFFFF,
++                .bg_color = 0xC88800,
++                .border_color = 0xC88800
++            }
++        },
++        .list = {
++            .fg_color = 0xFFFFFF,
++            .bg_color = 0x2B2838,
++            .selection_fg_color = 0xFFFFFF,
++            .selection_bg_color = 0xC88800,
++            .border_width = 1,
++            .border_color = 0x4A4558,
++            .corner_radius = 10,
++            .pad = 8
++        }
++    },
++    .label = {
++        .fg_color = 0xFFFFFF
++    },
++    .msgbox = {
++        .fg_color = 0xFFFFFF,
++        .bg_color = 0x2B2838,
++        .border_width = 1,
++        .border_color = 0x4A4558,
++        .corner_radius = 14,
++        .pad = 20,
++        .gap = 20,
++        .dimming = {
++            .color = 0x000000,
++            .opacity = 160
++        }
++    },
++    .bar = {
++        .border_width = 1,
++        .border_color = 0xC88800,
++        .corner_radius = 8,
++        .indicator = {
++            .bg_color = 0xC88800
++        }
++    },
++    .glass = {
++        .enabled = true,
++        .surface_opa = 0x33,
++        .pressed_opa = 0xD9,
++        .border_opa = 0x4D,
++        .panel_opa = 0x40
++    }
++};
++
++
+ /**
+  * Public interface
+  */
+ 
+-const int bbx_themes_num_themes = 7;
++const int bbx_themes_num_themes = 8;
+ const bbx_theme *bbx_themes_themes[] = {
+     &breezy_light,
+     &breezy_dark,
+@@ -1123,7 +1286,8 @@ const bbx_theme *bbx_themes_themes[] = {
+     &pmos_dark,
+     &adwaita_dark,
+     &nord_light,
+-    &nord_dark
++    &nord_dark,
++    &plinius_glass
+ };
+ 
+ bbx_themes_theme_id_t bbx_themes_find_theme_with_name(const char *name) {
+diff --git a/shared/themes.h b/shared/themes.h
+index f72f767..274c1de 100644
+--- a/shared/themes.h
++++ b/shared/themes.h
+@@ -19,6 +19,7 @@ typedef enum {
+     BBX_THEMES_THEME_ADWAITA_DARK = 4,
+     BBX_THEMES_THEME_NORD_LIGHT = 5,
+     BBX_THEMES_THEME_NORD_DARK = 6,
++    BBX_THEMES_THEME_PLINIUS_GLASS = 7,
+ } bbx_themes_theme_id_t;
+ 
+ /* Themes */
+diff --git a/unl0kr/config.c b/unl0kr/config.c
+index 1149308..38688b6 100644
+--- a/unl0kr/config.c
++++ b/unl0kr/config.c
+@@ -101,6 +101,9 @@ static int parsing_handler(void* user_data, const char* section, const char* key
+                 opts->theme.alternate_id = id;
+                 return 1;
+             }
++        } else if (strcmp(key, "background") == 0) {
++            opts->theme.background = value[0] ? strdup(value) : NULL;
++            return 1;
+         }
+     } else if (strcmp(section, "input") == 0) {
+         if (strcmp(key, "keyboard") == 0) {
+@@ -170,6 +173,7 @@ void ul_config_init_opts(ul_config_opts *opts) {
+     opts->textarea.bullet = LV_SYMBOL_BULLET;
+     opts->theme.default_id = BBX_THEMES_THEME_BREEZY_LIGHT;
+     opts->theme.alternate_id = BBX_THEMES_THEME_BREEZY_DARK;
++    opts->theme.background = NULL;
+     opts->input.keyboard = true;
+     opts->input.pointer = true;
+     opts->input.touchscreen = true;
+diff --git a/unl0kr/config.h b/unl0kr/config.h
+index 72c33e5..76578ea 100644
+--- a/unl0kr/config.h
++++ b/unl0kr/config.h
+@@ -61,6 +61,8 @@ typedef struct {
+     bbx_themes_theme_id_t default_id;
+     /* Alternate theme */
+     bbx_themes_theme_id_t alternate_id;
++    /* Background image (LVGL binary image, XRGB8888), NULL for a plain colour */
++    const char *background;
+ } ul_config_opts_theme;
+ 
+ /**
+diff --git a/unl0kr/main.c b/unl0kr/main.c
+index a5b3410..06abb2a 100644
+--- a/unl0kr/main.c
++++ b/unl0kr/main.c
+@@ -8,6 +8,7 @@
+ #include "config.h"
+ #include "unl0kr.h"
+ 
++#include "../shared/background.h"
+ #include "../shared/backends.h"
+ #include "../shared/display.h"
+ #include "../shared/force_feedback.h"
+@@ -485,6 +486,11 @@ int main(int argc, char *argv[]) {
+     /* Prevent scrolling when keyboard is off-screen */
+     lv_obj_t *screen = lv_screen_active();
+     lv_theme_apply(screen);
++
++    /* Background image, e.g. for a glass theme */
++    if (conf_opts.theme.background) {
++        bbx_background_apply(screen, conf_opts.theme.background);
++    }
+     lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
+     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+ 

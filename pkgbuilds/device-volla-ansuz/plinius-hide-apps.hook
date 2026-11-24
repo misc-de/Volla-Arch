@@ -1,0 +1,26 @@
+# Hides launchers that other packages pull in from the app grid: developer tools (hwloc,
+# v4l-utils), stoken's token generator, which openconnect (VPN) depends on, and CUPS's web
+# interface (printers are set up in Settings). Evince stays for Phosh's ticket-box plugin
+# (libevview3), but Papers is the document viewer; two "Document Viewer" icons confuse.
+# Runs on every install and upgrade, because the packages bring back their original launchers.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/share/applications/lstopo.desktop
+Target = usr/share/applications/qv4l2.desktop
+Target = usr/share/applications/qvidcap.desktop
+Target = usr/share/applications/stoken-gui.desktop
+Target = usr/share/applications/stoken-gui-small.desktop
+Target = usr/share/applications/cups.desktop
+Target = usr/share/applications/org.gnome.Evince.desktop
+Target = usr/share/applications/vim.desktop
+Target = usr/share/applications/xgps.desktop
+Target = usr/share/applications/xgpsspeed.desktop
+Target = usr/share/applications/system-config-printer.desktop
+
+[Action]
+Description = Hiding pulled-in tools from the app grid...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plinius-hide-apps
+NeedsTargets

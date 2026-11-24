@@ -1,0 +1,12 @@
+[Unit]
+Description=Tell when the phone is connected through a satellite
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/plinius-satellite-notify
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

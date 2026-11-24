@@ -1,0 +1,339 @@
+From 76f46c3a5d88bf77fc002982edabf955175052d0 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 08:35:18 +0100
+Subject: [PATCH 1/2] wayland: Use the size the compositor configures
+
+vkmark took the output's mode for fullscreen and set the output's
+wl_output.scale as buffer scale. With a fractional output scale, which
+wl_output.scale rounds up, the image then covers only part of the
+screen: on a 1080x2400 phone at scale 2.27 (configure 476x1058,
+wl_output.scale 3) it showed at 360x800 in the top left corner.
+In a window, a buffer scale that does not divide the requested size
+(800x600 at scale 3) is a protocol error, and the compositor
+disconnected vkmark.
+
+Wait for the first configure before choosing the swapchain extent.
+Fullscreen takes the output's pixels and shows them at the configured
+size through wp_viewporter; a configured window size is used with the
+output's scale; otherwise the buffer scale is only set when it divides
+the size, else the viewport (or no scaling) shows the buffer.
+---
+ src/meson.build                  |  16 ++++
+ src/ws/wayland_native_system.cpp | 151 +++++++++++++++++++++++++------
+ src/ws/wayland_native_system.h   |  14 +++
+ 3 files changed, 155 insertions(+), 26 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index a2da205..a8cef22 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -126,6 +126,20 @@ if build_wayland_ws
+         output: 'xdg-shell-protocol.c',
+         )
+ 
++    viewporter_xml_path = wayland_protocols_dir + '/stable/viewporter/viewporter.xml'
++    viewporter_client_header = custom_target(
++        'viewporter client-header',
++        command: [ wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@' ],
++        input: viewporter_xml_path,
++        output: 'viewporter-client-protocol.h',
++        )
++    viewporter_private_code = custom_target(
++        'viewporter private-code',
++        command: [ wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@' ],
++        input: viewporter_xml_path,
++        output: 'viewporter-protocol.c',
++        )
++
+     wayland_ws = shared_module(
+         'wayland',
+         'ws/wayland_window_system_plugin.cpp',
+@@ -133,6 +147,8 @@ if build_wayland_ws
+         'ws/swapchain_window_system.cpp',
+         xdg_shell_client_header,
+         xdg_shell_private_code,
++        viewporter_client_header,
++        viewporter_private_code,
+         dependencies : [vulkan_dep, wayland_client_dep],
+         name_prefix : '',
+         install : true,
+diff --git a/src/ws/wayland_native_system.cpp b/src/ws/wayland_native_system.cpp
+index 1b9809c..431f561 100644
+--- a/src/ws/wayland_native_system.cpp
++++ b/src/ws/wayland_native_system.cpp
+@@ -24,6 +24,8 @@
+ 
+ #include "vulkan_state.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <stdexcept>
+ #include <linux/input.h>
+ #include <poll.h>
+@@ -85,18 +87,6 @@ void handle_xdg_wm_base_ping(
+     xdg_wm_base_pong(xdg_wm_base, serial);
+ }
+ 
+-void handle_xdg_surface_configure(
+-    void* /*data*/, xdg_surface* xdg_surface, uint32_t serial)
+-{
+-    xdg_surface_ack_configure(xdg_surface, serial);
+-}
+-
+-void handle_xdg_toplevel_configure(
+-    void* /*data*/, struct xdg_toplevel* /*xdg_toplevel*/,
+-    int32_t /*width*/, int32_t /*height*/, wl_array* /*states*/)
+-{
+-}
+-
+ }
+ 
+ xdg_wm_base_listener const WaylandNativeSystem::xdg_wm_base_listener{
+@@ -104,12 +94,12 @@ xdg_wm_base_listener const WaylandNativeSystem::xdg_wm_base_listener{
+ };
+ 
+ xdg_toplevel_listener const WaylandNativeSystem::xdg_toplevel_listener{
+-    handle_xdg_toplevel_configure,
++    WaylandNativeSystem::handle_xdg_toplevel_configure,
+     WaylandNativeSystem::handle_xdg_toplevel_close,
+ };
+ 
+ xdg_surface_listener const WaylandNativeSystem::xdg_surface_listener{
+-    handle_xdg_surface_configure,
++    WaylandNativeSystem::handle_xdg_surface_configure,
+ };
+ 
+ wl_seat_listener const WaylandNativeSystem::seat_listener{
+@@ -140,7 +130,12 @@ WaylandNativeSystem::WaylandNativeSystem(int width, int height)
+       output_width{0},
+       output_height{0},
+       output_refresh{0},
+-      output_scale{1}
++      output_scale{1},
++      configured{false},
++      configured_width{0},
++      configured_height{0},
++      logical_width{0},
++      logical_height{0}
+ {
+     create_native_window();
+ }
+@@ -262,33 +257,108 @@ void WaylandNativeSystem::create_native_window()
+     xdg_toplevel_set_title(xdg_toplevel, "vkmark " VKMARK_VERSION_STR);
+ 
+     if (fullscreen_requested())
+-    {
+         xdg_toplevel_set_fullscreen(xdg_toplevel, output);
+-        vk_extent = vk::Extent2D{
+-            static_cast<uint32_t>(output_width),
+-            static_cast<uint32_t>(output_height)};
+-    }
+-    else
++
++    // The swapchain has a fixed size, so take it from the first configure:
++    // it carries the size the compositor gives the window (0x0 = our choice)
++    wl_surface_commit(surface);
++    while (!configured)
+     {
+-        vk_extent = vk::Extent2D{
+-            static_cast<uint32_t>(requested_width),
+-            static_cast<uint32_t>(requested_height)};
++        if (wl_display_dispatch(display) < 0)
++            throw std::runtime_error("Failed to get the Wayland window configuration");
+     }
+ 
+-    if (wl_proxy_get_version(reinterpret_cast<wl_proxy*>(output.raw)) >=
++    if (output && wl_proxy_get_version(reinterpret_cast<wl_proxy*>(output.raw)) <
+         WL_OUTPUT_SCALE_SINCE_VERSION)
+     {
++        output_scale = 1;
++    }
++    output_scale = std::max(output_scale, 1);
++
++    auto const sized = configured_width > 0 && configured_height > 0;
++
++    if (fullscreen_requested() && sized && viewporter &&
++        output_width > 0 && output_height > 0)
++    {
++        // All of the output's pixels, shown at the size the compositor gives:
++        // with a fractional output scale, which wl_output.scale rounds up,
++        // a buffer scale would shrink the image into a corner
++        auto width = static_cast<uint32_t>(output_width);
++        auto height = static_cast<uint32_t>(output_height);
++        if ((width > height) != (configured_width > configured_height))
++            std::swap(width, height);
++        vk_extent = vk::Extent2D{width, height};
++        viewport = ManagedResource<struct wp_viewport*>{
++            wp_viewporter_get_viewport(viewporter, surface), wp_viewport_destroy};
++        wp_viewport_set_destination(viewport, configured_width, configured_height);
++        logical_width = configured_width;
++        logical_height = configured_height;
++    }
++    else if (sized)
++    {
++        // Exactly the given size, with the output's scale
++        vk_extent = vk::Extent2D{
++            static_cast<uint32_t>(configured_width * output_scale),
++            static_cast<uint32_t>(configured_height * output_scale)};
+         wl_surface_set_buffer_scale(surface, output_scale);
++        logical_width = configured_width;
++        logical_height = configured_height;
++    }
++    else if (fullscreen_requested())
++    {
++        set_buffer_size(vk::Extent2D{
++            static_cast<uint32_t>(output_width),
++            static_cast<uint32_t>(output_height)});
++    }
++    else
++    {
++        set_buffer_size(vk::Extent2D{
++            static_cast<uint32_t>(requested_width),
++            static_cast<uint32_t>(requested_height)});
+     }
+ 
+     auto const opaque_region = ManagedResource<wl_region*>{
+         wl_compositor_create_region(compositor), wl_region_destroy};
+-    wl_region_add(opaque_region, 0, 0, vk_extent.width, vk_extent.height);
++    wl_region_add(opaque_region, 0, 0, logical_width, logical_height);
+     wl_surface_set_opaque_region(surface, opaque_region);
+ 
+     wl_surface_commit(surface);
+ }
+ 
++/*
++ * A buffer of our own size. The buffer scale must divide it (else the
++ * compositor disconnects us, e.g. 800x600 at scale 3); when it does not,
++ * the viewport shows it at the logical size instead, or unscaled.
++ */
++void WaylandNativeSystem::set_buffer_size(vk::Extent2D extent)
++{
++    auto const scale = static_cast<uint32_t>(output_scale);
++
++    vk_extent = extent;
++
++    if (extent.width % scale == 0 && extent.height % scale == 0)
++    {
++        wl_surface_set_buffer_scale(surface, output_scale);
++        logical_width = extent.width / scale;
++        logical_height = extent.height / scale;
++    }
++    else if (viewporter)
++    {
++        logical_width = std::max(1, static_cast<int32_t>(std::lround(
++            static_cast<double>(extent.width) / scale)));
++        logical_height = std::max(1, static_cast<int32_t>(std::lround(
++            static_cast<double>(extent.height) / scale)));
++        viewport = ManagedResource<struct wp_viewport*>{
++            wp_viewporter_get_viewport(viewporter, surface), wp_viewport_destroy};
++        wp_viewport_set_destination(viewport, logical_width, logical_height);
++    }
++    else
++    {
++        logical_width = extent.width;
++        logical_height = extent.height;
++    }
++}
++
+ bool WaylandNativeSystem::fullscreen_requested()
+ {
+     return requested_width == -1 && requested_height == -1;
+@@ -318,6 +388,13 @@ void WaylandNativeSystem::handle_registry_global(
+             std::move(xdg_wm_base_raw), xdg_wm_base_destroy};
+         xdg_wm_base_add_listener(wws->xdg_wm_base, &xdg_wm_base_listener, wws);
+     }
++    else if (interface == "wp_viewporter")
++    {
++        auto viewporter_raw = static_cast<struct wp_viewporter*>(
++            wl_registry_bind(registry, id, &wp_viewporter_interface, 1));
++        wws->viewporter = ManagedResource<struct wp_viewporter*>{
++            std::move(viewporter_raw), wp_viewporter_destroy};
++    }
+     else if (interface == "wl_seat")
+     {
+         auto seat_raw = static_cast<wl_seat*>(
+@@ -343,6 +420,28 @@ void WaylandNativeSystem::handle_registry_global(
+     }
+ }
+ 
++void WaylandNativeSystem::handle_xdg_surface_configure(
++    void* data, struct xdg_surface* xdg_surface, uint32_t serial)
++{
++    auto const wws = static_cast<WaylandNativeSystem*>(data);
++    xdg_surface_ack_configure(xdg_surface, serial);
++    wws->configured = true;
++}
++
++void WaylandNativeSystem::handle_xdg_toplevel_configure(
++    void* data, struct xdg_toplevel* /*xdg_toplevel*/,
++    int32_t width, int32_t height, wl_array* /*states*/)
++{
++    auto const wws = static_cast<WaylandNativeSystem*>(data);
++
++    // Only the first one counts: the swapchain is not recreated
++    if (!wws->configured)
++    {
++        wws->configured_width = width;
++        wws->configured_height = height;
++    }
++}
++
+ void WaylandNativeSystem::handle_xdg_toplevel_close(
+     void* data, struct xdg_toplevel* /*xdg_toplevel*/)
+ {
+diff --git a/src/ws/wayland_native_system.h b/src/ws/wayland_native_system.h
+index ac1659a..dd5aa9b 100644
+--- a/src/ws/wayland_native_system.h
++++ b/src/ws/wayland_native_system.h
+@@ -25,6 +25,7 @@
+ #define VK_USE_PLATFORM_WAYLAND_KHR
+ #include "native_system.h"
+ #include "xdg-shell-client-protocol.h"
++#include "viewporter-client-protocol.h"
+ 
+ #include <wayland-client.h>
+ 
+@@ -44,10 +45,16 @@ public:
+ private:
+     void create_native_window();
+     bool fullscreen_requested();
++    void set_buffer_size(vk::Extent2D extent);
+ 
+     static void handle_registry_global(
+         void* data, wl_registry* registry, uint32_t id,
+         char const* interface, uint32_t version);
++    static void handle_xdg_surface_configure(
++        void* data, struct xdg_surface* xdg_surface, uint32_t serial);
++    static void handle_xdg_toplevel_configure(
++        void* data, struct xdg_toplevel* xdg_toplevel,
++        int32_t width, int32_t height, wl_array* states);
+     static void handle_xdg_toplevel_close(
+         void* data, xdg_toplevel* xdg_toplevel);
+     static void handle_seat_capabilities(
+@@ -76,16 +83,23 @@ private:
+     ManagedResource<wl_display*> display;
+     ManagedResource<wl_compositor*> compositor;
+     ManagedResource<struct xdg_wm_base*> xdg_wm_base;
++    ManagedResource<struct wp_viewporter*> viewporter;
+     ManagedResource<wl_seat*> seat;
+     ManagedResource<wl_output*> output;
+     ManagedResource<wl_keyboard*> keyboard;
+     ManagedResource<wl_surface*> surface;
+     ManagedResource<struct xdg_surface*> xdg_surface;
+     ManagedResource<struct xdg_toplevel*> xdg_toplevel;
++    ManagedResource<struct wp_viewport*> viewport;
+     int display_fd;
+     int32_t output_width;
+     int32_t output_height;
+     int32_t output_refresh;
+     int32_t output_scale;
++    bool configured;
++    int32_t configured_width;
++    int32_t configured_height;
++    int32_t logical_width;
++    int32_t logical_height;
+     vk::Extent2D vk_extent;
+ };
+-- 
+2.56.0
+

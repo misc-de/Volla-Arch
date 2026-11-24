@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 08:06:00 +0100
+Subject: [PATCH] aod: The same place for the whole minute
+
+The content moves to a random place against burn-in. The always-on display is
+made anew when the phone locks while it dozes, and the new one jumped to another
+place in the middle of the minute. Take the place from the minute, so that any
+always-on display within one minute shows the same picture.
+---
+ src/aod.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/aod.c b/src/aod.c
+index 5c038143..217956be 100644
+--- a/src/aod.c
++++ b/src/aod.c
+@@ -73,11 +73,13 @@ static const char aod_css[] =
+ static void
+ move_content (PhoshAod *self)
+ {
++  /* The minute decides: the always-on display made anew when the phone locks stays in place */
++  g_autoptr (GRand) rand = g_rand_new_with_seed (g_get_real_time () / (60 * G_USEC_PER_SEC));
+   int height, dx, dy;
+ 
+   /* A new random place each minute, within a small box around the middle */
+-  dx = g_random_int_range (-AOD_SHIFT_X, AOD_SHIFT_X + 1);
+-  dy = g_random_int_range (0, AOD_SHIFT_Y + 1);
++  dx = g_rand_int_range (rand, -AOD_SHIFT_X, AOD_SHIFT_X + 1);
++  dy = g_rand_int_range (rand, 0, AOD_SHIFT_Y + 1);
+ 
+   height = gtk_widget_get_allocated_height (GTK_WIDGET (self));
+   if (height <= 1 && self->monitor)

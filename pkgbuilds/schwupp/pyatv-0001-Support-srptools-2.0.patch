@@ -1,0 +1,143 @@
+From: jullduxster
+Subject: [PATCH] Support srptools 2.0 (pyatv PR #2947, not merged yet)
+
+srptools 2.0.0 made the session arguments keyword-only and reads a bytes
+argument to verify_proof as the raw proof. Pass private= and
+password_verifier= by keyword and compare the server-side proofs with
+hmac.compare_digest; both work with srptools 1.x as well.
+https://github.com/postlund/pyatv/pull/2947
+---
+diff --git a/pyatv/auth/hap_srp.py b/pyatv/auth/hap_srp.py
+index 3453bfd10..52717bef6 100644
+--- a/pyatv/auth/hap_srp.py
++++ b/pyatv/auth/hap_srp.py
+@@ -145,7 +145,7 @@ def step1(self, pin):
+             hash_func=hashlib.sha512,
+         )
+         self._session = SRPClientSession(
+-            context, binascii.hexlify(self._auth_private).decode()
++            context, private=binascii.hexlify(self._auth_private).decode()
+         )
+ 
+     def step2(self, atv_pub_key, atv_salt):
+diff --git a/pyatv/protocols/airplay/server_auth.py b/pyatv/protocols/airplay/server_auth.py
+index 9351273fc..d9117641f 100644
+--- a/pyatv/protocols/airplay/server_auth.py
++++ b/pyatv/protocols/airplay/server_auth.py
+@@ -7,6 +7,7 @@
+ import binascii
+ from collections import namedtuple
+ import hashlib
++import hmac
+ import logging
+ import plistlib
+ from typing import Optional, Tuple
+@@ -72,7 +73,9 @@ def new_server_session(keys, pin) -> Tuple[SRPServerSession, bytes]:
+     )
+ 
+     session = SRPServerSession(
+-        context_server, verifier, binascii.hexlify(keys.auth).decode()
++        context_server,
++        password_verifier=verifier,
++        private=binascii.hexlify(keys.auth).decode(),
+     )
+ 
+     return session, salt
+@@ -326,7 +329,11 @@ def _m3_setup(self, pairing_data, transient: bool):
+         pubkey = binascii.hexlify(pairing_data[TlvValue.PublicKey]).decode()
+         self.session.process(pubkey, self.salt)
+ 
+-        if self.session.verify_proof(binascii.hexlify(pairing_data[TlvValue.Proof])):
++        # Compare raw bytes ourselves: srptools 2.0 reads a bytes argument to
++        # verify_proof as the raw proof, 1.x as hex, so neither form suits both.
++        if hmac.compare_digest(
++            pairing_data[TlvValue.Proof], binascii.unhexlify(self.session.key_proof)
++        ):
+             proof = binascii.unhexlify(self.session.key_proof_hash)
+             tlv = {TlvValue.Proof: proof, TlvValue.SeqNo: b"\x04"}
+         else:
+diff --git a/pyatv/protocols/airplay/srp.py b/pyatv/protocols/airplay/srp.py
+index 09cb19829..6969d49c1 100644
+--- a/pyatv/protocols/airplay/srp.py
++++ b/pyatv/protocols/airplay/srp.py
+@@ -157,7 +157,7 @@ def step1(self, username, password):
+             generator=constants.PRIME_2048_GEN,
+         )
+         self.session = SRPClientSession(
+-            context, binascii.hexlify(self._auth_private).decode()
++            context, private=binascii.hexlify(self._auth_private).decode()
+         )
+ 
+     def step2(self, pub_key, salt):
+diff --git a/pyatv/protocols/companion/server_auth.py b/pyatv/protocols/companion/server_auth.py
+index a8368c875..ed68523f5 100644
+--- a/pyatv/protocols/companion/server_auth.py
++++ b/pyatv/protocols/companion/server_auth.py
+@@ -4,6 +4,7 @@
+ import binascii
+ from collections import namedtuple
+ import hashlib
++import hmac
+ import logging
+ 
+ from cryptography.hazmat.primitives import serialization
+@@ -65,7 +66,9 @@ def new_server_session(keys, pin):
+     )
+ 
+     session = SRPServerSession(
+-        context_server, verifier, binascii.hexlify(keys.auth).decode()
++        context_server,
++        password_verifier=verifier,
++        private=binascii.hexlify(keys.auth).decode(),
+     )
+ 
+     return session, salt
+@@ -156,7 +159,11 @@ def _m3_setup(self, pairing_data):
+         pubkey = binascii.hexlify(pairing_data[TlvValue.PublicKey]).decode()
+         self.session.process(pubkey, self.salt)
+ 
+-        if self.session.verify_proof(binascii.hexlify(pairing_data[TlvValue.Proof])):
++        # Compare raw bytes ourselves: srptools 2.0 reads a bytes argument to
++        # verify_proof as the raw proof, 1.x as hex, so neither form suits both.
++        if hmac.compare_digest(
++            pairing_data[TlvValue.Proof], binascii.unhexlify(self.session.key_proof)
++        ):
+             proof = binascii.unhexlify(self.session.key_proof_hash)
+             tlv = {TlvValue.Proof: proof, TlvValue.SeqNo: b"\x04"}
+         else:
+diff --git a/pyatv/protocols/mrp/server_auth.py b/pyatv/protocols/mrp/server_auth.py
+index ef3a3d0d6..5802dde28 100644
+--- a/pyatv/protocols/mrp/server_auth.py
++++ b/pyatv/protocols/mrp/server_auth.py
+@@ -4,6 +4,7 @@
+ import binascii
+ from collections import namedtuple
+ import hashlib
++import hmac
+ import logging
+ 
+ from cryptography.hazmat.primitives import serialization
+@@ -66,7 +67,9 @@ def new_server_session(keys, pin):
+     )
+ 
+     session = SRPServerSession(
+-        context_server, verifier, binascii.hexlify(keys.auth).decode()
++        context_server,
++        password_verifier=verifier,
++        private=binascii.hexlify(keys.auth).decode(),
+     )
+ 
+     return session, salt
+@@ -190,7 +193,11 @@ def _m3_setup(self, pairing_data):
+         self.session.process(pubkey, self.salt)
+ 
+         proof = binascii.unhexlify(self.session.key_proof_hash)
+-        if self.session.verify_proof(binascii.hexlify(pairing_data[TlvValue.Proof])):
++        # Compare raw bytes ourselves: srptools 2.0 reads a bytes argument to
++        # verify_proof as the raw proof, 1.x as hex, so neither form suits both.
++        if hmac.compare_digest(
++            pairing_data[TlvValue.Proof], binascii.unhexlify(self.session.key_proof)
++        ):
+             msg = messages.crypto_pairing(
+                 {TlvValue.Proof: proof, TlvValue.SeqNo: b"\x04"}
+             )

@@ -1,0 +1,622 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on: Arch's PKGBUILD (phosh 0.59.0-1); ALARM builds it unchanged.
+
+pkgname=phosh-plinius
+pkgver=0.59.0
+pkgrel=27
+pkgdesc="Phosh mobile shell with a restart button, NFC, cast and USB switches and settings for the notch, the app overview and the calendar week"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+# Debug symbols in a -debug package (ALARM's makepkg.conf has !debug): perf names Phosh's functions
+options=(debug)
+url="https://gitlab.gnome.org/World/Phosh/phosh"
+license=(GPL-3.0-or-later)
+# Why a custom build: a long press on the power button opens Phosh's power menu, which only
+# offers power off, lock, screenshot and emergency call. A phone also needs "Restart" there.
+# gmobile has no panel data for the Plinius, so the top bar takes the panel data from the
+# device package (display-panel.json) or the notch position from GNOME Settings
+# (org.plinius.display, see pkgbuilds/gnome-control-center-plinius), and lays the clock and
+# the icons out from their real widths.
+# The app overview takes its layout options from there too (search, app names, folder dock).
+# A tap on the notch opens a minimal search of apps, settings, contacts, events and the other
+# GNOME search providers (org.plinius.display notch-search).
+# The cast quick setting mirrors the screen to a TV or sends the sound to a speaker through
+# Schwupp (pkgbuilds/schwupp).
+# VPN auth dialogs without the external UI mode (OpenConnect) get their own window, as in
+# GNOME Shell; before, Phosh refused them.
+# While a camera is on, the notch glows white (camera-hal-bridge tells it on the session bus).
+# The USB quick setting chooses what an attached computer gets (pkgbuilds/plinius-usb).
+# The contact card quick setting ("My Card") shares the own card over NFC and a QR code and takes
+# cards in (pkgbuilds/plinius-cardshare).
+# On a satellite network the cellular icon shows a satellite (pkgbuilds/plinius-satellite).
+# Every access question, of the portals and of plinius-appaccess, asks with Allow Once, Always
+# Allow and Don't Allow.
+# Must follow the phosh version in ALARM (same phoc version, see pkgbuilds/phoc-plinius).
+# Dependencies as in ALARM. phoc-plinius >= 0.59.0-1: Phosh 0.59 draws the overview's thumbnails
+# through phoc and uses the newer layer-shell-effects protocol; the doze power mode of the
+# always-on display needs our phoc patches too. phoc-plinius >= 0.59.0-8: with 0106 the OSK stays
+# on when docked, phoc 0038 keeps it on the phone's panel.
+depends=(
+	appstream at-spi2-core bash cairo callaudiod dconf evince evolution-data-server feedbackd fribidi gcr
+	gdk-pixbuf2 glib2 glibc gnome-bluetooth-3.0 gnome-desktop gnome-session gnome-shell
+	gsettings-desktop-schemas gtk3 gtk4 hicolor-icon-theme iio-sensor-proxy json-glib libadwaita
+	libgcc libgmobile libgudev libhandy libical libmm-glib libnm libpipewire libpulse libsecret
+	libsoup3 pam pango
+	# gtk3-plinius: scrolling the app grid follows the finger, it jumped back and forth by whole rows
+	'gtk3-plinius>=1:3.24.52-1'
+	# libhandy-plinius 1.8.3-3 draws a held card where the finger is (0076)
+	'libhandy-plinius>=1.8.3-3' 'phoc-plinius>=0.59.0-8' phosh-osk-provider 'plinius-pattern>=0.3' polkit qrcodegen systemd-libs upower wayland xdg-desktop-portal-gtk
+	xdg-desktop-portal-phosh xdg-desktop-portal-wlr
+)
+makedepends=(git glib2-devel meson python-docutils wayland-protocols)
+provides=("phosh=$pkgver")
+# Since 0.59 the settings are in mobi.phosh.shell; an older phosh-mobile-settings looks for sm.puri.phosh
+conflicts=(phosh 'phosh-mobile-settings<0.59.0')
+# Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot.
+# libcall-ui and gvc are subprojects; prepare() checks out the revisions of their .wrap files.
+# gvc's names a commit, libcall-ui's the tag v0.1.5: prepare() checks that it is still this commit.
+_commit=d587ead710b22c3f318df60ac457f44684ae0493
+_callui_commit=7389b4ae90e101620ef8e790e76a98e434bd920c
+source=(
+	"git+$url.git#commit=$_commit"
+	"git+https://gitlab.gnome.org/World/Phosh/libcall-ui.git"
+	"guidog-gvc::git+https://gitlab.gnome.org/guidog/libgnome-volume-control.git"
+	phosh.pam
+	0001-power-menu-Add-a-restart-button.patch
+	0002-layout-manager-Take-the-notch-position-from-the-settings.patch
+	0003-app-grid-Search-app-names-and-a-folder-dock-from-the.patch
+	0004-top-panel-Show-the-calendar-week.patch
+	0005-plugins-NFC-quick-setting-and-status-icon.patch
+	0006-top-panel-Only-the-week-number-left-of-the-clock.patch
+	0007-layout-manager-Lay-the-top-bar-out-from-the-real-siz.patch
+	0008-lockscreen-Keep-the-slide-hint-clear-of-an-under-display.patch
+	0009-monitor-manager-Keep-mode-and-scale-across-sessions.patch
+	0010-lockscreen-Unlock-with-a-pattern.patch
+	0011-wifi-manager-Hotspot-on-an-AP-only-interface.patch
+	0012-lockscreen-Keypad-and-pattern-pad-use-the-room-of-the-screen.patch
+	0013-lockscreen-Show-what-the-PAM-modules-say.patch
+	0014-lockscreen-manager-Dark-variant-of-the-background.patch
+	0015-style-manager-A-custom-accent-color-from-the-settings.patch
+	0016-brightness-manager-Fade-when-dimming-and-undimming.patch
+	0017-lockscreen-Center-the-unlock-page-on-the-screen.patch
+	0018-notch-search-Search-apps-from-the-notch.patch
+	0019-plugins-Cast-quick-setting.patch
+	0020-network-auth-manager-Auth-dialogs-with-their-own-window.patch
+	0021-camera-glow-Light-the-notch-while-a-camera-is-on.patch
+	0022-plugins-USB-quick-setting.patch
+	0023-torch-manager-Follow-changes-made-by-others.patch
+	0024-wwan-mm-Prefer-a-modem-with-a-SIM.patch
+	0025-brightness-manager-Show-the-brightness-on-the-slider.patch
+	0026-screen-saver-manager-Send-the-locked-hint-once-logind-is-there.patch
+	0027-gvc-A-Bluetooth-headset-is-one-device-per-direction.patch
+	0028-shell-Restart-the-UI-from-the-power-menu-and-the-system-menu.patch
+	0029-torch-manager-Keep-the-torch-s-own-brightness.patch
+	0030-gvc-No-crash-when-a-stream-s-active-port-is-unknown.patch
+	0031-auto-brightness-bucket-Wait-before-switching-buckets.patch
+	0032-shell-Always-on-display-while-the-panel-dozes.patch
+	0033-notch-search-Search-the-system-not-just-apps.patch
+	0034-camera-glow-Follow-the-camera-when-the-screen-turns.patch
+	0035-app-grid-button-Don-t-change-the-app-s-own-icon.patch
+	0036-app-grid-folder-button-Don-t-leak-the-app-infos-of-t.patch
+	0037-app-grid-Load-the-icons-of-folder-apps-ahead-and-kee.patch
+	0038-plugins-Cast-and-USB-settings-in-GNOME-Settings.patch
+	0039-folder-info-List-a-folder-s-apps-by-name.patch
+	0040-screenshot-manager-Release-the-frames-when-a-screenc.patch
+	0041-app-grid-Folders-at-the-bottom-keep-their-size.patch
+	0042-layersurface-Know-the-output-while-subclasses-are-co.patch
+	0043-lockshield-Unlock-on-the-phone-or-with-the-PIN-on-a-second-screen.patch
+	0044-shell-The-always-on-display-stays-on-top-of-everything.patch
+	0045-lockscreen-An-emergency-button-next-to-the-unlock-button.patch
+	0046-emergency-menu-Tell-how-the-call-is-going.patch
+	0047-po-Emergency-and-Calling-on-the-lock-screen-and-in-the-menu.patch
+	0048-emergency-menu-The-dial-pad-doesnt-ask-for-the-on-screen-keyboard.patch
+	0049-emergency-menu-Fill-the-whole-screen.patch
+	0050-aod-The-same-place-for-the-whole-minute.patch
+	0051-emergency-menu-A-swipe-closes-it.patch
+	0052-top-panel-The-clock-row-is-part-of-the-black-card.patch
+	0053-settings-Room-below-the-sliders-and-the-quick-settings.patch
+	0054-plugins-Desktop-over-VNC-quick-setting.patch
+	0055-shell-Ask-before-restarting-the-UI.patch
+	0056-brightness-manager-Smooth-transitions.patch
+	0057-camera-glow-Charge-the-ring-around-the-camera.patch
+	0058-top-panel-Modem-and-Wi-Fi-stay-left-of-the-notch-when-they-fit.patch
+	0059-lockscreen-The-emergency-button-below-the-unlock-button.patch
+	0060-shell-A-window-on-another-screen-keeps-the-phone-s-overview-open.patch
+	0061-home-With-a-second-screen-the-open-overview-leaves-the-keyboard-alone.patch
+	0062-shell-The-overview-opens-when-the-phone-s-last-window-left-for-another-screen.patch
+	0063-lockscreen-The-emergency-button-at-the-bottom-edge.patch
+	0064-aod-The-notification-icons-in-a-row-of-their-own.patch
+	0065-aod-Show-the-icon-of-an-app-s-first-notification.patch
+	0066-app-tracker-A-window-of-the-app-ends-its-splash.patch
+	0067-aod-Notification-icons-three-times-as-large.patch
+	0068-volume-osd-Sliders-at-the-keys-edge-the-volume-per-role.patch
+	0069-gvc-Hands-free-ports-take-the-new-profiles-of-the-card.patch
+	0070-metainfo-cache-No-AppStream-pool-without-GNOME-Software.patch
+	0072-overview-The-running-apps-above-or-below-the-app-grid.patch
+	0073-wwan-info-A-satellite-instead-of-the-bars-while-on-a-satellite.patch
+	0074-overview-Running-apps-below-the-grid-keep-their-size-and-close-downwards.patch
+	0075-notifications-Tapping-a-notification-also-folds-the-overview.patch
+	0076-overview-Hold-a-running-app-for-a-second-to-move-it-in-the-order.patch
+	0077-shell-Restart-Phosh-instead-of-Restart-UI.patch
+	0078-plugins-Contact-card-quick-setting.patch
+	0079-lockscreen-Show-what-the-PAM-modules-say-after-a-wrong-pattern.patch
+	0080-quick-settings-The-tile-s-name-instead-of-On-and-Off.patch
+	org.plinius.display.gschema.xml
+	org.plinius.appearance.gschema.xml
+	91-phosh-plinius.gschema.override
+	mobi.phosh.Shell-restart-direct.conf
+	0081-quick-settings-Airplane-mode-in-place-of-the-battery-tile.patch
+	0082-plugins-USB-Webcam-and-powering-the-connected-device.patch
+	0083-po-Airplane-Mode-and-the-USB-tile-s-new-rows.patch
+	0085-app-grid-Dissolve-a-folder-from-its-long-press-menu.patch
+	0086-plugins-Long-presses-open-the-tile-s-own-page-in-GNOME-Settings.patch
+	0087-quick-settings-Mobile-data-and-the-hotspot-up-among-the-first-tiles.patch
+	0088-shell-Log-Out-with-a-second-account-power-menu-buttons-in-rows.patch
+	0089-wwan-mm-The-SIM-card-s-own-label-instead-of-the-network-s-name.patch
+	0090-home-A-taller-home-bar-while-the-phone-is-turned.patch
+	0091-quick-settings-Settings-open-in-GNOME-Settings-again.patch
+	0092-power-menu-The-buttons-one-below-the-other.patch
+	0093-app-grid-Icons-fade-out-where-the-grid-scrolls-on.patch
+	0094-overview-Icons-fade-out-in-a-band-at-the-running-apps-cards.patch
+	0095-gvc-Sources-marked-plinius.hidden-are-not-listed.patch
+	0096-app-grid-Fade-the-band-without-drawing-the-grid-twice.patch
+	0097-activity-A-card-s-thumbnail-is-scaled-once-not-for-every-frame.patch
+	0098-camera-status-icon-No-icon-flashing-up-at-startup.patch
+	0099-overview-A-card-s-thumbnail-is-asked-for-once-per-layout.patch
+	0100-overview-The-cards-get-their-size-once-per-layout.patch
+	0101-app-grid-button-An-icon-from-a-file-is-loaded-once.patch
+	0102-app-grid-The-first-folder-s-page-is-built-ahead.patch
+	0103-overview-A-card-shows-the-on-screen-keyboard-below-the-window.patch
+	0104-phosh-session-Device-updates-of-phoc.ini-reach-a-user-with-saved-modes.patch
+	0105-app-grid-No-scrollbar-at-the-side-of-the-grid-and-of-a-folder.patch
+	0106-docked-manager-The-OSK-stays-on-when-docked.patch
+	0107-shell-A-prompt-shows-on-the-screen-where-the-action-.patch
+	0108-power-menu-Two-columns-while-the-screen-is-wider-tha.patch
+	0109-portal-access-manager-Allow-Once-Always-Allow-and-Don-t-Allow.patch
+	0110-po-Allow-Once-Always-Allow-and-Don-t-Allow.patch
+	0111-portal-access-manager-A-request-that-goes-away-close.patch
+	0112-location-manager-Remember-the-location-answers-of-na.patch
+	0113-cast-quick-setting-Buttons-per-TV-for-what-Schwupp-can-send.patch
+	0114-po-The-cast-quick-setting.patch
+	phoc-ini-merge
+)
+sha256sums=('SKIP'
+	'SKIP'
+	'SKIP'
+	'7623c603ddc0b428e1bff543a2a513c5442b98be16bed966b2136951995433d4'
+	'3d9246887e3cd6858961ff1c1aef951392a5f4cd2f1cdb995b0a331c6316b611'
+	'ddc2fbe2d779b69b976dbf52c5986bc3437ac7930cbfaea99fba0aff5e82ed65'
+	'efcc2c8f12b0f19f8484a2cda197d6d507f76ba9c3a81fff18eab3eeb810581c'
+	'63231b0fdd748ce7810b7dea58643050c5ad9ffc10c11136592663bd1c816bd8'
+	'1fd64d97bd6ad4e516820dd4658c7e3a4f88a02ef30ed3b7b6296755abb2d7e7'
+	'b272ec4977adec309fc4f44bc7d470266dba9c178a05e35a79049808ce6c3cfa'
+	'6186d81367051e4ee1a132c178c70b509641ff0f2913ac9d2aa827b8b467808a'
+	'cb38919ddafd35dceb0db3122369ad55fe3468f5a5888681dfcf5c9b52fd3cf0'
+	'317e7f73e5ba73fa6475b213e0100e6772f7855581fa2fa9230d0366a38cd519'
+	'dc6cbe4be39009ae203b92c3b89d0a82f67fc9cd14edcbe2e58e20ce3d71f1c9'
+	'd858b48f74612e7b5cdd69acb2457d495de5d5ed807a5df95b009e61e9e00ca8'
+	'f48b49c6faca611e54a62b3f5458ba9fe2c6676b16d21c118a00642e9744fbc9'
+	'83bbba0bf10c28643ef1af41d585d3c8c4510f4060bf733581fbe8251bac4c89'
+	'072da5aea6d86a1df6b27b1225260ba5130d0b98e970c5119b52876d9bf8c297'
+	'2e6cf6017e1b738313ee466e38203cfafd0ac88728676e69afce7cfa603cd7ab'
+	'7a7aa57438bdeb6671a5b7311313e9f9a985f57d7c5fcf53b226a8f309151991'
+	'8088a5b709defef3f9f9ee3427ed21b1ab2bdbeef08e0a6cb14087ecb2c2a951'
+	'68baab0073fee3a2e4dd30f4a101f5d88b2be6f04f3daa894f6bdd16677c08d7'
+	'560b26805cbcb8e1a9d114fa6c49614cc81cc91fce7bcff4f9fb70e6d4ed2cce'
+	'942495b1aa56b931743ec1930cad11fb48f447b237b7de51d6b6ac5d93c18d2b'
+	'782e44ad8f141a0955822f566460029ea4ba4f3c1439eb1f9913fb6b616bad85'
+	'29319684814ce08b153f7810c015a53eb82ef1324c50fdf9649e21ffe5d3e086'
+	'3b43e4455b9f8c00eb4d85bb9670ff8bf35174ad3e8c1bbffcac070464aade7c'
+	'7194f4ada5f2e1abc00c8824d27f80884bdd17277829fa60c9393658e614e48e'
+	'9102f1b15fa2c741d4435c04a4755c5d7f9d57f9cd94f05e1d00a60ffd45e699'
+	'bad2493d985f5c0a339e7357cda4744d24a0213754f6565c302800e9f141d31b'
+	'7eef90773732dfba4331907aa57747c2fce9fbd2cb10c9f60a631d191f279672'
+	'3dd05bafbad9c717704569a1fc41fc9fbceb3045b48e419fd0f30cb8210b1ca4'
+	'82ccfa3b976e262874e68fcbba6bc3f809f8047ee0f855985a675cc4e7c09e41'
+	'dd19516cb0495394e297400f802acd0c604704b840f67ecc2a4319ffaab832fc'
+	'c57e8f4c7162081dcc02e10f3249c6ede2615598d2d482e660d03c0604beaf20'
+	'8f1cea9363afba96acccbe40d913ef8bd503555cb68e47a6e7b46705c96fe794'
+	'06ee1c15109e144d72a3eec51a95e1a02ba5e878b1d578524eedfb29d3935ad3'
+	'ad8d6b2da7b04b32ad408698009ea7561952464c018bf5137f7f15efe625ed27'
+	'9435201f86ef4f2129fae1119a117e773f77749e8c23216070d3d0cf34dbc17f'
+	'0dac28d324709acaadaedd8793669f9ed088c0b603f4c3c6b2535fafa90db2af'
+	'1b21e69d68120a3025512bbdbdc166368ee7888b399581909e929238e98bf975'
+	'914754a7e66d3e3a8588274ecf2b648df068d3a6be08d75b1aca0a85d8103380'
+	'250ab674c63812e8a9d312a08d41154105c264bd7b378b647db2249348a3e2f8'
+	'636d94d54feb695e1c0d2190a27154f9cbc80a6ccb65f597c9296a9168c598df'
+	'7fbfdf72edc69144090733c9812ce1df249b2a12bae307c9ae1724cdeebacac1'
+	'a86e04e8d11bf04f6818733abf439105885331dbaa51175ae452c601f7b14519'
+	'd9e28209c8c0c65a84fa567a57bd4e1510a077df1fbdd1995ca7d129bf98cc1c'
+	'683e47bf8ee7322bf54b4245d8a4d74d71be3c0c2fe8995a3a0af04f33318e06'
+	'a2f9e211de43c8877ea223ccb3223f2f083ab1f83977561eb9a0164e0ab1f98c'
+	'50da07c5e9da692177485469d8c55b86b1569c9a17930361e511304bb790b7c2'
+	'87a401baeed12befa02a96f6d3efaa2583c7af79f255517a9a9b8b437ef550a1'
+	'ce42acf296187be46a780c32f5799f2cd8d46392e90f6877702345d4b82a5201'
+	'e33af4f18de043524617ba93dc2e340688ad40975b0c081221ad938c1747bba1'
+	'2dd891e46e4001db5e29a7c17ac863b5e321be9d6fd7963798484c0ee1c4d9b8'
+	'370d531a3b1ce8855961fc36494843c290e96d57991ecce3ea3b148b4277305c'
+	'244dd85a0f24776056d6dc7fe792a142d725e34d54d9253b6027e62839040c30'
+	'd8149a4c904fbc9ab31ede7b4f3916b07297282812362449c29508aaf424fd0e'
+	'77a904feb90e37d7be1d2a4541f1bf80e428f53681b968e663deca0238eca6ce'
+	'1efad5688e402260c6647e306dcc52ddf2bad93a0c16936fadba32f46b8b6c2e'
+	'21455630151a345cefba208578951fce6a9f675b2b05e2300b9231cba7651c5d'
+	'89e5208a4ba088103233c365a4c226e71ce582bedba97793ee00c94cac6f3508'
+	'c0d792394af3b81fdcf78cf5589f5f197eb749354fe77eec15898e9a18a32208'
+	'2aeeadecf53a49a75588f70c7823f69000f777781025c04d93024958a9ecf15a'
+	'583fd133ab2958e686fe0f7b8a84358eea1fc55ba5d3a9c89ba8c36f13238737'
+	'a536667a0e04b7c64425465180d34316047d19435edc53a97854b5cb1ac2c09e'
+	'b17fdb057840257d626b089ea38a2b527812d36929c725f4aed1182cb0a6f28b'
+	'34080fc011543a19159c708a5e37b3f88c537f1717dfb726d008c690c418aff9'
+	'05eb213b4d61260e908225ae7e2adc1b55a4f13287892bccab4ad0e710335ea1'
+	'5e730e245d4a681e1c9083d1fd72893614e0601538fa7c8853173dba59d2b8ae'
+	'2ccffc2e66804bd1927c8edba0081e6b7170fa74ba409309c648bf9be082ed38'
+	'b52e353ffafbd2868190dc2ed20ffde5a52df58946f3e49fc9df31f292d046fd'
+	'3cc2ae14f175d34f45ac20afe589045e31bc4c445a38804759776de66006f174'
+	'c5d0aee0f87289404bc48eed8fa81a7744c1ed83dbd7a0119965a9d44c1451ec'
+	'95add5e5644fc6a13467a6909a7f845435220dbeceaeec7a8baffd6dcff297cc'
+	'd9836f15a15e5da9837def43f42caef11fb5ad3f9e41b9f04c7a85ed1e2bd538'
+	'527293bc420de95a6bf29fa8e0b7985785f95197f92df5f75318ff90470f8461'
+	'cf1b600b35baa319a8f80778265a4da2ea9b255e29328ec26ab8f79b69b5a5a3'
+	'42f12f329c512bf807cfaec07e60562da70e8366a0421058bea5f05a46647384'
+	'4573d0a2c286df8365f835028113082bfbeb7371c9440c6947a258cda4371d7a'
+	'65459aa6fb97e55abf034310784cf731a7444e648445bbf36f1a8d55df471910'
+	'dc6fcf89e8c59742aec0e01143823856e8f24268991d54d21a30452fea2f0207'
+	'5006b8efedf47e753fdea49f95dd76c112fe8abd6647541a0631e09c5e14c9ea'
+	'1bd69a14176e1b6b7bdc5911fbf1058813c61cb07c3cdcaa496dafab2984c1df'
+	'9627add4a12e1a6082b038d0377c470edb45c21dd76c23a94e7b6b1aa3b7c84e'
+	'a8fcd469150acadd8dec4a6c7be4821db2c23edfd14c56d5813b25d00e85b1be'
+	'cf68a2d901bacc07a90d91135623e02c00e389088ad2f3640814b8fc62898589'
+	'bb14a4b48cfbad71b350f9191e76066139e5bda46ca5405de1de0becc39a27f4'
+	'2159b6fbebf5c7a153566898e0c4dc85449dad0f6f17b949654c874e9f4d1433'
+	'ed03b5628b57aa927b7568b78253afa3928ce158ce7ef41b1ee1d996bed7a26b'
+	'ce27c7a52db819ee532129dfc2d96f0dee572c9f0e96346224f6e502a8bbda15'
+	'b74ba8cebf3c9c94ed8a7a8c1633c6ad6b7d8a52ce4dcaa1f62df41624e28399'
+	'530d0e3ba2e59eea9b174247a2fd2d49d629cc847fff1528f3fd5ea869745af6'
+	'c3a1ee03d994e9be1ed40f1b5573388126343be2f785d4df2b3094cb99811545'
+	'9f23713c4ac7abfa56ff8e89a2a3514cfc214471bdc8893e1a68fabbe1a3f58a'
+	'5cf6fc635a8f3499938bb39cfd3c58e40bbc314b8640c3c50b31a3cfaa7ed1ee'
+	'68ed8640b47071a1a4c7d09629901bfcde291852217498e2a328c92930208921'
+	'0059f1eb7e82ab7feb71bc6b605faf0da91c7cb2d5868388765784c93c3a7394'
+	'd9cbfbbf08d5416a728b245353f6930d3c04fbbbe8238dabc7c0affb7224d234'
+	'799a98441dd70d95278ea4394c66610dec44d81305ede3b1bb56f0eae411adf3'
+	'55ef6a543509bdf88262634cf8a71f2012c3d668374105674692b404757145e9'
+	'dfa332fb9e1ff6373bf5c998dc6946ea0cda054cd207e67a5a4b5c1dd76e4a24'
+	'bb95794f6079db3ae81caf8d8f341ce91233d17529f1cbc160bcfa1b97a56dcb'
+	'3581b507835fdfa7e03985a4306d8b219e0a542954aa868ebf2960b217960f75'
+	'8de3aebb48bd35baa168c7e43468f3c328c818626b386727db5c651464013732'
+	'69f02886718fe68bd9147cbd220d4c82a32a47fe29bbe001469e93629b47b917'
+	'2475db4098186e39c4b67c2d6f303b7df5b4856b37702994c4a2041068bd6d53'
+	'd52ab8773977b9881ed89859ce97f4dcfd0b5ac041c20d6b3280b08e325d2b3d'
+	'cbde0be964c54e065c9b30e08ec38a190b96990b8711ca9aa3b8e52390611975'
+	'063e0ba896e68bf7427e9b395ec964103ccf8b214876c33fa1f2fdc93135e40a'
+	'44e67e5686838db61266531d97251c1f182a806dd931e13234a4498436aab89c'
+	'f0a1ee92661e5100890494d7fef0a928d7c2d138ebebc2f4e09dbbe85f7d205a'
+	'5d2229f7744a32d94dc9c836db2495164afc49e5c5b2d100ea9814ffe0046981'
+	'e4cb23299fbcfee6fb7327028115c1b232488dcfe581246ee9917332e2307a69'
+	'974663dd8afafdc5676a6b86eba2832b2ace11c394f26505adf8358d5d195766'
+	'cd63b44e2421e9682cba195478019c4ba193b13bbec1055d926b0af221823933'
+	'b6c4353b9cfded061b2238695832b8b2cee647466dc168d06a32edae0e7bf4d2'
+	'6d69d73c34a5c83950f29cc144636413e4537d223c5839008b5711153eda2bcf'
+	'56a79acf6b3c2177ce32ed32174825114ef621134734397f8188cacb2f9e395b'
+	'321b47bc689a499ff8981ca11f047a176b93cfdce487827bb0099a0ddd0825af'
+	'ebb9c179b37634f52e86b23e4377fee34a0120618c0674f662693d3bc764bbbc'
+	'38ca9adca511598de91f13da14d67fdeaf596d5ccf59693488db6cbd3e44c9f1')
+
+prepare() {
+	ln -s "$srcdir/libcall-ui" phosh/subprojects/libcall-ui
+	ln -s "$srcdir/guidog-gvc" phosh/subprojects/gvc
+	meson subprojects checkout --sourcedir phosh
+	local callui
+	callui=$(git -C "$srcdir/libcall-ui" rev-parse HEAD)
+	if [[ $callui != "$_callui_commit" ]]; then
+		error "libcall-ui's tag points to $callui, not to $_callui_commit"
+		return 1
+	fi
+	# Long press on the power button: "Restart" next to "Power Off"
+	patch -d phosh -Np1 -i "$srcdir/0001-power-menu-Add-a-restart-button.patch"
+	# Notch position from GNOME Settings (org.plinius.display): the top bar avoids the camera
+	patch -d phosh -Np1 -i "$srcdir/0002-layout-manager-Take-the-notch-position-from-the-settings.patch"
+	# App overview: search, app names and a folder dock from GNOME Settings (org.plinius.display)
+	patch -d phosh -Np1 -i "$srcdir/0003-app-grid-Search-app-names-and-a-folder-dock-from-the.patch"
+	# Top bar: calendar week left of the clock and after the date when "Week Numbers" is on
+	patch -d phosh -Np1 -i "$srcdir/0004-top-panel-Show-the-calendar-week.patch"
+	# NFC: quick setting and top bar symbol (nfcd)
+	patch -d phosh -Np1 -i "$srcdir/0005-plugins-NFC-quick-setting-and-status-icon.patch"
+	# Top bar: just the week number left of the clock
+	patch -d phosh -Np1 -i "$srcdir/0006-top-panel-Only-the-week-number-left-of-the-clock.patch"
+	# Top bar: clock and icons laid out from their real widths and the device's panel data
+	# (/usr/share/plinius/display-panel.json from device-volla-ansuz), notch "auto"
+	patch -d phosh -Np1 -i "$srcdir/0007-layout-manager-Lay-the-top-bar-out-from-the-real-siz.patch"
+	# Lock screen: "Slide up to unlock" above an under-display fingerprint sensor while the
+	# fingerprint target shows (biomd identifying or enrolling)
+	patch -d phosh -Np1 -i "$srcdir/0008-lockscreen-Keep-the-slide-hint-clear-of-an-under-display.patch"
+	# Displays: mode and scale from Settings survive a restart (~/.config/phosh/phoc.ini)
+	patch -d phosh -Np1 -i "$srcdir/0009-monitor-manager-Keep-mode-and-scale-across-sessions.patch"
+	# Lock screen: unlock pattern (plinius-pattern) instead of the PIN when the user has one
+	patch -d phosh -Np1 -i "$srcdir/0010-lockscreen-Unlock-with-a-pattern.patch"
+	# Hotspot on ap0 when the WLAN driver runs it on an interface of its own (MediaTek)
+	patch -d phosh -Np1 -i "$srcdir/0011-wifi-manager-Hotspot-on-an-AP-only-interface.patch"
+	# Lock screen: keypad and pattern pad grow with the screen (phone at a scale below 3)
+	patch -d phosh -Np1 -i "$srcdir/0012-lockscreen-Keypad-and-pattern-pad-use-the-room-of-the-screen.patch"
+	# Lock screen: what the PAM modules say after a wrong PIN, e.g. the wait (plinius-pinguard)
+	patch -d phosh -Np1 -i "$srcdir/0013-lockscreen-Show-what-the-PAM-modules-say.patch"
+	# Lock screen: in the dark style the dark variant of the background chosen in GNOME Settings
+	patch -d phosh -Np1 -i "$srcdir/0014-lockscreen-manager-Dark-variant-of-the-background.patch"
+	# Accent color: a color of the user's choice from GNOME Settings (org.plinius.appearance)
+	patch -d phosh -Np1 -i "$srcdir/0015-style-manager-A-custom-accent-color-from-the-settings.patch"
+	# Idle dimming: fade down and back up instead of jumping
+	patch -d phosh -Np1 -i "$srcdir/0016-brightness-manager-Fade-when-dimming-and-undimming.patch"
+	# Lock screen: the unlock page centered on the screen, clear of the fingerprint sensor
+	patch -d phosh -Np1 -i "$srcdir/0017-lockscreen-Center-the-unlock-page-on-the-screen.patch"
+	# Notch: a tap on it unfolds a minimal app search, a tap next to it or on it closes it
+	patch -d phosh -Np1 -i "$srcdir/0018-notch-search-Search-apps-from-the-notch.patch"
+	# Cast quick setting: mirror to a TV or send the sound to a speaker, through Schwupp
+	patch -d phosh -Np1 -i "$srcdir/0019-plugins-Cast-quick-setting.patch"
+	# VPN: auth dialogs that bring their own window (OpenConnect) instead of refusing them
+	patch -d phosh -Np1 -i "$srcdir/0020-network-auth-manager-Auth-dialogs-with-their-own-window.patch"
+	# Notch: a white glow around the camera hole while a camera is on (camera-hal-bridge >= 0.5)
+	patch -d phosh -Np1 -i "$srcdir/0021-camera-glow-Light-the-notch-while-a-camera-is-on.patch"
+	# USB quick setting: file sharing, network and internet for an attached computer (plinius-usb)
+	patch -d phosh -Np1 -i "$srcdir/0022-plugins-USB-quick-setting.patch"
+	# Torch quick setting: follows the torch when the assistant button or plinius-torch's timeout
+	# switches it (change uevent from plinius-torch >= 0.4)
+	patch -d phosh -Np1 -i "$srcdir/0023-torch-manager-Follow-changes-made-by-others.patch"
+	# Dual SIM: the status icon follows the modem with a SIM, not whichever modem came first
+	patch -d phosh -Np1 -i "$srcdir/0024-wwan-mm-Prefer-a-modem-with-a-SIM.patch"
+	# Brightness slider: shows the real brightness with auto brightness too, not an offset
+	# in the middle; moving it sets the offset to the auto brightness
+	patch -d phosh -Np1 -i "$srcdir/0025-brightness-manager-Show-the-brightness-on-the-slider.patch"
+	# Lock screen at startup: tell logind once its session proxy is there, else LockedHint stays
+	# false until the second lock and the first PIN unlock goes unseen (face unlock)
+	patch -d phosh -Np1 -i "$srcdir/0026-screen-saver-manager-Send-the-locked-hint-once-logind-is-there.patch"
+	# Sound devices (gvc): a Bluetooth headset once per direction under its own name, hands-free
+	# ports and codecs not offered (calls and recordings switch by themselves, audio-hal-bridge)
+	patch -d phosh/subprojects/gvc -Np1 -i "$srcdir/0027-gvc-A-Bluetooth-headset-is-one-device-per-direction.patch"
+	# "Restart UI" in the power menu and the system menu: the shell quits with a failure status and
+	# systemd starts it again, compositor and apps stay; the system menu no longer cuts its labels
+	patch -d phosh -Np1 -i "$srcdir/0028-shell-Restart-the-UI-from-the-power-menu-and-the-system-menu.patch"
+	# Torch: switches on at the brightness picked with its slider (org.plinius.torch from
+	# plinius-torch >= 0.5), not at the brightness the camera app last gave the LED
+	patch -d phosh -Np1 -i "$srcdir/0029-torch-manager-Keep-the-torch-s-own-brightness.patch"
+	# Phosh crashed when a car kit with hands-free only connected: gvc used a stream's active
+	# port without checking it is among the stream's ports
+	patch -d phosh/subprojects/gvc -Np1 -i "$srcdir/0030-gvc-No-crash-when-a-stream-s-active-port-is-unknown.patch"
+	# Phosh crashed when a headset connected or switched to hands-free: the hands-free port
+	# (no UI device, 0027) kept the card's freed profiles; every port takes the new ones
+	patch -d phosh/subprojects/gvc -Np1 -i "$srcdir/0069-gvc-Hands-free-ports-take-the-new-profiles-of-the-card.patch"
+	# The FM tuner's sound (audio-hal-bridge, plinius.hidden) is no input in the sound menu;
+	# the radio app opens it by name (the same patch as gnome-control-center-plinius 0096)
+	patch -d phosh/subprojects/gvc -Np1 -i "$srcdir/0095-gvc-Sources-marked-plinius.hidden-are-not-listed.patch"
+	# Without gnome-software the AppStream pool served nothing, but every change of the
+	# AppStream data reloaded the whole Flathub catalog and kept ~60 MB each time
+	patch -d phosh -Np1 -i "$srcdir/0070-metainfo-cache-No-AppStream-pool-without-GNOME-Software.patch"
+	# Auto brightness: a new brightness step only once the light stayed there (4 s brighter,
+	# 8 s darker), outdoors shadows and tilting kept the display changing all the time
+	patch -d phosh -Np1 -i "$srcdir/0031-auto-brightness-bucket-Wait-before-switching-buckets.patch"
+	# Always-on display: with the setting on, the built-in OLED dozes instead of going off and
+	# shows the time, the date, the battery and the apps with notifications (phoc-plinius >= 23)
+	patch -d phosh -Np1 -i "$srcdir/0032-shell-Always-on-display-while-the-panel-dozes.patch"
+	# Notch search: also settings, contacts, calendar events, the calculator and the other GNOME
+	# search providers (org.gnome.Shell.SearchProvider2), switched and ordered in GNOME Settings
+	patch -d phosh -Np1 -i "$srcdir/0033-notch-search-Search-the-system-not-just-apps.patch"
+	# The camera glow follows the camera when the screen turns (sides in landscape, bottom upside down)
+	patch -d phosh -Np1 -i "$srcdir/0034-camera-glow-Follow-the-camera-when-the-screen-turns.patch"
+	# Folders open without a jump. 0035/0036 are for upstream (docs/upstream/phosh/app-icon-fallback):
+	# every button appended the fallback to the app's own icon, its names grew on each opening
+	# and GTK's icon cache never matched; and the folder preview leaked app infos.
+	patch -d phosh -Np1 -i "$srcdir/0035-app-grid-button-Don-t-change-the-app-s-own-icon.patch"
+	patch -d phosh -Np1 -i "$srcdir/0036-app-grid-folder-button-Don-t-leak-the-app-infos-of-t.patch"
+	# The icons of apps in folders are loaded ahead in a thread, a folder opened again keeps its buttons
+	patch -d phosh -Np1 -i "$srcdir/0037-app-grid-Load-the-icons-of-folder-apps-ahead-and-kee.patch"
+	# Cast and USB quick settings: footer and long press open the Streaming and USB pages of
+	# GNOME Settings (gnome-control-center-plinius 51.1-35), not Schwupp's window
+	patch -d phosh -Np1 -i "$srcdir/0038-plugins-Cast-and-USB-settings-in-GNOME-Settings.patch"
+	# The apps in a folder are listed by name (casefolded, then collated), not in the order
+	# they came
+	patch -d phosh -Np1 -i "$srcdir/0039-folder-info-List-a-folder-s-apps-by-name.patch"
+	# A failed screencopy (e.g. a screenshot while the screen is locked) released nothing, so
+	# every later screenshot was refused as "already in progress" until Phosh restarted
+	patch -d phosh -Np1 -i "$srcdir/0040-screenshot-manager-Release-the-frames-when-a-screenc.patch"
+	# Folders at the bottom (folder dock) stay as tall as in the grid: the vexpand of their icon
+	# grid made the dock take half of the free height
+	patch -d phosh -Np1 -i "$srcdir/0041-app-grid-Folders-at-the-bottom-keep-their-size.patch"
+	# The output of a layer surface is known in constructed(): the lock screen put its
+	# background on no output, with a second screen phoc placed it there and dropped Phosh
+	# ("Layer surface not on same output") on every lock
+	patch -d phosh -Np1 -i "$srcdir/0042-layersurface-Know-the-output-while-subclasses-are-co.patch"
+	# A second screen (e.g. virtual over VNC) shows the time, asks to unlock on the phone and
+	# takes the PIN itself instead of an empty shield
+	patch -d phosh -Np1 -i "$srcdir/0043-lockshield-Unlock-on-the-phone-or-with-the-PIN-on-a-second-screen.patch"
+	# The always-on display lies over the top bar and over a lock screen that comes up while dozing;
+	# a starting Phosh removes the flag a crashed one left behind
+	patch -d phosh -Np1 -i "$srcdir/0044-shell-The-always-on-display-stays-on-top-of-everything.patch"
+	# The emergency menu can be reached from the unlock page. It only opens the menu, nothing dials
+	patch -d phosh -Np1 -i "$srcdir/0045-lockscreen-An-emergency-button-next-to-the-unlock-button.patch"
+	# With gnome-calls-plinius the menu shows "Calling…" while it dials and opens again on a failure
+	patch -d phosh -Np1 -i "$srcdir/0046-emergency-menu-Tell-how-the-call-is-going.patch"
+	# "Calling…" in all languages, "Emergency" also in Spanish and Italian
+	patch -d phosh -Np1 -i "$srcdir/0047-po-Emergency-and-Calling-on-the-lock-screen-and-in-the-menu.patch"
+	# The menu has its own keys, the on-screen keyboard only covered the call button
+	patch -d phosh -Np1 -i "$srcdir/0048-emergency-menu-The-dial-pad-doesnt-ask-for-the-on-screen-keyboard.patch"
+	# In an emergency the menu fills the screen instead of being a card in the middle
+	patch -d phosh -Np1 -i "$srcdir/0049-emergency-menu-Fill-the-whole-screen.patch"
+	# The always-on display made anew when the phone locks stays in place
+	patch -d phosh -Np1 -i "$srcdir/0050-aod-The-same-place-for-the-whole-minute.patch"
+	# A swipe sideways closes the emergency menu, and never places a call
+	patch -d phosh -Np1 -i "$srcdir/0051-emergency-menu-A-swipe-closes-it.patch"
+	# Nothing moves behind the clock in the settings: it is part of their black card
+	patch -d phosh -Np1 -i "$srcdir/0052-top-panel-The-clock-row-is-part-of-the-black-card.patch"
+	# Room below the volume slider and below the last tile
+	patch -d phosh -Np1 -i "$srcdir/0053-settings-Room-below-the-sliders-and-the-quick-settings.patch"
+	# The desktop over VNC on and off (plinius-desktop); hidden without that package
+	patch -d phosh -Np1 -i "$srcdir/0054-plugins-Desktop-over-VNC-quick-setting.patch"
+	# "Restart UI" asks first, like "Power Off" and "Restart"
+	patch -d phosh -Np1 -i "$srcdir/0055-shell-Ask-before-restarting-the-UI.patch"
+	# All brightness changes in steps too small to see, the slider and the keys too
+	patch -d phosh -Np1 -i "$srcdir/0056-brightness-manager-Smooth-transitions.patch"
+	# The glow charges around the camera hole when a camera goes on, and runs back when it goes off
+	patch -d phosh -Np1 -i "$srcdir/0057-camera-glow-Charge-the-ring-around-the-camera.patch"
+	# Modem and Wi-Fi stay left of the notch when they fit there, the other network icons go to the right
+	patch -d phosh -Np1 -i "$srcdir/0058-top-panel-Modem-and-Wi-Fi-stay-left-of-the-notch-when-they-fit.patch"
+	# Emergency below Unlock, with an empty line in between
+	patch -d phosh -Np1 -i "$srcdir/0059-lockscreen-The-emergency-button-below-the-unlock-button.patch"
+	# A window on the desktop over VNC keeps the phone's overview open
+	patch -d phosh -Np1 -i "$srcdir/0060-shell-A-window-on-another-screen-keeps-the-phone-s-overview-open.patch"
+	# A window on the desktop over VNC gets the keyboard
+	patch -d phosh -Np1 -i "$srcdir/0061-home-With-a-second-screen-the-open-overview-leaves-the-keyboard-alone.patch"
+	# The overview opens when the phone's last window went to the desktop over VNC
+	patch -d phosh -Np1 -i "$srcdir/0062-shell-The-overview-opens-when-the-phone-s-last-window-left-for-another-screen.patch"
+	# The emergency button sits in the lower left corner, beside the fingerprint sensor
+	patch -d phosh -Np1 -i "$srcdir/0063-lockscreen-The-emergency-button-at-the-bottom-edge.patch"
+	# The always-on display: notification icons in a row of their own, below the battery
+	patch -d phosh -Np1 -i "$srcdir/0064-aod-The-notification-icons-in-a-row-of-their-own.patch"
+	# The icon of an app's first notification also shows up during the always-on display
+	patch -d phosh -Np1 -i "$srcdir/0065-aod-Show-the-icon-of-an-app-s-first-notification.patch"
+	# The splash ends with the app's window, also when the app doesn't report its startup id
+	patch -d phosh -Np1 -i "$srcdir/0066-app-tracker-A-window-of-the-app-ends-its-splash.patch"
+	# Always-on display: the notification icons three times as large (66 px), easier to see
+	patch -d phosh -Np1 -i "$srcdir/0067-aod-Notification-icons-three-times-as-large.patch"
+	# The volume keys: a slider at their edge as on Android, swiped inwards the volume per role
+	# (media, calls, ringtone, notifications, alarm) as shares of the output volume
+	patch -d phosh -Np1 -i "$srcdir/0068-volume-osd-Sliders-at-the-keys-edge-the-volume-per-role.patch"
+	# Overview: the running apps above the app grid (default) or below it
+	# (org.plinius.display overview-running-apps, GNOME Settings > Appearance)
+	patch -d phosh -Np1 -i "$srcdir/0072-overview-The-running-apps-above-or-below-the-app-grid.patch"
+	# On a satellite network (plinius-satellite, org.plinius.Satellite) the cellular icon shows a
+	# satellite and "SAT" instead of the bars and the access technology
+	patch -d phosh -Np1 -i "$srcdir/0073-wwan-info-A-satellite-instead-of-the-bars-while-on-a-satellite.patch"
+	# Overview: running apps below the grid keep the size they have above it, as far from the
+	# bottom edge as they are from the top otherwise, and close with a swipe down
+	patch -d phosh -Np1 -i "$srcdir/0074-overview-Running-apps-below-the-grid-keep-their-size-and-close-downwards.patch"
+	# Tapping a notification also folds the overview, so the app it opens is in front
+	patch -d phosh -Np1 -i "$srcdir/0075-notifications-Tapping-a-notification-also-folds-the-overview.patch"
+	# Holding a running app for a second gives a short vibration, then the card follows the
+	# finger in the overview order
+	patch -d phosh -Np1 -i "$srcdir/0076-overview-Hold-a-running-app-for-a-second-to-move-it-in-the-order.patch"
+	# "Restart Phosh" instead of "Restart UI" in the system menu, the power menu and the question:
+	# only the shell restarts, the compositor and the apps keep running
+	patch -d phosh -Np1 -i "$srcdir/0077-shell-Restart-Phosh-instead-of-Restart-UI.patch"
+	# Contact card: share the own card over NFC and a QR code, receive cards over NFC and
+	# Bluetooth, through plinius-cardshare (quick setting "My Card")
+	patch -d phosh -Np1 -i "$srcdir/0078-plugins-Contact-card-quick-setting.patch"
+	# Lock screen: after a wrong pattern what the PAM modules say, e.g. the wait (plinius-pinguard
+	# counts wrong patterns like wrong PINs since plinius-pattern 0.4)
+	patch -d phosh -Np1 -i "$srcdir/0079-lockscreen-Show-what-the-PAM-modules-say-after-a-wrong-pattern.patch"
+	# Quick settings: the tile's name instead of "On"/"Off" (the accent color says that), Bluetooth's
+	# device count translated
+	patch -d phosh -Np1 -i "$srcdir/0080-quick-settings-The-tile-s-name-instead-of-On-and-Off.patch"
+	# Quick settings: no battery tile while the top bar shows the percentage; an "Airplane Mode"
+	# tile after it or in its place (gsd-rfkill: Wi-Fi, Bluetooth and the modem via WwanEnabled),
+	# the only switch for it since GNOME Settings' Wi-Fi page lost its own
+	patch -d phosh -Np1 -i "$srcdir/0081-quick-settings-Airplane-mode-in-place-of-the-battery-tile.patch"
+	# USB quick setting: the webcam and "Power the Device" (a power role swap through
+	# plinius-usb 0.4) in its list, as in GNOME Settings; toggling a function keeps the webcam
+	patch -d phosh -Np1 -i "$srcdir/0082-plugins-USB-Webcam-and-powering-the-connected-device.patch"
+	# Translations of the strings of 0081 and 0082
+	patch -d phosh -Np1 -i "$srcdir/0083-po-Airplane-Mode-and-the-USB-tile-s-new-rows.patch"
+	# A long press on a folder offers "Dissolve Folder", its apps go back to the main grid;
+	# German: "Aus Ordner lösen" and "Ordner auflösen"
+	patch -d phosh -Np1 -i "$srcdir/0085-app-grid-Dissolve-a-folder-from-its-long-press-menu.patch"
+	# Long presses: Contact Card opens Settings > NFC > Contact Card, Desktop the page "Desktop
+	# over VNC", the hotspot tile the hotspot's page (gnome-control-center-plinius 0086)
+	patch -d phosh -Np1 -i "$srcdir/0086-plugins-Long-presses-open-the-tile-s-own-page-in-GNOME-Settings.patch"
+	# Quick settings: Mobile Data right after Wi-Fi (end of the top row), the hotspot in the place
+	# of Bluetooth
+	patch -d phosh -Np1 -i "$srcdir/0087-quick-settings-Mobile-data-and-the-hotspot-up-among-the-first-tiles.patch"
+	# System menu and power menu: Log Out (asking first) with more than one account, greetd then
+	# shows plinius-greeter's account picker; the power menu's buttons as rows, not squares
+	patch -d phosh -Np1 -i "$srcdir/0088-shell-Log-Out-with-a-second-account-power-menu-buttons-in-rows.patch"
+	# Quick settings: the SIM card's label from GNOME Settings (org.plinius.sim) instead of the
+	# name the network gives, e.g. the operator's name or a greeting
+	patch -d phosh -Np1 -i "$srcdir/0089-wwan-mm-The-SIM-card-s-own-label-instead-of-the-network-s-name.patch"
+	# Landscape: the home bar is 32 px instead of 15 px high on the phone's own panel. The
+	# touchscreen drops or moves presses in its outer ~20 px at the long edges, so long presses
+	# (keyboard) and taps missed the thin bar; further in it is accurate
+	patch -d phosh -Np1 -i "$srcdir/0090-home-A-taller-home-bar-while-the-phone-is-turned.patch"
+	# Since 0.58 the long presses of the cellular, Wi-Fi, Bluetooth and VPN tiles and the footers of
+	# the Wi-Fi, Bluetooth and sound pages open phosh-mobile-settings; they open GNOME Settings
+	# again. Feedback, Caffeine and the top bar's settings button stay with phosh-mobile-settings
+	patch -d phosh -Np1 -i "$srcdir/0091-quick-settings-Settings-open-in-GNOME-Settings-again.patch"
+	# Power menu: the buttons one below the other in a single column, icon and label at the left
+	patch -d phosh -Np1 -i "$srcdir/0092-power-menu-The-buttons-one-below-the-other.patch"
+	# App grid: icons fade out softly where the grid scrolls on, e.g. under the running apps,
+	# instead of ending at a hard edge
+	patch -d phosh -Np1 -i "$srcdir/0093-app-grid-Icons-fade-out-where-the-grid-scrolls-on.patch"
+	# With running apps the grid gets a 40 px band at the cards' edge (the cards get that much
+	# lower); icons stay fully visible on the grid and fade out in the band, replacing 0093's fade
+	patch -d phosh -Np1 -i "$srcdir/0094-overview-Icons-fade-out-in-a-band-at-the-running-apps-cards.patch"
+	# The band is erased after drawing the grid once, not drawn a second time through a group
+	patch -d phosh -Np1 -i "$srcdir/0096-app-grid-Fade-the-band-without-drawing-the-grid-twice.patch"
+	# Cards of running apps: the thumbnail is scaled once, not for every frame of the overview
+	patch -d phosh -Np1 -i "$srcdir/0097-activity-A-card-s-thumbnail-is-scaled-once-not-for-every-frame.patch"
+	# The camera icon takes its first state without a transition, so it does not flash up at startup
+	patch -d phosh -Np1 -i "$srcdir/0098-camera-status-icon-No-icon-flashing-up-at-startup.patch"
+	# Cards of running apps: a thumbnail is asked for once a layout is done, only for a new size
+	patch -d phosh -Np1 -i "$srcdir/0099-overview-A-card-s-thumbnail-is-asked-for-once-per-layout.patch"
+	# Cards of running apps: their size once per layout, the band as a margin, not a second allocation
+	patch -d phosh -Np1 -i "$srcdir/0100-overview-The-cards-get-their-size-once-per-layout.patch"
+	# App icons from a file (no GTK cache) are loaded once per size and scale, not for every render
+	patch -d phosh -Np1 -i "$srcdir/0101-app-grid-button-An-icon-from-a-file-is-loaded-once.patch"
+	# The first folder's page gets its buttons ahead, file icons are preloaded too
+	patch -d phosh -Np1 -i "$srcdir/0102-app-grid-The-first-folder-s-page-is-built-ahead.patch"
+	# A card shows the on-screen keyboard below a window it shortened, not an empty third
+	patch -d phosh -Np1 -i "$srcdir/0103-overview-A-card-shows-the-on-screen-keyboard-below-the-window.patch"
+	# With mode and scale saved in Settings, phoc started with the user's old copy of the system
+	# phoc.ini, so device updates of it (the light sensor of phoc-plinius 0034) never arrived:
+	# phosh-session merges the current system file with mode and scale of that copy
+	patch -d phosh -Np1 -i "$srcdir/0104-phosh-session-Device-updates-of-phoc.ini-reach-a-user-with-saved-modes.patch"
+	# The app grid and an open folder scroll without a scrollbar at the side
+	patch -d phosh -Np1 -i "$srcdir/0105-app-grid-No-scrollbar-at-the-side-of-the-grid-and-of-a-folder.patch"
+	# Docking (the desktop over VNC) no longer turns the OSK off: the phone needs it on its own
+	# panel, phoc keeps it there (phoc-plinius 0038)
+	patch -d phosh -Np1 -i "$srcdir/0106-docked-manager-The-OSK-stays-on-when-docked.patch"
+	# With the desktop on a second screen, a PIN or password an app asks for shows on the
+	# screen of the focused window, not always on the phone
+	patch -d phosh -Np1 -i "$srcdir/0107-shell-A-prompt-shows-on-the-screen-where-the-action-.patch"
+	# Power menu: two columns while the screen is wider than high (landscape)
+	patch -d phosh -Np1 -i "$srcdir/0108-power-menu-Two-columns-while-the-screen-is-wider-tha.patch"
+	# Every access question (camera, location, screenshot, … of the portals and plinius-appaccess's
+	# USB cameras, security keys and network) asks with Allow Once, Always Allow and Don't Allow,
+	# one below the other; Allow Once removes the grant xdg-desktop-portal stores for it again
+	patch -d phosh -Np1 -i "$srcdir/0109-portal-access-manager-Allow-Once-Always-Allow-and-Don-t-Allow.patch"
+	# Translations of the three buttons
+	patch -d phosh -Np1 -i "$srcdir/0110-po-Allow-Once-Always-Allow-and-Don-t-Allow.patch"
+	# An access dialog whose request goes away (xdg-desktop-portal closes it, or the caller
+	# leaves the bus) closes, so the next access question can show
+	patch -d phosh -Np1 -i "$srcdir/0111-portal-access-manager-A-request-that-goes-away-close.patch"
+	# Apps geoclue lets the agent decide (Flatpak apps that talk to geoclue directly; geoclue
+	# asks for no native app) get the three buttons too; Always Allow and Don't Allow are
+	# remembered in the permission store as for the portal (GNOME Settings' Location page)
+	patch -d phosh -Np1 -i "$srcdir/0112-location-manager-Remember-the-location-answers-of-na.patch"
+	# A TV's row in the cast quick setting gets a button for each thing Schwupp can send it (screen,
+	# YouTube link, video, desktop through plinius-desktop-cast), the one in use marked
+	patch -d phosh -Np1 -i "$srcdir/0113-cast-quick-setting-Buttons-per-TV-for-what-Schwupp-can-send.patch"
+	# The cast quick setting in the eight languages (it was English everywhere)
+	patch -d phosh -Np1 -i "$srcdir/0114-po-The-cast-quick-setting.patch"
+	# German: "WiFi" instead of "WLAN" in Phosh's own translation (msgstr lines only)
+	sed -i '/^msgstr/,/^$/{/^#/!s/WLAN\([^;]\)/WiFi\1/g}' phosh/po/de.po
+}
+
+build() {
+	arch-meson phosh build \
+		--libexecdir=/usr/lib/phosh \
+		-D phoc_tests=disabled \
+		-D man=true
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+	install -Dm644 "$srcdir/phosh.pam" "$pkgdir/etc/pam.d/phosh"
+	# Schema of the notch setting; gnome-control-center-plinius shows its row only with it
+	install -Dm644 "$srcdir/org.plinius.display.gschema.xml" -t "$pkgdir/usr/share/glib-2.0/schemas"
+	# Schema of the custom accent color, read by Phosh and phoc; gnome-control-center-plinius
+	# shows its button only with it
+	install -Dm644 "$srcdir/org.plinius.appearance.gschema.xml" -t "$pkgdir/usr/share/glib-2.0/schemas"
+	# The NFC, cast and USB plugins switched on in the quick settings and the top bar
+	install -Dm644 "$srcdir/91-phosh-plinius.gschema.override" -t "$pkgdir/usr/share/glib-2.0/schemas"
+	# "Restart UI": restart the shell without ending the session (see the file)
+	# The system phoc.ini with the user's mode and scale, for phosh-session (0104)
+	install -Dm755 "$srcdir/phoc-ini-merge" -t "$pkgdir/usr/lib/phosh/plinius"
+	install -Dm644 "$srcdir/mobi.phosh.Shell-restart-direct.conf" \
+		"$pkgdir/usr/lib/systemd/user/mobi.phosh.Shell.service.d/plinius-restart-direct.conf"
+}

@@ -1,0 +1,12 @@
+[Unit]
+Description=Orbit predictions for a faster GPS fix, checked every hour
+
+[Timer]
+# Every hour, but plinius-epo only downloads when its files are older than 6 hours: so a boot
+# or a missed run without network is made up within an hour
+OnBootSec=2min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

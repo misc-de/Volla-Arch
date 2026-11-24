@@ -1,0 +1,13 @@
+# A new kernel of plinius-kernel: as a trial entry in the boot menu on the memory card, or straight
+# into the boot partition of the active slot without the card (plinius-kernel-install).
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/plinius/kernel/*/boot.img
+
+[Action]
+Description = Setting up the new kernel...
+When = PostTransaction
+Exec = /usr/lib/plinius/kernel/plinius-kernel-install hook
+NeedsTargets

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Display state hook (plinius-backlight-wake): NFC polls for tags only while the display is on,
+# as on Sailfish OS. nfcd may not run yet; then plinius-nfc-power decides at its start.
+[ "$1" = on ] && powered=true || powered=false
+busctl set-property org.neard /nfc0 org.neard.Adapter Powered b "$powered" 2>/dev/null
+exit 0

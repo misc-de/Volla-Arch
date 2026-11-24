@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 11:30:00 +0100
+Subject: [PATCH] power: Battery Usage and Battery Condition as pages
+
+Plinius: two rows right after the battery level open pages of their
+own. "Battery Usage" (with plinius-energy) lists apps and system
+services by their estimated share of the processor's energy over the
+last 24 hours or 7 days, beside the screen-on time and what the battery
+lost while unplugged. "Battery Condition" holds the group that was on
+the page itself before. Both come from cc-plinius-battery-usage.c.
+---
+ panels/power/cc-power-panel.c | 8 ++++++--
+ panels/power/meson.build      | 1 +
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/panels/power/cc-power-panel.c b/panels/power/cc-power-panel.c
+index d60dfab40..369680663 100644
+--- a/panels/power/cc-power-panel.c
++++ b/panels/power/cc-power-panel.c
+@@ -30,6 +30,7 @@
+ #include "cc-hostname.h"
+ #include "cc-number-row.h"
+ #include "cc-plinius-battery.h"
++#include "cc-plinius-battery-usage.h"
+ #include "cc-power-panel.h"
+ #include "cc-power-profile-info-row.h"
+ #include "cc-power-profile-row.h"
+@@ -1377,11 +1378,14 @@ cc_power_panel_init (CcPowerPanel *self)
+ 
+     setup_general_section (self);
+ 
+-    /* Plinius: battery condition after the charging options, plinius-charge's options */
++    /* Plinius: Battery Usage (plinius-energy) and Battery Condition as pages of their own, their
++     * rows right after the battery level; plinius-charge's options */
+     self->battery_condition_group = cc_plinius_battery_group_new ();
+     adw_preferences_page_insert (ADW_PREFERENCES_PAGE (gtk_widget_get_ancestor (GTK_WIDGET (self->battery_section),
+                                                                                 ADW_TYPE_PREFERENCES_PAGE)),
+-                                 ADW_PREFERENCES_GROUP (self->battery_condition_group), 2);
++                                 ADW_PREFERENCES_GROUP (cc_plinius_battery_pages_new (CC_PANEL (self),
++                                                                                      self->battery_condition_group)),
++                                 1);
+     self->plinius_charge = cc_plinius_charge_proxy_new ();
+     if (self->plinius_charge) {
+         if (cc_plinius_charge_get (self->plinius_charge, "HasFastCharge")) {
+diff --git a/panels/power/meson.build b/panels/power/meson.build
+index e4a819372..1022ce247 100644
+--- a/panels/power/meson.build
++++ b/panels/power/meson.build
+@@ -31,6 +31,7 @@ blueprints = custom_target(
+ sources = files(
+   'cc-battery-row.c',
+   'cc-plinius-battery.c',
++  'cc-plinius-battery-usage.c',
+   'cc-power-panel.c',
+   'cc-power-profile-row.c',
+   'cc-power-profile-info-row.c'

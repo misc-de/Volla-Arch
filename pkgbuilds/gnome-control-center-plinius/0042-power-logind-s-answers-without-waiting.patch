@@ -1,0 +1,220 @@
+From c1aff4684881432a6c6cdd0cbd8cb79177793397 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:12:32 +0100
+Subject: [PATCH] power: logind's answers without waiting
+
+Plinius: logind answers CanPowerOff, CanSuspend and CanHibernate only
+after asking polkit, 100-280 ms per call on the phone. The panel asked
+them one after the other while it was built, and its opening waited
+0.5-1.5 s.
+
+Now they go out together and asynchronously; the power button choice
+and the automatic suspend rows are set up when the answers are there.
+Where the power button offers no choice (vm, tablet, handset: the
+phone), only CanSuspend is asked.
+---
+ panels/power/cc-power-panel.c | 118 ++++++++++++++++++++++++++--------
+ 1 file changed, 90 insertions(+), 28 deletions(-)
+
+diff --git a/panels/power/cc-power-panel.c b/panels/power/cc-power-panel.c
+index fb93a77d4..382aa8f3a 100644
+--- a/panels/power/cc-power-panel.c
++++ b/panels/power/cc-power-panel.c
+@@ -96,6 +96,8 @@ struct _CcPowerPanel {
+     ActionAvailability can_shutdown;
+     ActionAvailability can_suspend;
+     ActionAvailability can_hibernate;
++    /* Plinius: logind's answers still to come */
++    guint pending_power_actions;
+ 
+     GDBusProxy *iio_proxy;
+     guint iio_proxy_watch_id;
+@@ -550,15 +552,17 @@ set_sleep_type (const GValue *value, const GVariantType *expected_type, gpointer
+     return g_variant_new_string (sleep_str);
+ }
+ 
++/* No choice for the power button on these */
++static const char *power_button_hidden_on_chassis[] = {
++    "vm",      /* Hard-coded to shutdown via logind (not interactive, as below!) */
++    "tablet",  /* Should be left to the default action of suspending */
++    "handset", /* This means phone. Similar to tablet */
++    NULL
++};
++
+ static gboolean
+ populate_power_button_row (CcPowerPanel *self)
+ {
+-    static const char *hidden_on_chassis[] = {
+-        "vm",      /* Hard-coded to shutdown via logind (not interactive, as below!) */
+-        "tablet",  /* Should be left to the default action of suspending */
+-        "handset", /* This means phone. Similar to tablet */
+-        NULL
+-    };
+     static const struct {
+         char *name;
+         GsdPowerButtonActionType value;
+@@ -570,7 +574,7 @@ populate_power_button_row (CcPowerPanel *self)
+     guint n_options = 0;
+     guint i;
+ 
+-    if (g_strv_contains (hidden_on_chassis, self->chassis_type))
++    if (g_strv_contains (power_button_hidden_on_chassis, self->chassis_type))
+         return FALSE;
+ 
+     for (i = 0; i < G_N_ELEMENTS (actions); i++) {
+@@ -592,7 +596,7 @@ populate_power_button_row (CcPowerPanel *self)
+ }
+ 
+ static ActionAvailability
+-can_power_action (CcPowerPanel *self, GDBusConnection *connection, const char *method_name)
++power_action_availability (const char *method_name, GVariant *variant, GError *error)
+ {
+     static const char *allowed_automatic_states[] = { "yes", /* Action is allowed without authentication */
+ 
+@@ -612,17 +616,10 @@ can_power_action (CcPowerPanel *self, GDBusConnection *connection, const char *m
+                                                       "na", /* Action entirely unavailable */
+                                                       NULL };
+ 
+-    g_autoptr(GVariant) variant = NULL;
+-    g_autoptr(GError) error = NULL;
+     const char *s;
+ 
+-    variant = g_dbus_connection_call_sync (
+-        connection, "org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", method_name,
+-        NULL, NULL, G_DBUS_CALL_FLAGS_NONE, -1, cc_panel_get_cancellable (CC_PANEL (self)), &error);
+-
+     if (!variant) {
+-        if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+-            g_debug ("Failed to call %s(): %s", method_name, error->message);
++        g_debug ("Failed to call %s(): %s", method_name, error->message);
+         return ACTION_UNAVAILABLE;
+     }
+ 
+@@ -640,6 +637,67 @@ can_power_action (CcPowerPanel *self, GDBusConnection *connection, const char *m
+     return ACTION_UNAVAILABLE;
+ }
+ 
++/*
++ * Plinius: logind answers CanPowerOff, CanSuspend and CanHibernate only after asking polkit, each
++ * 250 ms on the phone. Asked one after the other while the panel was built, they held up its
++ * opening by 0.5-0.8 s. Now they go out together, and the rows that depend on them (power button
++ * choice, automatic suspend) follow the answers. Where the power button has no choice (a phone
++ * is a "handset"), only CanSuspend is asked.
++ */
++typedef struct {
++    CcPowerPanel *self;
++    const char *method_name;
++    ActionAvailability *availability;
++} PowerActionQuery;
++
++static void setup_automatic_suspend (CcPowerPanel *self);
++
++static void
++power_actions_ready (CcPowerPanel *self)
++{
++    if (populate_power_button_row (self)) {
++        gtk_widget_set_visible (GTK_WIDGET (self->power_button_row), TRUE);
++        cc_number_row_bind_settings (self->power_button_row, self->gsd_settings, "power-button-action");
++        gtk_widget_set_visible (GTK_WIDGET (self->general_section), TRUE);
++    }
++
++    setup_automatic_suspend (self);
++}
++
++static void
++can_power_action_cb (GObject *source_object, GAsyncResult *result, gpointer user_data)
++{
++    g_autofree PowerActionQuery *query = user_data;
++    g_autoptr(GVariant) variant = NULL;
++    g_autoptr(GError) error = NULL;
++    CcPowerPanel *self = query->self;
++
++    variant = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source_object), result, &error);
++    /* The panel is gone */
++    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        return;
++
++    *query->availability = power_action_availability (query->method_name, variant, error);
++    if (--self->pending_power_actions == 0)
++        power_actions_ready (self);
++}
++
++static void
++query_power_action (CcPowerPanel *self, GDBusConnection *connection, const char *method_name,
++                    ActionAvailability *availability)
++{
++    PowerActionQuery *query = g_new0 (PowerActionQuery, 1);
++
++    query->self = self;
++    query->method_name = method_name;
++    query->availability = availability;
++    self->pending_power_actions++;
++    g_dbus_connection_call (connection, "org.freedesktop.login1", "/org/freedesktop/login1",
++                            "org.freedesktop.login1.Manager", method_name, NULL, G_VARIANT_TYPE ("(s)"),
++                            G_DBUS_CALL_FLAGS_NONE, -1, cc_panel_get_cancellable (CC_PANEL (self)),
++                            can_power_action_cb, query);
++}
++
+ static void
+ setup_can_power_actions (CcPowerPanel *self)
+ {
+@@ -649,6 +707,10 @@ setup_can_power_actions (CcPowerPanel *self)
+ 
+     lockdown_settings = g_settings_new ("org.gnome.desktop.lockdown");
+ 
++    self->can_shutdown = ACTION_UNAVAILABLE;
++    self->can_suspend = ACTION_UNAVAILABLE;
++    self->can_hibernate = ACTION_UNAVAILABLE;
++
+     connection = g_bus_get_sync (G_BUS_TYPE_SYSTEM, cc_panel_get_cancellable (CC_PANEL (self)), &error);
+     if (!connection) {
+         if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+@@ -656,13 +718,12 @@ setup_can_power_actions (CcPowerPanel *self)
+         return;
+     }
+ 
+-    if (g_settings_get_boolean (lockdown_settings, "disable-log-out"))
+-        self->can_shutdown = ACTION_UNAVAILABLE;
+-    else
+-        self->can_shutdown = can_power_action (self, connection, "CanPowerOff");
+-
+-    self->can_suspend = can_power_action (self, connection, "CanSuspend");
+-    self->can_hibernate = can_power_action (self, connection, "CanHibernate");
++    if (!g_strv_contains (power_button_hidden_on_chassis, self->chassis_type)) {
++        if (!g_settings_get_boolean (lockdown_settings, "disable-log-out"))
++            query_power_action (self, connection, "CanPowerOff", &self->can_shutdown);
++        query_power_action (self, connection, "CanHibernate", &self->can_hibernate);
++    }
++    query_power_action (self, connection, "CanSuspend", &self->can_suspend);
+ }
+ 
+ static void
+@@ -798,7 +859,12 @@ setup_power_saving (CcPowerPanel *self)
+         g_settings_set_enum (self->gsd_settings, "sleep-inactive-battery-type", GSD_POWER_ACTION_NOTHING);
+         g_settings_set_int (self->gsd_settings, "sleep-inactive-battery-timeout", 1800);
+     }
++}
+ 
++/* Plinius: once logind has said whether it can suspend (setup_can_power_actions()) */
++static void
++setup_automatic_suspend (CcPowerPanel *self)
++{
+     /* Automatic suspend rows */
+     if (self->can_suspend == ACTION_AUTOMATIC && g_strcmp0 (self->chassis_type, "vm") != 0) {
+         gtk_widget_set_visible (GTK_WIDGET (self->suspend_on_ac_group), TRUE);
+@@ -1151,11 +1217,7 @@ setup_general_section (CcPowerPanel *self)
+ {
+     gboolean show_section = FALSE;
+ 
+-    if (populate_power_button_row (self)) {
+-        gtk_widget_set_visible (GTK_WIDGET (self->power_button_row), TRUE);
+-        cc_number_row_bind_settings (self->power_button_row, self->gsd_settings, "power-button-action");
+-        show_section = TRUE;
+-    }
++    /* Plinius: the power button row follows logind's answers (power_actions_ready()) */
+ 
+     if (self->has_batteries) {
+         gtk_widget_set_visible (GTK_WIDGET (self->battery_percentage_row), TRUE);
+-- 
+2.55.0
+

@@ -1,0 +1,67 @@
+[Unit]
+Description=Face recognition (plinius-face)
+# Camera and NPU are Android services in the container
+After=lxc-android-config.service
+Requires=lxc-android-config.service
+# DeviceAllow= below only takes nodes that exist when the unit starts; the drivers of the GPU and
+# the APU create theirs late in the boot (device units: 71-plinius-face.rules)
+Wants=dev-mali0.device dev-apusys.device
+After=dev-mali0.device dev-apusys.device
+
+[Service]
+# Not Type=dbus: systemd would stop the service when the bus name goes away during its re-exec
+Type=exec
+Restart=on-failure
+ExecStart=/usr/bin/plinius-faced
+# The NPU's support library also loads ArmNN with OpenCL; without the vendor directories it
+# finds no OpenCL and aborts the process. Same as the system default plus those directories.
+Environment=HYBRIS_LD_LIBRARY_PATH=/system/lib64:/apex/com.android.vndk.v34/lib64:/vendor/lib64/hw:/vendor/lib64:/vendor/lib64/mt6878:/vendor/lib64/egl/mt6878:/vendor/lib64/egl
+# Face templates, readable by root only; compiled NPU models
+RuntimeDirectory=plinius-face
+RuntimeDirectoryMode=0700
+StateDirectory=plinius-face
+StateDirectoryMode=0700
+CacheDirectory=plinius-face
+CacheDirectoryMode=0700
+# Sandbox (docs/DIENSTE-HAERTEN.md), tried with plinius-face-probe (camera and NPU) and the lock
+# screen. CAP_DAC_READ_SEARCH only to look for the always-on display's flag in /run/user/<uid>
+# (0700), so the user's directories stay visible read-only. The devices are what libhybris, the
+# camera and the NPU open: binder, the APU, ashmem, the Mali GPU (ArmNN's OpenCL), DMA heaps and
+# Android's pmsg log.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateIPC=yes
+PrivateNetwork=yes
+DevicePolicy=closed
+DeviceAllow=/dev/binderfs/binder rw
+DeviceAllow=/dev/binderfs/hwbinder rw
+DeviceAllow=/dev/binderfs/vndbinder rw
+DeviceAllow=/dev/apusys rw
+DeviceAllow=/dev/ashmem rw
+DeviceAllow=/dev/mali0 rw
+DeviceAllow=char-dma_heap r
+DeviceAllow=char-pmsg w
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+# From boot: with face unlock on it watches the lock screen; else it ends after two idle minutes
+WantedBy=multi-user.target

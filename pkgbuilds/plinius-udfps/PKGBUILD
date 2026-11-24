@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-udfps
+pkgver=0.1
+pkgrel=3
+pkgdesc="Touch target and light for a fingerprint sensor under the display (biomd)"
+arch=(any)
+license=(MIT)
+# biomd 1.4.0.20260508-3 brings the SensorLocation property and the PointerDown/UiReady methods
+depends=(python python-gobject python-cairo gtk3 gtk-layer-shell 'biomd>=1.4.0.20260508-3')
+source=(plinius-udfps.py
+	plinius-udfps.desktop
+	LICENSE)
+sha256sums=('9ae2857bd4ff841187872e85cc154aae4c49938745c604bd82185ae1496204d6'
+	'f30e609b28afde0e8491d86c6d60945ff9948c2085ef124803f699374bb1f5e5'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-udfps.py "$pkgdir/usr/bin/plinius-udfps"
+	# Runs in the session: a layer-shell surface over the sensor while biomd is busy
+	install -Dm644 plinius-udfps.desktop -t "$pkgdir/etc/xdg/autostart"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

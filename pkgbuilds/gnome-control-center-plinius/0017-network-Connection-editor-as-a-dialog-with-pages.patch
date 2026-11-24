@@ -1,0 +1,589 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 01:35:32 +0100
+Subject: [PATCH] network: Connection editor as a dialog with pages
+
+Plinius: adding a VPN (and editing any connection) opened a window of its
+own with notebook tabs (Details, Identity, IPv4, IPv6, Security/VPN) that
+do not fit a 360 px wide phone. The editor is an AdwDialog now (a bottom
+sheet on the phone, inside the Settings window) whose first page lists the
+settings pages; a row opens its page as a navigation page with a back
+button. Cancel and Apply stay on the first page. Closing the dialog any
+other way still counts as cancel ("done" with FALSE once).
+---
+ panels/network/cc-network-panel.c             |   3 +-
+ .../connection-editor/connection-editor.blp   | 125 ++++++++-------
+ .../connection-editor/net-connection-editor.c | 143 +++++++++++++-----
+ .../connection-editor/net-connection-editor.h |   2 +-
+ panels/network/net-device-bluetooth.c         |   3 +-
+ panels/network/net-device-ethernet.c          |   6 +-
+ panels/network/net-device-wifi.c              |   3 +-
+ panels/network/net-vpn.c                      |   3 +-
+ 8 files changed, 186 insertions(+), 102 deletions(-)
+
+diff --git a/panels/network/cc-network-panel.c b/panels/network/cc-network-panel.c
+index 1bdac3da1..87c6a8471 100644
+--- a/panels/network/cc-network-panel.c
++++ b/panels/network/cc-network-panel.c
+@@ -652,8 +652,7 @@ create_connection_cb (CcNetworkPanel *self)
+     NetConnectionEditor *editor;
+ 
+     editor = net_connection_editor_new (NULL, NULL, NULL, self->client);
+-    gtk_window_set_transient_for (GTK_WINDOW (editor), GTK_WINDOW (gtk_widget_get_native (GTK_WIDGET (self))));
+-    gtk_window_present (GTK_WINDOW (editor));
++    adw_dialog_present (ADW_DIALOG (editor), GTK_WIDGET (self));
+ }
+ 
+ static void
+diff --git a/panels/network/connection-editor/connection-editor.blp b/panels/network/connection-editor/connection-editor.blp
+index a5637b500..e9c3ad1e2 100644
+--- a/panels/network/connection-editor/connection-editor.blp
++++ b/panels/network/connection-editor/connection-editor.blp
+@@ -1,67 +1,90 @@
+ using Gtk 4.0;
+ using Adw 1;
+ 
+-template $NetConnectionEditor: Adw.Window {
+-  destroy-with-parent: true;
+-  modal: true;
+-  width-request: 360;
+-  height-request: 294;
++// Plinius: a dialog (a bottom sheet on the phone) instead of a window of its own, and the
++// settings as pages to open from a list instead of notebook tabs, which do not fit 360 px
++template $NetConnectionEditor: Adw.Dialog {
++  content-width: 420;
++  content-height: 600;
+ 
+-  Adw.ToolbarView {
+-    [top]
+-    Adw.HeaderBar {
+-      show-end-title-buttons: false;
+-      show-start-title-buttons: false;
++  child: Adw.ToastOverlay toast_overlay {
++    child: Adw.NavigationView navigation_view {
++      Adw.NavigationPage main_page {
++        title: _("Connection");
+ 
+-      Button cancel_button {
+-        label: _("_Cancel");
+-        use-underline: true;
+-        clicked => $cancel_clicked_cb(template);
+-      }
++        child: Adw.ToolbarView {
++          [top]
++          Adw.HeaderBar {
++            show-end-title-buttons: false;
++            show-start-title-buttons: false;
+ 
+-      [end]
+-      Button apply_button {
+-        label: _("_Apply");
+-        use-underline: true;
+-        clicked => $apply_clicked_cb(template);
++            Button cancel_button {
++              label: _("_Cancel");
++              use-underline: true;
++              clicked => $cancel_clicked_cb(template);
++            }
+ 
+-        styles [
+-          "suggested-action",
+-        ]
+-      }
+-    }
++            [end]
++            Button apply_button {
++              label: _("_Apply");
++              use-underline: true;
++              clicked => $apply_clicked_cb(template);
+ 
+-    Adw.ToastOverlay toast_overlay {
+-      child: Stack toplevel_stack {
+-        hexpand: true;
+-        vexpand: true;
++              styles [
++                "suggested-action",
++              ]
++            }
++          }
+ 
+-        Adw.Spinner spinner {}
++          content: Stack toplevel_stack {
++            hexpand: true;
++            vexpand: true;
+ 
+-        Notebook notebook {
+-          show-border: false;
+-        }
++            Adw.Spinner spinner {}
+ 
+-        Box add_connection_box {
+-          vexpand: true;
++            // The settings pages, each row opens one (net-connection-editor.c)
++            ScrolledWindow pages_box {
++              hscrollbar-policy: never;
+ 
+-          Box {
+-            hexpand: true;
+-            vexpand: true;
++              Adw.Clamp {
++                margin-start: 12;
++                margin-end: 12;
++                margin-top: 12;
++                margin-bottom: 12;
++
++                ListBox pages_list {
++                  valign: start;
++                  selection-mode: none;
++                  row-activated => $page_row_activated_cb(template);
++
++                  styles [
++                    "boxed-list",
++                  ]
++                }
++              }
++            }
+ 
+-            Adw.Bin add_connection_frame {
+-              hexpand: true;
++            Box add_connection_box {
+               vexpand: true;
+-              width-request: 300;
+-              valign: start;
+-              margin-start: 12;
+-              margin-end: 12;
+-              margin-top: 12;
+-              margin-bottom: 12;
++
++              Box {
++                hexpand: true;
++                vexpand: true;
++
++                Adw.Bin add_connection_frame {
++                  hexpand: true;
++                  vexpand: true;
++                  valign: start;
++                  margin-start: 12;
++                  margin-end: 12;
++                  margin-top: 12;
++                  margin-bottom: 12;
++                }
++              }
+             }
+-          }
+-        }
+-      };
+-    }
+-  }
++          };
++        };
++      }
++    };
++  };
+ }
+diff --git a/panels/network/connection-editor/net-connection-editor.c b/panels/network/connection-editor/net-connection-editor.c
+index 608564a20..bab99386a 100644
+--- a/panels/network/connection-editor/net-connection-editor.c
++++ b/panels/network/connection-editor/net-connection-editor.c
+@@ -49,16 +49,25 @@ enum {
+ static guint signals[LAST_SIGNAL] = { 0 };
+ 
+ struct _NetConnectionEditor {
+-    AdwWindow parent;
++    AdwDialog parent;
+ 
+     GtkBox *add_connection_box;
+     AdwBin *add_connection_frame;
+     GtkButton *apply_button;
+     GtkButton *cancel_button;
+-    GtkNotebook *notebook;
++    AdwNavigationView *navigation_view;
++    AdwNavigationPage *main_page;
++    GtkWidget *pages_box;
++    GtkListBox *pages_list;
+     AdwToastOverlay *toast_overlay;
+     GtkStack *toplevel_stack;
+ 
++    /* Plinius: the settings pages (CEPage) in their order; each has a row in pages_list that
++     * pushes its own navigation page, instead of the notebook tabs */
++    GPtrArray *pages;
++    /* "done" was emitted, or the changes are being applied: closing is no cancel anymore */
++    gboolean finished;
++
+     NMClient *client;
+     NMDevice *device;
+ 
+@@ -76,7 +85,7 @@ struct _NetConnectionEditor {
+     gboolean title_set;
+ };
+ 
+-G_DEFINE_FINAL_TYPE (NetConnectionEditor, net_connection_editor, ADW_TYPE_WINDOW)
++G_DEFINE_FINAL_TYPE (NetConnectionEditor, net_connection_editor, ADW_TYPE_DIALOG)
+ 
+ /* Used as both GSettings keys and GObject data tags */
+ #define IGNORE_CA_CERT_TAG "ignore-ca-cert"
+@@ -162,20 +171,47 @@ eap_method_ca_cert_ignore_load (NMConnection *connection)
+ }
+ 
+ static void page_changed (NetConnectionEditor *self);
++static void page_row_activated_cb (NetConnectionEditor *self, GtkListBoxRow *row);
++
++/* Close the dialog if it is shown; a dialog that was never presented has nothing to close */
++static void
++close_editor (NetConnectionEditor *self)
++{
++    if (gtk_widget_get_parent (GTK_WIDGET (self)) != NULL)
++        adw_dialog_force_close (ADW_DIALOG (self));
++}
++
++/* Title of the dialog and of its first page (the back button of the settings pages shows it) */
++static void
++set_editor_title (NetConnectionEditor *self, const gchar *title)
++{
++    adw_dialog_set_title (ADW_DIALOG (self), title);
++    adw_navigation_page_set_title (self->main_page, title);
++}
+ 
+ static void
+ cancel_editing (NetConnectionEditor *self)
+ {
+-    g_signal_emit (self, signals[DONE], 0, FALSE);
+-    gtk_window_destroy (GTK_WINDOW (self));
++    if (!self->finished) {
++        self->finished = TRUE;
++        g_signal_emit (self, signals[DONE], 0, FALSE);
++    }
++    close_editor (self);
+ }
+ 
+-static gboolean
+-net_connection_editor_close_request (GtkWindow *window)
++/* Closed by the user (close button, Escape, swiping the sheet down): a cancel */
++static void
++net_connection_editor_closed (AdwDialog *dialog)
+ {
+-    cancel_editing (NET_CONNECTION_EDITOR (window));
++    NetConnectionEditor *self = NET_CONNECTION_EDITOR (dialog);
++
++    if (!self->finished) {
++        self->finished = TRUE;
++        g_signal_emit (self, signals[DONE], 0, FALSE);
++    }
+ 
+-    return GTK_WINDOW_CLASS (net_connection_editor_parent_class)->close_request (window);
++    if (ADW_DIALOG_CLASS (net_connection_editor_parent_class)->closed)
++        ADW_DIALOG_CLASS (net_connection_editor_parent_class)->closed (dialog);
+ }
+ 
+ static void
+@@ -197,7 +233,7 @@ static void
+ update_complete (NetConnectionEditor *self, gboolean success)
+ {
+     g_signal_emit (self, signals[DONE], 0, success);
+-    gtk_window_destroy (GTK_WINDOW (self));
++    close_editor (self);
+ }
+ 
+ static void
+@@ -280,13 +316,16 @@ apply_clicked_cb (NetConnectionEditor *self)
+                                                    updated_connection_cb, g_object_ref (self));
+     }
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (self), FALSE);
++    /* The result comes with "done"; until then the async calls hold a reference */
++    self->finished = TRUE;
++    close_editor (self);
+ }
+ 
+ static void
+ net_connection_editor_init (NetConnectionEditor *self)
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
++    self->pages = g_ptr_array_new ();
+ }
+ 
+ static void
+@@ -301,6 +340,7 @@ net_connection_editor_finalize (GObject *object)
+     g_clear_object (&self->ap);
+     g_cancellable_cancel (self->cancellable);
+     g_clear_object (&self->cancellable);
++    g_clear_pointer (&self->pages, g_ptr_array_unref);
+ 
+     G_OBJECT_CLASS (net_connection_editor_parent_class)->finalize (object);
+ }
+@@ -310,19 +350,17 @@ net_connection_editor_class_init (NetConnectionEditorClass *class)
+ {
+     GObjectClass *object_class = G_OBJECT_CLASS (class);
+     GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (class);
+-    GtkWindowClass *window_class = GTK_WINDOW_CLASS (class);
++    AdwDialogClass *dialog_class = ADW_DIALOG_CLASS (class);
+ 
+     g_resources_register (net_connection_editor_get_resource ());
+ 
+     object_class->finalize = net_connection_editor_finalize;
+ 
+-    window_class->close_request = net_connection_editor_close_request;
++    dialog_class->closed = net_connection_editor_closed;
+ 
+     signals[DONE] = g_signal_new ("done", G_OBJECT_CLASS_TYPE (object_class), G_SIGNAL_RUN_FIRST, 0, NULL, NULL, NULL,
+                                   G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
+ 
+-    gtk_widget_class_add_binding_action (widget_class, GDK_KEY_Escape, GDK_NO_MODIFIER_MASK, "window.close", NULL);
+-
+     gtk_widget_class_set_template_from_resource (widget_class,
+                                                  "/org/gnome/control-center/network/connection-editor.ui");
+ 
+@@ -330,12 +368,16 @@ net_connection_editor_class_init (NetConnectionEditorClass *class)
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, add_connection_frame);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, apply_button);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, cancel_button);
+-    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, notebook);
++    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, main_page);
++    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, navigation_view);
++    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, pages_box);
++    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, pages_list);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toast_overlay);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toplevel_stack);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, cancel_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, apply_clicked_cb);
++    gtk_widget_class_bind_template_callback (widget_class, page_row_activated_cb);
+ }
+ 
+ static void
+@@ -346,7 +388,7 @@ nm_connection_editor_watch_cb (GPid pid, gint status, gpointer user_data)
+ 
+     g_spawn_close_pid (pid);
+     /* Close the dialog when nm-connection-editor exits. */
+-    gtk_window_destroy (GTK_WINDOW (user_data));
++    close_editor (NET_CONNECTION_EDITOR (user_data));
+ }
+ 
+ static void
+@@ -391,6 +433,7 @@ net_connection_editor_do_fallback (NetConnectionEditor *self, const gchar *type)
+         g_child_watch_add (child_pid, nm_connection_editor_watch_cb, self);
+     }
+ 
++    self->finished = TRUE;
+     g_signal_emit (self, signals[DONE], 0, FALSE);
+ }
+ 
+@@ -420,7 +463,7 @@ net_connection_editor_update_title (NetConnectionEditor *self)
+             id = g_strdup (nm_connection_get_id (self->connection));
+         }
+     }
+-    gtk_window_set_title (GTK_WINDOW (self), id);
++    set_editor_title (self, id);
+ }
+ 
+ static gboolean
+@@ -447,10 +490,8 @@ update_sensitivity (NetConnectionEditor *self)
+         sensitive = self->can_modify;
+     }
+ 
+-    for (i = 0; i < gtk_notebook_get_n_pages (self->notebook); i++) {
+-        GtkWidget *page = gtk_notebook_get_nth_page (self->notebook, i);
+-        gtk_widget_set_sensitive (page, sensitive);
+-    }
++    for (i = 0; i < self->pages->len; i++)
++        gtk_widget_set_sensitive (GTK_WIDGET (g_ptr_array_index (self->pages, i)), sensitive);
+ }
+ 
+ static void
+@@ -464,8 +505,8 @@ validate (NetConnectionEditor *self)
+         goto done;
+ 
+     valid = TRUE;
+-    for (i = 0; i < gtk_notebook_get_n_pages (self->notebook); i++) {
+-        CEPage *page = CE_PAGE (gtk_notebook_get_nth_page (self->notebook, i));
++    for (i = 0; i < self->pages->len; i++) {
++        CEPage *page = CE_PAGE (g_ptr_array_index (self->pages, i));
+         g_autoptr(GError) error = NULL;
+ 
+         if (!ce_page_validate (page, self->connection, &error)) {
+@@ -507,8 +548,7 @@ recheck_initialization (NetConnectionEditor *self)
+     if (!editor_is_initialized (self))
+         return;
+ 
+-    gtk_stack_set_visible_child (self->toplevel_stack, GTK_WIDGET (self->notebook));
+-    gtk_notebook_set_current_page (self->notebook, 0);
++    gtk_stack_set_visible_child (self->toplevel_stack, self->pages_box);
+ 
+     g_idle_add_once (idle_validate, self);
+ 
+@@ -516,25 +556,52 @@ recheck_initialization (NetConnectionEditor *self)
+         adw_bin_set_child (self->add_connection_frame, NULL);
+ }
+ 
++/* A settings page as a navigation page of its own, with a header bar and back button */
++static AdwNavigationPage *
++new_navigation_page (CEPage *page)
++{
++    GtkWidget *toolbar = adw_toolbar_view_new ();
++
++    adw_toolbar_view_add_top_bar (ADW_TOOLBAR_VIEW (toolbar), adw_header_bar_new ());
++    adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (toolbar), GTK_WIDGET (page));
++    return adw_navigation_page_new (toolbar, ce_page_get_title (page));
++}
++
++static void
++page_row_activated_cb (NetConnectionEditor *self, GtkListBoxRow *row)
++{
++    AdwNavigationPage *page = g_object_get_data (G_OBJECT (row), "navigation-page");
++
++    if (page != NULL)
++        adw_navigation_view_push (self->navigation_view, page);
++}
++
+ static void
+ page_initialized (NetConnectionEditor *self, GError *error, CEPage *page)
+ {
+-    GtkWidget *label;
++    AdwNavigationPage *navigation_page;
++    GtkWidget *row;
+     gint position;
+-    gint i;
++    guint i;
+ 
++    /* Pages finish in any order (secrets come asynchronously); keep the order they were added in */
+     position = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (page), "position"));
+-    g_object_set_data (G_OBJECT (page), "position", GINT_TO_POINTER (position));
+-    for (i = 0; i < gtk_notebook_get_n_pages (self->notebook); i++) {
+-        GtkWidget *page = gtk_notebook_get_nth_page (self->notebook, i);
+-        gint pos = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (page), "position"));
++    for (i = 0; i < self->pages->len; i++) {
++        gint pos = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (g_ptr_array_index (self->pages, i)), "position"));
+         if (pos > position)
+             break;
+     }
++    g_ptr_array_insert (self->pages, i, page);
+ 
+-    label = gtk_label_new (ce_page_get_title (page));
+-
+-    gtk_notebook_insert_page (self->notebook, GTK_WIDGET (page), label, i);
++    navigation_page = new_navigation_page (page);
++    row = adw_action_row_new ();
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), ce_page_get_title (page));
++    gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
++    adw_action_row_add_suffix (ADW_ACTION_ROW (row), gtk_image_new_from_icon_name ("go-next-symbolic"));
++    /* The row keeps the navigation page, which is only in the view while it is shown */
++    g_object_set_data_full (G_OBJECT (row), "navigation-page", g_object_ref_sink (navigation_page),
++                            g_object_unref);
++    gtk_list_box_insert (self->pages_list, row, i);
+ 
+     self->initializing_pages = g_slist_remove (self->initializing_pages, page);
+ 
+@@ -767,7 +834,7 @@ vpn_type_activated (NetConnectionEditor *self, GtkWidget *row)
+     GType s_type = NM_TYPE_SETTING_VPN;
+ 
+     if (!strcmp (service_name, "import")) {
+-        vpn_import (GTK_WINDOW (self), vpn_import_complete, self);
++        vpn_import (GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self))), vpn_import_complete, self);
+         return;
+     } else if (!strcmp (service_name, "wireguard")) {
+         s_type = NM_TYPE_SETTING_WIREGUARD;
+@@ -859,7 +926,7 @@ net_connection_editor_add_connection (NetConnectionEditor *self)
+ 
+     gtk_stack_set_visible_child (self->toplevel_stack, GTK_WIDGET (self->add_connection_box));
+     gtk_widget_set_visible (GTK_WIDGET (self->apply_button), FALSE);
+-    gtk_window_set_title (GTK_WINDOW (self), _("Add VPN"));
++    set_editor_title (self, _("Add VPN"));
+ }
+ 
+ static void
+@@ -930,6 +997,6 @@ net_connection_editor_forget (NetConnectionEditor *self)
+ void
+ net_connection_editor_set_title (NetConnectionEditor *self, const gchar *title)
+ {
+-    gtk_window_set_title (GTK_WINDOW (self), title);
++    set_editor_title (self, title);
+     self->title_set = TRUE;
+ }
+diff --git a/panels/network/connection-editor/net-connection-editor.h b/panels/network/connection-editor/net-connection-editor.h
+index 5b15a10d0..652cf0fd4 100644
+--- a/panels/network/connection-editor/net-connection-editor.h
++++ b/panels/network/connection-editor/net-connection-editor.h
+@@ -28,7 +28,7 @@
+ G_BEGIN_DECLS
+ 
+ #define NET_TYPE_CONNECTION_EDITOR (net_connection_editor_get_type ())
+-G_DECLARE_FINAL_TYPE (NetConnectionEditor, net_connection_editor, NET, CONNECTION_EDITOR, AdwWindow);
++G_DECLARE_FINAL_TYPE (NetConnectionEditor, net_connection_editor, NET, CONNECTION_EDITOR, AdwDialog);
+ NetConnectionEditor *net_connection_editor_new (NMConnection *connection, NMDevice *device, NMAccessPoint *ap,
+                                                 NMClient *client);
+ void net_connection_editor_set_title (NetConnectionEditor *editor, const gchar *title);
+diff --git a/panels/network/net-device-bluetooth.c b/panels/network/net-device-bluetooth.c
+index 0effe930a..a4dcf62c9 100644
+--- a/panels/network/net-device-bluetooth.c
++++ b/panels/network/net-device-bluetooth.c
+@@ -127,10 +127,9 @@ options_button_clicked_cb (NetDeviceBluetooth *self)
+     connection = net_device_get_find_connection (self->client, self->device);
+ 
+     editor = net_connection_editor_new (connection, self->device, NULL, self->client);
+-    gtk_window_set_transient_for (GTK_WINDOW (editor), GTK_WINDOW (gtk_widget_get_native (GTK_WIDGET (self))));
+     net_connection_editor_set_title (editor, _("Bluetooth"));
+     g_signal_connect_object (editor, "done", G_CALLBACK (editor_done), self, G_CONNECT_SWAPPED);
+-    gtk_window_present (GTK_WINDOW (editor));
++    adw_dialog_present (ADW_DIALOG (editor), GTK_WIDGET (self));
+ }
+ 
+ static void
+diff --git a/panels/network/net-device-ethernet.c b/panels/network/net-device-ethernet.c
+index 087492fad..4b89b7680 100644
+--- a/panels/network/net-device-ethernet.c
++++ b/panels/network/net-device-ethernet.c
+@@ -240,11 +240,10 @@ show_details (NetDeviceEthernet *self, GtkButton *button, const gchar *title)
+     connection = NM_CONNECTION (g_object_get_data (G_OBJECT (row), "connection"));
+ 
+     editor = net_connection_editor_new (connection, self->device, NULL, self->client);
+-    gtk_window_set_transient_for (GTK_WINDOW (editor), GTK_WINDOW (gtk_widget_get_native (GTK_WIDGET (self))));
+     if (title)
+         net_connection_editor_set_title (editor, title);
+     g_signal_connect_object (editor, "done", G_CALLBACK (editor_done), self, G_CONNECT_SWAPPED);
+-    gtk_window_present (GTK_WINDOW (editor));
++    adw_dialog_present (ADW_DIALOG (editor), GTK_WIDGET (self));
+ }
+ 
+ static void
+@@ -411,9 +410,8 @@ add_profile_button_clicked_cb (NetDeviceEthernet *self)
+     nm_connection_add_setting (connection, nm_setting_wired_new ());
+ 
+     editor = net_connection_editor_new (connection, self->device, NULL, self->client);
+-    gtk_window_set_transient_for (GTK_WINDOW (editor), GTK_WINDOW (gtk_widget_get_native (GTK_WIDGET (self))));
+     g_signal_connect_object (editor, "done", G_CALLBACK (editor_done), self, G_CONNECT_SWAPPED);
+-    gtk_window_present (GTK_WINDOW (editor));
++    adw_dialog_present (ADW_DIALOG (editor), GTK_WIDGET (self));
+ }
+ 
+ static void
+diff --git a/panels/network/net-device-wifi.c b/panels/network/net-device-wifi.c
+index 2f62cf657..301f14fa4 100644
+--- a/panels/network/net-device-wifi.c
++++ b/panels/network/net-device-wifi.c
+@@ -905,8 +905,7 @@ show_details_for_row (NetDeviceWifi *self, CcWifiConnectionRow *row, CcWifiConne
+     ap = cc_wifi_connection_row_best_access_point (row);
+ 
+     editor = net_connection_editor_new (connection, self->device, ap, self->client);
+-    gtk_window_set_transient_for (GTK_WINDOW (editor), GTK_WINDOW (gtk_widget_get_native (GTK_WIDGET (row))));
+-    gtk_window_present (GTK_WINDOW (editor));
++    adw_dialog_present (ADW_DIALOG (editor), GTK_WIDGET (row));
+ }
+ 
+ static void
+diff --git a/panels/network/net-vpn.c b/panels/network/net-vpn.c
+index 07b62ce2d..92607f47e 100644
+--- a/panels/network/net-vpn.c
++++ b/panels/network/net-vpn.c
+@@ -154,11 +154,10 @@ edit_connection (NetVpn *self)
+     NetConnectionEditor *editor;
+ 
+     editor = net_connection_editor_new (self->connection, NULL, NULL, self->client);
+-    gtk_window_set_transient_for (GTK_WINDOW (editor), GTK_WINDOW (gtk_widget_get_native (GTK_WIDGET (self))));
+     net_connection_editor_set_title (editor, nm_connection_get_id (self->connection));
+ 
+     g_signal_connect_object (editor, "done", G_CALLBACK (editor_done), self, G_CONNECT_SWAPPED);
+-    gtk_window_present (GTK_WINDOW (editor));
++    adw_dialog_present (ADW_DIALOG (editor), GTK_WIDGET (self));
+ }
+ 
+ static void

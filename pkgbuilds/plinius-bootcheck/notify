@@ -1,0 +1,85 @@
+#!/bin/bash
+# Session notification when plinius-bootcheck found changes at boot.
+# Runs as the user (plinius-bootcheck-notify.service), only reads /run/plinius-bootcheck.
+#
+# Tapping the notification opens Settings → Security → Boot Chain. Phosh does not open apps
+# itself: a tap only sends ActionInvoked("default") back to the sender, so this script stays
+# until the notification is tapped, dismissed or no longer needed (the change was accepted).
+set -euo pipefail
+
+RUN=/run/plinius-bootcheck
+NOTIFICATIONS=org.freedesktop.Notifications
+export TEXTDOMAIN=plinius-bootcheck
+
+# The boot-time check may still be running when the session is already up
+for _ in $(seq 300); do
+	[[ -e $RUN/done ]] && break
+	sleep 1
+done
+[[ -s $RUN/changed ]] || exit 0
+
+names=$(xargs -n1 basename < "$RUN/changed" | paste -sd, - | sed 's/,/, /g')
+title=$(gettext "Start system changed")
+# shellcheck disable=SC2059
+body=$(printf "$(gettext "Since the last start, these parts of the start system were changed: %s. If you did not update Volla OS or the start system yourself, someone may have tampered with the phone and may know your encryption password. Details and accepting the change: Settings → Security → Boot Chain")" "$names")
+
+# Opens Settings on the Boot Chain page through its D-Bus action "launch-panel" (D-Bus
+# activation starts Settings if it is not running). Not by running gnome-control-center: that
+# child would live in this unit and be stopped with it as soon as this script exits.
+open_boot_chain() {
+	gdbus call --session --timeout 30 --dest org.gnome.Settings \
+		--object-path /org/gnome/Settings \
+		--method org.freedesktop.Application.ActivateAction \
+		launch-panel "[<('security', [<'plinius-boot-chain'>])>]" "{}" >/dev/null ||
+		echo "plinius-bootcheck: could not open Settings on Boot Chain" >&2
+}
+
+# Watch the signals before sending, so that no early tap is missed
+coproc MONITOR { exec gdbus monitor --session --dest "$NOTIFICATIONS" \
+	--object-path /org/freedesktop/Notifications; }
+monitor_pid=$MONITOR_PID
+# bash unsets MONITOR once the monitor has ended; with set -u reading ${MONITOR[0]} then stops
+# the script instead of ending it quietly below
+monitor_fd=${MONITOR[0]}
+trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
+
+# Critical urgency: stays until it is dismissed. Shown as coming from Settings: on a tap Phosh
+# activates that app with an xdg-activation token, which brings its window to the front; the
+# panel request below arrives after that.
+reply=$(gdbus call --session --dest "$NOTIFICATIONS" \
+	--object-path /org/freedesktop/Notifications \
+	--method "$NOTIFICATIONS.Notify" \
+	"plinius-bootcheck" 0 "dialog-warning-symbolic" "$title" "$body" \
+	"['default', '$(gettext "Show Details")']" \
+	"{'urgency': <byte 2>, 'desktop-entry': <'org.gnome.Settings'>}" 0)
+# Reply "(uint32 7,)"
+id=$(sed -n 's/^(uint32 \([0-9]\+\),)$/\1/p' <<< "$reply")
+[[ -n $id ]] || exit 1
+
+# Signal lines: "/org/freedesktop/Notifications: org.freedesktop.Notifications.ActionInvoked
+# (uint32 7, 'default')". Every 5 s without one: is the alarm still there?
+while :; do
+	rc=0
+	IFS= read -r -t 5 line <&"$monitor_fd" || rc=$?
+	if (( rc )); then
+		# Timeout (status > 128): accepted in Settings meanwhile → remove the notification
+		(( rc > 128 )) || exit 0  # monitor ended (session bus gone)
+		if [[ ! -s $RUN/changed ]]; then
+			gdbus call --session --dest "$NOTIFICATIONS" \
+				--object-path /org/freedesktop/Notifications \
+				--method "$NOTIFICATIONS.CloseNotification" "$id" >/dev/null || true
+			exit 0
+		fi
+		continue
+	fi
+	case $line in
+	*"$NOTIFICATIONS.ActionInvoked (uint32 $id, 'default')"*)
+		open_boot_chain
+		exit 0 ;;
+	*"$NOTIFICATIONS.NotificationClosed (uint32 $id,"*)
+		exit 0 ;;
+	# Phosh restarted (session ended): the notification is gone, nobody will tap it
+	*"does not have an owner"*)
+		exit 0 ;;
+	esac
+done

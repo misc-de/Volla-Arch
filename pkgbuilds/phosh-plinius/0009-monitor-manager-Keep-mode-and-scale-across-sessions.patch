@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 00:47:21 +0100
+Subject: [PATCH] monitor-manager: Keep mode and scale across sessions
+
+A configuration applied as persistent (GNOME Settings' "Apply") was only
+sent to phoc; phoc takes its outputs from phoc.ini at start, so scale and
+refresh rate were back to the defaults after every restart. Save the system
+phoc.ini with mode and scale of each enabled head as
+$XDG_CONFIG_HOME/phosh/phoc.ini, and let phosh-session start phoc with that
+copy when there is one. The values are written in exactly the format phoc
+parses (it asserts on anything else).
+---
+ data/phosh-session.in |  5 +++++
+ src/monitor-manager.c | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 60 insertions(+)
+
+diff --git a/data/phosh-session.in b/data/phosh-session.in
+index b0b3c4a4..abf35912 100755
+--- a/data/phosh-session.in
++++ b/data/phosh-session.in
+@@ -40,6 +40,11 @@ if [ -f /etc/phosh/phoc.ini ]; then
+   PHOC_INI=/etc/phosh/phoc.ini
+ fi
+ 
++# Mode and scale picked in Settings, saved by phosh on top of the system phoc.ini
++if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phosh/phoc.ini" ]; then
++  PHOC_INI="${XDG_CONFIG_HOME:-$HOME/.config}/phosh/phoc.ini"
++fi
++
+ if [ -f "$HOME/.phoshdebug" ]; then
+   echo "WARN: .phoshdebug found."
+   . "$HOME/.phoshdebug"
+diff --git a/src/monitor-manager.c b/src/monitor-manager.c
+index e7b416fa..c80cfff4 100644
+--- a/src/monitor-manager.c
++++ b/src/monitor-manager.c
+@@ -25,6 +25,8 @@
+ 
+ #include <gdk/gdkwayland.h>
+ 
++#include <errno.h>
++
+ #define GSD_COLOR_BUS_NAME "org.gnome.SettingsDaemon.Color"
+ #define GSD_COLOR_OBJECT_PATH "/org/gnome/SettingsDaemon/Color"
+ 
+@@ -688,6 +690,57 @@ phosh_monitor_manager_clear_pending (PhoshMonitorManager *self)
+ }
+ 
+ 
++/*
++ * Keep a persistent configuration across sessions. Nothing else stores it:
++ * phoc takes its outputs from phoc.ini at start. So write the user's own copy
++ * of the system phoc.ini with mode and scale of every enabled head;
++ * phosh-session starts phoc with that copy when there is one. phoc parses the
++ * values strictly (and in the C locale), so they are written in exactly its
++ * format.
++ */
++static void
++save_phoc_ini (PhoshMonitorManager *self)
++{
++  const char *system_ini[] = { "/etc/phosh/phoc.ini", "/usr/share/phosh/phoc.ini" };
++  g_autoptr (GKeyFile) ini = g_key_file_new ();
++  g_autoptr (GError) err = NULL;
++  g_autofree char *dir = g_build_filename (g_get_user_config_dir (), "phosh", NULL);
++  g_autofree char *path = g_build_filename (dir, "phoc.ini", NULL);
++
++  for (int i = 0; i < G_N_ELEMENTS (system_ini); i++) {
++    if (g_key_file_load_from_file (ini, system_ini[i], G_KEY_FILE_KEEP_COMMENTS, NULL))
++      break;
++  }
++
++  for (int i = 0; i < self->heads->len; i++) {
++    PhoshHead *head = g_ptr_array_index (self->heads, i);
++    PhoshHeadMode *mode = head->pending.mode;
++    g_autofree char *group = NULL;
++    g_autofree char *mode_str = NULL;
++    char refresh[G_ASCII_DTOSTR_BUF_SIZE], scale[G_ASCII_DTOSTR_BUF_SIZE];
++
++    if (!head->pending.enabled || head->pending.scale <= 0)
++      continue;
++
++    group = g_strdup_printf ("output:%s", head->name);
++    if (mode) {
++      g_ascii_formatd (refresh, sizeof (refresh), "%.3f", mode->refresh / 1000.0);
++      mode_str = g_strdup_printf ("%dx%d@%sHz", mode->width, mode->height, refresh);
++      g_key_file_set_string (ini, group, "mode", mode_str);
++    }
++    g_ascii_formatd (scale, sizeof (scale), "%.6f", head->pending.scale);
++    g_key_file_set_string (ini, group, "scale", scale);
++  }
++
++  if (g_mkdir_with_parents (dir, 0700) != 0) {
++    g_warning ("Failed to create %s: %s", dir, g_strerror (errno));
++    return;
++  }
++  if (!g_key_file_save_to_file (ini, path, &err))
++    g_warning ("Failed to save the output configuration to %s: %s", path, err->message);
++}
++
++
+ static gboolean
+ phosh_monitor_manager_handle_apply_monitors_config (PhoshDBusDisplayConfig *skeleton,
+                                                     GDBusMethodInvocation  *invocation,
+@@ -798,6 +851,8 @@ phosh_monitor_manager_handle_apply_monitors_config (PhoshDBusDisplayConfig *skel
+   if (method == PHOSH_MONITOR_MANAGER_CONFIG_METHOD_PERSISTENT) {
+     PhoshMonitor *primary_monitor;
+ 
++    save_phoc_ini (self);
++
+     primary_monitor = phosh_monitor_manager_find_monitor (self, primary_head->name);
+     /* If the primary monitor is in the list of enabled heads we can assign it right away */
+     if (primary_monitor) {

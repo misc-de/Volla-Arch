@@ -1,0 +1,112 @@
+From bdfe3cf58e1493b3bfc636ab32007b89071678af Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 08:23:25 +0100
+Subject: [PATCH] lockscreen-manager: Dark variant of the background in the
+ dark style
+
+Plinius: GNOME Settings sets the lock screen picture to the light
+variant of the chosen background only, the screensaver schema has no
+dark key. While the dark style is on and the lock screen shows the same
+picture as the background, the lock screen takes the background's dark
+variant too.
+---
+ src/lockscreen-manager.c | 51 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/src/lockscreen-manager.c b/src/lockscreen-manager.c
+index ec13d1c0..6c39b072 100644
+--- a/src/lockscreen-manager.c
++++ b/src/lockscreen-manager.c
+@@ -27,6 +27,11 @@
+ #define SCREENSAVER_SETTINGS "org.gnome.desktop.screensaver"
+ #define KEY_PICTURE_URI       "picture-uri"
+ #define KEY_PICTURE_OPTIONS   "picture-options"
++/* Plinius: the dark variant of the background, see lock_picture_uri() */
++#define BG_SETTINGS           "org.gnome.desktop.background"
++#define KEY_PICTURE_URI_DARK  "picture-uri-dark"
++#define IF_SETTINGS           "org.gnome.desktop.interface"
++#define KEY_COLOR_SCHEME      "color-scheme"
+ 
+ /**
+  * PhoshLockscreenManager:
+@@ -61,6 +66,8 @@ struct _PhoshLockscreenManager {
+   GPtrArray              *shields;         /* other outputs */
+ 
+   GSettings              *bg_settings;
++  GSettings              *desktop_bg_settings;
++  GSettings              *interface_settings;
+   GFile *bg_file;
+   GFileMonitor           *bg_file_monitor;
+   GDesktopBackgroundStyle bg_style;
+@@ -160,6 +167,31 @@ monitor_bg_file (PhoshLockscreenManager *self)
+ }
+ 
+ 
++/*
++ * Plinius: GNOME Settings sets the lock screen to the light variant of the chosen background
++ * only (the screensaver schema has no dark key). While the dark style is on and the lock screen
++ * shows the same picture as the background, take the background's dark variant as well.
++ */
++static char *
++lock_picture_uri (PhoshLockscreenManager *self)
++{
++  g_autofree char *uri = g_settings_get_string (self->bg_settings, KEY_PICTURE_URI);
++  g_autofree char *bg_uri = NULL;
++  g_autofree char *bg_uri_dark = NULL;
++
++  if (g_settings_get_enum (self->interface_settings, KEY_COLOR_SCHEME) !=
++      G_DESKTOP_COLOR_SCHEME_PREFER_DARK)
++    return g_steal_pointer (&uri);
++
++  bg_uri = g_settings_get_string (self->desktop_bg_settings, KEY_PICTURE_URI);
++  bg_uri_dark = g_settings_get_string (self->desktop_bg_settings, KEY_PICTURE_URI_DARK);
++  if (g_strcmp0 (uri, bg_uri) == 0 && !gm_str_is_null_or_empty (bg_uri_dark))
++    return g_steal_pointer (&bg_uri_dark);
++
++  return g_steal_pointer (&uri);
++}
++
++
+ static void
+ on_picture_params_changed (PhoshLockscreenManager *self)
+ {
+@@ -168,7 +200,7 @@ on_picture_params_changed (PhoshLockscreenManager *self)
+   g_autoptr (GFile) file = NULL;
+   g_autofree char *uri = NULL;
+ 
+-  uri = g_settings_get_string (self->bg_settings, KEY_PICTURE_URI);
++  uri = lock_picture_uri (self);
+   style = g_settings_get_enum (self->bg_settings, KEY_PICTURE_OPTIONS);
+ 
+   if (!gm_str_is_null_or_empty (uri) &&
+@@ -494,6 +526,8 @@ phosh_lockscreen_manager_dispose (GObject *object)
+   g_clear_object (&self->bg_file_monitor);
+   g_clear_object (&self->bg_file);
+   g_clear_object (&self->bg_settings);
++  g_clear_object (&self->desktop_bg_settings);
++  g_clear_object (&self->interface_settings);
+   g_clear_object (&self->cached_bg_image);
+ 
+   G_OBJECT_CLASS (phosh_lockscreen_manager_parent_class)->dispose (object);
+@@ -576,6 +610,21 @@ phosh_lockscreen_manager_init (PhoshLockscreenManager *self)
+                     on_picture_params_changed,
+                     self,
+                     NULL);
++  self->desktop_bg_settings = g_settings_new (BG_SETTINGS);
++  g_object_connect (self->desktop_bg_settings,
++                    "swapped-object-signal::changed::" KEY_PICTURE_URI,
++                    G_CALLBACK (on_picture_params_changed),
++                    self,
++                    "swapped-object-signal::changed::" KEY_PICTURE_URI_DARK,
++                    G_CALLBACK (on_picture_params_changed),
++                    self,
++                    NULL);
++  self->interface_settings = g_settings_new (IF_SETTINGS);
++  g_signal_connect_object (self->interface_settings,
++                           "changed::" KEY_COLOR_SCHEME,
++                           G_CALLBACK (on_picture_params_changed),
++                           self,
++                           G_CONNECT_SWAPPED);
+   on_picture_params_changed (self);
+ }
+ 

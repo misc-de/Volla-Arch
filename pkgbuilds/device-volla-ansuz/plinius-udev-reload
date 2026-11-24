@@ -1,0 +1,26 @@
+#!/bin/sh -e
+# Stands in for "systemd-hook udev-reload" (see 35-systemd-udev-reload.hook): the same steps, except
+# that the trigger leaves out power_supply. The vendor drivers mtk-gauge and upm6722-standalone
+# refuse a written "change" with EINVAL, which makes "udevadm trigger" return 1 and pacman report
+# "command failed to execute correctly" on every update that touches udev rules. Those devices send
+# change events by themselves. Any other failure still ends this script with an error (sh -e).
+
+# As in systemd-hook: nothing to do while an image is built, or without a running device manager
+if systemd-detect-virt --chroot; then
+	echo >&2 "  Skipped: Running in chroot."
+	exit 0
+fi
+if ! systemd-notify --booted; then
+	echo >&2 "  Skipped: Current root is not booted."
+	exit 0
+fi
+if [ ! -S /run/udev/control ]; then
+	echo >&2 "  Skipped: Device manager is not running."
+	exit 0
+fi
+
+/usr/bin/udevadm control --reload
+if [ ! -e /etc/systemd/do-not-udevadm-trigger-on-update ]; then
+	/usr/bin/udevadm trigger -c change --subsystem-nomatch=power_supply
+	/usr/bin/udevadm settle
+fi

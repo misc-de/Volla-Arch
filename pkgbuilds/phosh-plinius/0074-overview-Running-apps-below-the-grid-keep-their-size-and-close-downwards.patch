@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 12:21:18 +0100
+Subject: [PATCH] overview: Running apps below the grid keep their size and
+ close downwards
+
+---
+ src/activity.c       | 20 +++++++++++++++
+ src/activity.h       |  1 +
+ src/overview.c       | 72 +++++++++++++++++++++++++++++++++++++++++++++++++---
+ src/swipe-away-bin.c | 34 ++++++++++++++++++++++++-
+ src/swipe-away-bin.h |  1 +
+ 5 files changed, 124 insertions(+), 4 deletions(-)
+
+diff --git a/src/activity.c b/src/activity.c
+index 7cc4055b..3dc819e4 100644
+--- a/src/activity.c
++++ b/src/activity.c
+@@ -878,3 +878,23 @@ phosh_activity_get_app_info (PhoshActivity *self)
+ 
+   return priv->app_info;
+ }
++
++
++/**
++ * phosh_activity_set_swipe_downwards:
++ * @self: The activity
++ * @downwards: Whether a swipe down closes the app
++ *
++ * Plinius: below the app grid the cards are closed with a swipe down,
++ * above it with a swipe up (as shipped).
++ */
++void
++phosh_activity_set_swipe_downwards (PhoshActivity *self, gboolean downwards)
++{
++  PhoshActivityPrivate *priv;
++
++  g_return_if_fail (PHOSH_IS_ACTIVITY (self));
++  priv = phosh_activity_get_instance_private (self);
++
++  phosh_swipe_away_bin_set_downwards (PHOSH_SWIPE_AWAY_BIN (priv->swipe_bin), downwards);
++}
+diff --git a/src/activity.h b/src/activity.h
+index bfc6921d..167e8631 100644
+--- a/src/activity.h
++++ b/src/activity.h
+@@ -23,3 +23,4 @@ void        phosh_activity_get_thumbnail_allocation (PhoshActivity *self,
+                                                      GtkAllocation *allocation);
+ gboolean    phosh_activity_get_has_thumbnail (PhoshActivity *self);
+ GAppInfo *  phosh_activity_get_app_info (PhoshActivity *self);
++void        phosh_activity_set_swipe_downwards (PhoshActivity *self, gboolean downwards);
+diff --git a/src/overview.c b/src/overview.c
+index 084053a7..7424b470 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -67,6 +67,8 @@ typedef struct {
+ 
+   /* Plinius: org.plinius.display, for the edge of the running apps (NULL without the schema) */
+   GSettings          *plinius_settings;
++  /* Plinius: the running apps below the app grid */
++  gboolean            plinius_bottom;
+ } PhoshOverviewPrivate;
+ 
+ 
+@@ -157,6 +159,9 @@ create_new_activity (PhoshOverview *self,
+   if (parent_app_id)
+     pos = get_last_app_id_pos (self, parent_app_id);
+ 
++  /* Plinius: below the app grid a swipe down closes the app */
++  phosh_activity_set_swipe_downwards (activity, priv->plinius_bottom);
++
+   if (pos)
+     hdy_carousel_insert (priv->carousel_running_activities, GTK_WIDGET (activity), pos);
+   else
+@@ -646,6 +651,51 @@ on_n_pages_changed (PhoshOverview *self)
+ }
+ 
+ 
++/* Plinius: the least room below the cards, clear of the bottom edge's swipe */
++#define PLINIUS_CARD_GAP_MIN 18
++/* The carousel's margin towards the app grid, as the shipped one above the grid */
++#define PLINIUS_CARD_GRID_MARGIN 6
++
++/*
++ * Plinius: below the app grid the cards sat at the bottom edge: the carousel filled its share of
++ * the height down to the edge. Instead the cards keep the size they have above the grid and are
++ * mirrored: above the grid both carousel and grid expand, so the carousel gets about half of the
++ * overview less its margin of 6 (the natural heights of cards and grid are small), and the top
++ * bar keeps the cards clear of the screen's top edge. Below the grid the carousel asks for the
++ * same height, has the margin of 6 towards the grid and the height of the top bar as room below
++ * the cards, so they stand as far from the bottom edge as they do from the top edge otherwise.
++ * The app grid takes what is left and scrolls. The box does the allocation: the carousel does
++ * not expand, its height being its minimum and its room its margins.
++ */
++static void
++plinius_lay_out_bottom (PhoshOverview *self, const GtkAllocation *alloc)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  GtkWidget *carousel = GTK_WIDGET (priv->carousel_running_activities);
++  int top_bar = 0, below, card_height, request;
++
++  if (!priv->plinius_bottom || !gtk_widget_get_visible (carousel))
++    return;
++
++  /* The usable area starts below the top bar */
++  phosh_shell_get_usable_area (phosh_shell_get_default (), NULL, &top_bar, NULL, NULL);
++  below = MAX (PLINIUS_CARD_GAP_MIN, top_bar);
++  /* What the carousel gets above the grid */
++  card_height = MAX (0, (alloc->height - PLINIUS_CARD_GRID_MARGIN) / 2);
++  /* A very low overview (landscape): less room below rather than smaller cards */
++  below = MIN (below, MAX (0, alloc->height - PLINIUS_CARD_GRID_MARGIN - card_height));
++
++  /* Only what changed: each change lays the overview out once more */
++  if (gtk_widget_get_margin_top (carousel) != PLINIUS_CARD_GRID_MARGIN)
++    gtk_widget_set_margin_top (carousel, PLINIUS_CARD_GRID_MARGIN);
++  if (gtk_widget_get_margin_bottom (carousel) != below)
++    gtk_widget_set_margin_bottom (carousel, below);
++  gtk_widget_get_size_request (carousel, NULL, &request);
++  if (request != card_height)
++    gtk_widget_set_size_request (carousel, -1, card_height);
++}
++
++
+ static void
+ phosh_overview_size_allocate (GtkWidget     *widget,
+                               GtkAllocation *alloc)
+@@ -665,6 +715,8 @@ phosh_overview_size_allocate (GtkWidget     *widget,
+                   NULL);
+   }
+ 
++  plinius_lay_out_bottom (self, alloc);
++
+   GTK_WIDGET_CLASS (phosh_overview_parent_class)->size_allocate (widget, alloc);
+ }
+ 
+@@ -731,11 +783,25 @@ on_running_apps_position_changed (PhoshOverview *self)
+   gboolean bottom = g_strcmp0 (position, "bottom") == 0;
+   GtkWidget *carousel = GTK_WIDGET (priv->carousel_running_activities);
+ 
++  g_autoptr (GList) children = NULL;
++
++  priv->plinius_bottom = bottom;
++
+   /* The box keeps its children in order: the carousel first or last */
+   gtk_box_reorder_child (GTK_BOX (self), carousel, bottom ? -1 : 0);
+-  /* The gap the template puts below the cards goes between them and the app grid */
+-  gtk_widget_set_margin_bottom (carousel, bottom ? 0 : 6);
+-  gtk_widget_set_margin_top (carousel, bottom ? 6 : 0);
++  /* Above the grid as shipped; below it plinius_lay_out_bottom() sets size and margins */
++  gtk_widget_set_margin_bottom (carousel, bottom ? 0 : PLINIUS_CARD_GRID_MARGIN);
++  gtk_widget_set_margin_top (carousel, 0);
++  gtk_widget_set_size_request (carousel, -1, -1);
++  /* Below the grid the carousel keeps the height it has above it, the grid takes the rest */
++  gtk_widget_set_vexpand (carousel, !bottom);
++
++  /* Cards at the bottom go down when swiped away, at the top up */
++  children = gtk_container_get_children (GTK_CONTAINER (carousel));
++  for (GList *l = children; l; l = l->next)
++    phosh_activity_set_swipe_downwards (PHOSH_ACTIVITY (l->data), bottom);
++
++  gtk_widget_queue_resize (GTK_WIDGET (self));
+ }
+ 
+ 
+diff --git a/src/swipe-away-bin.c b/src/swipe-away-bin.c
+index d587b0c6..2ccf0927 100644
+--- a/src/swipe-away-bin.c
++++ b/src/swipe-away-bin.c
+@@ -44,6 +44,8 @@ struct _PhoshSwipeAwayBin {
+   PhoshAnimation  *animation;
+ 
+   gboolean         enabled;
++  /* Plinius: a vertical swipe takes the child downwards instead of upwards */
++  gboolean         downwards;
+ };
+ 
+ static void phosh_swipe_away_bin_swipeable_init (HdySwipeableInterface *iface);
+@@ -157,6 +159,10 @@ update_orientation (PhoshSwipeAwayBin *self)
+     self->orientation == GTK_ORIENTATION_HORIZONTAL &&
+     gtk_widget_get_direction (GTK_WIDGET (self)) == GTK_TEXT_DIR_RTL;
+ 
++  /* Plinius: downwards, a swipe down is the positive direction */
++  if (self->orientation == GTK_ORIENTATION_VERTICAL && self->downwards)
++    reversed = TRUE;
++
+   hdy_swipe_tracker_set_reversed (self->tracker, reversed);
+ 
+   gtk_widget_queue_allocate (GTK_WIDGET (self));
+@@ -287,7 +293,10 @@ phosh_swipe_away_bin_size_allocate (GtkWidget     *widget,
+       self->distance = alloc->height;
+     }
+ 
+-    child_alloc.y -= (int) (self->progress * self->distance);
++    if (self->downwards)
++      child_alloc.y += (int) (self->progress * self->distance);
++    else
++      child_alloc.y -= (int) (self->progress * self->distance);
+   }
+ 
+ 
+@@ -630,3 +639,26 @@ phosh_swipe_away_bin_undo (PhoshSwipeAwayBin *self)
+ 
+   animate (self, 600, 0, PHOSH_ANIMATION_TYPE_EASE_OUT_BOUNCE);
+ }
++
++
++/**
++ * phosh_swipe_away_bin_set_downwards:
++ * @self: The swipe away bin
++ * @downwards: Whether a vertical swipe away goes down
++ *
++ * Plinius: a vertical bin normally takes its child away upwards. Downwards
++ * suits a child at the bottom of the screen, where the thumb pulls it down.
++ */
++void
++phosh_swipe_away_bin_set_downwards (PhoshSwipeAwayBin *self,
++                                    gboolean           downwards)
++{
++  g_return_if_fail (PHOSH_IS_SWIPE_AWAY_BIN (self));
++
++  downwards = !!downwards;
++  if (downwards == self->downwards)
++    return;
++
++  self->downwards = downwards;
++  update_orientation (self);
++}
+diff --git a/src/swipe-away-bin.h b/src/swipe-away-bin.h
+index 39217d8a..581b4927 100644
+--- a/src/swipe-away-bin.h
++++ b/src/swipe-away-bin.h
+@@ -28,3 +28,4 @@ void phosh_swipe_away_bin_hide   (PhoshSwipeAwayBin *self);
+ void phosh_swipe_away_bin_reveal (PhoshSwipeAwayBin *self);
+ void phosh_swipe_away_bin_remove (PhoshSwipeAwayBin *self);
+ void phosh_swipe_away_bin_undo   (PhoshSwipeAwayBin *self);
++void phosh_swipe_away_bin_set_downwards (PhoshSwipeAwayBin *self, gboolean downwards);

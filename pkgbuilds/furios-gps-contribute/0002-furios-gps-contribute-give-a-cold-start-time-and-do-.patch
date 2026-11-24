@@ -1,0 +1,188 @@
+From 6b555461c37c24484ad4afb11d79d9d2a6f5a000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 15:07:39 +0100
+Subject: [PATCH] furios-gps-contribute: give a cold start time, and do not
+ sleep through a walk
+
+A day with the switch on sent nothing. Every attempt switched the receiver
+on for 45 s, but between attempts it is off for minutes, so each one is a
+cold start - about 67 s under open sky on a Volla Phone Quintus. Ten
+attempts in a row came to nothing, and the pause after them had grown to an
+hour, kept across reboots: a whole walk could pass without one attempt.
+
+- FIX_WAIT_S (CONTRIB_FIX_WAIT, default 120 s) for the fix.
+- A fresh fix that would be refused on accuracy or altitude no longer ends
+  the wait; the first ones of a cold start are often tens of metres off.
+- The pause after failed fixes stops at MISS_PAUSE_MAX_S (20 min), and it is
+  cut short when the networks in range have changed since the last failed
+  attempt (overlap under 0.5) - the phone has gone somewhere else.
+- Location switched off system-wide does not count as a failed fix.
+---
+ tools/furios-gps-contribute | 74 +++++++++++++++++++++++++++++--------
+ 1 file changed, 59 insertions(+), 15 deletions(-)
+
+diff --git a/tools/furios-gps-contribute b/tools/furios-gps-contribute
+index 6908263..72c29c0 100755
+--- a/tools/furios-gps-contribute
++++ b/tools/furios-gps-contribute
+@@ -102,6 +102,22 @@ SCAN_AFTER_FIX_S = float(os.environ.get("CONTRIB_SCAN_AFTER_FIX", "20"))
+ # Backoff after a refused or failed submission, in seconds. It gives up for
+ # this run rather than walking the list again - the queue keeps.
+ BACKOFF_S = [60, 300, 1800]
++# How long the receiver may look for a fix. Between attempts it is off for
++# minutes, so nearly every attempt is a cold start, and a cold start takes
++# about a minute under open sky (67 s measured on a Volla Phone Quintus).
++FIX_WAIT_S = int(os.environ.get("CONTRIB_FIX_WAIT", "120"))
++# Failed attempts stretch the pause before the next one (see measure()), but
++# not beyond this: an hour lets a whole walk pass without a single attempt.
++MISS_PAUSE_MAX_S = int(os.environ.get("CONTRIB_MISS_PAUSE_MAX", "1200"))
++# Below this overlap with the networks of the last failed attempt the phone
++# has gone somewhere else, and the pause is cut short. Looser than
++# same_surroundings(): a flickering network at home must not read as a move,
++# or the receiver would run every few minutes indoors.
++MOVED_OVERLAP = 0.5
++
++
++class GeolocationOff(Exception):
++    """geoclue refused us: location is switched off system-wide."""
+ 
+ NOMAP = re.compile(r"(_nomap|_optout)$", re.IGNORECASE)
+ 
+@@ -195,7 +211,7 @@ def scan_wifi():
+ 
+ # ---------------------------------------------------------------- position
+ 
+-def gnss_fix(not_before, wait_s=45):
++def gnss_fix(not_before, wait_s=FIX_WAIT_S):
+     """One position from geoclue, but only if it is a fresh GNSS one.
+ 
+     Returns (position, fix time) or None rather than a doubtful fix. Sending a
+@@ -241,7 +257,10 @@ def gnss_fix(not_before, wait_s=45):
+         # follows a second later. Stopping at the first answer would end
+         # every attempt on that cached one, which judge_fix() refuses - so
+         # wait on for a fix taken after the request, up to wait_s.
+-        if not fix_is_older(values, not_before):
++        # A fresh fix that judge_fix() would still refuse (the first ones of
++        # a cold start are often tens of metres off) is kept, and the wait
++        # goes on for a better one.
++        if not fix_is_older(values, not_before) and fix_is_good(values):
+             loop.quit()
+ 
+     client.connect("g-signal", on_signal)
+@@ -249,6 +268,9 @@ def gnss_fix(not_before, wait_s=45):
+         client.call_sync("Start", None, Gio.DBusCallFlags.NONE, 15000, None)
+     except GLib.Error as e:
+         log("geoclue would not start:", e.message)
++        # Location switched off is not a failed fix: the receiver never ran.
++        if "AccessDenied" in (e.message or ""):
++            raise GeolocationOff() from e
+         return None
+     GLib.timeout_add_seconds(wait_s, lambda: (loop.quit(), False)[1])
+     loop.run()
+@@ -272,6 +294,13 @@ def fix_is_older(result, not_before):
+         return False
+ 
+ 
++def fix_is_good(result):
++    """True for a fix judge_fix() would accept on accuracy and altitude."""
++    altitude = result.get("Altitude")
++    return (altitude is not None and altitude > -1e300
++            and float(result.get("Accuracy", 1e9)) <= ACCURACY_MAX)
++
++
+ def judge_fix(result, not_before):
+     """(position, fix time in seconds) from geoclue's Location properties,
+     or None for a fix that must not be paired with a scan.
+@@ -454,12 +483,19 @@ def flush(everything=False):
+ 
+ # ---------------------------------------------------------------- measure
+ 
++def overlap(aps, before):
++    """Share of networks two scans have in common, 0 to 1."""
++    now = {a["macAddress"] for a in aps}
++    before = set(before or [])
++    return len(now & before) / max(1, len(now | before))
++
++
+ def same_surroundings(aps, s):
+     """Do these access points look like the ones from last time?
+ 
+     A cheap stand-in for "has this phone moved". It exists because the honest
+     test - compare the positions - needs a GNSS fix first, and a GNSS fix is
+-    the expensive thing here: the receiver is switched on for up to a minute
++    the expensive thing here: the receiver is switched on for up to two minutes
+     and draws tens of milliamps while it looks. Doing that on a phone lying on
+     a table, every few minutes, only to throw the result away because it is
+     two metres from the last one, is the kind of cost nobody notices until the
+@@ -468,18 +504,15 @@ def same_surroundings(aps, s):
+     The networks in range are already scanned by NetworkManager and cost
+     nothing extra. When they are the same set, the phone is in the same place.
+     """
+-    before = set(s.get("last_aps") or [])
+-    if not before:
++    if not s.get("last_aps"):
+         return False
+-    now = {a["macAddress"] for a in aps}
+     # Overlap rather than equality, so that a neighbour switching their router
+     # off does not read as a move. It stays deliberately strict: at 0.8 a set
+     # of six survives one network disappearing, but not one disappearing and
+     # another appearing, which is already as likely to be a few steps as a
+     # flickering signal. Measuring once too often costs a little power;
+     # missing a move costs an observation, which is the point of all this.
+-    overlap = len(now & before) / max(1, len(now | before))
+-    return overlap >= 0.8
++    return overlap(aps, s["last_aps"]) >= 0.8
+ 
+ 
+ def measure(dry=False):
+@@ -506,29 +539,40 @@ def measure(dry=False):
+ 
+     # Indoors there is never a fix, and looking for one every few minutes is
+     # the worst case for the battery: the receiver runs and finds nothing. So
+-    # a run of failures stretches the wait between attempts.
++    # a run of failures stretches the wait between attempts - unless the
++    # networks around have changed since the last failed one: then the phone
++    # has moved, perhaps out of the building, and the next try is worth it.
+     misses = s.get("gnss_misses", 0)
+     if misses and not dry:
+         next_try = s.get("gnss_next_try", 0)
+-        if time.time() < next_try:
++        moved = (s.get("miss_aps") is not None
++                 and overlap(aps, s["miss_aps"]) < MOVED_OVERLAP)
++        if moved:
++            log("other networks than at the last failed fix - trying now")
++        elif time.time() < next_try:
+             log(f"skipped: {misses} fixes in a row came to nothing, "
+                 f"waiting {int((next_try - time.time())/60)} min")
+             return None
+ 
+     # The scan above only decides whether the receiver is worth switching on.
+     # The networks sent are scanned again after the fix: the fix can take up
+-    # to 45 s, and pairing it with networks from before it would put them
+-    # wherever the phone had got to by then.
+-    fix = gnss_fix(not_before=time.time())
++    # to FIX_WAIT_S, and pairing it with networks from before it would put
++    # them wherever the phone had got to by then.
++    try:
++        fix = gnss_fix(not_before=time.time())
++    except GeolocationOff:
++        return None
+     if fix is None:
+         s["gnss_misses"] = misses + 1
+-        # 3, 6, 12 ... up to an hour between attempts.
+-        delay = min(3600, INTERVAL_S * (2 ** min(misses, 5)))
++        # 3, 6, 12 ... minutes between attempts, up to MISS_PAUSE_MAX_S.
++        delay = min(MISS_PAUSE_MAX_S, INTERVAL_S * (2 ** min(misses, 5)))
+         s["gnss_next_try"] = time.time() + delay
++        s["miss_aps"] = [a["macAddress"] for a in aps]
+         save_stats(s)
+         return None
+     s["gnss_misses"] = 0
+     s.pop("gnss_next_try", None)
++    s.pop("miss_aps", None)
+     pos, taken = fix
+ 
+     aps = scan_wifi()
+-- 
+2.56.0
+

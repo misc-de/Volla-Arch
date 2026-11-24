@@ -1,0 +1,38 @@
+From 7a9a3411cdfb9820454bcf21853717e326e8d688 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 08:17:06 +0100
+Subject: [PATCH 3/3] Forget a deleted program as the current one
+
+glDeleteProgram freed the program while the bound-program caches
+(gleshard and glsl) still pointed at it. When the driver handed the same
+name to the next program, glUseProgram saw it as already bound and the
+next draw used the freed program (NULL uniform list, segfault). Seen with
+glmark2 when it switches scenes.
+---
+ src/gl/program.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/gl/program.c b/src/gl/program.c
+index 2eaeb02b..833cccdd 100644
+--- a/src/gl/program.c
++++ b/src/gl/program.c
+@@ -163,6 +163,16 @@ void deleteProgram(program_t *glprogram, khint_t k_program) {
+     // clean fpe cache if it exist
+     if(glprogram->fpe_cache)
+         fpe_disposeCache((fpe_cache_t*)glprogram->fpe_cache, 1);
++    // forget it as the current program: the driver may hand its name to the next program, and
++    // the bound-program cache would then keep pointing at freed memory
++    if(glstate->gleshard->glprogram == glprogram) {
++        glstate->gleshard->program = 0;
++        glstate->gleshard->glprogram = NULL;
++    }
++    if(glstate->glsl->glprogram == glprogram) {
++        glstate->glsl->program = 0;
++        glstate->glsl->glprogram = NULL;
++    }
+     // delete program
+     kh_del(programlist, glstate->glsl->programs, k_program);
+     free(glprogram);
+-- 
+2.56.0
+

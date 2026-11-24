@@ -1,0 +1,69 @@
+From af331203269af7124bad95fc6bfe36ab0947014e Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 15:50:00 +0100
+Subject: [PATCH] session: no fingerprint before the first PIN unlock
+
+After a reboot the fingerprint was on and could unlock before the PIN
+had been entered once. The keyring check meant for that does not help
+when the keyring opens at login (autologin): it is never locked.
+
+Keep the biometrics off until the session has been unlocked once
+without them (PIN or pattern) since biomd-session started with it, as
+Android and the face unlock (plinius-faced) do. A restarted listener
+asks for the PIN again too.
+---
+ src/session/biomd_session.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/session/biomd_session.c b/src/session/biomd_session.c
+index 018c761..a46e9ed 100644
+--- a/src/session/biomd_session.c
++++ b/src/session/biomd_session.c
+@@ -28,6 +28,14 @@ typedef struct {
+     gboolean unlock_in_progress;
+     gboolean unlocked_this_attempt;
+ 
++    /*
++     * Unlocked without biometrics since this listener started with the
++     * session: until then a reboot or a new login needs the PIN (or pattern)
++     * first, as the keyring check alone does not when the keyring opens at
++     * login (autologin).
++     */
++    gboolean pin_seen;
++
+     SessionFingerprint *fingerprint;
+     SessionFace *face;
+ 
+@@ -618,6 +626,12 @@ start_unlock_attempt(BiometricSession *session)
+         return;
+     }
+ 
++    if (!session->pin_seen) {
++        g_debug("Not unlocked with the PIN since the session started, no biometric unlock attempt");
++        stop_all_biometrics(session);
++        return;
++    }
++
+     if (session->unlock_in_progress) {
+         g_debug("Unlock attempt already in progress");
+         return;
+@@ -852,6 +866,8 @@ on_properties_changed(GDBusConnection *connection,
+                 } else {
+                     g_debug("Session unlocked, stopping biometrics");
+                     stop_all_biometrics(session);
++                    /* Biometrics never run before this, so the first unlock was the PIN or pattern */
++                    session->pin_seen = TRUE;
+                     session->unlocked_this_attempt = FALSE;
+                     update_face_agent_policy(session);
+                 }
+@@ -979,6 +995,7 @@ main(void)
+ 
+     session->unlock_in_progress = FALSE;
+     session->unlocked_this_attempt = FALSE;
++    session->pin_seen = FALSE;
+ 
+     session->properties_changed_id = 0;
+     session->phosh_changed_id = 0;
+-- 
+2.56.0
+

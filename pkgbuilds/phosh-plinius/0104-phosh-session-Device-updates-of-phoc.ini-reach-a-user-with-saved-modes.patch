@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 10:19:47 +0100
+Subject: [PATCH] phosh-session: Device updates of phoc.ini reach a user with
+ saved modes
+
+Plinius: once mode or scale were applied in Settings, phosh-session
+started phoc with the user's copy of the system phoc.ini (0009), and
+whatever a device update changed in the system file later never reached
+phoc: here the light sensor's box (phoc-plinius 0034).
+
+phoc now starts with $XDG_RUNTIME_DIR/phoc.ini: the system file as it is
+now, with only mode and scale of each output from the user's copy
+(phoc-ini-merge, packaged with phosh-plinius). If that fails the copy is
+used as before.
+---
+ data/phosh-session.in | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/data/phosh-session.in b/data/phosh-session.in
+index abf35912..3bbf55d2 100755
+--- a/data/phosh-session.in
++++ b/data/phosh-session.in
+@@ -40,9 +40,20 @@ if [ -f /etc/phosh/phoc.ini ]; then
+   PHOC_INI=/etc/phosh/phoc.ini
+ fi
+ 
+-# Mode and scale picked in Settings, saved by phosh on top of the system phoc.ini
+-if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phosh/phoc.ini" ]; then
+-  PHOC_INI="${XDG_CONFIG_HOME:-$HOME/.config}/phosh/phoc.ini"
++# Mode and scale picked in Settings, saved by phosh with a copy of the system phoc.ini. phoc
++# starts with the system file as it is now plus mode and scale from that copy: a device update
++# of the system file reaches it too. The copy as it is only if that fails.
++USER_PHOC_INI="${XDG_CONFIG_HOME:-$HOME/.config}/phosh/phoc.ini"
++MERGED_PHOC_INI="$XDG_RUNTIME_DIR/phoc.ini"
++if [ -f "$USER_PHOC_INI" ]; then
++  if [ -d "$XDG_RUNTIME_DIR" ] &&
++     @libexecdir@/plinius/phoc-ini-merge "$PHOC_INI" "$USER_PHOC_INI" > "$MERGED_PHOC_INI.new" &&
++     mv -f "$MERGED_PHOC_INI.new" "$MERGED_PHOC_INI"; then
++    PHOC_INI="$MERGED_PHOC_INI"
++  else
++    [ -d "$XDG_RUNTIME_DIR" ] && rm -f "$MERGED_PHOC_INI.new"
++    PHOC_INI="$USER_PHOC_INI"
++  fi
+ fi
+ 
+ if [ -f "$HOME/.phoshdebug" ]; then

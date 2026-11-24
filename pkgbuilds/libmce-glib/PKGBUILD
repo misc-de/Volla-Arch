@@ -1,0 +1,24 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=libmce-glib
+pkgver=1.1.0
+pkgrel=1
+pkgdesc="GLib wrapper for the Sailfish OS MCE D-Bus API (used by ofono-binder-plugin)"
+arch=(aarch64 x86_64)
+url="https://github.com/sailfishos/libmce-glib"
+license=(BSD-3-Clause)
+depends=(glib2 libglibutil)
+makedepends=(mce-dev glib2-devel)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('c33111cc1a3d7b31f86e059d1f8240ed34e951eb4e19225a2996fc6c9f386749')
+
+build() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib KEEP_SYMBOLS=1 release pkgconfig
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib DESTDIR="$pkgdir" install-dev
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

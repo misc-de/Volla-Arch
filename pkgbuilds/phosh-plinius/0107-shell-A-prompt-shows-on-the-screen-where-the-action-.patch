@@ -1,0 +1,417 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 18:43:10 +0100
+Subject: [PATCH] shell: A prompt shows on the screen where the action was
+ taken
+
+With the desktop on a second screen (VNC) a PIN asked for by an app on
+the desktop came up on the phone: a system modal without a monitor goes
+to the primary one.
+
+polkit names the process that asks. Its unit (dbus-:1.2-<app id>@.service
+for an app activated through D-Bus, app-<launcher>-<app id>-<pid>.scope
+for one started by GLib, Phosh or the desktop) gives the app, the app's
+window gives the monitor: its active window, else its first window that
+shows somewhere. Phosh's own requests (a quick setting on the phone)
+stay on the primary monitor. Without such a window the monitor of the
+active window is taken; while a layer surface of Phosh (the open top
+panel, the lock screen) has the keyboard there is none, and the prompt
+stays on the primary monitor.
+
+The other prompts apps ask for, the keyring (gcr system prompt), network
+secrets, app permissions (location, portals) and mount passwords, go to
+the monitor of the active window. A window on two monitors counts for
+the primary one. The end-session dialog and cell broadcasts stay on the
+primary monitor.
+---
+ src/app-auth-prompt.c     |   2 +
+ src/gtk-mount-prompt.c    |   2 +
+ src/network-auth-prompt.c |   5 +-
+ src/polkit-auth-agent.c   | 116 +++++++++++++++++++++++++++++++++++++-
+ src/polkit-auth-prompt.c  |   4 +-
+ src/polkit-auth-prompt.h  |   3 +-
+ src/shell-priv.h          |   2 +
+ src/shell.c               |  98 ++++++++++++++++++++++++++++++++
+ src/system-prompt.c       |   5 +-
+ 9 files changed, 232 insertions(+), 5 deletions(-)
+
+diff --git a/src/app-auth-prompt.c b/src/app-auth-prompt.c
+index 19dadd32..07bfc7ad 100644
+--- a/src/app-auth-prompt.c
++++ b/src/app-auth-prompt.c
+@@ -12,6 +12,7 @@
+ 
+ #include "app-auth-prompt.h"
+ #include "auth-prompt-option.h"
++#include "shell-priv.h"
+ 
+ #include <handy.h>
+ #include <glib/gi18n.h>
+@@ -443,6 +444,7 @@ phosh_app_auth_prompt_new (GIcon      *icon,
+                            GVariant   *choices)
+ {
+   return g_object_new (PHOSH_TYPE_APP_AUTH_PROMPT,
++                       "monitor", phosh_shell_get_active_window_monitor (phosh_shell_get_default ()),
+                        "icon", icon,
+                        "title", title,
+                        "subtitle", subtitle,
+diff --git a/src/gtk-mount-prompt.c b/src/gtk-mount-prompt.c
+index 34bb58e4..83e47745 100644
+--- a/src/gtk-mount-prompt.c
++++ b/src/gtk-mount-prompt.c
+@@ -11,6 +11,7 @@
+ #include "phosh-config.h"
+ 
+ #include "gtk-mount-prompt.h"
++#include "shell-priv.h"
+ 
+ #include <glib/gi18n.h>
+ 
+@@ -465,6 +466,7 @@ phosh_gtk_mount_prompt_new (const char        *message,
+                             GAskPasswordFlags  ask_flags)
+ {
+   return g_object_new (PHOSH_TYPE_GTK_MOUNT_PROMPT,
++                       "monitor", phosh_shell_get_active_window_monitor (phosh_shell_get_default ()),
+                        "message", message,
+                        "icon-name", icon_name,
+                        "ask-flags", ask_flags,
+diff --git a/src/network-auth-prompt.c b/src/network-auth-prompt.c
+index de5b4a8c..f75316bd 100644
+--- a/src/network-auth-prompt.c
++++ b/src/network-auth-prompt.c
+@@ -12,6 +12,7 @@
+ 
+ #include "contrib/shell-network-agent.h"
+ #include "network-auth-prompt.h"
++#include "shell-priv.h"
+ #include "password-entry.h"
+ 
+ #define GCR_API_SUBJECT_TO_CHANGE
+@@ -473,7 +474,9 @@ phosh_network_auth_prompt_new (ShellNetworkAgent *agent)
+ 
+   g_return_val_if_fail (SHELL_IS_NETWORK_AGENT (agent), NULL);
+ 
+-  self = g_object_new (PHOSH_TYPE_NETWORK_AUTH_PROMPT, NULL);
++  self = g_object_new (PHOSH_TYPE_NETWORK_AUTH_PROMPT,
++                       "monitor", phosh_shell_get_active_window_monitor (phosh_shell_get_default ()),
++                       NULL);
+   self->agent = g_object_ref (agent);
+ 
+   return GTK_WIDGET (self);
+diff --git a/src/polkit-auth-agent.c b/src/polkit-auth-agent.c
+index de230296..b8ea178a 100644
+--- a/src/polkit-auth-agent.c
++++ b/src/polkit-auth-agent.c
+@@ -16,6 +16,7 @@
+ 
+ #include <sys/types.h>
+ #include <pwd.h>
++#include <string.h>
+ 
+ #ifdef PHOSH_POLKIT_AUTH_DEBUG
+ #define auth_debug(...) g_debug (__VA_ARGS__)
+@@ -167,6 +168,118 @@ close_prompt (PhoshPolkitAuthAgent *self)
+ }
+ 
+ 
++/* systemd's escaping in unit names: \x2d for "-" and so on */
++static char *
++unescape_unit_name (const char *escaped, gsize len)
++{
++  GString *out = g_string_sized_new (len);
++
++  for (gsize i = 0; i < len; i++) {
++    if (escaped[i] == '\\' && i + 3 < len && escaped[i + 1] == 'x' &&
++        g_ascii_isxdigit (escaped[i + 2]) && g_ascii_isxdigit (escaped[i + 3])) {
++      g_string_append_c (out, (char) (g_ascii_xdigit_value (escaped[i + 2]) * 16 +
++                                      g_ascii_xdigit_value (escaped[i + 3])));
++      i += 3;
++    } else {
++      g_string_append_c (out, escaped[i]);
++    }
++  }
++  return g_string_free (out, FALSE);
++}
++
++
++/**
++ * app_id_of_pid:
++ * @pid: A process
++ *
++ * The app a process belongs to, from the unit it runs in: an app activated through D-Bus runs
++ * in dbus-:1.2-org.gnome.Settings@1.service, an app started by GLib, Phosh or the desktop in
++ * app-gnome-org.gnome.Console-1234.scope (app-desktop-..., app-flatpak-...). A helper the app
++ * started (pkexec) runs in the same unit.
++ *
++ * Returns:(nullable): The app id
++ */
++static char *
++app_id_of_pid (pid_t pid)
++{
++  g_autofree char *path = g_strdup_printf ("/proc/%d/cgroup", (int) pid);
++  g_autofree char *contents = NULL;
++  const char *unit, *start, *end;
++  char *newline;
++
++  if (!g_file_get_contents (path, &contents, NULL, NULL))
++    return NULL;
++
++  /* cgroup v2: "0::/user.slice/.../<unit>" */
++  newline = strchr (contents, '\n');
++  if (newline)
++    *newline = '\0';
++  unit = strrchr (contents, '/');
++  if (unit == NULL)
++    return NULL;
++  unit++;
++
++  if (g_str_has_prefix (unit, "dbus-")) {
++    /* Past the bus name, which has no "-" */
++    start = strchr (unit + strlen ("dbus-"), '-');
++    if (start == NULL)
++      return NULL;
++    start++;
++    end = strchr (start, '@');
++    if (end == NULL)
++      end = g_strrstr (start, ".service");
++  } else if (g_str_has_prefix (unit, "app-")) {
++    /* Past the launcher (gnome, desktop, flatpak, ...) */
++    start = strchr (unit + strlen ("app-"), '-');
++    if (start == NULL)
++      return NULL;
++    start++;
++    end = strchr (start, '@');
++    if (end == NULL && g_str_has_suffix (start, ".scope")) {
++      /* The pid at the end: app-gnome-<app id>-<pid>.scope */
++      end = strrchr (start, '-');
++    }
++  } else {
++    return NULL;
++  }
++
++  if (end == NULL || end <= start)
++    return NULL;
++
++  return unescape_unit_name (start, end - start);
++}
++
++
++/*
++ * Where the action was taken: Phosh's own (a quick setting on the phone) asks on the primary
++ * monitor, an app asks on the monitor of its window, e.g. the desktop on a second screen. The
++ * window that has the focus is the fallback: while a layer surface of Phosh (the open top
++ * panel, the lock screen) has the keyboard no window is active.
++ */
++static PhoshMonitor *
++prompt_monitor (PolkitDetails *details)
++{
++  PhoshShell *shell = phosh_shell_get_default ();
++  const char *subject_pid = details ? polkit_details_lookup (details, "polkit.subject-pid") : NULL;
++  PhoshMonitor *monitor = NULL;
++
++  if (subject_pid) {
++    pid_t pid = (pid_t) g_ascii_strtoll (subject_pid, NULL, 10);
++    g_autofree char *app_id = NULL;
++
++    if (pid == getpid ())
++      return NULL;
++
++    app_id = app_id_of_pid (pid);
++    g_debug ("Prompt for pid %d, app %s", (int) pid, app_id);
++    if (app_id)
++      monitor = phosh_shell_get_app_monitor (shell, app_id);
++  }
++
++  return monitor ?: phosh_shell_get_active_window_monitor (shell);
++}
++
++
+ static void
+ on_prompt_done (PhoshPolkitAuthPrompt *prompt, gboolean cancelled, AuthRequest *request)
+ {
+@@ -221,7 +334,8 @@ auth_request_initiate (AuthRequest *request)
+       request->message,
+       request->icon_name,
+       request->cookie,
+-      user_names));
++      user_names,
++      prompt_monitor (request->details)));
+ 
+   g_signal_connect (request->agent->current_prompt,
+                     "done",
+diff --git a/src/polkit-auth-prompt.c b/src/polkit-auth-prompt.c
+index 45a497c5..a8367a90 100644
+--- a/src/polkit-auth-prompt.c
++++ b/src/polkit-auth-prompt.c
+@@ -645,9 +645,11 @@ phosh_polkit_auth_prompt_new (const char *action_id,
+                               const char *message,
+                               const char *icon_name,
+                               const char *cookie,
+-                              GStrv       user_names)
++                              GStrv       user_names,
++                              PhoshMonitor *monitor)
+ {
+   return g_object_new (PHOSH_TYPE_POLKIT_AUTH_PROMPT,
++                       "monitor", monitor,
+                        "action-id", action_id,
+                        "cookie", cookie,
+                        "message", message,
+diff --git a/src/polkit-auth-prompt.h b/src/polkit-auth-prompt.h
+index ab0d6d6e..6baa9af3 100644
+--- a/src/polkit-auth-prompt.h
++++ b/src/polkit-auth-prompt.h
+@@ -19,6 +19,7 @@ GtkWidget *phosh_polkit_auth_prompt_new (const char *action_id,
+                                          const char *message,
+                                          const char *icon_name,
+                                          const char *cookie,
+-                                         GStrv user_names);
++                                         GStrv user_names,
++                                         PhoshMonitor *monitor);
+ 
+ G_END_DECLS
+diff --git a/src/shell-priv.h b/src/shell-priv.h
+index efbd6490..4b9b610d 100644
+--- a/src/shell-priv.h
++++ b/src/shell-priv.h
+@@ -80,6 +80,8 @@ PhoshModeManager       *phosh_shell_get_mode_manager       (PhoshShell *self);
+ PhoshSplashManager *    phosh_shell_get_splash_manager     (PhoshShell *self);
+ PhoshStyleManager      *phosh_shell_get_style_manager      (PhoshShell *self);
+ PhoshToplevelManager   *phosh_shell_get_toplevel_manager   (PhoshShell *self);
++PhoshMonitor           *phosh_shell_get_active_window_monitor (PhoshShell *self);
++PhoshMonitor           *phosh_shell_get_app_monitor (PhoshShell *self, const char *app_id);
+ PhoshScreenSaverManager *phosh_shell_get_screen_saver_manager (PhoshShell *self);
+ /* Created on the fly */
+ PhoshBtManager         *phosh_shell_get_bt_manager         (PhoshShell *self);
+diff --git a/src/shell.c b/src/shell.c
+index 949daecd..8ff1d348 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -33,6 +33,8 @@
+ #include "debug-control.h"
+ #include "dh-dconf-migration.h"
+ #include "shell-priv.h"
++#include "toplevel.h"
++#include "toplevel-manager.h"
+ #include "app-tracker.h"
+ #include "battery-info.h"
+ #include "background-manager.h"
+@@ -1916,6 +1918,102 @@ phosh_shell_get_primary_monitor (PhoshShell *self)
+   return priv->primary_monitor;
+ }
+ 
++/**
++ * phosh_shell_get_active_window_monitor:
++ * @self: The shell singleton
++ *
++ * The monitor of the window that has the focus. A prompt an app asks for (a PIN, a password)
++ * goes there, so with the desktop on a second screen it shows where the action was taken.
++ * A window on two monitors counts for the primary one.
++ *
++ * Returns:(transfer none)(nullable): The monitor, %NULL without an active window
++ */
++PhoshMonitor *
++phosh_shell_get_active_window_monitor (PhoshShell *self)
++{
++  return phosh_shell_get_app_monitor (self, NULL);
++}
++
++
++/* The monitor a toplevel shows on; one on two monitors counts for the primary one */
++static PhoshMonitor *
++toplevel_monitor (PhoshShell *self, PhoshToplevel *toplevel)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++  PhoshMonitor *found = NULL;
++
++  for (guint j = 0; j < phosh_monitor_manager_get_num_monitors (priv->monitor_manager); j++) {
++    PhoshMonitor *monitor = phosh_monitor_manager_get_monitor (priv->monitor_manager, j);
++    struct wl_output *output = phosh_monitor_get_wl_output (monitor);
++
++    if (output == NULL || !phosh_toplevel_is_on_output (toplevel, output))
++      continue;
++
++    if (monitor == priv->primary_monitor)
++      return monitor;
++    if (found == NULL)
++      found = monitor;
++  }
++  return found;
++}
++
++
++static gboolean
++same_app_id (const char *a, const char *b)
++{
++  g_autofree char *a_id = NULL, *b_id = NULL;
++
++  if (a == NULL || b == NULL)
++    return FALSE;
++
++  a_id = g_str_has_suffix (a, ".desktop") ? g_strndup (a, strlen (a) - strlen (".desktop")) : g_strdup (a);
++  b_id = g_str_has_suffix (b, ".desktop") ? g_strndup (b, strlen (b) - strlen (".desktop")) : g_strdup (b);
++  return g_strcmp0 (a_id, b_id) == 0;
++}
++
++
++/**
++ * phosh_shell_get_app_monitor:
++ * @self: The shell singleton
++ * @app_id:(nullable): The app's id, %NULL for the window that has the focus
++ *
++ * The monitor of an app's window: the active one of its windows, else the first one that
++ * shows somewhere. A prompt an app asks for (a PIN, a password) goes there, so with the
++ * desktop on a second screen it shows where the action was taken.
++ *
++ * Returns:(transfer none)(nullable): The monitor, %NULL without such a window
++ */
++PhoshMonitor *
++phosh_shell_get_app_monitor (PhoshShell *self, const char *app_id)
++{
++  PhoshShellPrivate *priv;
++  PhoshToplevelManager *toplevel_manager;
++  PhoshMonitor *fallback = NULL;
++
++  g_return_val_if_fail (PHOSH_IS_SHELL (self), NULL);
++  priv = phosh_shell_get_instance_private (self);
++
++  toplevel_manager = phosh_shell_get_toplevel_manager (self);
++  if (toplevel_manager == NULL || priv->monitor_manager == NULL)
++    return NULL;
++
++  for (guint i = 0; i < phosh_toplevel_manager_get_num_toplevels (toplevel_manager); i++) {
++    PhoshToplevel *toplevel = phosh_toplevel_manager_get_toplevel (toplevel_manager, i);
++    PhoshMonitor *monitor;
++
++    if (app_id && !same_app_id (app_id, phosh_toplevel_get_app_id (toplevel)))
++      continue;
++
++    if (phosh_toplevel_is_activated (toplevel))
++      return toplevel_monitor (self, toplevel);
++
++    if (app_id && fallback == NULL && (monitor = toplevel_monitor (self, toplevel)))
++      fallback = monitor;
++  }
++
++  return fallback;
++}
++
+ /* Manager getters */
+ 
+ /**
+diff --git a/src/system-prompt.c b/src/system-prompt.c
+index 6659a000..24292838 100644
+--- a/src/system-prompt.c
++++ b/src/system-prompt.c
+@@ -714,5 +714,8 @@ phosh_system_prompt_init (PhoshSystemPrompt *self)
+ GtkWidget *
+ phosh_system_prompt_new (void)
+ {
+-  return g_object_new (PHOSH_TYPE_SYSTEM_PROMPT, NULL);
++  /* On the screen of the window that asked (the keyring for an app on the desktop) */
++  return g_object_new (PHOSH_TYPE_SYSTEM_PROMPT,
++                       "monitor", phosh_shell_get_active_window_monitor (phosh_shell_get_default ()),
++                       NULL);
+ }
+-- 
+2.56.0
+

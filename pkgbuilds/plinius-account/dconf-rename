@@ -1,0 +1,18 @@
+#!/bin/sh
+# After a rename, replaces the old home path in the dconf settings
+# (plinius-account-dconf.service, first login of the renamed user).
+# Only the keys containing the old path are written back: a full dump would also contain
+# locked keys, on which dconf load fails.
+set -eu
+marker=$HOME/.config/plinius-account/dconf-rename
+old=$(cat "$marker")
+changes=$(dconf dump / | awk -v old="$old" '
+	/^\[/ { section = $0; next }
+	index($0, old) { if (section != shown) { print section; shown = section }; print }')
+if [ -n "$changes" ]; then
+	# Literal paths: escape regex characters in the pattern and & | \ in the replacement
+	pat=$(printf '%s' "$old" | sed 's/[][\.*^$|]/\\&/g')
+	rep=$(printf '%s' "$HOME" | sed 's/[&|\]/\\&/g')
+	printf "%s\n" "$changes" | sed "s|$pat/|$rep/|g; s|'$pat'|'$rep'|g" | dconf load /
+fi
+rm -f "$marker"

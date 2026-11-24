@@ -1,0 +1,184 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 12:25:32 +0100
+Subject: [PATCH] power: Battery condition and charging options of
+ plinius-charge
+
+Plinius: the battery has no charge thresholds for UPower, so GNOME's
+"Battery Charging" group never showed. With plinius-charge
+(org.plinius.Charge) the group shows anyway: "Preserve Battery Health"
+switches its charge limit (the subtitle names its levels), and a
+"Fast Charging" switch follows. A "Battery Condition" group after it
+shows health, full charge, charge cycles, temperature, voltage, power and
+type of the battery from UPower (cc-plinius-battery.c).
+
+With UPower thresholds, or without plinius-charge, nothing changes.
+---
+ panels/power/cc-power-panel.c | 92 +++++++++++++++++++++++++++++++++++
+ panels/power/meson.build      |  1 +
+ 2 files changed, 93 insertions(+)
+
+diff --git a/panels/power/cc-power-panel.c b/panels/power/cc-power-panel.c
+index 8d7cbe7e5..fb93a77d4 100644
+--- a/panels/power/cc-power-panel.c
++++ b/panels/power/cc-power-panel.c
+@@ -29,6 +29,7 @@
+ #include "cc-battery-row.h"
+ #include "cc-hostname.h"
+ #include "cc-number-row.h"
++#include "cc-plinius-battery.h"
+ #include "cc-power-panel.h"
+ #include "cc-power-profile-info-row.h"
+ #include "cc-power-profile-row.h"
+@@ -98,6 +99,13 @@ struct _CcPowerPanel {
+ 
+     GDBusProxy *iio_proxy;
+     guint iio_proxy_watch_id;
++
++    /* Plinius: charging options of plinius-charge, its fast charging switch, the charge limit
++     * behind "Preserve Battery Health" while UPower has no thresholds, the battery condition */
++    GDBusProxy *plinius_charge;
++    GtkWidget *fast_charge_row;
++    gboolean plinius_limit;
++    GtkWidget *battery_condition_group;
+     GDBusProxy *shell_brightness_proxy;
+     gboolean has_brightness_control;
+ 
+@@ -153,6 +161,14 @@ update_power_saver_low_battery_row_visibility (CcPowerPanel *self)
+                             self->power_profiles_proxy && kind == UP_DEVICE_KIND_BATTERY);
+ }
+ 
++/* Plinius: fast charging switch of plinius-charge */
++static void
++plinius_fast_charge_changed_cb (CcPowerPanel *self)
++{
++    cc_plinius_charge_set (self->plinius_charge, "FastCharge",
++                           adw_switch_row_get_active (ADW_SWITCH_ROW (self->fast_charge_row)));
++}
++
+ static void
+ battery_health_radio_changed_cb (CcPowerPanel *self)
+ {
+@@ -165,6 +181,12 @@ battery_health_radio_changed_cb (CcPowerPanel *self)
+     enabled = gtk_check_button_get_active (GTK_CHECK_BUTTON (self->preserve_battery_radio));
+     g_debug ("Setting preserve battery health enabled %s", enabled ? "on" : "off");
+ 
++    /* Plinius: the limit of plinius-charge */
++    if (self->plinius_limit) {
++        cc_plinius_charge_set (self->plinius_charge, "Limit", enabled);
++        return;
++    }
++
+     connection = g_bus_get_sync (G_BUS_TYPE_SYSTEM, cc_panel_get_cancellable (CC_PANEL (self)), &error);
+     if (!connection) {
+         if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+@@ -227,6 +249,56 @@ power_saving_group_visibility_cb (CcPowerPanel *self)
+     ensure_power_saving_title (self);
+ }
+ 
++/*
++ * Plinius: plinius-charge's limit behind "Preserve Battery Health" when UPower has no charge
++ * thresholds for the battery, its fast charging switch, and the condition of the main battery
++ */
++static void
++plinius_battery_update (CcPowerPanel *self, gboolean upower_thresholds)
++{
++    UpDevice *main_battery = NULL;
++
++    for (guint i = 0; self->devices != NULL && i < self->devices->len; i++) {
++        UpDevice *device = g_ptr_array_index (self->devices, i);
++
++        if (g_object_get_data (G_OBJECT (device), "is-main-battery"))
++            main_battery = device;
++    }
++    cc_plinius_battery_group_update (self->battery_condition_group, main_battery);
++
++    self->plinius_limit = !upower_thresholds && main_battery &&
++                          cc_plinius_charge_get (self->plinius_charge, "HasLimit");
++    if (self->plinius_limit) {
++        g_autofree char *subtitle = cc_plinius_charge_limit_subtitle (self->plinius_charge);
++
++        /* The levels of plinius-charge instead of the general sentence */
++        adw_action_row_set_subtitle (ADW_ACTION_ROW (gtk_widget_get_ancestor (GTK_WIDGET (self->preserve_battery_radio),
++                                                                              ADW_TYPE_ACTION_ROW)),
++                                     subtitle);
++        g_signal_handlers_block_by_func (self->preserve_battery_radio, battery_health_radio_changed_cb, self);
++        if (cc_plinius_charge_get (self->plinius_charge, "Limit"))
++            gtk_check_button_set_active (self->preserve_battery_radio, TRUE);
++        else
++            gtk_check_button_set_active (self->maximize_charge_radio, TRUE);
++        g_signal_handlers_unblock_by_func (self->preserve_battery_radio, battery_health_radio_changed_cb, self);
++    }
++
++    if (self->fast_charge_row) {
++        g_signal_handlers_block_by_func (self->fast_charge_row, plinius_fast_charge_changed_cb, self);
++        adw_switch_row_set_active (ADW_SWITCH_ROW (self->fast_charge_row),
++                                   cc_plinius_charge_get (self->plinius_charge, "FastCharge"));
++        g_signal_handlers_unblock_by_func (self->fast_charge_row, plinius_fast_charge_changed_cb, self);
++    }
++
++    /* The upstream radio rows only with a limit; the group as well for the fast charging switch */
++    gtk_widget_set_visible (gtk_widget_get_ancestor (GTK_WIDGET (self->maximize_charge_radio), ADW_TYPE_ACTION_ROW),
++                            upower_thresholds || self->plinius_limit);
++    gtk_widget_set_visible (gtk_widget_get_ancestor (GTK_WIDGET (self->preserve_battery_radio), ADW_TYPE_ACTION_ROW),
++                            upower_thresholds || self->plinius_limit);
++    if (self->plinius_limit || (self->fast_charge_row && main_battery))
++        gtk_widget_set_visible (GTK_WIDGET (self->battery_charging_section), TRUE);
++}
++
+ static void
+ up_client_changed (CcPowerPanel *self)
+ {
+@@ -332,6 +404,8 @@ up_client_changed (CcPowerPanel *self)
+         gtk_widget_set_visible (GTK_WIDGET (self->battery_charging_section), TRUE);
+     }
+ 
++    plinius_battery_update (self, charge_threshold_supported);
++
+     update_power_saver_low_battery_row_visibility (self);
+ }
+ 
+@@ -1133,6 +1207,7 @@ cc_power_panel_dispose (GObject *object)
+     g_clear_object (&self->interface_settings);
+     g_clear_pointer (&self->devices, g_ptr_array_unref);
+     g_clear_object (&self->up_client);
++    g_clear_object (&self->plinius_charge);
+     g_clear_object (&self->iio_proxy);
+     g_clear_object (&self->power_profiles_proxy);
+     if (self->iio_proxy_watch_id != 0)
+@@ -1233,6 +1308,23 @@ cc_power_panel_init (CcPowerPanel *self)
+ 
+     setup_general_section (self);
+ 
++    /* Plinius: battery condition after the charging options, plinius-charge's options */
++    self->battery_condition_group = cc_plinius_battery_group_new ();
++    adw_preferences_page_insert (ADW_PREFERENCES_PAGE (gtk_widget_get_ancestor (GTK_WIDGET (self->battery_section),
++                                                                                ADW_TYPE_PREFERENCES_PAGE)),
++                                 ADW_PREFERENCES_GROUP (self->battery_condition_group), 2);
++    self->plinius_charge = cc_plinius_charge_proxy_new ();
++    if (self->plinius_charge) {
++        if (cc_plinius_charge_get (self->plinius_charge, "HasFastCharge")) {
++            self->fast_charge_row = cc_plinius_charge_fast_row_new ();
++            adw_preferences_group_add (self->battery_charging_section, self->fast_charge_row);
++            g_signal_connect_swapped (self->fast_charge_row, "notify::active",
++                                      G_CALLBACK (plinius_fast_charge_changed_cb), self);
++        }
++        g_signal_connect_object (self->plinius_charge, "g-properties-changed", G_CALLBACK (up_client_changed), self,
++                                 G_CONNECT_SWAPPED);
++    }
++
+     /* populate batteries */
+     if (self->up_client) {
+         g_signal_connect_object (self->up_client, "device-added", G_CALLBACK (up_client_device_added), self,
+diff --git a/panels/power/meson.build b/panels/power/meson.build
+index 646111b71..e4a819372 100644
+--- a/panels/power/meson.build
++++ b/panels/power/meson.build
+@@ -30,6 +30,7 @@ blueprints = custom_target(
+ 
+ sources = files(
+   'cc-battery-row.c',
++  'cc-plinius-battery.c',
+   'cc-power-panel.c',
+   'cc-power-profile-row.c',
+   'cc-power-profile-info-row.c'

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The switches "Allowed Networks" in GNOME Settings › System › Secure Shell run
+     pkexec /usr/lib/plinius-ssh/plinius-ssh-set allow|deny usb|local|all; argv1 picks the action. -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <!-- Opening SSH to one more network: an administrator's PIN, every time (auth_admin, not
+       _keep). The switch is for the whole phone, so an account without administrator rights
+       must not open it for the others with its own PIN (attack review 2026-11-18, L15). The
+       phone's first user is an administrator and confirms with its own PIN, as before. -->
+  <action id="org.plinius.ssh.allow">
+    <description>Allow SSH logins from a network</description>
+    <message>Authentication is required to allow SSH logins from more networks</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-ssh/plinius-ssh-set</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">allow</annotate>
+  </action>
+
+  <!-- Closing a network only makes the phone safer: no password -->
+  <action id="org.plinius.ssh.deny">
+    <description>Stop SSH logins from a network</description>
+    <message>Authentication is required to stop SSH logins from a network</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-ssh/plinius-ssh-set</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">deny</annotate>
+  </action>
+</policyconfig>

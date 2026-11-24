@@ -1,0 +1,104 @@
+From b0cc91ca456dc84d61355949048ba383a529b5e9 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 18:55:40 +0100
+Subject: [PATCH] output: A doze ends with the shell that asked for it
+
+When Phosh dies while the always-on display dozes, the output stays in
+doze for good: doze_holds_frame() keeps every frame back until the
+always-on display is on top again, which a newly started Phosh never puts
+there, and no key wakes the output since the new Phosh thinks it is on.
+Leave the doze when the shell's phosh_private resource goes away.
+---
+ src/output.c        | 28 ++++++++++++++++++++++++++++
+ src/output.h        |  1 +
+ src/phosh-private.c | 12 ++++++++++++
+ 3 files changed, 41 insertions(+)
+
+diff --git a/src/output.c b/src/output.c
+index 8507fdd..9ffac0a 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -2285,6 +2285,34 @@ phoc_output_is_awake (PhocOutput *self)
+            wlr_drm_connector_get_doze (self->wlr_output));
+ }
+ 
++/**
++ * phoc_output_end_doze:
++ *
++ * Plinius: leaves the always-on display's doze, for when the shell that asked for it is gone.
++ * Otherwise the output stays in doze for good: doze_holds_frame() keeps every frame back until
++ * the always-on display is on top again, which a newly started shell never puts there, and no
++ * key wakes it as the new shell thinks the output is on (09.11.2026: Phosh died in doze, the
++ * picture stood still and nothing woke the phone).
++ */
++void
++phoc_output_end_doze (PhocOutput *self)
++{
++  PhocOutputPrivate *priv;
++
++  g_return_if_fail (PHOC_IS_OUTPUT (self));
++
++  if (!wlr_output_is_drm (self->wlr_output) || !wlr_drm_connector_get_doze (self->wlr_output))
++    return;
++
++  priv = phoc_output_get_instance_private (self);
++  g_message ("Output '%s' dozes without the shell that asked for it, leaving the doze",
++             self->wlr_output->name);
++  wlr_drm_connector_set_doze (self->wlr_output, false);
++  priv->doze_showed_aod = FALSE;
++  if (self->wlr_output->enabled)
++    phoc_output_damage_whole (self);
++}
++
+ /**
+  * phoc_output_set_position:
+  * @self: The output
+diff --git a/src/output.h b/src/output.h
+index 33c35a7..7cbd084 100644
+--- a/src/output.h
++++ b/src/output.h
+@@ -167,6 +167,7 @@ gboolean    phoc_output_is_builtin (PhocOutput *self);
+ void        phoc_output_set_position (PhocOutput *self, int x, int y);
+ gboolean    phoc_output_supports_doze (PhocOutput *self);
+ gboolean    phoc_output_is_awake (PhocOutput *self);
++void        phoc_output_end_doze (PhocOutput *self);
+ gboolean    phoc_output_is_match (PhocOutput *self,
+                                   const char *make,
+                                   const char *model,
+diff --git a/src/phosh-private.c b/src/phosh-private.c
+index 131f1f3..f4dd7ad 100644
+--- a/src/phosh-private.c
++++ b/src/phosh-private.c
+@@ -25,6 +25,7 @@
+ #include <wlr-screencopy-unstable-v1-protocol.h>
+ #include "server.h"
+ #include "desktop.h"
++#include "output.h"
+ #include "render.h"
+ #include "utils.h"
+ 
+@@ -773,6 +774,7 @@ static void
+ phosh_handle_resource_destroy (struct wl_resource *resource)
+ {
+   PhocPhoshPrivate *phosh = wl_resource_get_user_data (resource);
++  PhocDesktop *desktop;
+ 
+   g_debug ("Destroying phosh %p (res %p)", phosh, resource);
+   phosh->resource = NULL;
+@@ -782,6 +784,16 @@ phosh_handle_resource_destroy (struct wl_resource *resource)
+ 
+   phosh->state = PHOC_PHOSH_PRIVATE_SHELL_STATE_UNKNOWN;
+   g_object_notify_by_pspec (G_OBJECT (phosh), props[PROP_SHELL_STATE]);
++
++  /* Plinius: an always-on display ends with the shell that asked for it, so that a restarted
++   * shell finds the outputs on, see phoc_output_end_doze() */
++  desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  if (desktop) {
++    PhocOutput *output;
++
++    wl_list_for_each (output, &desktop->outputs, link)
++      phoc_output_end_doze (output);
++  }
+ }
+ 
+ 

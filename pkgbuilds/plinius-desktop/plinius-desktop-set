@@ -1,0 +1,112 @@
+#!/bin/bash
+# plinius-desktop-set: the networks the desktop over VNC takes connections from (GNOME Settings ›
+# Desktop over VNC runs this through pkexec). Whether the port is open at all is the
+# user's socket unit; this only decides where it can be reached.
+#
+#   plinius-desktop-set allow|deny usb|local   change one choice and apply
+#   plinius-desktop-set apply                  apply the file (at boot)
+#   plinius-desktop-set status                 print the choices
+#
+# Firewall through iptables-legacy (the kernel has no nftables), as in plinius-ssh-set. Only the
+# firewall knows interfaces: mobile data has a private address here too (ccmni2 10.x/8, measured),
+# so addresses alone cannot tell it from a local network.
+#
+# polkit (org.plinius.desktop.policy): "allow" asks for the user's PIN, "deny" does not.
+#
+# Once both families' rules are in place, FIREWALL_OK exists: plinius-desktop.socket only starts
+# with it, so the port never listens without the chain (fail closed). It is in /run, so it is
+# gone at the next boot until the rules are there again, and only root can make it.
+#
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+
+conf=/etc/plinius-desktop.conf
+chain=plinius-desktop
+port=5900
+firewall_ok=/run/plinius-desktop-firewall
+
+usb_if=usb0
+# Wi-Fi, hotspot, Wi-Fi Direct, Ethernet adapters ("+" = prefix)
+local_ifs=(wlan+ ap+ p2p+ eth+ enx+)
+# Private, link-local, unique local
+local_v4=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16)
+local_v6=(fe80::/10 fc00::/7)
+
+# Reads one choice ("yes"/"no") from the file; missing file or key: the default
+get() {
+	local key=$1 def=$2 val
+	val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*\([a-z]*\).*/\1/p" "$conf" 2>/dev/null | tail -n1)
+	case $val in yes | no) echo "$val" ;; *) echo "$def" ;; esac
+}
+
+# Writes one choice, keeping the comments and the other keys of the file
+put() {
+	local key=$1 val=$2 tmp
+	tmp=$(mktemp "$conf.XXXXXX")
+	if [[ -f $conf ]] && grep -q "^[[:space:]]*$key[[:space:]]*=" "$conf"; then
+		sed "s/^[[:space:]]*$key[[:space:]]*=.*/$key=$val/" "$conf" >"$tmp"
+	else
+		{ [[ -f $conf ]] && cat "$conf"; echo "$key=$val"; } >"$tmp"
+	fi
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$conf"
+}
+
+# Rules for one family through *-restore --noflush: declaring the chain empties it, the new rules
+# take effect in one step. The jump from INPUT is added only once.
+apply_firewall() {
+	local tool=$1 usb=$2 lan=$3 i net
+	local -a nets
+	if [[ $tool == ip6tables-legacy ]]; then nets=("${local_v6[@]}"); else nets=("${local_v4[@]}"); fi
+	{
+		echo '*filter'
+		echo ":$chain - [0:0]"
+		echo "-A $chain -i lo -j RETURN"
+		[[ $usb == yes ]] && echo "-A $chain -i $usb_if -j RETURN"
+		if [[ $lan == yes ]]; then
+			for i in "${local_ifs[@]}"; do
+				for net in "${nets[@]}"; do
+					echo "-A $chain -i $i -s $net -j RETURN"
+				done
+			done
+		fi
+		echo "-A $chain -j DROP"
+		echo 'COMMIT'
+	} | "$tool-restore" -w --noflush
+	"$tool" -w -C INPUT -p tcp --dport "$port" -j "$chain" 2>/dev/null ||
+		"$tool" -w -I INPUT 1 -p tcp --dport "$port" -j "$chain"
+}
+
+apply() {
+	local usb lan
+	usb=$(get usb yes)
+	lan=$(get local no)
+	apply_firewall iptables-legacy "$usb" "$lan"
+	apply_firewall ip6tables-legacy "$usb" "$lan"
+	: >"$firewall_ok"
+}
+
+case "${1:-}" in
+allow | deny)
+	case "${2:-}" in
+	usb | local) ;;
+	*)
+		echo "Usage: plinius-desktop-set allow|deny usb|local" >&2
+		exit 2
+		;;
+	esac
+	if [[ $1 == allow ]]; then put "$2" yes; else put "$2" no; fi
+	apply
+	;;
+apply)
+	apply
+	;;
+status)
+	echo "usb=$(get usb yes)"
+	echo "local=$(get local no)"
+	;;
+*)
+	echo "Usage: plinius-desktop-set allow|deny usb|local | apply | status" >&2
+	exit 2
+	;;
+esac

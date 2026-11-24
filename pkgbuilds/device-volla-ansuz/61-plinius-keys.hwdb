@@ -1,0 +1,7 @@
+# Volla Phone Plinius: the Hall sensor (flip cover) on gpio-keys, button index 2. The device tree
+# gives it KEY_F2: apps would get an F2 on every closing of the cover, and phoc would take it as
+# activity and turn the screen on. KEY_MACRO1 is outside the XKB range, so no app sees it, and
+# phoc does not wake on it. plinius-assist switches the screen on cover changes.
+evdev:name:gpio-keys:*
+ KEYBOARD_KEY_2=macro1
+ GM_WAKEUP_KEY_656=0

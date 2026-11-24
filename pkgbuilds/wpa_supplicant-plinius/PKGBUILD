@@ -1,0 +1,101 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on Arch's wpa_supplicant 2:2.12-2 (Morten Linderud, Bartłomiej Piotrowski,
+# Thomas Bächler, loqs); patches 0001-0008 and wpa_supplicant_config are taken from there.
+
+pkgname=wpa_supplicant-plinius
+pkgver=2.12
+pkgrel=5
+epoch=2
+pkgdesc="wpa_supplicant with a hotspot that MediaTek WLAN drivers accept"
+arch=(aarch64)
+url="https://w1.fi/wpa_supplicant/"
+license=(BSD-3-Clause)
+depends=(glibc libdbus libnl openssl pcsclite readline)
+makedepends=(docbook-sgml docbook-utils git perl-sgmls)
+# Why not wpa_supplicant from ALARM: NetworkManager offers WPA-PSK-SHA256 next to WPA-PSK
+# for every WPA-PSK hotspot, also with PMF disabled. Stations then pick PSK-SHA256 and the
+# Volla's WLAN driver (MediaTek gen4m) rejects every association with status 43 (invalid
+# AKMP). Patch 0009 offers plain PSK in AP mode when PMF is off (docs/HARDWARE.md, Hotspot).
+provides=("wpa_supplicant=$epoch:$pkgver")
+conflicts=(wpa_supplicant)
+# Commit of tag hostap_2_12: a tag can be moved later, a commit hash cannot
+_commit=831364bf02710ad09c2f27d3efa92abeeb5634c0
+source=(
+	"git+https://git.w1.fi/hostap.git#commit=$_commit"
+	wpa_supplicant_config
+	0001-Enable-TLSv1.0-by-default.patch
+	0002-Disable-Werror-for-eapol_test.patch
+	0003-Allow-legacy-renegotiation-to-fix-PEAP-issues-with-s.patch
+	0004-Tweak-D-Bus-systemd-service-activation-configuration.patch
+	0005-Add-IgnoreOnIsolate-yes-to-keep-wpa-supplicant-runni.patch
+	0006-Add-reload-support-to-the-systemd-unit-files.patch
+	0007-nl80211-add-extra-ies-only-if-allowed-by-driver.patch
+	0008-Revert-Mark-authorization-completed-on-driver-indica.patch
+	0009-AP-No-PSK-SHA256-without-PMF.patch
+	10-plinius-sandbox.conf
+)
+sha256sums=('SKIP'
+            'ccd9064f0723409fdd3b477aad4f7a2a884352b8b55b85d343dd7a9bcb1dd281'
+            '5aef689d3c2ba2d5bec89520aa163f6ff12ef6e93c456adc70221864a5720996'
+            '2e0b751f4c3d6605ee1a85f44c6e72fdfef1b890422662cec553e3d177510459'
+            'c6425c40ca04ba05d7935e4b67cadf2bd3efa3eaff5473ece33722aeede8da33'
+            '7aecdb7ce85a399eee75dae4595645b34260739725b5922726a51a8db76148f9'
+            'fb82577605c960a53b9376ae3928ab0c052c6f371096e0d692fbf95ef9117475'
+            'f3491b0e06c1ac6c0c727cf5cc94770d94fe55cb5193a78f152542eb06dac835'
+            '5ae98b10db05a559b7b6137fd50d4263889b5f497fedbfca1ad473d41b3fdaa1'
+            '798420ccf86f277ea5335d4c92b94202d2865c91dff0db2362c788924445bb27'
+            'b30bf70df9cfd63c60465b0464bcf5fa26618db378e0ee28270e7921ad281832'
+            '46f2acb59c9632d965849b0dbde8367973eb2e580fc483639bbf67b7b6cce826')
+
+prepare() {
+	cd hostap
+
+	local src
+	for src in "${source[@]}"; do
+		[[ $src = *.patch ]] || continue
+		echo "Applying patch $src..."
+		git apply -3 < "../$src"
+	done
+
+	cp ../wpa_supplicant_config wpa_supplicant/.config
+}
+
+_make() {
+	make BINDIR=/usr/bin LIBDIR=/usr/lib "$@"
+}
+
+build() {
+	cd hostap/wpa_supplicant
+
+	_make
+	_make eapol_test
+	_make -C doc/docbook man
+}
+
+package() {
+	cd hostap/wpa_supplicant
+
+	_make DESTDIR="$pkgdir" install
+
+	install -Dm755 eapol_test "$pkgdir/usr/bin/eapol_test"
+
+	install -dm755 "$pkgdir/etc/wpa_supplicant"
+	install -Dm644 wpa_supplicant.conf -t "$pkgdir/usr/share/doc/wpa_supplicant"
+
+	install -Dm644 dbus/fi.w1.wpa_supplicant1.service \
+		-t "$pkgdir/usr/share/dbus-1/system-services"
+
+	install -Dm644 dbus/dbus-wpa_supplicant.conf \
+		"$pkgdir/usr/share/dbus-1/system.d/wpa_supplicant.conf"
+
+	install -Dm644 doc/docbook/*.5 -t "$pkgdir/usr/share/man/man5"
+	install -Dm644 doc/docbook/*.8 -t "$pkgdir/usr/share/man/man8"
+	rm "$pkgdir"/usr/share/man/man8/wpa_{priv,gui}.8
+
+	install -Dm644 systemd/*.service -t "$pkgdir/usr/lib/systemd/system"
+	# Sandbox for the D-Bus activated service (docs/DIENSTE-HAERTEN.md)
+	install -Dm644 "$srcdir/10-plinius-sandbox.conf" \
+		-t "$pkgdir/usr/lib/systemd/system/wpa_supplicant.service.d"
+
+	install -Dm644 ../README "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

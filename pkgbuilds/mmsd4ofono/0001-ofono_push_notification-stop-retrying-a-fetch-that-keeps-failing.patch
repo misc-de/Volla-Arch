@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 14:42:35 +0100
+Subject: [PATCH] ofono_push_notification: stop retrying a fetch that keeps
+ failing
+
+A notification whose message could not be fetched was put back into the
+retry queue every 5 s, five times in a row. With the MMS context brought
+up on demand every try brings it up, and five tries within half a minute
+do not outlast a short gap in coverage or a busy MMSC.
+
+Try again after 30 s, 1, 2, 5, 10 and 30 min, then mark the message
+download_failed. Each message waits on its own, so one dead MMSC no
+longer delays the others.
+---
+ mmsd/ofono_push_notification.py | 52 ++++++++++++++++++---------------
+ 1 file changed, 29 insertions(+), 23 deletions(-)
+
+diff --git a/mmsd/ofono_push_notification.py b/mmsd/ofono_push_notification.py
+index 9dbab7d..8d9f31a 100644
+--- a/mmsd/ofono_push_notification.py
++++ b/mmsd/ofono_push_notification.py
+@@ -16,10 +16,6 @@ from dbus_fast import Variant
+ 
+ from mmsd.logging import mmsd_print
+ 
+-# retrying a download forever leaves the message invisible for as long as
+-# the fault lasts, which is how a failed fetch used to go unreported
+-DOWNLOAD_ATTEMPTS = 5
+-
+ from mmsd.route_controller import cleanup_mms_routes, setup_mms_routes
+ from mmsd.utils import resolve_host
+ from mmsdecoder.message import MMSMessage
+@@ -31,6 +27,11 @@ CONNECT_TIMEOUT = 8
+ # The transfer itself needs room: messages run to hundreds of kilobytes and
+ # may cross a CLAT.
+ FETCH_TIMEOUT = 120
++# A message that cannot be fetched (an MMSC that is gone, a carrier that has
++# switched MMS off) is tried again after each of these delays, then marked as
++# download_failed. Each try brings the MMS context up, so it must not go on
++# for ever; retrying for ever also left the message invisible.
++FETCH_RETRY_DELAYS = (30, 60, 120, 300, 600, 1800)
+ 
+ class OfonoPushNotification(ServiceInterface):
+     def __init__(self, bus, ofono_interfaces, ofono_interface_props, mms_dir, export_mms_message, update_mms_message, mms_context, path, verbose=False):
+@@ -47,25 +48,30 @@ class OfonoPushNotification(ServiceInterface):
+         self.mms_context = mms_context
+         self.agent_path = False
+         self.registered = False
+-        self.retry_queue = asyncio.Queue()
++        self.retry_tasks = set()
+         self.announced = set()
+-        asyncio.create_task(self.retry_failed_requests())
+ 
+-    async def retry_failed_requests(self):
+-        while True:
+-            transaction_id, content_location, sender, info, uuid, attempts = await self.retry_queue.get()
+-            proxy = await self.get_mms_context_info()
+-            response_content = await self.fetch_mms_content(content_location, proxy)
+-            if response_content:
+-                self.process_mms_content(response_content, transaction_id, sender, info, uuid)
+-            elif attempts + 1 < DOWNLOAD_ATTEMPTS:
+-                self.retry_queue.put_nowait(
+-                    (transaction_id, content_location, sender, info, uuid, attempts + 1))
+-            else:
+-                mmsd_print(f"Giving up on downloading message {uuid} after "
+-                           f"{DOWNLOAD_ATTEMPTS} attempts", self.verbose)
+-                self.settle_incoming(uuid, 'download_failed')
+-            await asyncio.sleep(5)
++    def schedule_retry(self, transaction_id, content_location, sender, info, uuid, attempt=0):
++        if attempt >= len(FETCH_RETRY_DELAYS):
++            mmsd_print(f"Giving up on downloading message {uuid} after {attempt} retries", self.verbose)
++            self.settle_incoming(uuid, 'download_failed')
++            return
++
++        delay = FETCH_RETRY_DELAYS[attempt]
++        mmsd_print(f"Retrying {content_location} in {delay}s ({attempt + 1}/{len(FETCH_RETRY_DELAYS)})", self.verbose)
++        task = asyncio.get_event_loop().create_task(
++            self.retry_fetch(transaction_id, content_location, sender, info, uuid, attempt, delay))
++        self.retry_tasks.add(task)
++        task.add_done_callback(self.retry_tasks.discard)
++
++    async def retry_fetch(self, transaction_id, content_location, sender, info, uuid, attempt, delay):
++        await asyncio.sleep(delay)
++        proxy = await self.get_mms_context_info()
++        response_content = await self.fetch_mms_content(content_location, proxy)
++        if response_content:
++            self.process_mms_content(response_content, transaction_id, sender, info, uuid)
++        else:
++            self.schedule_retry(transaction_id, content_location, sender, info, uuid, attempt + 1)
+ 
+     def announce_incoming(self, uuid, sender_number, sent_time):
+         """The body is not here yet but the message is. A thread that stays
+@@ -309,8 +315,8 @@ class OfonoPushNotification(ServiceInterface):
+         if response_content:
+             self.process_mms_content(response_content, transaction_id, sender, info, uuid)
+         else:
+-            mmsd_print("Failed to get response content, adding to retry queue", self.verbose)
+-            self.retry_queue.put_nowait((transaction_id, content_location, sender, info, uuid, 0))
++            mmsd_print("Failed to get response content, trying again later", self.verbose)
++            self.schedule_retry(transaction_id, content_location, sender, info, uuid)
+ 
+     @method()
+     def Release(self):

@@ -1,0 +1,35 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=umtp-responder
+pkgver=1.8.1.r32.8f20c6f
+pkgrel=1
+pkgdesc="Lightweight MTP responder for USB gadgets (FunctionFS), file sharing with a computer"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://github.com/viveris/uMTP-Responder"
+license=(GPL-3.0-or-later)
+# Why a custom build: no Arch package. plinius-usb starts it with a configuration of its own
+# for "File Sharing" in the USB quick setting (pkgbuilds/plinius-usb), so the example
+# configuration only goes to the documentation and there is no service of its own.
+# Without SYSTEMD=1: it runs as a child of plinius-usb, not as a service of its own.
+# master after 1.8.1, not the release: it fixes MTP path traversal (file names from the computer
+# could leave the shared folder, 2327db5, 96a94ca, 964d736) and runs without POSIX message queues,
+# which the GKI kernel lacks (920df09; our patch for that is no longer needed).
+depends=(glibc)
+makedepends=(git)
+# umtprd-1.8.1-29-g85a26f4: a commit hash cannot be moved later
+_commit=8f20c6f8d47d1057c9793aa23bd0a678d54084e3
+source=("git+$url.git#commit=$_commit")
+sha256sums=('SKIP')
+
+build() {
+	cd uMTP-Responder
+	# The Makefile strips with -s and sets -O3; makepkg strips itself and brings its own flags
+	make CFLAGS="$CFLAGS -I./inc -Wall" LDFLAGS="$LDFLAGS -lpthread -lrt"
+}
+
+package() {
+	cd uMTP-Responder
+	install -Dm755 umtprd -t "$pkgdir/usr/bin"
+	install -Dm644 conf/umtprd.conf -t "$pkgdir/usr/share/doc/$pkgname/examples"
+	install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"
+}

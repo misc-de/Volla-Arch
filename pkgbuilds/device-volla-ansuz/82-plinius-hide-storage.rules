@@ -1,0 +1,31 @@
+# Keep the phone's own storage out of Files and every other udisks client. There are about 120
+# such block devices, none of them of use to the user, and mounting one can only do harm.
+# This only hides them: the device nodes stay, and lsblk and root still see everything.
+# Runs after 80-udisks2.rules.
+
+SUBSYSTEM!="block", GOTO="plinius_hide_storage_end"
+ACTION=="remove", GOTO="plinius_hide_storage_end"
+
+# Internal UFS, whole disks and partitions. Matched by bus path, not by name: a USB stick is
+# called sd* as well and has to stay visible.
+ENV{ID_PATH}=="platform-*.ufshci-*", ENV{UDISKS_IGNORE}="1"
+
+# The memory card in the phone holds the boot entries and the systems: this one, other systems
+# and their data. All of them are Linux filesystems or LUKS. A data partition with FAT, exFAT or
+# NTFS stays visible, and so does a card in a USB reader, which is called sd*.
+KERNEL=="mmcblk*", ENV{ID_FS_TYPE}=="ext2|ext3|ext4|f2fs|btrfs|xfs|erofs|squashfs|crypto_LUKS|LVM2_member", ENV{UDISKS_IGNORE}="1"
+
+# Device mapper: Android's dynamic partitions (no uuid) and APEX packages (bare uuid). A LUKS or
+# LVM volume of the user carries a CRYPT- or LVM- prefix and stays visible.
+KERNEL=="dm-*", ATTR{dm/uuid}!="CRYPT-*|LVM-*", ENV{UDISKS_IGNORE}="1"
+
+# Loop devices of the Android container, by the path of their image. A disk image the user mounts
+# from elsewhere stays visible. The event for a newly attached file arrives with the path set.
+KERNEL=="loop*", ATTR{loop/backing_file}=="/android/*|/apex/*|/data/*|/odm/*|/product/*|/system/*|/system_ext/*|/userdata/*|/var/lib/lxc/android/*|/vendor/*", ENV{UDISKS_IGNORE}="1"
+
+# f2fs on a USB stick or card reader stays visible but is not mounted on its own: the kernel's
+# f2fs code has known bugs without a fix in this kernel, and a prepared stick would reach them
+# just by being plugged in. Mounting it by hand in Files still works.
+ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="f2fs", ENV{UDISKS_AUTO}="0"
+
+LABEL="plinius_hide_storage_end"

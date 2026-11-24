@@ -1,0 +1,16 @@
+# The DOS Installer adds every game to the app grid with its own launcher and starts ScummVM and
+# DOSBox itself. Their own launchers would open empty windows next to the games, and DOSBox's
+# without the phone settings. Runs on every install and upgrade of scummvm or dosbox, because
+# the packages bring their launchers back.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/share/applications/org.scummvm.scummvm.desktop
+Target = usr/share/applications/dosbox.desktop
+
+[Action]
+Description = Hiding the launchers of ScummVM and DOSBox (plinius-dos-installer)...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plinius-hide-apps
+NeedsTargets

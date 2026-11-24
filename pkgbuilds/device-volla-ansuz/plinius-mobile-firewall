@@ -1,0 +1,78 @@
+#!/bin/bash
+# plinius-mobile-firewall: no connections from the internet over mobile data.
+#
+# NetworkManager dispatcher script (also linked into pre-up.d, so the rules are there before the
+# connection carries traffic). On every change of a mobile data connection it rebuilds the chain
+# "plinius-mobile" (iptables-legacy, the kernel has no nftables), jumped to first from INPUT, for
+# IPv4 and IPv6: on the IP interface of each mobile data connection NetworkManager has up, only
+# answers to the phone's own connections (conntrack ESTABLISHED/RELATED) and ICMP come in, every
+# new connection from outside is dropped.
+#
+# Why per connection and not "ccmni+": the modem has many ccmni interfaces, and the IMS one for
+# VoLTE (set up by the vendor RIL, not by NetworkManager) takes new connections from the
+# operator's network for incoming calls. Only the interfaces NetworkManager brings up for mobile
+# data are the internet; those get the rule.
+#
+# Services have firewall chains of their own too (plinius-ssh, plinius-desktop, plinius-dnsfilter);
+# this one covers anything listening on all addresses that has none, now or later.
+#
+# Called by NetworkManager-dispatcher as: plinius-mobile-firewall INTERFACE ACTION
+# By hand: plinius-mobile-firewall apply   (rebuild from the connections that are up)
+#
+# SPDX-License-Identifier: MIT
+set -uo pipefail
+
+chain=plinius-mobile
+action=${2:-${1:-apply}}
+
+case $action in
+up | pre-up | down | pre-down | dhcp4-change | dhcp6-change | reapply | apply) ;;
+*) exit 0 ;;
+esac
+
+# Only events of a modem (NetworkManager's device "/ril_0", type gsm) change the chain
+event_ip_if=
+if [[ $action != apply && -n ${DEVICE_IFACE:-} ]]; then
+	[[ $(nmcli -g GENERAL.TYPE device show "$DEVICE_IFACE" 2>/dev/null) == gsm ]] || exit 0
+	event_ip_if=${DEVICE_IP_IFACE:-}
+	# Without its own IP interface the modem's name would stand here; nothing to filter then
+	[[ $event_ip_if == /* ]] && event_ip_if=
+fi
+
+# The IP interfaces of the mobile data connections that are up (e.g. ccmni2)
+declare -A ifaces=()
+while IFS=: read -r dev type state; do
+	[[ $type == gsm && $state == connected* ]] || continue
+	ip_if=$(nmcli -g GENERAL.IP-IFACE device show "$dev" 2>/dev/null)
+	[[ -n $ip_if ]] && ifaces[$ip_if]=1
+done < <(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
+# The connection of this event: on pre-up it is not "connected" yet, on down it goes
+if [[ -n $event_ip_if ]]; then
+	case $action in
+	down | pre-down) unset "ifaces[$event_ip_if]" ;;
+	*) ifaces[$event_ip_if]=1 ;;
+	esac
+fi
+
+# One family through *-restore --noflush: declaring the chain empties it, the new rules take
+# effect in one step. The jump from INPUT is added once, as the first rule.
+apply_family() {
+	local tool=$1 icmp=$2 i
+	{
+		echo '*filter'
+		echo ":$chain - [0:0]"
+		for i in "${!ifaces[@]}"; do
+			echo "-A $chain -i $i -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN"
+			echo "-A $chain -i $i -p $icmp -j RETURN"
+			echo "-A $chain -i $i -j DROP"
+		done
+		echo 'COMMIT'
+	} | "$tool-restore" --noflush || return 1
+	"$tool" -C INPUT -j "$chain" 2>/dev/null || "$tool" -I INPUT 1 -j "$chain"
+}
+
+rc=0
+apply_family iptables-legacy icmp || rc=1
+apply_family ip6tables-legacy ipv6-icmp || rc=1
+[[ $rc == 0 ]] || logger -t plinius-mobile-firewall "could not apply the rules for: ${!ifaces[*]}"
+exit $rc

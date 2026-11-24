@@ -1,0 +1,560 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 10:00:00 +0100
+Subject: [PATCH] shell: Log Out with a second account, power menu buttons in
+ rows
+
+Plinius: greetd shows plinius-greeter's account picker once a session
+ends, so logging out is how one switches accounts. The system menu of
+the top bar and the power menu offer Log Out when the phone has more
+than one account one can log in with (the rule of plinius-greeter: a
+user ID between UID_MIN and UID_MAX of /etc/login.defs and a login
+shell), counted each time a menu opens, so an account just added in
+Settings counts at once. With one account the entries stay hidden; on
+the lock screen Log Out is off, like Power Off and Restart.
+
+Log Out goes through gnome-session's end session dialog (normal mode)
+instead of logging out at once: open apps close, so it asks first, as
+Restart UI does.
+
+The power menu's buttons show icon and label side by side in shorter
+rows instead of squares, which leaves room for Log Out as a fourth row
+across both columns.
+---
+ src/power-menu-manager.c  |  20 ++++++++
+ src/power-menu.c          |  18 +++++++
+ src/power-menu.h          |   1 +
+ src/session-manager.c     |   4 +-
+ src/stylesheet/common.css |   5 +-
+ src/top-panel.c           |  23 +++++++--
+ src/ui/power-menu.ui      | 116 +++++++++++++++++++++++++++++++---------------
+ src/ui/top-panel.ui       |   4 +-
+ src/util.c                |  59 +++++++++++++++++++++++
+ src/util.h                |   1 +
+ 10 files changed, 205 insertions(+), 46 deletions(-)
+
+diff --git a/src/power-menu-manager.c b/src/power-menu-manager.c
+index f074edc8..65543723 100644
+--- a/src/power-menu-manager.c
++++ b/src/power-menu-manager.c
+@@ -88,6 +88,20 @@ on_restart_shell_activated (GSimpleAction *action, GVariant *param, gpointer dat
+ }
+ 
+ 
++static void
++on_logout_activated (GSimpleAction *action, GVariant *param, gpointer data)
++{
++  PhoshPowerMenuManager *self = PHOSH_POWER_MENU_MANAGER (data);
++  PhoshSessionManager *sm = phosh_shell_get_session_manager (phosh_shell_get_default ());
++
++  g_return_if_fail (PHOSH_IS_POWER_MENU_MANAGER (self));
++
++  /* Plinius: to switch accounts, plinius-greeter shows once the session ended; asks first */
++  close_menu (self);
++  phosh_session_manager_logout (sm);
++}
++
++
+ static void
+ on_suspend_activated (GSimpleAction *action, GVariant *param, gpointer data)
+ {
+@@ -166,6 +180,8 @@ on_power_menu_activated (GSimpleAction *action, GVariant *param, gpointer data)
+   suspend_action = g_action_map_lookup_action (G_ACTION_MAP (self->menu_actions), "suspend");
+   show_suspend = locked && g_action_get_enabled (suspend_action);
+   phosh_power_menu_set_show_suspend (self->dialog, show_suspend);
++  /* Plinius: Log Out only with another account to switch to */
++  phosh_power_menu_set_show_logout (self->dialog, phosh_util_plinius_has_other_accounts ());
+ 
+   gtk_widget_set_visible (GTK_WIDGET (self->dialog), TRUE);
+ }
+@@ -191,6 +207,9 @@ on_shell_locked_changed (PhoshPowerMenuManager *self, GParamSpec *pspec, PhoshSh
+   g_simple_action_set_enabled (G_SIMPLE_ACTION (action), !locked);
+   action = g_action_map_lookup_action (G_ACTION_MAP (self->menu_actions), "restart-shell");
+   g_simple_action_set_enabled (G_SIMPLE_ACTION (action), !locked);
++  /* Plinius: nobody logs the owner out from the lock screen */
++  action = g_action_map_lookup_action (G_ACTION_MAP (self->menu_actions), "logout");
++  g_simple_action_set_enabled (G_SIMPLE_ACTION (action), !locked);
+ }
+ 
+ 
+@@ -219,6 +238,7 @@ phosh_power_menu_manager_class_init (PhoshPowerMenuManagerClass *klass)
+ 
+ static GActionEntry menu_entries[] = {
+   { .name = "emergency-call", .activate = on_emergency_call_activated },
++  { .name = "logout", .activate = on_logout_activated },
+   { .name = "poweroff", .activate = on_power_off_activated },
+   { .name = "restart", .activate = on_restart_activated },
+   { .name = "restart-shell", .activate = on_restart_shell_activated },
+diff --git a/src/power-menu.c b/src/power-menu.c
+index 9d590ce2..9eb522f5 100644
+--- a/src/power-menu.c
++++ b/src/power-menu.c
+@@ -40,6 +40,7 @@ struct _PhoshPowerMenu {
+   PhoshSystemModalDialog parent;
+ 
+   GtkStack *stack;
++  GtkWidget *btn_logout;  /* Plinius */
+   gboolean  show_suspend;
+ };
+ G_DEFINE_TYPE (PhoshPowerMenu, phosh_power_menu, PHOSH_TYPE_SYSTEM_MODAL_DIALOG)
+@@ -124,6 +125,7 @@ phosh_power_menu_class_init (PhoshPowerMenuClass *klass)
+   gtk_widget_class_set_template_from_resource (widget_class,
+                                                "/mobi/phosh/ui/power-menu.ui");
+   gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, stack);
++  gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, btn_logout);
+   gtk_widget_class_bind_template_callback (widget_class, on_power_menu_done);
+ 
+   gtk_widget_class_set_css_name (widget_class, "phosh-power-menu");
+@@ -171,3 +173,19 @@ phosh_power_menu_get_show_suspend (PhoshPowerMenu *self)
+ 
+   return self->show_suspend;
+ }
++
++
++/**
++ * phosh_power_menu_set_show_logout:
++ * @self: The power menu
++ * @show_logout: Whether to offer Log Out
++ *
++ * Plinius: Log Out switches accounts (plinius-greeter), so it shows only with a second account.
++ */
++void
++phosh_power_menu_set_show_logout (PhoshPowerMenu *self, gboolean show_logout)
++{
++  g_assert (PHOSH_IS_POWER_MENU (self));
++
++  gtk_widget_set_visible (self->btn_logout, show_logout);
++}
+diff --git a/src/power-menu.h b/src/power-menu.h
+index 6cacfbcd..95dd5e33 100644
+--- a/src/power-menu.h
++++ b/src/power-menu.h
+@@ -19,5 +19,6 @@ G_DECLARE_FINAL_TYPE (PhoshPowerMenu, phosh_power_menu, PHOSH, POWER_MENU, Phosh
+ PhoshPowerMenu *phosh_power_menu_new (PhoshMonitor *monitor);
+ void            phosh_power_menu_set_show_suspend (PhoshPowerMenu *self, gboolean show_suspend);
+ gboolean        phosh_power_menu_get_show_suspend (PhoshPowerMenu *self);
++void            phosh_power_menu_set_show_logout (PhoshPowerMenu *self, gboolean show_logout);
+ 
+ G_END_DECLS
+diff --git a/src/session-manager.c b/src/session-manager.c
+index d1c2ae1c..7e6b4a30 100644
+--- a/src/session-manager.c
++++ b/src/session-manager.c
+@@ -461,8 +461,10 @@ phosh_session_manager_logout (PhoshSessionManager *self)
+   g_return_if_fail (PHOSH_IS_SESSION_MANAGER (self));
+   g_return_if_fail (PHOSH_DBUS_IS_SESSION_MANAGER_PROXY (self->proxy));
+ 
++  /* Plinius: Log Out switches to another account (plinius-greeter); gnome-session asks first
++   * through Phosh's end session dialog, as Restart UI does, open apps would close */
+   phosh_dbus_session_manager_call_logout (self->proxy,
+-                                          1 /* no dialog */,
++                                          0 /* normal: with the dialog */,
+                                           NULL,
+                                           on_logout_finished,
+                                           g_object_ref (self));
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index a3c7a1ed..05805934 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -1313,10 +1313,11 @@ phosh-power-menu .phosh-system-modal-dialog {
+   margin: 24px;
+ }
+ 
++/* Plinius: icon and label side by side, rows instead of squares (room for Log Out) */
+ phosh-power-menu grid button {
+-  min-height: 80px;
++  min-height: 52px;
+   min-width: 64px;
+-  border-radius: 24px;
++  border-radius: 18px;
+   font-weight: bold;
+ }
+ 
+diff --git a/src/top-panel.c b/src/top-panel.c
+index 0720895b..969e6d31 100644
+--- a/src/top-panel.c
++++ b/src/top-panel.c
+@@ -80,6 +80,7 @@ typedef struct _PhoshTopPanel {
+   /* Top row above settings */
+   GtkWidget *btn_power;
+   GtkWidget *menu_system;
++  GtkWidget *btn_logout;     /* Plinius: only with more than one account */
+   GtkWidget *box_clock;
+   GtkWidget *btn_lock;
+   GtkWidget *lbl_clock2;
+@@ -304,6 +305,19 @@ on_lockscreen_action (GSimpleAction *action,
+ }
+ 
+ 
++/* Plinius: Log Out switches accounts through plinius-greeter, so it shows with a second account */
++static void
++on_menu_system_show (PhoshTopPanel *self)
++{
++  gboolean enabled = phosh_shell_started_by_display_manager (phosh_shell_get_default ()) ||
++                     phosh_util_plinius_has_other_accounts ();
++  GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->actions), "logout");
++
++  g_simple_action_set_enabled (G_SIMPLE_ACTION (action), enabled);
++  gtk_widget_set_visible (self->btn_logout, enabled);
++}
++
++
+ static void
+ on_logout_action (GSimpleAction *action,
+                   GVariant      *parameter,
+@@ -870,10 +884,10 @@ phosh_top_panel_constructed (GObject *object)
+   g_action_map_add_action_entries (G_ACTION_MAP (self->actions),
+                                    entries, G_N_ELEMENTS (entries),
+                                    self);
+-  if (!phosh_shell_started_by_display_manager (phosh_shell_get_default ())) {
+-    action = g_action_map_lookup_action (G_ACTION_MAP (self->actions), "logout");
+-    g_simple_action_set_enabled (G_SIMPLE_ACTION (action), FALSE);
+-  }
++  /* Plinius: also with a second account to switch to, see on_menu_system_show () */
++  on_menu_system_show (self);
++  g_signal_connect_object (self->menu_system, "show", G_CALLBACK (on_menu_system_show), self,
++                           G_CONNECT_SWAPPED);
+ 
+   action = g_action_map_lookup_action (G_ACTION_MAP (self->actions), "suspend");
+   g_settings_bind (phosh_settings, "enable-suspend",
+@@ -1078,6 +1092,7 @@ phosh_top_panel_class_init (PhoshTopPanelClass *klass)
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, box_network);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, box_indicators);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, btn_lock);
++  gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, btn_logout);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, btn_power);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, click_gesture);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, launch_settings_revealer);
+diff --git a/src/ui/power-menu.ui b/src/ui/power-menu.ui
+index e65244b9..c993f361 100644
+--- a/src/ui/power-menu.ui
++++ b/src/ui/power-menu.ui
+@@ -37,8 +37,8 @@
+             <property name="visible">1</property>
+             <property name="column-homogeneous">1</property>
+             <property name="row-homogeneous">1</property>
+-            <property name="column-spacing">18</property>
+-            <property name="row-spacing">18</property>
++            <property name="column-spacing">6</property>
++            <property name="row-spacing">6</property>
+             <child>
+               <object class="GtkStack" id="stack">
+                 <property name="visible">1</property>
+@@ -52,18 +52,18 @@
+                       <object class="GtkBox">
+                         <property name="visible">1</property>
+                         <property name="margin-start">12</property>
+-                        <property name="margin-top">12</property>
++                        <property name="margin-top">8</property>
+                         <property name="margin-end">12</property>
+-                        <property name="margin-bottom">12</property>
+-                        <property name="spacing">8</property>
++                        <property name="margin-bottom">8</property>
++                        <property name="spacing">10</property>
+                         <property name="halign">center</property>
+                         <property name="hexpand">1</property>
+-                        <property name="orientation">vertical</property>
++                        <property name="orientation">horizontal</property>
+                         <child>
+                           <object class="GtkImage">
+                             <property name="visible">1</property>
+                             <property name="icon-name">system-shutdown-symbolic</property>
+-                            <property name="pixel-size">32</property>
++                            <property name="pixel-size">24</property>
+                           </object>
+                         </child>
+                         <child>
+@@ -92,18 +92,18 @@
+                       <object class="GtkBox">
+                         <property name="visible">1</property>
+                         <property name="margin-start">12</property>
+-                        <property name="margin-top">12</property>
++                        <property name="margin-top">8</property>
+                         <property name="margin-end">12</property>
+-                        <property name="margin-bottom">12</property>
+-                        <property name="spacing">8</property>
++                        <property name="margin-bottom">8</property>
++                        <property name="spacing">10</property>
+                         <property name="halign">center</property>
+                         <property name="hexpand">1</property>
+-                        <property name="orientation">vertical</property>
++                        <property name="orientation">horizontal</property>
+                         <child>
+                           <object class="GtkImage">
+                             <property name="visible">1</property>
+                             <property name="icon-name">moon-filled-symbolic</property>
+-                            <property name="pixel-size">32</property>
++                            <property name="pixel-size">24</property>
+                           </object>
+                         </child>
+                         <child>
+@@ -138,18 +138,18 @@
+                   <object class="GtkBox">
+                     <property name="visible">1</property>
+                     <property name="margin-start">12</property>
+-                    <property name="margin-top">12</property>
++                    <property name="margin-top">8</property>
+                     <property name="margin-end">12</property>
+-                    <property name="margin-bottom">12</property>
+-                    <property name="spacing">8</property>
++                    <property name="margin-bottom">8</property>
++                    <property name="spacing">10</property>
+                     <property name="halign">center</property>
+                     <property name="hexpand">1</property>
+-                    <property name="orientation">vertical</property>
++                    <property name="orientation">horizontal</property>
+                     <child>
+                       <object class="GtkImage">
+                         <property name="visible">1</property>
+                         <property name="icon-name">system-reboot-symbolic</property>
+-                        <property name="pixel-size">32</property>
++                        <property name="pixel-size">24</property>
+                       </object>
+                     </child>
+                     <child>
+@@ -179,18 +179,18 @@
+                   <object class="GtkBox">
+                     <property name="visible">1</property>
+                     <property name="margin-start">12</property>
+-                    <property name="margin-top">12</property>
++                    <property name="margin-top">8</property>
+                     <property name="margin-end">12</property>
+-                    <property name="margin-bottom">12</property>
+-                    <property name="spacing">8</property>
++                    <property name="margin-bottom">8</property>
++                    <property name="spacing">10</property>
+                     <property name="halign">center</property>
+                     <property name="hexpand">1</property>
+-                    <property name="orientation">vertical</property>
++                    <property name="orientation">horizontal</property>
+                     <child>
+                       <object class="GtkImage">
+                         <property name="visible">1</property>
+                         <property name="icon-name">system-lock-screen-symbolic</property>
+-                        <property name="pixel-size">32</property>
++                        <property name="pixel-size">24</property>
+                       </object>
+                     </child>
+                     <child>
+@@ -220,18 +220,18 @@
+                   <object class="GtkBox">
+                     <property name="visible">1</property>
+                     <property name="margin-start">12</property>
+-                    <property name="margin-top">12</property>
++                    <property name="margin-top">8</property>
+                     <property name="margin-end">12</property>
+-                    <property name="margin-bottom">12</property>
+-                    <property name="spacing">8</property>
++                    <property name="margin-bottom">8</property>
++                    <property name="spacing">10</property>
+                     <property name="halign">center</property>
+                     <property name="hexpand">1</property>
+-                    <property name="orientation">vertical</property>
++                    <property name="orientation">horizontal</property>
+                     <child>
+                       <object class="GtkImage">
+                         <property name="visible">1</property>
+                         <property name="icon-name">screenshot-portrait-symbolic</property>
+-                        <property name="pixel-size">32</property>
++                        <property name="pixel-size">24</property>
+                       </object>
+                     </child>
+                     <child>
+@@ -261,18 +261,18 @@
+                   <object class="GtkBox">
+                     <property name="visible">1</property>
+                     <property name="margin-start">12</property>
+-                    <property name="margin-top">12</property>
++                    <property name="margin-top">8</property>
+                     <property name="margin-end">12</property>
+-                    <property name="margin-bottom">12</property>
+-                    <property name="spacing">8</property>
++                    <property name="margin-bottom">8</property>
++                    <property name="spacing">10</property>
+                     <property name="halign">center</property>
+                     <property name="hexpand">1</property>
+-                    <property name="orientation">vertical</property>
++                    <property name="orientation">horizontal</property>
+                     <child>
+                       <object class="GtkImage">
+                         <property name="visible">1</property>
+                         <property name="icon-name">view-refresh-symbolic</property>
+-                        <property name="pixel-size">32</property>
++                        <property name="pixel-size">24</property>
+                       </object>
+                     </child>
+                     <child>
+@@ -302,18 +302,18 @@
+                   <object class="GtkBox">
+                     <property name="visible">1</property>
+                     <property name="margin-start">12</property>
+-                    <property name="margin-top">12</property>
++                    <property name="margin-top">8</property>
+                     <property name="margin-end">12</property>
+-                    <property name="margin-bottom">12</property>
+-                    <property name="spacing">8</property>
++                    <property name="margin-bottom">8</property>
++                    <property name="spacing">10</property>
+                     <property name="halign">center</property>
+                     <property name="hexpand">1</property>
+-                    <property name="orientation">vertical</property>
++                    <property name="orientation">horizontal</property>
+                     <child>
+                       <object class="GtkImage">
+                         <property name="visible">1</property>
+                         <property name="icon-name">asterisk-symbolic</property>
+-                        <property name="pixel-size">32</property>
++                        <property name="pixel-size">24</property>
+                       </object>
+                     </child>
+                     <child>
+@@ -334,6 +334,48 @@
+                 <property name="top-attach">2</property>
+               </packing>
+             </child>
++            <child>
++              <object class="GtkButton" id="btn_logout">
++                <property name="visible">0</property>
++                <property name="vexpand">1</property>
++                <property name="valign">center</property>
++                <property name="action-name">power-menu.logout</property>
++                <child>
++                  <object class="GtkBox">
++                    <property name="visible">1</property>
++                    <property name="margin-start">12</property>
++                    <property name="margin-top">8</property>
++                    <property name="margin-end">12</property>
++                    <property name="margin-bottom">8</property>
++                    <property name="spacing">10</property>
++                    <property name="halign">center</property>
++                    <property name="hexpand">1</property>
++                    <property name="orientation">horizontal</property>
++                    <child>
++                      <object class="GtkImage">
++                        <property name="visible">1</property>
++                        <property name="icon-name">system-log-out-symbolic</property>
++                        <property name="pixel-size">24</property>
++                      </object>
++                    </child>
++                    <child>
++                      <object class="PhoshFadingLabel">
++                        <property name="visible">1</property>
++                        <property name="label" translatable="yes">Log Out</property>
++                      </object>
++                    </child>
++                  </object>
++                </child>
++                <style>
++                  <class name="flat"/>
++                </style>
++              </object>
++              <packing>
++                <property name="left-attach">0</property>
++                <property name="top-attach">3</property>
++                <property name="width">2</property>
++              </packing>
++            </child>
+           </object>
+         </child>
+       </object>
+diff --git a/src/ui/top-panel.ui b/src/ui/top-panel.ui
+index 3788fc41..1bf06e0f 100644
+--- a/src/ui/top-panel.ui
++++ b/src/ui/top-panel.ui
+@@ -121,8 +121,8 @@
+           </object>
+         </child>
+         <child>
+-          <object class="GtkButton">
+-            <property name="visible">1</property>
++          <object class="GtkButton" id="btn_logout">
++            <property name="visible">0</property>
+             <property name="action-name">panel.logout</property>
+             <child>
+               <object class="GtkBox">
+diff --git a/src/util.c b/src/util.c
+index 25386ee6..88570d0e 100644
+--- a/src/util.c
++++ b/src/util.c
+@@ -38,6 +38,7 @@
+ #include <fcntl.h>
+ 
+ #include <math.h>
++#include <pwd.h>
+ 
+ static gboolean have_gnome_software = -1;
+ 
+@@ -1512,3 +1513,61 @@ phosh_util_systemd_unit_set_active_finish (GDBusProxy *unit, GAsyncResult *res,
+ 
+   return g_task_propagate_boolean (G_TASK (res), err);
+ }
++
++
++/*
++ * Plinius: more than one account one can log in with, by the rule of plinius-greeter
++ * (plinius_greeter_accounts.py): a user ID between UID_MIN and UID_MAX of /etc/login.defs and a
++ * shell listed in /etc/shells other than nologin or false. Read anew at each call, so an account
++ * added in Settings counts at once (the system menu and the power menu ask when they open).
++ */
++/**
++ * phosh_util_plinius_has_other_accounts:
++ *
++ * Returns: %TRUE with more than one account one can log in with
++ */
++gboolean
++phosh_util_plinius_has_other_accounts (void)
++{
++  g_autofree char *defs = NULL;
++  g_autofree char *shells_text = NULL;
++  g_auto (GStrv) shells = NULL;
++  gint64 uid_min = 1000, uid_max = 60000;
++  struct passwd *pw;
++  guint n = 0;
++
++  if (g_file_get_contents ("/etc/login.defs", &defs, NULL, NULL)) {
++    g_auto (GStrv) lines = g_strsplit (defs, "\n", -1);
++
++    for (guint i = 0; lines[i]; i++) {
++      g_auto (GStrv) parts = g_strsplit_set (g_strstrip (lines[i]), " \t", 2);
++
++      if (!parts[0] || !parts[1])
++        continue;
++      if (g_str_equal (parts[0], "UID_MIN"))
++        uid_min = g_ascii_strtoll (g_strstrip (parts[1]), NULL, 10);
++      else if (g_str_equal (parts[0], "UID_MAX"))
++        uid_max = g_ascii_strtoll (g_strstrip (parts[1]), NULL, 10);
++    }
++  }
++  if (!g_file_get_contents ("/etc/shells", &shells_text, NULL, NULL))
++    return FALSE;
++  shells = g_strsplit (shells_text, "\n", -1);
++
++  setpwent ();
++  while ((pw = getpwent ()) != NULL && n < 2) {
++    if (pw->pw_uid < uid_min || pw->pw_uid > uid_max || !pw->pw_shell)
++      continue;
++    if (g_str_has_suffix (pw->pw_shell, "/nologin") || g_str_has_suffix (pw->pw_shell, "/false"))
++      continue;
++    for (guint i = 0; shells[i]; i++) {
++      if (g_str_equal (g_strstrip (shells[i]), pw->pw_shell)) {
++        n++;
++        break;
++      }
++    }
++  }
++  endpwent ();
++
++  return n > 1;
++}
+diff --git a/src/util.h b/src/util.h
+index a4a92dd2..40791c7f 100644
+--- a/src/util.h
++++ b/src/util.h
+@@ -115,6 +115,7 @@ void             phosh_util_systemd_unit_set_active (GDBusProxy          *unit,
+ gboolean         phosh_util_systemd_unit_set_active_finish (GDBusProxy   *unit,
+                                                             GAsyncResult *res,
+                                                             GError      **err);
++gboolean         phosh_util_plinius_has_other_accounts (void);
+ 
+ 
+ G_END_DECLS

@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:30:55 +0100
+Subject: [PATCH] output-management: A virtual mode for every client of a head
+
+An output without fixed modes (e.g. headless) is announced with a
+virtual mode while it is enabled. When it was enabled again, a virtual
+mode was only sent if no client had one: a client that bound while the
+output was disabled (e.g. wlr-randr --on) got none, while the clients
+from before still had theirs. head_send_state() then found no current
+mode for that client and the compositor aborted on assert(found).
+Check per client instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ types/wlr_output_management_v1.c | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/types/wlr_output_management_v1.c b/types/wlr_output_management_v1.c
+index 910bcbe5e..91f224dd4 100644
+--- a/types/wlr_output_management_v1.c
++++ b/types/wlr_output_management_v1.c
+@@ -99,10 +99,12 @@ static void head_destroy_custom_mode_resources(struct wlr_output_head_v1 *head)
+ 	}
+ }
+ 
+-static bool head_has_custom_mode_resources(const struct wlr_output_head_v1 *head) {
++static bool head_client_has_custom_mode_resource(const struct wlr_output_head_v1 *head,
++		struct wl_client *client) {
+ 	struct wl_resource *resource;
+ 	wl_resource_for_each(resource, &head->mode_resources) {
+-		if (wl_resource_get_user_data(resource) == NULL) {
++		if (wl_resource_get_user_data(resource) == NULL &&
++				wl_resource_get_client(resource) == client) {
+ 			return true;
+ 		}
+ 	}
+@@ -932,10 +934,15 @@ static bool manager_update_head(struct wlr_output_manager_v1 *manager,
+ 		}
+ 	}
+ 
+-	if (next->mode == NULL && next->enabled && !head_has_custom_mode_resources(head)) {
++	if (next->mode == NULL && next->enabled) {
++		// Each client needs its own virtual mode: one that bound while the
++		// head was disabled has none yet, even if others kept theirs
+ 		struct wl_resource *resource;
+ 		wl_resource_for_each(resource, &head->resources) {
+-			head_send_mode(head, resource, NULL);
++			if (!head_client_has_custom_mode_resource(head,
++					wl_resource_get_client(resource))) {
++				head_send_mode(head, resource, NULL);
++			}
+ 		}
+ 	} else if (next->mode != NULL) {
+ 		head_destroy_custom_mode_resources(head);
+-- 
+2.56.0
+

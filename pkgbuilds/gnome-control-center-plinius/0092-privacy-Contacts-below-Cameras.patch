@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 13:00:00 +0100
+Subject: [PATCH] privacy: Contacts below Cameras
+
+The same row Contacts as on the Bluetooth panel, opening the same page (which
+Bluetooth devices may read the contacts), in the group Devices below Cameras:
+a second way to it, from privacy. cc_plinius_bt_contacts_row_new() comes from
+the Bluetooth panel's library; nothing shows without bluez-obex-plinius.
+---
+ privacy/cc-privacy-panel.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/panels/privacy/cc-privacy-panel.c b/panels/privacy/cc-privacy-panel.c
+index 0e1ed7623..99d0bef2c 100644
+--- a/panels/privacy/cc-privacy-panel.c
++++ b/panels/privacy/cc-privacy-panel.c
+@@ -21,6 +21,7 @@
+ 
+ #include "cc-privacy-panel.h"
+ #include "shell/cc-window.h"
++#include "../bluetooth/cc-plinius-bt-contacts.h"
+ 
+ #ifdef BUILD_THUNDERBOLT
+ #include "bolt/cc-bolt-page.h"
+@@ -95,6 +96,8 @@ cc_privacy_panel_class_init (CcPrivacyPanelClass *klass)
+ static void
+ cc_privacy_panel_init (CcPrivacyPanel *self)
+ {
++    GtkWidget *contacts_row;
++
+     g_resources_register (cc_privacy_get_resource ());
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+@@ -128,4 +131,10 @@ cc_privacy_panel_init (CcPrivacyPanel *self)
+     /* Plinius: Widevine (DRM) from Google through plinius-widevine, below Devices
+      * (cc-plinius-widevine.c, nothing without plinius-widevine) */
+     cc_plinius_widevine_add (self->privacy_page);
++
++    /* Plinius: which Bluetooth devices may read the contacts, the same row and page as on the
++     * Bluetooth panel, below Cameras (cc-plinius-bt-contacts.c, nothing without bluez-obex-plinius) */
++    contacts_row = cc_plinius_bt_contacts_row_new (CC_PANEL (self), TRUE);
++    if (contacts_row != NULL)
++        gtk_list_box_insert (GTK_LIST_BOX (gtk_widget_get_parent (GTK_WIDGET (self->security_row))), contacts_row, 1);
+ }

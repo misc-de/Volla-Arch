@@ -1,0 +1,363 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 19:00:00 +0100
+Subject: [PATCH] po: Airplane Mode and the USB tile's new rows
+
+Translations of the strings of 0081 (the "Airplane Mode" tile) and 0082
+(webcam and powering the connected device in the USB quick setting) for
+de, fr, es, it, pt, pt_BR (as pt), nl, pl and ru, kept apart so that both
+patches stay free of po hunks.
+---
+ po/de.po    | 30 ++++++++++++++++++++++++++++++
+ po/es.po    | 30 ++++++++++++++++++++++++++++++
+ po/fr.po    | 30 ++++++++++++++++++++++++++++++
+ po/it.po    | 30 ++++++++++++++++++++++++++++++
+ po/nl.po    | 30 ++++++++++++++++++++++++++++++
+ po/pl.po    | 30 ++++++++++++++++++++++++++++++
+ po/pt.po    | 30 ++++++++++++++++++++++++++++++
+ po/pt_BR.po | 30 ++++++++++++++++++++++++++++++
+ po/ru.po    | 30 ++++++++++++++++++++++++++++++
+ 9 files changed, 270 insertions(+)
+
+diff --git a/po/de.po b/po/de.po
+index b1d4e13c..f8cca632 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1633,3 +1633,33 @@ msgid "%d device"
+ msgid_plural "%d devices"
+ msgstr[0] "%d Gerät"
+ msgstr[1] "%d Geräte"
++
++msgid "Airplane Mode"
++msgstr "Flugmodus"
++
++msgid "Webcam"
++msgstr "Webcam"
++
++msgid "The phone's camera for the computer"
++msgstr "Die Kamera des Telefons für den Computer"
++
++msgid "Power the Device"
++msgstr "Gerät versorgen"
++
++msgid "Webcam + More"
++msgstr "Webcam + mehr"
++
++msgid "Powering Device"
++msgstr "Versorgt Gerät"
++
++msgid "The device takes its power from the phone"
++msgstr "Das Gerät bezieht seinen Strom vom Telefon"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Braucht ein Gerät mit USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "Das Telefon liefert den Strom"
++
++msgid "This phone charges from the cable"
++msgstr "Dieses Telefon lädt über das Kabel"
+diff --git a/po/es.po b/po/es.po
+index 396adfca..d1d1b0ec 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -947,3 +947,33 @@ msgid "%d device"
+ msgid_plural "%d devices"
+ msgstr[0] "%d dispositivo"
+ msgstr[1] "%d dispositivos"
++
++msgid "Airplane Mode"
++msgstr "Modo avión"
++
++msgid "Webcam"
++msgstr "Cámara web"
++
++msgid "The phone's camera for the computer"
++msgstr "La cámara del teléfono para el ordenador"
++
++msgid "Power the Device"
++msgstr "Alimentar el dispositivo"
++
++msgid "Webcam + More"
++msgstr "Cámara web + más"
++
++msgid "Powering Device"
++msgstr "Alimentando dispositivo"
++
++msgid "The device takes its power from the phone"
++msgstr "El dispositivo se alimenta del teléfono"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Requiere un dispositivo con USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "El teléfono suministra la energía"
++
++msgid "This phone charges from the cable"
++msgstr "Este teléfono se carga por el cable"
+diff --git a/po/fr.po b/po/fr.po
+index b8985e74..9e9a212c 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1295,3 +1295,33 @@ msgid "%d device"
+ msgid_plural "%d devices"
+ msgstr[0] "%d appareil"
+ msgstr[1] "%d appareils"
++
++msgid "Airplane Mode"
++msgstr "Mode avion"
++
++msgid "Webcam"
++msgstr "Webcam"
++
++msgid "The phone's camera for the computer"
++msgstr "L'appareil photo du téléphone pour l'ordinateur"
++
++msgid "Power the Device"
++msgstr "Alimenter l'appareil"
++
++msgid "Webcam + More"
++msgstr "Webcam + autres"
++
++msgid "Powering Device"
++msgstr "Alimente l'appareil"
++
++msgid "The device takes its power from the phone"
++msgstr "L'appareil est alimenté par le téléphone"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Nécessite un appareil compatible USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "Le téléphone fournit l'alimentation"
++
++msgid "This phone charges from the cable"
++msgstr "Ce téléphone se recharge par le câble"
+diff --git a/po/it.po b/po/it.po
+index 1f121cbb..f9bd365a 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -1029,3 +1029,33 @@ msgid "%d device"
+ msgid_plural "%d devices"
+ msgstr[0] "%d dispositivo"
+ msgstr[1] "%d dispositivi"
++
++msgid "Airplane Mode"
++msgstr "Modalità aereo"
++
++msgid "Webcam"
++msgstr "Webcam"
++
++msgid "The phone's camera for the computer"
++msgstr "La fotocamera del telefono per il computer"
++
++msgid "Power the Device"
++msgstr "Alimenta il dispositivo"
++
++msgid "Webcam + More"
++msgstr "Webcam + altro"
++
++msgid "Powering Device"
++msgstr "Alimenta dispositivo"
++
++msgid "The device takes its power from the phone"
++msgstr "Il dispositivo è alimentato dal telefono"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Richiede un dispositivo con USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "Il telefono fornisce l'alimentazione"
++
++msgid "This phone charges from the cable"
++msgstr "Questo telefono si ricarica dal cavo"
+diff --git a/po/nl.po b/po/nl.po
+index 914c9f3e..99dcd83b 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1640,3 +1640,33 @@ msgid "%d device"
+ msgid_plural "%d devices"
+ msgstr[0] "%d apparaat"
+ msgstr[1] "%d apparaten"
++
++msgid "Airplane Mode"
++msgstr "Vliegtuigmodus"
++
++msgid "Webcam"
++msgstr "Webcam"
++
++msgid "The phone's camera for the computer"
++msgstr "De camera van de telefoon voor de computer"
++
++msgid "Power the Device"
++msgstr "Apparaat voeden"
++
++msgid "Webcam + More"
++msgstr "Webcam + meer"
++
++msgid "Powering Device"
++msgstr "Voedt apparaat"
++
++msgid "The device takes its power from the phone"
++msgstr "Het apparaat krijgt stroom van de telefoon"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Vereist een apparaat met USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "De telefoon levert de stroom"
++
++msgid "This phone charges from the cable"
++msgstr "Deze telefoon laadt op via de kabel"
+diff --git a/po/pl.po b/po/pl.po
+index fea14d34..4b260b64 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1605,3 +1605,33 @@ msgid_plural "%d devices"
+ msgstr[0] "%d urządzenie"
+ msgstr[1] "%d urządzenia"
+ msgstr[2] "%d urządzeń"
++
++msgid "Airplane Mode"
++msgstr "Tryb samolotowy"
++
++msgid "Webcam"
++msgstr "Kamera internetowa"
++
++msgid "The phone's camera for the computer"
++msgstr "Aparat telefonu dla komputera"
++
++msgid "Power the Device"
++msgstr "Zasilaj urządzenie"
++
++msgid "Webcam + More"
++msgstr "Kamera + więcej"
++
++msgid "Powering Device"
++msgstr "Zasila urządzenie"
++
++msgid "The device takes its power from the phone"
++msgstr "Urządzenie jest zasilane z telefonu"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Wymaga urządzenia z USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "Telefon dostarcza zasilanie"
++
++msgid "This phone charges from the cable"
++msgstr "Ten telefon ładuje się z kabla"
+diff --git a/po/pt.po b/po/pt.po
+index 37da6bac..30ca1148 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1590,3 +1590,33 @@ msgid "%d device"
+ msgid_plural "%d devices"
+ msgstr[0] "%d dispositivo"
+ msgstr[1] "%d dispositivos"
++
++msgid "Airplane Mode"
++msgstr "Modo de avião"
++
++msgid "Webcam"
++msgstr "Webcam"
++
++msgid "The phone's camera for the computer"
++msgstr "A câmara do telefone para o computador"
++
++msgid "Power the Device"
++msgstr "Alimentar o dispositivo"
++
++msgid "Webcam + More"
++msgstr "Webcam + mais"
++
++msgid "Powering Device"
++msgstr "A alimentar dispositivo"
++
++msgid "The device takes its power from the phone"
++msgstr "O dispositivo é alimentado pelo telefone"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Requer um dispositivo com USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "O telefone fornece a energia"
++
++msgid "This phone charges from the cable"
++msgstr "Este telefone carrega pelo cabo"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 9932df0f..eb379666 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1682,3 +1682,33 @@ msgid "%d device"
+ msgid_plural "%d devices"
+ msgstr[0] "%d dispositivo"
+ msgstr[1] "%d dispositivos"
++
++msgid "Airplane Mode"
++msgstr "Modo de avião"
++
++msgid "Webcam"
++msgstr "Webcam"
++
++msgid "The phone's camera for the computer"
++msgstr "A câmara do telefone para o computador"
++
++msgid "Power the Device"
++msgstr "Alimentar o dispositivo"
++
++msgid "Webcam + More"
++msgstr "Webcam + mais"
++
++msgid "Powering Device"
++msgstr "A alimentar dispositivo"
++
++msgid "The device takes its power from the phone"
++msgstr "O dispositivo é alimentado pelo telefone"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Requer um dispositivo com USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "O telefone fornece a energia"
++
++msgid "This phone charges from the cable"
++msgstr "Este telefone carrega pelo cabo"
+diff --git a/po/ru.po b/po/ru.po
+index 7992ab82..d7a107f5 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1702,3 +1702,33 @@ msgid_plural "%d devices"
+ msgstr[0] "%d устройство"
+ msgstr[1] "%d устройства"
+ msgstr[2] "%d устройств"
++
++msgid "Airplane Mode"
++msgstr "Режим полёта"
++
++msgid "Webcam"
++msgstr "Веб-камера"
++
++msgid "The phone's camera for the computer"
++msgstr "Камера телефона для компьютера"
++
++msgid "Power the Device"
++msgstr "Питать устройство"
++
++msgid "Webcam + More"
++msgstr "Веб-камера + ещё"
++
++msgid "Powering Device"
++msgstr "Питает устройство"
++
++msgid "The device takes its power from the phone"
++msgstr "Устройство питается от телефона"
++
++msgid "Needs a device with USB Power Delivery"
++msgstr "Нужно устройство с USB Power Delivery"
++
++msgid "The phone supplies the power"
++msgstr "Телефон подаёт питание"
++
++msgid "This phone charges from the cable"
++msgstr "Этот телефон заряжается от кабеля"

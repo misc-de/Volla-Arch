@@ -1,0 +1,20 @@
+[Desktop Entry]
+Name=DOS Installer
+Comment=Install MS-DOS games from floppy disks, CDs, archives or GOG
+Comment[de]=MS-DOS-Spiele von Disketten, CDs, Archiven oder GOG installieren
+Comment[es]=Instalar juegos de MS-DOS desde disquetes, CD, archivos o GOG
+Comment[fr]=Installer des jeux MS-DOS depuis des disquettes, des CD, des archives ou GOG
+Comment[it]=Installa giochi MS-DOS da dischetti, CD, archivi o GOG
+Comment[nl]=MS-DOS-spellen installeren van diskettes, cd's, archieven of GOG
+Comment[pl]=Instaluj gry MS-DOS z dyskietek, płyt CD, archiwów lub GOG
+Comment[pt]=Instalar jogos MS-DOS a partir de disquetes, CDs, arquivos ou GOG
+Comment[ru]=Установка игр MS-DOS с дискет, компакт-дисков, архивов или GOG
+Exec=plinius-dos-installer
+Icon=org.plinius.DOSInstaller
+Terminal=false
+Type=Application
+Categories=Game;Emulator;GTK;
+Keywords=DOS;MS-DOS;DOSBox;ScummVM;Floppy;Disk;Installer;GOG;Adventure;Retro;
+StartupNotify=true
+SingleMainWindow=true
+X-Purism-FormFactor=Workstation;Mobile;

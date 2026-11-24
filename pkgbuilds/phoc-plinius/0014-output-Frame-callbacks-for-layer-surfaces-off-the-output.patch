@@ -1,0 +1,49 @@
+From 714d420369a6a1e3fdd4bcc40c0959737ed08cd5 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 09:21:45 +0100
+Subject: [PATCH] output: Frame callbacks for layer surfaces off the output
+
+Phosh maps its home surface folded at the bottom with a margin that
+leaves only the home bar on screen. After Phosh restarted (after a
+crash or "Restart UI") the layout shrank the home surface by the top
+bar's height while the folded margin stayed, so the surface lay
+completely below the output. Frame callbacks only went to visible
+surfaces, so GTK never drew the new size and Phosh never sent the
+matching margin: the home bar stayed off screen and could not be
+dragged up, touches at the bottom edge went to the app.
+
+Layer surfaces now get their frame callbacks wherever they are.
+---
+ src/output.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/src/output.c b/src/output.c
+index 90f0f5c..806c554 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -705,6 +705,25 @@ phoc_output_handle_frame (struct wl_listener *listener, void *data)
+   clock_gettime (CLOCK_MONOTONIC, &now);
+   phoc_output_for_each_surface (self, surface_send_frame_done_iterator, &now, true);
+ 
++  /* Plinius: layer surfaces get their frame callbacks even when they lie off the output.
++   * A folded drag surface (Phosh's home) that the layout shrinks while its folded margin
++   * stays the same ends up completely below the output. Without frame callbacks its client
++   * never draws the new size and never sends the matching margin, so it stayed off-screen
++   * for good and the home bar could not be dragged. There are only a few layer surfaces,
++   * and sending done twice to a surface (visible ones got it above) is a no-op.
++   * plinius-ambient keeps its own rule (frames only while its effect is seen), see
++   * surface_send_frame_done_iterator(). */
++  {
++    PhocLayerSurface *layer_surface;
++
++    wl_list_for_each (layer_surface, &self->layer_surfaces, link) {
++      if (!layer_surface->mapped ||
++          g_strcmp0 (layer_surface->layer_surface->namespace, "plinius-ambient") == 0)
++        continue;
++      wlr_surface_send_frame_done (layer_surface->layer_surface->surface, &now);
++    }
++  }
++
+   /* Want frame clock ticking as long as we have frame callbacks */
+   if (priv->frame_callbacks)
+     wlr_output_schedule_frame (self->wlr_output);

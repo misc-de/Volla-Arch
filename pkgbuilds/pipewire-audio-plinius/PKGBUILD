@@ -1,0 +1,82 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=pipewire-audio-plinius
+pkgver=1.6.11
+_archrel=2
+pkgrel=3
+epoch=1
+pkgdesc="Arch's pipewire-audio, with a Bluetooth plugin whose hands-free gateway knows the modem"
+arch=(aarch64)
+url="https://pipewire.org"
+license=(MIT)
+# Why: a car (HFP hands-free unit) talks to the phone's hands-free gateway in PipeWire's bluez5
+# plugin. Arch builds that plugin without "bluez5-backend-native-mm" (meson default: disabled),
+# so the gateway never asks ModemManager (ofono2mm here) for the network and the calls: the car
+# got "+CIND: 0,..." (no service), its ATD was answered "+CME ERROR: 1", it said the phone does
+# not support the function, and an incoming call stayed silent. This package is Arch's
+# pipewire-audio unchanged, except libspa-bluez5.so, built from the same PipeWire release with
+# ModemManager, patch 0001 (call index from 1 in +CLCC; a car drops a call with index 0,
+# found by furios_audio) and patch 0002 (an AT+CHUP is answered when the call ends first).
+# Only the plugin is built: the rest of PipeWire stays Arch's.
+# The Arch package comes from the ALARM mirror, which keeps only the current release: when
+# PipeWire is updated there, pkgver/_archrel/_commit and the checksums follow.
+depends=("libpipewire=1:$pkgver-$_archrel" "pipewire=1:$pkgver-$_archrel"
+	alsa-card-profiles alsa-lib bluez-libs dbus fftw glib2 glibc libebur128 libfdk-aac
+	libfreeaptx libgcc liblc3 libldac libmysofa libsndfile libstdc++ libusb lilv opus sbc
+	spandsp systemd-libs webrtc-audio-processing-1)
+makedepends=(git meson glib2-devel libmm-glib)
+provides=("pipewire-audio=1:$pkgver-$_archrel" ladspa-host lv2-host)
+conflicts=(pipewire-audio)
+# Commit of tag $pkgver: a tag can be moved later, a commit hash cannot
+_commit=4287f31510771fc999f8a58a024c81ca10b8d55f
+_archpkg=pipewire-audio-$pkgver-$_archrel-aarch64.pkg.tar.xz
+source=("pipewire::git+https://gitlab.freedesktop.org/pipewire/pipewire.git#commit=$_commit"
+        "$_archpkg::https://de3.mirror.archlinuxarm.org/aarch64/extra/pipewire-audio-1%3A$pkgver-$_archrel-aarch64.pkg.tar.xz"
+        0001-bluez5-modemmanager-number-calls-from-1-in-CLCC.patch
+        0002-bluez5-modemmanager-answer-the-AT-command-when-its-call-goes-away.patch)
+noextract=("$_archpkg")
+sha256sums=('SKIP'
+            '66d315e9e9c49da3c4757ddb23a2f348df80d45da6b824c7d39484db22542317'
+            '05b15068574060136ee9ecabd27fd05ad4235dd4c7da07cbbe5f0cbcaaa78407'
+            '09c67dd766b53fc1e393fa6bb11a20dff97b8948d7158f9ba96c2a3c2fb5f158')
+
+prepare() {
+	cd pipewire
+	patch -Np1 -i ../0001-bluez5-modemmanager-number-calls-from-1-in-CLCC.patch
+	# A car's AT+CHUP got no answer when the call ended before ofono2mm returned from Hangup:
+	# the car kept showing the call
+	patch -Np1 -i ../0002-bluez5-modemmanager-answer-the-AT-command-when-its-call-goes-away.patch
+}
+
+build() {
+	# Everything off except what libspa-bluez5.so is built with in Arch's package (backends,
+	# libusb, LC3), plus ModemManager. The codec plugins next to it stay Arch's.
+	# Arch's arch-meson settings, but it also sets --auto-features enabled, which is the point here
+	meson setup pipewire build \
+		--prefix /usr --libexecdir lib --sbindir bin --buildtype plain --wrap-mode nodownload \
+		-D b_lto=false -D b_pie=true \
+		--auto-features disabled \
+		-D spa-plugins=enabled \
+		-D dbus=enabled \
+		-D bluez5=enabled \
+		-D bluez5-backend-hsp-native=enabled \
+		-D bluez5-backend-hfp-native=enabled \
+		-D bluez5-backend-native-mm=enabled \
+		-D bluez5-backend-ofono=enabled \
+		-D bluez5-backend-hsphfpd=enabled \
+		-D bluez5-codec-lc3=enabled \
+		-D libusb=enabled \
+		-D session-managers=[] \
+		-D examples=disabled \
+		-D tests=disabled \
+		-D man=disabled \
+		-D docs=disabled
+	meson compile -C build spa/plugins/bluez5/spa-bluez5
+}
+
+package() {
+	# Arch's package as it is, without its own metadata
+	bsdtar -xpf "$_archpkg" -C "$pkgdir" --exclude '.PKGINFO' --exclude '.BUILDINFO' --exclude '.MTREE' \
+		--exclude '.INSTALL'
+	install -Dm755 build/spa/plugins/bluez5/libspa-bluez5.so -t "$pkgdir/usr/lib/spa-0.2/bluez5"
+}

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The switch "Protected Content" in GNOME Settings > Privacy runs
+     pkexec /usr/lib/plinius-widevine/plinius-widevine-set on|off; argv1 picks the action. -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <!-- Brings closed-source code from Google onto the phone: the administrator password -->
+  <action id="org.plinius.widevine.enable">
+    <description>Turn on protected content (DRM)</description>
+    <message>Authentication is required to download Google's Widevine module for protected content</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-widevine/plinius-widevine-set</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">on</annotate>
+  </action>
+
+  <!-- Removing it only takes something away: no password -->
+  <action id="org.plinius.widevine.disable">
+    <description>Turn off protected content (DRM)</description>
+    <message>Authentication is required to remove Google's Widevine module</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-widevine/plinius-widevine-set</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">off</annotate>
+  </action>
+</policyconfig>

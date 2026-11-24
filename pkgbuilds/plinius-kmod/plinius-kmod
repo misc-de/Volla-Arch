@@ -1,0 +1,18 @@
+#!/bin/sh
+# Loads the out-of-tree modules of plinius-kmod (backlight device, uleds for the torch, no VT
+# switch on suspend, no Bluetooth host suspend, IPsec AH matches for the RIL's Wi-Fi calling
+# filters – loaded before the Android container starts). They live outside /lib/modules, which the
+# Halium kernel setup does not provide.
+# Usage: plinius-kmod   (plinius-kmod.service)
+set -eu
+
+# Our own kernels (plinius-kernel) bring theirs along; a kernel that is only kept as the fallback
+# has them in plinius-kernel's copy
+dir=/usr/lib/plinius/modules/$(uname -r)
+[ -d "$dir" ] || dir=/var/lib/plinius-kernel/kept/$(uname -r)/modules
+# plinius-novt only prevents the VT switch on suspend while consoles are suspended along: the
+# kernel of the port runs with console_suspend off, and then it switches regardless.
+echo Y > /sys/module/printk/parameters/console_suspend
+for m in uleds plinius-backlight plinius-novt plinius-btsuspend ipt_ah ip6t_ah; do
+	grep -q "^$(echo "$m" | tr - _) " /proc/modules || insmod "$dir/$m.ko"
+done

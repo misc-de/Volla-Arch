@@ -1,0 +1,149 @@
+From dfe5bb67008533648ebabbda60d566ad72fe6c9b Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:12:32 +0100
+Subject: [PATCH] about: GPU and storage from a thread
+
+Plinius: the About page found the GPU's name by running
+gnome-control-center-print-renderer, which starts EGL (through
+libhybris on the phone), and the storage size through udisks, which
+lists every partition of the phone. Both ran while the page was built
+and held it up ~650 ms.
+
+They now run in a thread. Until they are known, the Graphics and Disk
+Capacity rows show an ellipsis, so that nothing moves when the values
+arrive. "Copy" still gathers its details when it is tapped.
+---
+ panels/system/about/cc-about-page.c | 81 ++++++++++++++++++++++++++---
+ 1 file changed, 73 insertions(+), 8 deletions(-)
+
+diff --git a/panels/system/about/cc-about-page.c b/panels/system/about/cc-about-page.c
+index eccfc392f..7febc7d3e 100644
+--- a/panels/system/about/cc-about-page.c
++++ b/panels/system/about/cc-about-page.c
+@@ -75,6 +75,10 @@ struct _CcAboutPage {
+ 
+     /* Cached version string */
+     char *gnome_version_str;
++
++    /* Plinius: the graphics and storage rows, filled in from a thread */
++    GtkWidget *graphics_placeholder;
++    GCancellable *cancellable;
+ };
+ 
+ G_DEFINE_FINAL_TYPE (CcAboutPage, cc_about_page, ADW_TYPE_NAVIGATION_PAGE)
+@@ -920,6 +924,53 @@ on_copy_row_activated_cb (GtkWidget *widget, CcAboutPage *self)
+     adw_toast_overlay_add_toast (self->toast_overlay, adw_toast_new (_("Details copied to clipboard")));
+ }
+ 
++/*
++ * Plinius: the GPU's name and the storage size come from a thread. Both wait for other processes:
++ * the renderer helper starts EGL through libhybris, udisks lists every partition of the phone.
++ * That took ~600 ms of the main thread when the page opened. Until they are known, the rows show
++ * an ellipsis, so that nothing moves when they arrive.
++ */
++typedef struct {
++    GSList *graphics;
++    char *disk;
++} OverviewData;
++
++static void
++overview_data_free (OverviewData *data)
++{
++    g_slist_free_full (data->graphics, (GDestroyNotify) gpu_data_free);
++    g_free (data->disk);
++    g_free (data);
++}
++
++static void
++overview_thread (GTask *task, gpointer source_object, gpointer task_data, GCancellable *cancellable)
++{
++    OverviewData *data = g_new0 (OverviewData, 1);
++
++    data->graphics = get_graphics_hardware_list ();
++    data->disk = get_primary_disk_info ();
++    g_task_return_pointer (task, data, (GDestroyNotify) overview_data_free);
++}
++
++static void
++overview_ready_cb (GObject *source_object, GAsyncResult *result, gpointer user_data)
++{
++    CcAboutPage *self = CC_ABOUT_PAGE (source_object);
++    OverviewData *data;
++
++    /* NULL when the page went away meanwhile */
++    data = g_task_propagate_pointer (G_TASK (result), NULL);
++    if (data == NULL)
++        return;
++
++    adw_preferences_group_remove (self->hardware_group, self->graphics_placeholder);
++    self->graphics_placeholder = NULL;
++    create_graphics_rows (self, data->graphics);
++    adw_action_row_set_subtitle (self->disk_row, data->disk ? data->disk : _("Unknown"));
++    overview_data_free (data);
++}
++
+ static void
+ cc_about_page_setup_overview (CcAboutPage *self)
+ {
+@@ -932,8 +983,7 @@ cc_about_page_setup_overview (CcAboutPage *self)
+     g_autofree char *hardware_model_text = NULL;
+     g_autofree char *firmware_version_text = NULL;
+     g_autofree char *kernel_version_text = NULL;
+-    g_autoslist (GpuData) graphics_hardware_list = NULL;
+-    g_autofree gchar *disk_capacity_string = NULL;
++    g_autoptr(GTask) task = NULL;
+ 
+     hardware_model_text = get_hardware_model_string ();
+     adw_action_row_set_subtitle (self->hardware_model_row, hardware_model_text);
+@@ -952,13 +1002,16 @@ cc_about_page_setup_overview (CcAboutPage *self)
+     cpu_text = get_cpu_info ();
+     adw_action_row_set_subtitle (self->processor_row, cpu_text);
+ 
+-    graphics_hardware_list = get_graphics_hardware_list ();
+-    create_graphics_rows (self, graphics_hardware_list);
++    self->graphics_placeholder = adw_action_row_new ();
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->graphics_placeholder), _("Graphics"));
++    adw_action_row_set_subtitle (ADW_ACTION_ROW (self->graphics_placeholder), "…");
++    gtk_widget_add_css_class (self->graphics_placeholder, "property");
++    adw_preferences_group_add (self->hardware_group, self->graphics_placeholder);
++    adw_action_row_set_subtitle (self->disk_row, "…");
+ 
+-    disk_capacity_string = get_primary_disk_info ();
+-    if (disk_capacity_string == NULL)
+-        disk_capacity_string = g_strdup (_("Unknown"));
+-    adw_action_row_set_subtitle (self->disk_row, disk_capacity_string);
++    self->cancellable = g_cancellable_new ();
++    task = g_task_new (self, self->cancellable, overview_ready_cb, NULL);
++    g_task_run_in_thread (task, overview_thread);
+ 
+     os_name_text = get_os_name ();
+     adw_action_row_set_subtitle (self->os_name_row, os_name_text);
+@@ -977,6 +1030,17 @@ cc_about_page_setup_overview (CcAboutPage *self)
+     gtk_widget_set_visible (GTK_WIDGET (self->kernel_row), kernel_version_text != NULL);
+ }
+ 
++static void
++cc_about_page_dispose (GObject *object)
++{
++    CcAboutPage *self = CC_ABOUT_PAGE (object);
++
++    g_cancellable_cancel (self->cancellable);
++    g_clear_object (&self->cancellable);
++
++    G_OBJECT_CLASS (cc_about_page_parent_class)->dispose (object);
++}
++
+ static void
+ cc_about_page_finalize (GObject *object)
+ {
+@@ -993,6 +1057,7 @@ cc_about_page_class_init (CcAboutPageClass *klass)
+     GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+     GObjectClass *object_class = G_OBJECT_CLASS (klass);
+ 
++    object_class->dispose = cc_about_page_dispose;
+     object_class->finalize = cc_about_page_finalize;
+ 
+     g_type_ensure (CC_TYPE_HOSTNAME_ENTRY);
+-- 
+2.55.0
+

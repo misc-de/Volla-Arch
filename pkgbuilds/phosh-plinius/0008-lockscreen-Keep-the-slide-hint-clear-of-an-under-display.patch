@@ -1,0 +1,230 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 00:44:50 +0100
+Subject: [PATCH] lockscreen: Keep the slide hint clear of an under-display
+ fingerprint sensor
+
+On a phone with the fingerprint sensor under the display the fingerprint
+target is drawn over the sensor, right where "Slide up to unlock" and its
+arrow sit. Ask biomd (io.FuriOS.Biomd) where the sensor is and lift the
+hint above it while biomd is busy (identifying or enrolling), which is when
+the target shows. biomd announces its state with its own StateChanged
+signal; when biomd goes away or comes back the proxy's properties are read
+again. Without biomd, with another kind of sensor or while biomd is idle,
+the hint stays where it is.
+---
+ src/lockscreen.c     | 145 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/ui/lockscreen.ui |   2 +-
+ 2 files changed, 146 insertions(+), 1 deletion(-)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index ced5d2dd..447673e7 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -38,6 +38,19 @@
+ #define LOCKSCREEN_IDLE_SECONDS 5
+ #define LOCKSCREEN_SMALL_DATE_AND_TIME_CLASS "p-small"
+ 
++/* biomd (fingerprint) reports where an under-display sensor sits */
++#define BIOMD_BUS_NAME        "io.FuriOS.Biomd"
++#define BIOMD_FP_OBJECT_PATH  "/io/FuriOS/Biomd/Fingerprint"
++#define BIOMD_FP_INTERFACE    "io.FuriOS.Biomd.Fingerprint"
++/* FingerprintSensorType: under the display, ultrasonic and optical */
++#define BIOMD_SENSOR_UDFPS_ULTRASONIC 2
++#define BIOMD_SENSOR_UDFPS_OPTICAL    3
++/* biomd's State: idle; enrolling and identifying show the fingerprint target */
++#define BIOMD_STATE_IDLE              0
++/* The slide hint's own bottom margin (lockscreen.ui) and the gap kept above the sensor */
++#define SLIDE_HINT_MARGIN     32
++#define SLIDE_HINT_SENSOR_GAP 12
++
+ #define LOCKSCREEN_SMALL_DISPLAY 700
+ 
+ /**
+@@ -83,6 +96,13 @@ typedef struct {
+ 
+   /* info page */
+   GtkWidget          *box_info;
++  GtkWidget          *box_slide_hint;
++  /* Top edge of an under-display fingerprint sensor in panel pixels, 0 if there is none */
++  int                 udfps_top;
++  /* biomd is enrolling or identifying: the fingerprint target is on screen */
++  gboolean            udfps_active;
++  GDBusProxy         *biomd;
++  GCancellable       *cancel;
+   GtkWidget          *box_datetime;
+   GtkListBox         *list_calls;
+   GtkWidget          *lbl_clock;
+@@ -886,6 +906,115 @@ phosh_lockscreen_add_background (PhoshLockscreen *self)
+ }
+ 
+ 
++/*
++ * Keep "Slide up to unlock" clear of an under-display fingerprint sensor: the
++ * fingerprint target is drawn over the sensor (plinius-udfps) right where the
++ * hint would sit. Only while the target shows (biomd busy), and only in the
++ * panel's natural orientation, which the sensor location refers to.
++ */
++static void
++update_slide_hint (PhoshLockscreen *self)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  PhoshShell *shell = phosh_shell_get_default ();
++  PhoshMonitor *monitor;
++  int margin = 0;
++
++  monitor = phosh_shell_get_builtin_monitor (shell) ?: phosh_shell_get_primary_monitor (shell);
++
++  if (priv->udfps_top > 0 && priv->udfps_active && monitor && monitor->logical.width > 0 &&
++      monitor->transform == PHOSH_MONITOR_TRANSFORM_NORMAL) {
++    double ratio = (double) monitor->width / monitor->logical.width;
++    int above = ceil ((monitor->height - priv->udfps_top) / ratio) + SLIDE_HINT_SENSOR_GAP;
++
++    margin = MAX (0, above - SLIDE_HINT_MARGIN);
++  }
++
++  gtk_widget_set_margin_bottom (priv->box_slide_hint, margin);
++}
++
++
++/* Sensor location and state from biomd's cached properties, e.g. after biomd (re)started */
++static void
++read_biomd_properties (PhoshLockscreen *self)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  g_autoptr (GVariant) type = NULL;
++  g_autoptr (GVariant) location = NULL;
++  g_autoptr (GVariant) state = NULL;
++  gint32 sensor_type, x, y, radius;
++
++  priv->udfps_top = 0;
++  priv->udfps_active = FALSE;
++
++  /* No owner or an older biomd: no properties, nothing to move */
++  type = g_dbus_proxy_get_cached_property (priv->biomd, "SensorType");
++  location = g_dbus_proxy_get_cached_property (priv->biomd, "SensorLocation");
++  state = g_dbus_proxy_get_cached_property (priv->biomd, "State");
++  if (type && location && g_variant_is_of_type (location, G_VARIANT_TYPE ("(iii)"))) {
++    sensor_type = g_variant_get_int32 (type);
++    g_variant_get (location, "(iii)", &x, &y, &radius);
++    if ((sensor_type == BIOMD_SENSOR_UDFPS_OPTICAL || sensor_type == BIOMD_SENSOR_UDFPS_ULTRASONIC) &&
++        radius > 0 && y - radius > 0)
++      priv->udfps_top = y - radius;
++  }
++  if (state && g_variant_is_of_type (state, G_VARIANT_TYPE_INT32))
++    priv->udfps_active = g_variant_get_int32 (state) != BIOMD_STATE_IDLE;
++
++  update_slide_hint (self);
++}
++
++
++/* biomd announces its state with a signal of its own, not PropertiesChanged */
++static void
++on_biomd_signal (PhoshLockscreen *self,
++                 const char      *sender_name,
++                 const char      *signal_name,
++                 GVariant        *parameters,
++                 GDBusProxy      *proxy)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  gint32 state;
++
++  if (g_strcmp0 (signal_name, "StateChanged") != 0 ||
++      !g_variant_is_of_type (parameters, G_VARIANT_TYPE ("(i)")))
++    return;
++
++  g_variant_get (parameters, "(i)", &state);
++  priv->udfps_active = state != BIOMD_STATE_IDLE;
++  update_slide_hint (self);
++}
++
++
++static void
++on_biomd_proxy_ready (GObject *source_object, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  GDBusProxy *proxy;
++  PhoshLockscreen *self;
++  PhoshLockscreenPrivate *priv;
++
++  proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
++  if (!proxy) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_debug ("No biomd: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_LOCKSCREEN (user_data);
++  priv = phosh_lockscreen_get_instance_private (self);
++  priv->biomd = proxy;
++
++  g_signal_connect_object (proxy, "g-signal", G_CALLBACK (on_biomd_signal), self, G_CONNECT_SWAPPED);
++  /* The proxy loads the properties again when biomd comes back */
++  g_signal_connect_object (proxy, "g-properties-changed", G_CALLBACK (read_biomd_properties), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "notify::g-name-owner", G_CALLBACK (read_biomd_properties), self,
++                           G_CONNECT_SWAPPED);
++  read_biomd_properties (self);
++}
++
++
+ static void
+ phosh_lockscreen_constructed (GObject *object)
+ {
+@@ -996,6 +1125,17 @@ phosh_lockscreen_constructed (GObject *object)
+   on_info_reveal_child_changed (self);
+ 
+   phosh_lockscreen_add_background (self);
++
++  priv->cancel = g_cancellable_new ();
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM,
++                            G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
++                            NULL,
++                            BIOMD_BUS_NAME,
++                            BIOMD_FP_OBJECT_PATH,
++                            BIOMD_FP_INTERFACE,
++                            priv->cancel,
++                            on_biomd_proxy_ready,
++                            self);
+ }
+ 
+ static void
+@@ -1024,6 +1164,9 @@ phosh_lockscreen_dispose (GObject *object)
+   PhoshLockscreen *self = PHOSH_LOCKSCREEN (object);
+   PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
+ 
++  g_cancellable_cancel (priv->cancel);
++  g_clear_object (&priv->cancel);
++  g_clear_object (&priv->biomd);
+   g_clear_object (&priv->notification_settings);
+   g_clear_handle_id (&priv->idle_timer, g_source_remove);
+   g_clear_object (&priv->calls_manager);
+@@ -1053,6 +1196,7 @@ phosh_lockscreen_configured (PhoshLayerSurface *layer_surface)
+     margin = 0;
+ 
+   gtk_widget_set_margin_top (GTK_WIDGET (priv->box_unlock), margin);
++  update_slide_hint (self);
+ 
+   PHOSH_LAYER_SURFACE_CLASS (phosh_lockscreen_parent_class)->configured (layer_surface);
+ }
+@@ -1223,6 +1367,7 @@ phosh_lockscreen_class_init (PhoshLockscreenClass *klass)
+ 
+   /* info page */
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, box_info);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, box_slide_hint);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, box_datetime);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, lbl_clock);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, lbl_date);
+diff --git a/src/ui/lockscreen.ui b/src/ui/lockscreen.ui
+index 0a6852ca..3bde5a95 100644
+--- a/src/ui/lockscreen.ui
++++ b/src/ui/lockscreen.ui
+@@ -73,7 +73,7 @@
+                 <property name="hexpand">1</property>
+                 <property name="vexpand">1</property>
+                 <child>
+-                  <object class="GtkBox">
++                  <object class="GtkBox" id="box_slide_hint">
+                     <property name="visible">1</property>
+                     <property name="orientation">vertical</property>
+                     <child>

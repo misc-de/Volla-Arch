@@ -1,0 +1,68 @@
+From 31a78915bf373968023bd60969fd087565c47bf3 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:44:07 +0100
+Subject: [PATCH] Assistant button on the Power page, no own language on Users
+
+Plinius:
+- Power: actions for the assistant button (cc-plinius-buttons.*, added
+  as separate files): a short, a double and a long press each run one of
+  torch, screenshot, camera, silent mode, lock screen or a custom
+  command (plinius-assist does the work). Shown only with plinius-assist.
+- Users: the language row is hidden for one's own account. It is the
+  same setting as Region & Language > Language; for other accounts it
+  stays.
+---
+ panels/common/meson.build          | 1 +
+ panels/power/cc-power-panel.c      | 3 +++
+ panels/system/users/cc-user-page.c | 2 ++
+ 3 files changed, 6 insertions(+)
+
+diff --git a/panels/common/meson.build b/panels/common/meson.build
+index dac552f4b..a0ea195c0 100644
+--- a/panels/common/meson.build
++++ b/panels/common/meson.build
+@@ -82,6 +82,7 @@ sources = common_sources + files(
+   'cc-timelike-editor.c',
+   'cc-timelike-editor-layout.c',
+   'cc-permission-infobar.c',
++  'cc-plinius-buttons.c',
+   'cc-plinius-device.c',
+   'cc-plinius-display.c',
+   'cc-split-row.c',
+diff --git a/panels/power/cc-power-panel.c b/panels/power/cc-power-panel.c
+index 8d7cbe7e5..7f637ea8a 100644
+--- a/panels/power/cc-power-panel.c
++++ b/panels/power/cc-power-panel.c
+@@ -29,6 +29,7 @@
+ #include "cc-battery-row.h"
+ #include "cc-hostname.h"
+ #include "cc-number-row.h"
++#include "cc-plinius-buttons.h"
+ #include "cc-power-panel.h"
+ #include "cc-power-profile-info-row.h"
+ #include "cc-power-profile-row.h"
+@@ -1232,6 +1233,8 @@ cc_power_panel_init (CcPowerPanel *self)
+                      "active", G_SETTINGS_BIND_DEFAULT);
+ 
+     setup_general_section (self);
++    /* Plinius: the assistant button, after "General" */
++    cc_plinius_buttons_setup (self->general_page);
+ 
+     /* populate batteries */
+     if (self->up_client) {
+diff --git a/panels/system/users/cc-user-page.c b/panels/system/users/cc-user-page.c
+index 7b5443e07..39300ee66 100644
+--- a/panels/system/users/cc-user-page.c
++++ b/panels/system/users/cc-user-page.c
+@@ -761,6 +761,8 @@ cc_user_page_set_user (CcUserPage *self, ActUser *user, GPermission *permission)
+     cc_list_row_set_secondary_label (self->password_row, get_password_mode_text (user));
+     user_language = get_user_language (user);
+     cc_list_row_set_secondary_label (self->language_row, user_language);
++    /* Plinius: one's own language is set in Region & Language; here only for other accounts */
++    gtk_widget_set_visible (GTK_WIDGET (self->language_row), !is_current_user (user));
+ 
+     if (!self->fingerprint_manager
+         || g_strcmp0 (act_user_get_user_name (cc_fingerprint_manager_get_user (self->fingerprint_manager)),
+-- 
+2.55.0
+

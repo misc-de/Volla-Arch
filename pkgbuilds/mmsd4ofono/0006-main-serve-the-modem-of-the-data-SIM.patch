@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 09:52:41 +0100
+Subject: [PATCH] main: serve the modem of the data SIM
+
+mmsd took the first /ril_ modem. With the SIM in the second slot (or a
+physical SIM next to an eSIM without a profile in the first) that modem
+has no SIM: RegisterAgent gives up on it, and no MMS ever arrives.
+
+The default data modem of Sailfish oFono's org.nemomobile.ofono.ModemManager
+now goes first; without that interface the order is as before. When
+the data SIM moves to another modem, mmsd exits and systemd starts it
+again (Restart=always): agent, context and routes all belong to one
+modem, and oFono brings data up on the data SIM only.
+---
+ main.py | 35 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/main.py b/main.py
+index 8e066f4..173c5bb 100755
+--- a/main.py
++++ b/main.py
+@@ -43,6 +43,7 @@ class OfonoMMSManagerInterface(ServiceInterface):
+         self.ofono_mms_modemmanager_interface = False
+         self.ofono_push_notification_interface = False
+         self.already_exported = False
++        self.exported_modem = None
+         self.mms_context = MMSContext(self.activate_mms_context, self.deactivate_mms_context, verbose)
+         self.mms_dir = expanduser("~/.mms/modemmanager")
+         makedirs(self.mms_dir, exist_ok=True)
+@@ -184,8 +185,33 @@ class OfonoMMSManagerInterface(ServiceInterface):
+         self.ofono_manager_interface = self.ofono_client["ofono"]["/"]["org.ofono.Manager"]
+         self.ofono_manager_interface.on_modem_added(self.ofono_modem_added)
+         self.ofono_manager_interface.on_modem_removed(self.ofono_modem_removed)
++        try:
++            self.slot_manager_interface = self.ofono_client["ofono"]["/"]["org.nemomobile.ofono.ModemManager"]
++            self.slot_manager_interface.on_default_data_modem_changed(self.default_data_modem_changed)
++        except Exception as e:
++            mmsd_print(f"No Sailfish modem manager, using the first modem: {e}", self.verbose)
++            self.slot_manager_interface = None
+         self.loop.create_task(self.find_ofono_modems())
+ 
++    async def default_data_modem(self):
++        if not getattr(self, 'slot_manager_interface', None):
++            return ''
++        try:
++            return await self.slot_manager_interface.call_get_default_data_modem()
++        except Exception as e:
++            mmsd_print(f"Failed to get the default data modem: {e}", self.verbose)
++            return ''
++
++    def default_data_modem_changed(self, path):
++        # Only one modem is served (the agent, the context, the routes), and
++        # oFono brings data up on the data SIM only. Following a new data SIM
++        # in place would mean taking all of that down; exiting lets systemd
++        # (Restart=always) start mmsd again on it.
++        if not path or not self.already_exported or path == self.exported_modem:
++            return
++        mmsd_print(f"Data SIM moved from {self.exported_modem} to {path}, restarting", True)
++        self.session_bus.disconnect()
++
+     def ofono_removed(self):
+         mmsd_print("oFono removed", self.verbose)
+         self.ofono_manager_interface = None
+@@ -221,6 +247,13 @@ class OfonoMMSManagerInterface(ServiceInterface):
+                     if x[0].startswith("/ril_") # FIXME
+                 ]
+ 
++                # The modem of the data SIM first: MMS goes over its bearer, and
++                # with the SIM in the second slot the first modem has none
++                data_modem = await self.default_data_modem()
++                if data_modem:
++                    mmsd_print(f"Default data modem is {data_modem}", self.verbose)
++                self.ofono_modem_list.sort(key=lambda x: x[0] != data_modem)
++
+                 if not self.ofono_modem_list:
+                     mmsd_print("No modems available, retrying", self.verbose)
+                     attempts += 1
+@@ -384,6 +417,7 @@ class OfonoMMSManagerInterface(ServiceInterface):
+ 
+             self.modem_added_block = False
+             self.already_exported = True
++            self.exported_modem = path
+         except asyncio.CancelledError:
+             mmsd_print(f"export_new_modem task cancelled for path {path}", self.verbose)
+             raise  # Re-raise the CancelledError to properly handle the cancellation
+@@ -579,6 +613,7 @@ class OfonoMMSManagerInterface(ServiceInterface):
+         mmsd_print(f"Exported object paths after unexporting: {self.ofono_mms_objects}", self.verbose)
+ 
+         self.already_exported = False
++        self.exported_modem = None
+         self.modem_added_block = False
+ 
+     async def init_ofono_interfaces(self):

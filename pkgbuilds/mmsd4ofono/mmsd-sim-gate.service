@@ -1,0 +1,11 @@
+[Unit]
+Description=MMS for the SIM with mobile data, as set in Settings
+After=sm.puri.Phosh.service
+
+[Service]
+Type=simple
+# oFono is a system service and cannot be ordered against from the session
+ExecStartPre=gdbus wait --system org.ofono
+ExecStart=/usr/lib/mmsd/mmsd-sim-gate
+Restart=on-failure
+RestartSec=5s

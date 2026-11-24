@@ -1,0 +1,8 @@
+[Unit]
+Description=Check the PDF printer when the printers change
+
+[Path]
+PathChanged=/etc/cups/printers.conf
+
+[Install]
+WantedBy=multi-user.target

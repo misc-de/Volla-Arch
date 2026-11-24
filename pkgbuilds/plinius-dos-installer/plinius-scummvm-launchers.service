@@ -1,0 +1,18 @@
+[Unit]
+Description=Launchers with their own icons for the games added in ScummVM
+# Without this graphical-session.target is ordered after the service, while the service (through
+# its path unit) comes after the target: systemd dropped the start at every login to break the
+# cycle. Now it runs once after the target, and on each change seen by the path unit.
+DefaultDependencies=no
+After=graphical-session.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/plinius-scummvm-launchers
+# Low priority, it only writes a few small files
+Nice=10
+
+[Install]
+WantedBy=graphical-session.target

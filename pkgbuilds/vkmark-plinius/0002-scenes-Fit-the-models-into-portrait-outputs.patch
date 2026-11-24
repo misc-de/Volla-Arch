@@ -1,0 +1,87 @@
+From c948f9a16ce66558c7de261ebc9c1164a9d76736 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 08:35:34 +0100
+Subject: [PATCH 2/2] scenes: Fit the models into portrait outputs
+
+The vertex, texture and shading scenes choose the field of view so that
+the model fits vertically. In portrait (e.g. 1080x2400) the narrower
+width then cuts the model off at the sides. Fit it into the narrower
+side instead.
+---
+ src/scenes/shading_scene.cpp | 5 ++++-
+ src/scenes/texture_scene.cpp | 5 ++++-
+ src/scenes/vertex_scene.cpp  | 5 ++++-
+ 3 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/scenes/shading_scene.cpp b/src/scenes/shading_scene.cpp
+index af93abc..060a14c 100644
+--- a/src/scenes/shading_scene.cpp
++++ b/src/scenes/shading_scene.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include "shading_scene.h"
+ 
++#include <algorithm>
++
+ #include "mesh.h"
+ #include "model.h"
+ #include "util.h"
+@@ -81,7 +83,8 @@ void ShadingScene::setup(
+     auto const aspect = static_cast<float>(extent.width)/static_cast<float>(extent.height);
+     center = (max_bound + min_bound) / 2.0f;
+     radius = diameter / 2.0f;
+-    auto const fovy = 2.0f * atanf(radius / (2.0f + radius));
++    // Fit the model into the narrower side: in portrait, the width
++    auto const fovy = 2.0f * atanf(radius / ((2.0f + radius) * std::min(aspect, 1.0f)));
+     projection = glm::perspective(fovy, aspect, 2.0f, 2.0f + diameter);
+ 
+     setup_vertex_buffer();
+diff --git a/src/scenes/texture_scene.cpp b/src/scenes/texture_scene.cpp
+index 4f4ac5b..88fec13 100644
+--- a/src/scenes/texture_scene.cpp
++++ b/src/scenes/texture_scene.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include "texture_scene.h"
+ 
++#include <algorithm>
++
+ #include "mesh.h"
+ #include "model.h"
+ #include "util.h"
+@@ -83,7 +85,8 @@ void TextureScene::setup(
+     auto const aspect = static_cast<float>(extent.width)/static_cast<float>(extent.height);
+     center = (max_bound + min_bound) / 2.0f;
+     radius = diameter / 2.0f;
+-    auto const fovy = 2.0f * atanf(radius / (2.0f + radius));
++    // Fit the model into the narrower side: in portrait, the width
++    auto const fovy = 2.0f * atanf(radius / ((2.0f + radius) * std::min(aspect, 1.0f)));
+     projection = glm::perspective(fovy, aspect, 2.0f, 2.0f + diameter);
+ 
+     setup_vertex_buffer();
+diff --git a/src/scenes/vertex_scene.cpp b/src/scenes/vertex_scene.cpp
+index a9b20fb..465a650 100644
+--- a/src/scenes/vertex_scene.cpp
++++ b/src/scenes/vertex_scene.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include "vertex_scene.h"
+ 
++#include <algorithm>
++
+ #include "mesh.h"
+ #include "model.h"
+ #include "util.h"
+@@ -83,7 +85,8 @@ void VertexScene::setup(
+     auto const aspect = static_cast<float>(extent.width)/static_cast<float>(extent.height);
+     center = (max_bound + min_bound) / 2.0f;
+     radius = diameter / 2.0f;
+-    auto const fovy = 2.0f * atanf(radius / (2.0f + radius));
++    // Fit the model into the narrower side: in portrait, the width
++    auto const fovy = 2.0f * atanf(radius / ((2.0f + radius) * std::min(aspect, 1.0f)));
+     projection = glm::perspective(fovy, aspect, 2.0f, 2.0f + diameter);
+ 
+     setup_vertex_buffer();
+-- 
+2.56.0
+

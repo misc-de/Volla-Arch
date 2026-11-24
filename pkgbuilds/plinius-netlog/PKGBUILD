@@ -1,0 +1,47 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-netlog
+pkgver=0.1
+pkgrel=8
+pkgdesc="Records which app connects where (BPF on the cgroup tree, DNS names), for GNOME Settings"
+arch=(aarch64 x86_64)
+# The daemon is MIT; the BPF programs are GPL-2.0-only (the kernel's helpers ask for it)
+license=(MIT GPL-2.0-only)
+# Kernel: CONFIG_CGROUP_BPF, CONFIG_BPF_SYSCALL, ring buffers (5.8), cgroup v2.
+# The Connections page of gnome-control-center-plinius asks over D-Bus (org.plinius.NetLog1).
+depends=(glib2 libbpf sqlite systemd)
+makedepends=(clang)
+source=(netlog.h
+	netlog.bpf.c
+	plinius-netlogd.c
+	plinius-netlogd.service
+	org.plinius.NetLog1.conf
+	org.plinius.NetLog1.service
+	LICENSE)
+sha256sums=('49078acf706549ec7fd659621cc81cbc9dbdd34ee03426de2e37b014fc103666'
+	'1224a9d9a5c8483f9d7724fc66a13721cd5ed10ddd1690ffbe5dacd0b6149a13'
+	'7c2584d9b476085107391a1cc6fa47b0f4dd095b1e37f2bc91973551e98452d8'
+	'0962aadc5b60c8031e031c1b92c7546bc18c05d74082b713b78c3d85e76c8591'
+	'168798974606cab44dbce4292bfc26295c0fa0baaec465b993cbe66fed581745'
+	'6ac97fbae7f89a2d67d8a0603728bf6742bc4993afaa262ba9b14751aac4ce44'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# -g: libbpf reads the map definitions from the BTF
+	clang -target bpf -O2 -g -Wall -I. -c netlog.bpf.c -o netlog.bpf.o
+	# shellcheck disable=SC2086,SC2046
+	cc $CPPFLAGS $CFLAGS -Wall -Wextra -Wno-unused-parameter -I. -o plinius-netlogd plinius-netlogd.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 libbpf sqlite3) $LDFLAGS
+}
+
+package() {
+	install -Dm755 plinius-netlogd -t "$pkgdir/usr/lib/plinius-netlog"
+	install -Dm644 netlog.bpf.o -t "$pkgdir/usr/lib/plinius-netlog"
+	install -Dm644 plinius-netlogd.service -t "$pkgdir/usr/lib/systemd/system"
+	# Always on: the day and week views need the history from boot on
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-netlogd.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 org.plinius.NetLog1.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 org.plinius.NetLog1.service -t "$pkgdir/usr/share/dbus-1/system-services"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

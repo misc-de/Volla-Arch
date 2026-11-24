@@ -1,0 +1,15 @@
+# Moves the own TLS block of Firefox and Thunderbird off bionic's TLS slots, otherwise
+# Mali's GL driver crashes them (see hybris-tls-relocate). Runs again after every
+# upgrade, because the package brings back the unpatched executable.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/firefox/firefox
+Target = usr/lib/thunderbird/thunderbird
+
+[Action]
+Description = Moving executable TLS off bionic's TLS slots...
+When = PostTransaction
+Exec = /usr/bin/hybris-tls-relocate --stdin
+NeedsTargets

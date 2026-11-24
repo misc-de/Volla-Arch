@@ -1,0 +1,47 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=ofono-binder-plugin-ext-mtk
+pkgver=1.0.0.20261106
+pkgrel=2
+pkgdesc="MediaTek extension for ofono-binder-plugin: IMS/VoLTE over mtkradioex (HIDL and AIDL), voice domains per SIM (Plinius)"
+arch=(aarch64)
+url="https://gitlab.com/ubports/development/core/hybris-support/ofono-binder-plugin-ext-mtk"
+license=(GPL-2.0-only AND BSD-3-Clause)
+# libandroid-properties comes from libhybris (aarch64 only)
+depends=('ofono-binder-plugin>=1.1.33-6' libgbinder-radio libgbinder libglibutil glib2 libhybris)
+makedepends=(git)
+# UBports original (TheKit) with AIDL support; the Droidian/FuriLabs offshoots only do HIDL.
+# No tags: commit pin on main; pkgver = version from rpm/*.spec + commit date
+_commit=00f9b3e161d463b67a8437430802b20298c3eb6a
+# 0001: voice domains per slot (GSM, LTE, 5G, Wi-Fi) as org.plinius.Voice, applied to the modem
+# 0002: emergencyDial on the IMS slot (docs/NOTRUF.md)
+# 0003: imsRedialEmergencyIndication ends the attempt, gnome-calls-plinius dials again
+source=("git+$url.git#commit=$_commit"
+        0001-Voice-domains-per-slot-GSM-LTE-5G-Wi-Fi.patch
+        0002-Set-up-emergency-calls-with-emergencyDial-on-the-IMS-slot.patch
+        0003-End-an-emergency-call-the-modem-wants-to-redial.patch
+        org.plinius.Voice.conf)
+sha256sums=('SKIP'
+            '2264ab4f818f9c47946cc21253ddf2799de469d7039402775a6a07d45b94a04c'
+            '69089fc2ed356aace8d917649620a57f72399590760e59752adf878346c1720b'
+            '344905ad36a3f2ebebfa1f2b019f29baa0594617568a4d8a07e3c3cf16b05b32'
+            'dc235e0482d2cafebb2121a19ed530f0a6cba720051537b9df1cf79d191be164')
+
+prepare() {
+	patch -d ofono-binder-plugin-ext-mtk -Np1 -i "$srcdir/0001-Voice-domains-per-slot-GSM-LTE-5G-Wi-Fi.patch"
+	patch -d ofono-binder-plugin-ext-mtk -Np1 -i "$srcdir/0002-Set-up-emergency-calls-with-emergencyDial-on-the-IMS-slot.patch"
+	patch -d ofono-binder-plugin-ext-mtk -Np1 -i "$srcdir/0003-End-an-emergency-call-the-modem-wants-to-redial.patch"
+}
+
+build() {
+	cd ofono-binder-plugin-ext-mtk
+	make PLUGINDIR="$(pkg-config ofono --variable=plugindir)" KEEP_SYMBOLS=1 release
+}
+
+package() {
+	cd ofono-binder-plugin-ext-mtk
+	make DESTDIR="$pkgdir" PLUGINDIR="$(pkg-config ofono --variable=plugindir)" install
+	install -Dm644 mtk.conf -t "$pkgdir/usr/share/doc/$pkgname"
+	install -Dm644 "$srcdir/org.plinius.Voice.conf" -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

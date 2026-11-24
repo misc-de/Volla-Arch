@@ -1,0 +1,80 @@
+#!/bin/bash
+# Moves the home of the user of a running system to the data partition, away from a /home that
+# systemd's gpt-auto generator found on another system's partition. Run as root over SSH:
+#
+#   plinius-home-move copy     copies while the session runs; can be repeated
+#   plinius-home-move finish   ends the session, copies the rest, checks it and turns the new /home
+#                              on for the next start. Reboot afterwards. The display stays dark until
+#                              then: greetd logs in automatically only once per boot.
+#   plinius-home-move undo     turns the old /home back on for the next start
+#
+# The old partition is never written to, so "undo" brings back the state before "finish".
+# PLINIUS_HOME_ROOT is for tests: everything then happens below that directory.
+set -euo pipefail
+
+root=${PLINIUS_HOME_ROOT:-}
+home=$root/home
+userdata=$root/userdata
+src=$home/plinius
+dst=$userdata/home/plinius
+generator=$root/etc/systemd/system-generators/systemd-gpt-auto-generator
+# -A and -X: file systems here may carry ACLs and capabilities. --numeric-ids: UID 32011 stays.
+rsync_copy=(rsync -aHAX --numeric-ids --delete)
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+# Nothing in here may run on a system whose /home is already where it belongs
+check_source() {
+	[[ -n $root ]] || (( EUID == 0 )) || die "must run as root"
+	mountpoint -q "$userdata" || die "$userdata is no mount point"
+	[[ -d $src ]] || die "$src does not exist"
+	[[ $(stat -c %d "$home") != "$(stat -c %d "$userdata")" ]] ||
+		die "$home is already on the data partition"
+}
+
+copy() {
+	local need free
+	need=$(du -sk "$src" | cut -f1)
+	free=$(df -k --output=avail "$userdata" | tail -1 | tr -d ' ')
+	(( need < free )) || die "$need kB needed, only $free kB free in $userdata"
+	install -d -m 755 "$userdata/home"
+	"${rsync_copy[@]}" "$src/" "$dst/"
+}
+
+case ${1:-} in
+copy)
+	check_source
+	copy
+	echo "Copied. Run \"plinius-home-move finish\" when the session may end."
+	;;
+finish)
+	check_source
+	[[ -d $dst ]] || die "run \"plinius-home-move copy\" first, it takes long and the session can stay"
+	systemctl stop greetd
+	systemctl stop "user@$(id -u plinius).service"
+	if fuser -sm "$home"; then
+		fuser -vm "$home" >&2 || true
+		die "still in use, nothing was changed. Reboot to get the session back; never restart greetd"
+	fi
+	copy
+	# Anything rsync would still do means the copy is not whole. --checksum compares the contents.
+	diff=$("${rsync_copy[@]}" --checksum --dry-run --itemize-changes "$src/" "$dst/")
+	[[ -z $diff ]] || die "the copy differs, nothing was changed. Reboot to get the session back:
+$diff"
+	mkdir -p "$(dirname "$generator")"
+	ln -sfn /dev/null "$generator"
+	systemctl enable home.mount
+	sync
+	echo "Done. Reboot now: /home then comes from $userdata/home."
+	;;
+undo)
+	[[ -n $root ]] || (( EUID == 0 )) || die "must run as root"
+	systemctl disable home.mount
+	rm -f "$generator"
+	sync
+	echo "Done. After a reboot /home is the old partition again, $dst stays."
+	;;
+*)
+	die "usage: plinius-home-move copy|finish|undo"
+	;;
+esac

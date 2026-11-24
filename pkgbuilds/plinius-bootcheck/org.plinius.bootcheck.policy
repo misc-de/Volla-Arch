@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- GNOME Settings › Security › Boot Chain runs "pkexec plinius-bootcheck accept PATH..." for the
+     parts reported as changed: they become the accepted state and the alarm ends. Accepting a
+     changed start system must not happen unnoticed, so the PIN is asked every time (auth_admin,
+     not _keep). -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <action id="org.plinius.bootcheck.accept">
+    <description>Accept changes to the start system</description>
+    <description xml:lang="de">Änderungen am Startsystem akzeptieren</description>
+    <description xml:lang="es">Aceptar cambios en el sistema de arranque</description>
+    <description xml:lang="fr">Accepter des modifications du système de démarrage</description>
+    <description xml:lang="it">Accettare modifiche al sistema di avvio</description>
+    <description xml:lang="nl">Wijzigingen aan het opstartsysteem accepteren</description>
+    <description xml:lang="pl">Akceptacja zmian w systemie rozruchowym</description>
+    <description xml:lang="pt">Aceitar alterações ao sistema de arranque</description>
+    <description xml:lang="ru">Принять изменения системы загрузки</description>
+    <message>Authentication is required to accept the changed start system and end the alarm</message>
+    <message xml:lang="de">Zum Akzeptieren des veränderten Startsystems und Beenden des Alarms ist eine Legitimierung erforderlich</message>
+    <message xml:lang="es">Se necesita autenticación para aceptar el sistema de arranque modificado y terminar la alarma</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour accepter le système de démarrage modifié et arrêter l'alarme</message>
+    <message xml:lang="it">È richiesta l'autenticazione per accettare il sistema di avvio modificato e terminare l'allarme</message>
+    <message xml:lang="nl">Om het gewijzigde opstartsysteem te accepteren en het alarm te beëindigen is authenticatie vereist</message>
+    <message xml:lang="pl">Akceptacja zmienionego systemu rozruchowego i zakończenie alarmu wymagają uwierzytelnienia</message>
+    <message xml:lang="pt">É necessária autenticação para aceitar o sistema de arranque alterado e terminar o alarme</message>
+    <message xml:lang="ru">Чтобы принять изменённую систему загрузки и отключить тревогу, требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/plinius-bootcheck</annotate>
+  </action>
+</policyconfig>

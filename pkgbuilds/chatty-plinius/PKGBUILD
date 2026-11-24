@@ -1,0 +1,46 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=chatty-plinius
+pkgver=0.8.9
+pkgrel=6
+pkgdesc="Chatty that follows address books appearing later, so that contacts of an online account can be selected"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://gitlab.gnome.org/World/Chatty"
+license=(GPL-3.0-or-later)
+# As Arch's chatty
+depends=(
+	cairo dconf evolution-data-server gdk-pixbuf2 glib2 glibc gnome-desktop-4 gstreamer gtk4
+	gtksourceview5 hicolor-icon-theme libadwaita libcmatrix libgcc libmm-glib libphonenumber
+	libspelling libstdc++ pango sqlite
+)
+makedepends=(appstream git glib2-devel itstool meson)
+provides=("chatty=$pkgver")
+conflicts=(chatty)
+# Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
+_commit=8fcf8387917bf9d25a005c9e6b506026e77a4876
+source=(
+	"git+https://gitlab.gnome.org/World/Chatty.git#commit=$_commit"
+	0001-contact-provider-Correct-vCard-attributes-fetch-for-.patch
+	0002-contact-provider-Follow-address-books-that-appear-or.patch
+)
+sha256sums=('SKIP'
+            'cfb803cc50ecbef66e07e3a6d534edaa1e19321715dd789cec47af8494a84f64'
+            '092d1a81e4c25ed7a3ccf81f1f8e896c5dff43ea8ba86e812fc213699f38a2b0')
+
+prepare() {
+	# Upstream's commit 2556c083, as Arch's package applies it: contacts for
+	# evolution-data-server 3.60 and later
+	patch -d Chatty -Np1 -i "$srcdir/0001-contact-provider-Correct-vCard-attributes-fetch-for-.patch"
+	# Chatty looked at the address books once at its start, which is before an online account
+	# brought its own: their contacts could not be selected until Chatty was restarted
+	patch -d Chatty -Np1 -i "$srcdir/0002-contact-provider-Follow-address-books-that-appear-or.patch"
+}
+
+build() {
+	arch-meson Chatty build -D purple=disabled
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+}

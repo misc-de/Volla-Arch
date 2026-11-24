@@ -1,0 +1,37 @@
+From fc547708bfa653db6a8e3494d4cb0a27ff969d01 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 18:30:03 +0100
+Subject: [PATCH] egl: route eglSwapBuffersWithDamageKHR through the window
+ system
+
+Only eglSwapBuffers and eglSwapBuffersWithDamageEXT were wrapped, so
+eglGetProcAddress handed out the driver's eglSwapBuffersWithDamageKHR.
+The driver then queues its buffer, but ws_finishSwap() never runs: the
+wayland window never attaches it, the compositor never releases it, and
+after three frames dequeueBuffer() waits forever. Firefox prefers the KHR
+variant and hung with an empty window. Both have the same signature.
+---
+ hybris/egl/egl.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/hybris/egl/egl.c b/hybris/egl/egl.c
+index 5003f7b..9f381b4 100644
+--- a/hybris/egl/egl.c
++++ b/hybris/egl/egl.c
+@@ -686,6 +686,13 @@ struct FuncNamePair {
+ static struct FuncNamePair _eglHybrisOverrideFunctions[] = {
+ 	OVERRIDE_MY(eglCreateImageKHR),
+ 	OVERRIDE_MY(eglSwapBuffersWithDamageEXT),
++	/*
++	 * Same signature as the EXT variant. Without this the driver's own
++	 * function is returned: it queues the buffer, but the window system
++	 * never gets finishSwap() and never hands it to the compositor. Clients
++	 * that prefer KHR (Firefox) run out of buffers after a few frames.
++	 */
++	OVERRIDE_TO(eglSwapBuffersWithDamageKHR, _my_eglSwapBuffersWithDamageEXT),
+ 	OVERRIDE_MY(glEGLImageTargetTexture2DOES),
+ 	OVERRIDE_MY(glEGLImageTargetRenderbufferStorageOES),
+ 	OVERRIDE_MY(eglDestroyImageKHR),
+-- 
+2.55.0
+

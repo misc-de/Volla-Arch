@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- plinius-cardshare: the own contact card (quick setting "Contact Card" in Phosh),
+     set in GNOME Settings › NFC › Contact Card -->
+<schemalist gettext-domain="plinius-cardshare">
+  <schema id="org.plinius.cardshare" path="/org/plinius/cardshare/">
+    <key name="contact-book" type="s">
+      <default>''</default>
+      <summary>Address book of the own card</summary>
+      <description>UID of the evolution-data-server source that holds the own contact.</description>
+    </key>
+    <key name="contact-uid" type="s">
+      <default>''</default>
+      <summary>Contact of the own card</summary>
+      <description>UID of the own contact in that address book. Empty: no card chosen.</description>
+    </key>
+    <key name="fields" type="as">
+      <default>['name', 'phone', 'email']</default>
+      <summary>Fields that go out</summary>
+      <description>Of name, phone, email, organization, address, website, birthday, note and photo. The name always goes out, the photo never in the QR code.</description>
+    </key>
+    <key name="seconds" type="u">
+      <range min="10" max="300"/>
+      <default>30</default>
+      <summary>How long sharing and receiving run</summary>
+      <description>"+30 s" adds 30 seconds, up to five minutes.</description>
+    </key>
+  </schema>
+</schemalist>

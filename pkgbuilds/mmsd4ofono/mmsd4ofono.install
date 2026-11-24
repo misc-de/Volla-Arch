@@ -1,0 +1,25 @@
+# pacman install script of mmsd4ofono. routectld runs through routectld.socket (patch 0012): an
+# upgrade from routectld at boot stops the old daemon and listens on its socket right away
+# (the package's link in sockets.target.wants does it at boot). mmsd starts with the next
+# session through mmsd-sim-gate.service, if the SIM for mobile data has MMS on.
+
+_apply() {
+	systemctl daemon-reload 2>/dev/null || true
+	# A routectld started by its socket may hold routes of an MMS in progress
+	if ! systemctl -q is-active routectld.socket 2>/dev/null; then
+		systemctl stop routectld.service 2>/dev/null || true
+	fi
+	systemctl start routectld.socket 2>/dev/null || true
+}
+
+post_install() {
+	_apply
+}
+
+post_upgrade() {
+	_apply
+}
+
+pre_remove() {
+	systemctl stop routectld.socket routectld.service 2>/dev/null || true
+}

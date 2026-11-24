@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.plinius.ambient" path="/org/plinius/ambient/">
+    <key name="effect" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="snow"/>
+        <choice value="dust"/>
+        <choice value="fireflies"/>
+        <choice value="rain"/>
+        <choice value="balls"/>
+        <choice value="water"/>
+        <choice value="panorama"/>
+      </choices>
+      <default>'none'</default>
+      <summary>Animated effect over the background</summary>
+      <description>Drawn by plinius-ambient over the background picture (or over the 360° photo or the video, see panorama-enabled and video-enabled), under the windows. “balls” roll and “water” runs along the glass as the phone is tilted. “panorama” is left from version 0.3, where the 360° photo was an effect: plinius-ambient turns it into panorama-enabled.</description>
+    </key>
+    <key name="density" type="s">
+      <choices>
+        <choice value="low"/>
+        <choice value="medium"/>
+        <choice value="high"/>
+      </choices>
+      <default>'medium'</default>
+      <summary>How many particles the effect has</summary>
+    </key>
+    <key name="panorama-enabled" type="b">
+      <default>false</default>
+      <summary>Show the 360° photo as the background</summary>
+      <description>The photo of the key panorama instead of the background picture, turning with the phone; the effect is drawn over it. Excludes video-enabled: switching one on switches the other off. Choosing a background picture in GNOME Settings switches it off.</description>
+    </key>
+    <key name="panorama" type="s">
+      <default>''</default>
+      <summary>The 360° photo for the effect “panorama”</summary>
+      <description>Path of an equirectangular photo (2:1, the whole sphere), as 360° cameras save them; Muga’s “Set as Background” copies one to ~/.local/share/backgrounds/360 and sets it here.</description>
+    </key>
+    <key name="video-enabled" type="b">
+      <default>false</default>
+      <summary>Show the video as the background</summary>
+      <description>The video or animated GIF of the key video instead of the background picture, looping and muted, scaled to cover the screen; the effect is drawn over it. It plays only while it can be seen (not under an app, not with the display off or always-on). Excludes panorama-enabled: switching one on switches the other off. Choosing a background picture in GNOME Settings switches it off.</description>
+    </key>
+    <key name="video" type="s">
+      <default>''</default>
+      <summary>The video for the background</summary>
+      <description>Absolute path of a video file (anything GStreamer plays; H.264, H.265 and VP9 are decoded in hardware with plinius-vdec) or of an animated GIF. GNOME Settings copies the ones added there to ~/.local/share/backgrounds/video and sets them here. If it cannot be played, the background picture shows.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,669 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 19:13:03 +0100
+Subject: [PATCH] overview: Hold a running app for a second to move it in the
+ order
+
+Holding a card of a running app for a second gives a short vibration;
+then the card follows the finger and takes the place where it is
+released. Lifting the finger after a move does not open the app: on the
+touchscreen, claiming the touch did not keep the card's button from its
+click, so the click that comes with that release is dropped.
+---
+ src/activity.c            | 223 +++++++++++++++++++++++++++++++++
+ src/overview.c            | 309 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/stylesheet/common.css |  10 ++
+ 3 files changed, 542 insertions(+)
+
+diff --git a/src/activity.c b/src/activity.c
+index 3dc819e4..4ea1f102 100644
+--- a/src/activity.c
++++ b/src/activity.c
+@@ -16,6 +16,9 @@
+ #include "thumbnail.h"
+ #include "util.h"
+ #include "app-grid-button.h"
++#include "feedback-manager.h"
++
++#include <math.h>
+ 
+ /**
+  * PhoshActivity:
+@@ -33,6 +36,9 @@ enum {
+   CLOSED,
+   FULLSCREENED,
+   RESIZED,
++  PLINIUS_REORDER_BEGIN,
++  PLINIUS_REORDER_UPDATE,
++  PLINIUS_REORDER_END,
+   N_SIGNALS
+ };
+ static guint signals[N_SIGNALS] = { 0 };
+@@ -79,6 +85,12 @@ typedef struct {
+   GtkAllocation    allocation;
+ 
+   GAppInfo        *app_info;
++
++  /* Plinius: hold the card to move it in the overview's order */
++  GtkGesture      *plinius_move;
++  guint            plinius_hold_id;
++  gboolean         plinius_reordering;
++  guint            plinius_ignore_click_id;
+ } PhoshActivityPrivate;
+ 
+ 
+@@ -214,6 +226,16 @@ phosh_activity_get_property (GObject    *object,
+ static void
+ clicked_cb (PhoshActivity *self)
+ {
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++
++  /* Plinius: lifting the finger after moving the card does not open the app. Claiming the touch
++   * does not keep the button from its click on the phone's touchscreen, so the click that comes
++   * with the release is dropped here. */
++  if (priv->plinius_reordering || priv->plinius_ignore_click_id) {
++    g_debug ("Activity moved, not activating %s", priv->app_id);
++    return;
++  }
++
+   g_signal_emit (self, signals[CLICKED], 0);
+ }
+ 
+@@ -401,6 +423,10 @@ phosh_activity_dispose (GObject *object)
+     priv->remove_timeout_id = 0;
+   }
+ 
++  g_clear_handle_id (&priv->plinius_hold_id, g_source_remove);
++  g_clear_handle_id (&priv->plinius_ignore_click_id, g_source_remove);
++  g_clear_object (&priv->plinius_move);
++
+   G_OBJECT_CLASS (phosh_activity_parent_class)->dispose (object);
+ }
+ 
+@@ -602,6 +628,162 @@ phosh_activity_unmap (GtkWidget *widget)
+ }
+ 
+ 
++/*
++ * Plinius: how long a card is held before it can be moved, in milliseconds. A GtkGestureLongPress
++ * gives up when the finger moves after it fired, taking the touch from its group, and its delay
++ * depends on gtk-long-press-time (at most twice that), so the drag gesture below times the hold.
++ */
++#define PLINIUS_REORDER_HOLD_MS 1000
++
++/* Plinius: how long after a move the button's click is dropped; it comes with the same release */
++#define PLINIUS_IGNORE_CLICK_MS 300
++
++/* Where the gesture's last event happened, horizontally, independent of the card's window */
++static gboolean
++plinius_get_root_x (GtkGesture *gesture, double *x)
++{
++  GdkEventSequence *sequence;
++  const GdkEvent *event;
++  double root_y;
++
++  sequence = gtk_gesture_single_get_current_sequence (GTK_GESTURE_SINGLE (gesture));
++  event = gtk_gesture_get_last_event (gesture, sequence);
++  if (!event)
++    return FALSE;
++
++  return gdk_event_get_root_coords (event, x, &root_y);
++}
++
++
++static void
++plinius_set_reordering (PhoshActivity *self, gboolean reordering)
++{
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++
++  priv->plinius_reordering = reordering;
++  phosh_util_toggle_style_class (GTK_WIDGET (self), "plinius-reordering", reordering);
++  /* No swipe away while the card is moved; afterwards as bound to has-thumbnail */
++  phosh_swipe_away_bin_set_enabled (PHOSH_SWIPE_AWAY_BIN (priv->swipe_bin),
++                                    !reordering && phosh_activity_get_has_thumbnail (self));
++}
++
++
++/*
++ * The card was held for PLINIUS_REORDER_HOLD_MS without moving: a short vibration, and the card
++ * follows the finger. Claiming the touch takes it away from the carousel's swipe and the swipe
++ * away; the button's click on release is dropped in clicked_cb().
++ */
++static gboolean
++on_plinius_hold_timeout (gpointer data)
++{
++  PhoshActivity *self = PHOSH_ACTIVITY (data);
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++  double root_x;
++
++  priv->plinius_hold_id = 0;
++
++  if (!gtk_gesture_is_active (priv->plinius_move) ||
++      !plinius_get_root_x (priv->plinius_move, &root_x))
++    return G_SOURCE_REMOVE;
++
++  gtk_gesture_set_state (priv->plinius_move, GTK_EVENT_SEQUENCE_CLAIMED);
++  plinius_set_reordering (self, TRUE);
++  phosh_trigger_feedback ("button-pressed", FALSE);
++  g_signal_emit (self, signals[PLINIUS_REORDER_BEGIN], 0, root_x);
++
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++on_plinius_move_begin (PhoshActivity *self, double start_x, double start_y, GtkGesture *gesture)
++{
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++
++  g_clear_handle_id (&priv->plinius_hold_id, g_source_remove);
++  priv->plinius_hold_id = g_timeout_add (PLINIUS_REORDER_HOLD_MS, on_plinius_hold_timeout, self);
++  g_source_set_name_by_id (priv->plinius_hold_id, "[phosh] plinius activity hold");
++}
++
++
++static void
++on_plinius_move_update (PhoshActivity *self, double offset_x, double offset_y, GtkGesture *gesture)
++{
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++  double root_x;
++  int threshold = 8;
++
++  if (!priv->plinius_reordering) {
++    /* Moved before the time was up: a swipe or a tap, not a hold */
++    g_object_get (gtk_widget_get_settings (GTK_WIDGET (self)),
++                  "gtk-dnd-drag-threshold", &threshold,
++                  NULL);
++    if (priv->plinius_hold_id && hypot (offset_x, offset_y) > threshold)
++      g_clear_handle_id (&priv->plinius_hold_id, g_source_remove);
++    return;
++  }
++
++  if (plinius_get_root_x (gesture, &root_x))
++    g_signal_emit (self, signals[PLINIUS_REORDER_UPDATE], 0, root_x);
++}
++
++
++static gboolean
++on_plinius_ignore_click_timeout (gpointer data)
++{
++  PhoshActivity *self = PHOSH_ACTIVITY (data);
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++
++  priv->plinius_ignore_click_id = 0;
++  return G_SOURCE_REMOVE;
++}
++
++
++/* Released, or the touch went to a swipe: no hold, and a moved card stays where it is */
++static void
++on_plinius_move_end (PhoshActivity *self, GdkEventSequence *sequence, GtkGesture *gesture)
++{
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++
++  g_clear_handle_id (&priv->plinius_hold_id, g_source_remove);
++
++  if (!priv->plinius_reordering)
++    return;
++
++  /* The button's click for this release comes after this; one before it was dropped as
++   * plinius_reordering was still set */
++  g_clear_handle_id (&priv->plinius_ignore_click_id, g_source_remove);
++  priv->plinius_ignore_click_id = g_timeout_add (PLINIUS_IGNORE_CLICK_MS,
++                                                 on_plinius_ignore_click_timeout, self);
++  g_source_set_name_by_id (priv->plinius_ignore_click_id, "[phosh] plinius activity ignore click");
++
++  plinius_set_reordering (self, FALSE);
++  g_signal_emit (self, signals[PLINIUS_REORDER_END], 0);
++}
++
++
++/*
++ * The drag gesture runs in the capture phase, before the carousel's swipe, the swipe away and
++ * the button see the touch. Until the hold is over it only watches: moving earlier leaves the
++ * swipes as they were, and a tap still activates the app.
++ */
++static void
++plinius_setup_reorder (PhoshActivity *self)
++{
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++
++  priv->plinius_move = gtk_gesture_drag_new (GTK_WIDGET (self));
++  gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (priv->plinius_move),
++                                              GTK_PHASE_CAPTURE);
++  g_signal_connect_object (priv->plinius_move, "drag-begin",
++                           G_CALLBACK (on_plinius_move_begin), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (priv->plinius_move, "drag-update",
++                           G_CALLBACK (on_plinius_move_update), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (priv->plinius_move, "end",
++                           G_CALLBACK (on_plinius_move_end), self, G_CONNECT_SWAPPED);
++}
++
++
+ static void
+ phosh_activity_class_init (PhoshActivityClass *klass)
+ {
+@@ -736,6 +918,45 @@ phosh_activity_class_init (PhoshActivityClass *klass)
+                                    1,
+                                    GDK_TYPE_RECTANGLE | G_SIGNAL_TYPE_STATIC_SCOPE);
+ 
++  /**
++   * PhoshActivity::plinius-reorder-begin
++   * @self: The activity
++   * @x: Where the finger is, in root coordinates
++   *
++   * The card was held long enough: it follows the finger in the overview's order
++   * until the finger is lifted.
++   */
++  signals[PLINIUS_REORDER_BEGIN] = g_signal_new ("plinius-reorder-begin",
++                                                 G_TYPE_FROM_CLASS (klass),
++                                                 G_SIGNAL_RUN_LAST, 0, NULL, NULL,
++                                                 NULL,
++                                                 G_TYPE_NONE, 1,
++                                                 G_TYPE_DOUBLE);
++  /**
++   * PhoshActivity::plinius-reorder-update
++   * @self: The activity
++   * @x: Where the finger is now, in root coordinates
++   *
++   * The finger holding the card moved.
++   */
++  signals[PLINIUS_REORDER_UPDATE] = g_signal_new ("plinius-reorder-update",
++                                                  G_TYPE_FROM_CLASS (klass),
++                                                  G_SIGNAL_RUN_LAST, 0, NULL, NULL,
++                                                  NULL,
++                                                  G_TYPE_NONE, 1,
++                                                  G_TYPE_DOUBLE);
++  /**
++   * PhoshActivity::plinius-reorder-end
++   * @self: The activity
++   *
++   * The finger holding the card was lifted (or the touch was taken away).
++   */
++  signals[PLINIUS_REORDER_END] = g_signal_new ("plinius-reorder-end",
++                                               G_TYPE_FROM_CLASS (klass),
++                                               G_SIGNAL_RUN_LAST, 0, NULL, NULL,
++                                               NULL,
++                                               G_TYPE_NONE, 0);
++
+   g_type_ensure (PHOSH_TYPE_SWIPE_AWAY_BIN);
+ 
+   gtk_widget_class_set_template_from_resource (widget_class, "/mobi/phosh/ui/activity.ui");
+@@ -770,6 +991,8 @@ phosh_activity_init (PhoshActivity *self)
+ 
+   priv->win_height = 300;
+   priv->win_width = 300;
++
++  plinius_setup_reorder (self);
+ }
+ 
+ 
+diff --git a/src/overview.c b/src/overview.c
+index 7424b470..e30f3187 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -22,6 +22,8 @@
+ 
+ #include <gio/gdesktopappinfo.h>
+ 
++#include <math.h>
++
+ #include <handy.h>
+ 
+ #define OVERVIEW_ICON_SIZE 64
+@@ -69,6 +71,12 @@ typedef struct {
+   GSettings          *plinius_settings;
+   /* Plinius: the running apps below the app grid */
+   gboolean            plinius_bottom;
++  /* The card held to move it in the order, where the finger is and where it holds the card */
++  PhoshActivity      *plinius_moving;
++  double              plinius_move_x;
++  double              plinius_move_grab;
++  guint               plinius_edge_id;
++  guint               plinius_tick_id;
+ } PhoshOverviewPrivate;
+ 
+ 
+@@ -117,6 +125,297 @@ find_activity_by_app_id (PhoshOverview *self, const char *needle)
+ }
+ 
+ 
++/*
++ * Plinius: a card held for a moment follows the finger, and moves to another place in the order
++ * once it is more than half a card away from its own; the card it passed slides into the gap.
++ * The carousel (libhandy-plinius) draws a card away from its place by the offset set on it.
++ */
++/* How long a card slides into its place, in milliseconds */
++#define PLINIUS_SLIDE_MS 200
++/* Holding the finger this close to the left or right edge scrolls on to further cards ... */
++#define PLINIUS_MOVE_EDGE 40
++/* ... once per this many milliseconds */
++#define PLINIUS_MOVE_EDGE_MS 600
++/* How long that scroll takes */
++#define PLINIUS_MOVE_SCROLL_MS 300
++
++typedef struct {
++  int      from;
++  gint64   start;
++  gboolean raised;
++} PliniusSlide;
++
++
++/* Where the card's place is on the screen: its window stays there, wherever it is drawn */
++static double
++plinius_card_place_x (PhoshActivity *activity)
++{
++  GdkWindow *window = gtk_widget_get_window (GTK_WIDGET (activity));
++  int x = 0, y = 0;
++
++  if (window)
++    gdk_window_get_root_coords (window, 0, 0, &x, &y);
++
++  return x;
++}
++
++
++static int
++plinius_card_offset (PhoshActivity *activity)
++{
++  return GPOINTER_TO_INT (g_object_get_data (G_OBJECT (activity), "hdy-plinius-offset"));
++}
++
++
++static void
++plinius_set_card_offset (PhoshActivity *activity, int offset, gboolean raised)
++{
++  GtkWidget *box = gtk_widget_get_parent (GTK_WIDGET (activity));
++  gboolean was_raised;
++
++  was_raised = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (activity), "hdy-plinius-raised"));
++  if (plinius_card_offset (activity) == offset && was_raised == raised)
++    return;
++
++  g_object_set_data (G_OBJECT (activity), "hdy-plinius-offset", GINT_TO_POINTER (offset));
++  g_object_set_data (G_OBJECT (activity), "hdy-plinius-raised", GINT_TO_POINTER (raised));
++  /* The carousel's box decides from its allocation which cards it draws */
++  if (box) {
++    gtk_widget_queue_allocate (box);
++    gtk_widget_queue_draw (box);
++  }
++}
++
++
++static double
++plinius_ease_out (double t)
++{
++  return 1.0 - pow (1.0 - t, 3);
++}
++
++
++static gboolean plinius_move_step (PhoshOverview *self, int direction);
++
++/*
++ * Once per frame while a card is held or slides: the held card goes under the finger, the
++ * sliding ones a bit closer to their place.
++ */
++static gboolean
++on_plinius_tick (GtkWidget *widget, GdkFrameClock *clock, gpointer data)
++{
++  PhoshOverview *self = PHOSH_OVERVIEW (widget);
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  g_autoptr (GList) children = NULL;
++  gint64 now = gdk_frame_clock_get_frame_time (clock);
++  gboolean busy = FALSE;
++  int step_direction = 0;
++
++  children = gtk_container_get_children (GTK_CONTAINER (priv->carousel_running_activities));
++  for (GList *l = children; l; l = l->next) {
++    PhoshActivity *activity = PHOSH_ACTIVITY (l->data);
++    PliniusSlide *slide = g_object_get_data (G_OBJECT (activity), "plinius-slide");
++
++    if (activity == priv->plinius_moving) {
++      int offset = (int) round (priv->plinius_move_x - priv->plinius_move_grab -
++                                plinius_card_place_x (activity));
++      double half = (gtk_widget_get_allocated_width (GTK_WIDGET (activity)) +
++                     hdy_carousel_get_spacing (priv->carousel_running_activities)) / 2.0;
++
++      plinius_set_card_offset (activity, offset, TRUE);
++      if (half > 0 && offset > half)
++        step_direction = 1;
++      else if (half > 0 && offset < -half)
++        step_direction = -1;
++      busy = TRUE;
++    } else if (slide) {
++      double t = (now - slide->start) / (PLINIUS_SLIDE_MS * 1000.0);
++
++      if (t >= 1.0) {
++        g_object_set_data (G_OBJECT (activity), "plinius-slide", NULL);
++        plinius_set_card_offset (activity, 0, FALSE);
++      } else {
++        plinius_set_card_offset (activity,
++                                 (int) round (slide->from * (1.0 - plinius_ease_out (MAX (0, t)))),
++                                 slide->raised);
++        busy = TRUE;
++      }
++    }
++  }
++
++  /* After the loop: moving the card changes the list. The next frame sees its new place. */
++  if (step_direction)
++    plinius_move_step (self, step_direction);
++
++  if (busy)
++    return G_SOURCE_CONTINUE;
++
++  priv->plinius_tick_id = 0;
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++plinius_ensure_tick (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++
++  if (!priv->plinius_tick_id)
++    priv->plinius_tick_id = gtk_widget_add_tick_callback (GTK_WIDGET (self), on_plinius_tick,
++                                                          NULL, NULL);
++}
++
++
++/* The card is drawn FROM pixels away from its place and slides there */
++static void
++plinius_slide (PhoshOverview *self, PhoshActivity *activity, int from, gboolean raised)
++{
++  PliniusSlide *slide = g_new0 (PliniusSlide, 1);
++
++  slide->from = from;
++  slide->start = g_get_monotonic_time ();
++  slide->raised = raised;
++  g_object_set_data_full (G_OBJECT (activity), "plinius-slide", slide, g_free);
++  plinius_set_card_offset (activity, from, raised);
++  plinius_ensure_tick (self);
++}
++
++
++/*
++ * Moves the held card one place to the left (-1) or right (1). The cards in view stay where they
++ * are, the one passed slides into the gap; the held card keeps following the finger.
++ */
++static gboolean
++plinius_move_step (PhoshOverview *self, int direction)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  HdyCarousel *carousel = priv->carousel_running_activities;
++  g_autoptr (GList) children = NULL;
++  g_autoptr (GList) reordered = NULL;
++  GtkWidget *held, *passed;
++  int index, n_pages, distance, in_view;
++
++  if (!priv->plinius_moving)
++    return FALSE;
++
++  held = GTK_WIDGET (priv->plinius_moving);
++  children = gtk_container_get_children (GTK_CONTAINER (carousel));
++  index = g_list_index (children, held);
++  n_pages = g_list_length (children);
++  if (index < 0 || index + direction < 0 || index + direction >= n_pages)
++    return FALSE;
++
++  passed = g_list_nth_data (children, index + direction);
++  in_view = CLAMP ((int) round (hdy_carousel_get_position (carousel)), 0, n_pages - 1);
++  distance = gtk_widget_get_allocated_width (held) + hdy_carousel_get_spacing (carousel);
++
++  /*
++   * The card that goes to the left moves: hdy_carousel_reorder() puts a card before the one at
++   * the place it is given, so a card moved to the right would land where it was.
++   */
++  if (direction < 0)
++    hdy_carousel_reorder (carousel, held, index - 1);
++  else
++    hdy_carousel_reorder (carousel, passed, index);
++
++  /* The carousel keeps a moved card in view if it was: stay at the place in view instead */
++  if ((int) round (hdy_carousel_get_position (carousel)) != in_view) {
++    reordered = gtk_container_get_children (GTK_CONTAINER (carousel));
++    hdy_carousel_scroll_to_full (carousel, g_list_nth_data (reordered, in_view), 0);
++  }
++
++  plinius_slide (self, PHOSH_ACTIVITY (passed), direction * distance, FALSE);
++  return TRUE;
++}
++
++
++/* With the finger at an edge, the carousel scrolls on, and the held card goes along */
++static gboolean
++on_plinius_move_edge_timeout (gpointer data)
++{
++  PhoshOverview *self = PHOSH_OVERVIEW (data);
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  HdyCarousel *carousel = priv->carousel_running_activities;
++  GtkWidget *widget = GTK_WIDGET (self);
++  g_autoptr (GList) children = NULL;
++  GtkAllocation alloc;
++  int left, top, direction = 0, index, n_pages;
++
++  /* The held card went away (its app closed) before the finger was lifted */
++  if (!priv->plinius_moving) {
++    priv->plinius_edge_id = 0;
++    hdy_carousel_set_interactive (carousel, TRUE);
++    return G_SOURCE_REMOVE;
++  }
++
++  /* The overview's edges in the root coordinates the finger comes in */
++  gtk_widget_get_allocation (widget, &alloc);
++  gdk_window_get_root_coords (gtk_widget_get_window (widget), alloc.x, alloc.y, &left, &top);
++  if (priv->plinius_move_x < left + PLINIUS_MOVE_EDGE)
++    direction = -1;
++  else if (priv->plinius_move_x > left + alloc.width - PLINIUS_MOVE_EDGE)
++    direction = 1;
++  if (!direction)
++    return G_SOURCE_CONTINUE;
++
++  children = gtk_container_get_children (GTK_CONTAINER (carousel));
++  n_pages = g_list_length (children);
++  index = (int) round (hdy_carousel_get_position (carousel)) + direction;
++  if (index >= 0 && index < n_pages)
++    hdy_carousel_scroll_to_full (carousel, g_list_nth_data (children, index),
++                                 PLINIUS_MOVE_SCROLL_MS);
++
++  return G_SOURCE_CONTINUE;
++}
++
++
++static void
++on_plinius_reorder_begin (PhoshOverview *self, double x, PhoshActivity *activity)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++
++  g_set_weak_pointer (&priv->plinius_moving, activity);
++  priv->plinius_move_x = x;
++  /* Where the finger holds the card, as it is drawn now (it may still slide) */
++  priv->plinius_move_grab = x - plinius_card_place_x (activity) - plinius_card_offset (activity);
++  g_object_set_data (G_OBJECT (activity), "plinius-slide", NULL);
++  /* The carousel would take the moving finger for a swipe and the touch from the card */
++  hdy_carousel_set_interactive (priv->carousel_running_activities, FALSE);
++
++  g_clear_handle_id (&priv->plinius_edge_id, g_source_remove);
++  priv->plinius_edge_id = g_timeout_add (PLINIUS_MOVE_EDGE_MS, on_plinius_move_edge_timeout, self);
++  g_source_set_name_by_id (priv->plinius_edge_id, "[phosh] plinius overview move edge");
++  plinius_ensure_tick (self);
++}
++
++
++static void
++on_plinius_reorder_update (PhoshOverview *self, double x, PhoshActivity *activity)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++
++  if (priv->plinius_moving == activity)
++    priv->plinius_move_x = x;
++}
++
++
++/* Let go: the card slides into its place, which comes into view */
++static void
++on_plinius_reorder_end (PhoshOverview *self, PhoshActivity *activity)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++
++  if (priv->plinius_moving != activity)
++    return;
++
++  g_clear_handle_id (&priv->plinius_edge_id, g_source_remove);
++  g_clear_weak_pointer (&priv->plinius_moving);
++  hdy_carousel_set_interactive (priv->carousel_running_activities, TRUE);
++  plinius_slide (self, activity, plinius_card_offset (activity), TRUE);
++  hdy_carousel_scroll_to_full (priv->carousel_running_activities, GTK_WIDGET (activity),
++                               PLINIUS_SLIDE_MS);
++}
++
++
+ static PhoshActivity *
+ create_new_activity (PhoshOverview *self,
+                      GAppInfo      *info,
+@@ -149,6 +448,10 @@ create_new_activity (PhoshOverview *self,
+ 
+   g_object_connect (activity,
+                     "swapped-signal::clicked", on_activity_clicked, self,
++                    /* Plinius: hold a card to move it in the order */
++                    "swapped-signal::plinius-reorder-begin", on_plinius_reorder_begin, self,
++                    "swapped-signal::plinius-reorder-update", on_plinius_reorder_update, self,
++                    "swapped-signal::plinius-reorder-end", on_plinius_reorder_end, self,
+                     NULL);
+ 
+   if (!toplevel) {
+@@ -833,6 +1136,12 @@ phosh_overview_dispose (GObject *object)
+   PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
+ 
+   g_clear_object (&priv->plinius_settings);
++  g_clear_handle_id (&priv->plinius_edge_id, g_source_remove);
++  g_clear_weak_pointer (&priv->plinius_moving);
++  if (priv->plinius_tick_id) {
++    gtk_widget_remove_tick_callback (GTK_WIDGET (self), priv->plinius_tick_id);
++    priv->plinius_tick_id = 0;
++  }
+ 
+   G_OBJECT_CLASS (phosh_overview_parent_class)->dispose (object);
+ }
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index c7b4d241..a3c7a1ed 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -323,6 +323,16 @@ phosh-activity > widget > button:focus {
+   outline: none;
+ }
+ 
++/* Plinius: a card held to move it in the order is framed and lets the others shine through */
++phosh-activity.plinius-reordering {
++  opacity: 0.85;
++}
++
++phosh-activity.plinius-reordering > widget > button,
++phosh-activity.plinius-reordering > widget > button:focus {
++  box-shadow: inset 0 0 0 3px @theme_selected_bg_color;
++}
++
+ phosh-activity box button {
+   background: @phosh_bg_color;
+   border-radius: 0;

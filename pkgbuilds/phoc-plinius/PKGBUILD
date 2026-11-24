@@ -1,0 +1,234 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=phoc-plinius
+pkgver=0.59.0
+pkgrel=9
+pkgdesc="Phosh compositor with embedded, patched wlroots 0.20.2 as upstream intends"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://gitlab.gnome.org/World/Phosh/phoc"
+license=(GPL-3.0-or-later MIT)
+# Runtime deps as ALARM's phoc, plus those of the statically embedded wlroots
+depends=(
+	cairo dconf glib2 gnome-desktop gsettings-desktop-schemas hicolor-icon-theme
+	json-glib libgmobile libinput libxcb libxkbcommon mutter pango pixman
+	systemd-libs wayland xorg-xwayland
+	libdrm libdisplay-info libliftoff seatd libglvnd mesa vulkan-icd-loader lcms2
+	xcb-util-errors xcb-util-renderutil xcb-util-wm
+)
+# feedbackd plays the bell of the apps (0032); without it the bell stays silent as before
+optdepends=('feedbackd: the bell of the apps as a sound or a vibration')
+makedepends=(git meson glib2-devel wayland-protocols xorgproto hwdata glslang vulkan-headers)
+# Why not phoc from ALARM: our patches (always-on display, night light, second screen, ...).
+# Since 0.59 Arch also embeds wlroots with phoc's own wlroots patches (the revert "layer-shell:
+# error on 0 dimension without anchors" and text-input-v3 version 2); same here.
+provides=("phoc=$pkgver")
+conflicts=(phoc)
+# Commits of tag v$pkgver and of wlroots tag 0.20.2: a tag can be moved later, a commit hash cannot
+_commit=caebbe49fc18ae34af73e8517ced4313000ab65c
+_wlroots_commit=d783533489e1f75d6886c2ab5c5960090ef268f8
+_gvdb_commit=4758f6fb7f889e074e13df3f914328f3eecb1fd3
+source=(
+	"git+$url.git#commit=$_commit"
+	"git+https://gitlab.freedesktop.org/wlroots/wlroots.git#commit=$_wlroots_commit"
+	"git+https://gitlab.gnome.org/GNOME/gvdb.git#commit=$_gvdb_commit"
+	0001-render-gles2-wait-for-the-GPU-without-implicit-sync.patch
+	0003-output-Use-the-picked-mode-whether-it-is-preferred-or-not.patch
+	0004-output-shield-Show-the-device-s-logo-instead-of-the-spinner.patch
+	0005-render-gles2-Gamma-LUTs-when-the-CRTC-cannot-set-them.patch
+	0006-output-Apply-gamma-LUTs-in-the-renderer-when-the-output-has-none.patch
+	0007-spinner-The-logo-in-the-accent-color.patch
+	0008-style-manager-A-custom-accent-color-from-the-settings.patch
+	0010-render-Draw-plinius-ambient-s-effect-with-Phosh-s-background.patch
+	0011-layer-shell-effects-Keep-a-folded-surface-folded-whe.patch
+	0013-backend-drm-Keep-the-outputs-over-a-session-pause.patch
+	0014-output-Frame-callbacks-for-layer-surfaces-off-the-output.patch
+	0015-backend-drm-Doze-for-an-always-on-display.patch
+	0016-output-Doze-as-an-always-on-display.patch
+	0018-view-Windows-open-and-come-to-the-screen-they-were-picked-on.patch
+	0019-output-management-A-virtual-mode-for-every-client-of-a-head.patch
+	0020-view-The-phone-stays-a-phone-a-second-screen-floats-as-last-time.patch
+	0021-view-An-app-picked-in-the-app-grid-comes-to-that-screen-too.patch
+	0022-output-Only-the-always-on-display-draws-while-dozing.patch
+	0023-output-A-dozing-panel-only-gets-the-always-on-display.patch
+	0024-server-A-virtual-output-on-request.patch
+	0025-view-A-window-moved-to-another-screen-is-scaled-for-that-screen.patch
+	0026-view-An-app-started-on-the-phone-is-maximized-with-a-second-screen-too.patch
+	0027-view-A-window-s-scale-starts-over-when-it-gets-arranged-anew.patch
+	0028-output-shield-The-start-up-logo-from-the-first-frame.patch
+	0029-xdg-toplevel-A-plain-resize-counts-as-a-pending-configure-too.patch
+	0030-output-A-doze-ends-with-the-shell-that-asked-for-it.patch
+	0031-output-A-shown-OSK-stays-on-top-of-a-fullscreen-view.patch
+	0032-gtk-shell-The-bell-of-the-apps-goes-to-feedbackd.patch
+	0033-backend-drm-MediaTek-runs-the-panel-timing-of-DISP_MODE_IDX.patch
+	0034-output-Tell-the-light-sensor-what-the-panel-shows-over-it.patch
+	0035-desktop-A-maximized-window-whose-screen-went-away-is.patch
+	0036-cursor-A-dragged-window-keeps-half-its-title-bar-out.patch
+	0037-view-Windows-can-be-minimized.patch
+	0038-input-method-relay-The-OSK-only-for-the-phone-s-own-.patch
+)
+sha256sums=('SKIP'
+	'SKIP'
+	'SKIP'
+	'cd2ff9a5634fe85d6446aee51d74d2315169c48ff25a5cb572c62e767bf98ce9'
+	'8acbd76f214e2886acb66b4dec95fd38dc23b7187674658364c26873f0bd32a1'
+	'0f0c65837e81fcff6c4654e6f179fdcab256682c00a1bf713b2bdcabf4f02261'
+	'81cc184b3abffaeaf0ef3c44bee66542559ba4022fab8511e2e55f9c68843188'
+	'fb9e6103b75997a2bf3e5d51de332f525d6285f9f0a68841416508d28d98e6ae'
+	'14f5b3739a82980f3876f3b3ffcd75cb1fa092672712dee80f008b4fd000a6e1'
+	'90144d63bb0ef831431a4ca5f146ca12c36c4f433a90fa2d52037fed77b90fbe'
+	'4dd5af65e51be7d3ff2d1e215d865e2bc90160bde77a65708a4468c1403f8c4e'
+	'8171ed1a1d073574bba85fb649218ba4a40a4fda00efa3e78b766387308c10bc'
+	'6c0c4d0f27215de60607f815bbef2a8018f2fb0ee998ca01973b913a227bc6c2'
+	'd156588ff754dbee5c0b666932be2d944b4dd6c532824aa3e5b3bdb51c16f2d8'
+	'24b617b69efeba1a2da6d0a28564b866808f20fbd6e85ca406d7b4132afad8d4'
+	'2b8ba13ed7cee46304628be77b1feb353c736f99626f794ac77616e1d0dc1862'
+	'18dfc5e2e6f8c6e275bf5f72103ebbde706360624277ef500dd6bc439e354657'
+	'3fada86559621ddcf12861d7e93e33bcc14f155136f476711b59ecbc706c51e6'
+	'fab692be8b43bba86331942a056609cfe59500b03da9631aaa04b00aefe4247e'
+	'7b10ca1bfdbc46bc5c99c1b4e27c225b6cca415e515729f15d48d19aa5ba8ba4'
+	'840ced8341bf956725301a746a053e12900243fddfc471ddbc2d7e0565bdc93d'
+	'f7abf741f5d59308a2a3883ee5a95b239356f4f7b6ee7f965698644a9879602f'
+	'782b51feac7808ca23ff4efcc11fbb5386e8dccb903f15daa6b12acc83270020'
+	'3dcdfa6a09771217b8cc97b2b4bfafb925cfa458061d9593b0e4086e722b38b1'
+	'6c7790727d832325922a67e293950fc8e940c8eb94a5995053119db7367b2827'
+	'b74085fa1cad6619f5116b702244aded5b0e3c5c1338fedefc09bd6211e45402'
+	'cb8668ca1051b777aa75ab3c674030b8f96ca14bc9b0642025b8d7e8cc3644a1'
+	'3bdc91eb8bcf5526825da0bea74bd0993459cd1dae9d59a0d054d1b47c8eeac8'
+	'10d1eb09d1bc725d0d244792cb4c75912446805410b05135e6ce9ae2a79df749'
+	'e1818d8322d9d75ab28ffcfd2e59c19511b5836e17a5649efd266036ad7c5ea8'
+	'529512108daaf74bd90665b5c77a35c0f441325227157c5b98f80a04d5b5a632'
+	'2f187c303825cc6fe6b2b75c8109d58e9e0690363c9fad71f8036900634fe09a'
+	'20dc67380901c24fcf958c9aa2f106554e2b0e58492a43e3d6b887fa698e01e2'
+	'264d44ec3b1811e3c0bd1297aa3cc9561dde33279552b08f8a810a603c205647'
+	'c40be68caace2db39ead878727440aa17cf9ef4e8d35490bc9fcb0ccef55aed8'
+	'47bfb6fdd682f1e4d293f999ab1754af68f862dfa02c994ba7b48db1d59641a9'
+	'41da21271531577d4a0aee94621c59f8fe4768b9bf2b8a5722557819a14a926e')
+
+prepare() {
+	# Place the subprojects where phoc's .wrap files expect them (no download during build)
+	cp -a wlroots phoc/subprojects/wlroots-0.20.x
+	cp -a gvdb phoc/subprojects/gvdb
+	# phoc's own wlroots patches, in the order of its wlroots.wrap: text-input-v3 version 2 (GTK 4
+	# apps ask for the OSK only on a tap) and the revert for Phosh's home bar of height 0
+	local _p
+	for _p in text-input-v2/0001-text-input-v3-Introduce-version.patch \
+		text-input-v2/0002-text-input-Add-version-2-events.patch \
+		text-input-v2/0003-text-input-v3-Add-version-2-requests.patch \
+		text-input-v2/0004-text-input-v3-Bump-protocol-version-to-2.patch \
+		0001-Revert-layer-shell-error-on-0-dimension-without-anch.patch; do
+		patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "../packagefiles/wlroots/$_p"
+	done
+	# Mali through libhybris: KMS must not scan out frames the GPU is still drawing (docs/GRAFIK.md)
+	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0001-render-gles2-wait-for-the-GPU-without-implicit-sync.patch"
+	# 0002, 0012, 0017 (the OSK only after a tap) are gone: since 0.58 phoc does that itself for
+	# text-input-v3 version 2 (GTK 4); tested without them since 10.11.2026, GTK 3 and Firefox too
+	# Displays: 90/120 Hz were set back to the preferred 60 Hz (upstream bug from phoc 4709966, phoc!771)
+	patch -d phoc -Np1 -i "$srcdir/0003-output-Use-the-picked-mode-whether-it-is-preferred-or-not.patch"
+	# While the session starts: the device's logo (device package) instead of the spinner
+	patch -d phoc -Np1 -i "$srcdir/0004-output-shield-Show-the-device-s-logo-instead-of-the-spinner.patch"
+	# Night light: the MediaTek display cannot set a gamma LUT (legacy KMS, ENOSYS); wlroots reports
+	# none and its GLES2 renderer applies the LUT, phoc hands it over (docs/GRAFIK.md)
+	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0005-render-gles2-Gamma-LUTs-when-the-CRTC-cannot-set-them.patch"
+	patch -d phoc -Np1 -i "$srcdir/0006-output-Apply-gamma-LUTs-in-the-renderer-when-the-output-has-none.patch"
+	# The logo while the session starts takes the accent color from GNOME Settings
+	patch -d phoc -Np1 -i "$srcdir/0007-spinner-The-logo-in-the-accent-color.patch"
+	# Accent color: a color of the user's choice from GNOME Settings (org.plinius.appearance,
+	# schema in phosh-plinius)
+	patch -d phoc -Np1 -i "$srcdir/0008-style-manager-A-custom-accent-color-from-the-settings.patch"
+	# 0009 (crash on a tap on the home bar) is gone: fixed upstream (a9e2c3d, phoc 0.58)
+	# plinius-ambient's effect (snow, rain, ...) is drawn with each of Phosh's backgrounds: under
+	# the windows, under the app grid and on the lock screen; it gets frames only while it is seen
+	patch -d phoc -Np1 -i "$srcdir/0010-render-Draw-plinius-ambient-s-effect-with-Phosh-s-background.patch"
+	# Phosh's top panel grows to the full screen after start-up; it stays folded instead of
+	# sliding in from margin 0, which showed the quick settings over the lock screen
+	patch -d phoc -Np1 -i "$srcdir/0011-layer-shell-effects-Keep-a-folded-surface-folded-whe.patch"
+	# Every suspend ended the Phosh session: wlroots destroyed the outputs when logind paused the
+	# session and re-created them on resume; Phosh rebuilt its shell for the "new" output and GTK 3
+	# committed a buffer at the wrong scale meanwhile. The outputs stay now (docs/STANDBY.md)
+	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0013-backend-drm-Keep-the-outputs-over-a-session-pause.patch"
+	# After a Phosh restart (crash, "Restart UI") the home bar lay below the screen and could not
+	# be dragged: the layout shrank the folded home surface, which then got no frame callbacks
+	# to draw the new size. Layer surfaces get them now wherever they are
+	patch -d phoc -Np1 -i "$srcdir/0014-output-Frame-callbacks-for-layer-surfaces-off-the-output.patch"
+	# Always-on display: the OLED keeps showing Phosh's clock in its low-power mode (MediaTek
+	# DOZE_ACTIVE), the CRTC goes off between frames and the SoC can suspend. Phosh asks for it
+	# with the power mode "doze", a Plinius extension of wlr-output-power-management
+	# (-25: each change of doze is a commit of its own without a page-flip event; MediaTek skips the
+	# plane update of such a commit and its event, wlroots then waited forever and the panel stayed dark)
+	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0015-backend-drm-Doze-for-an-always-on-display.patch"
+	patch -d phoc -Np1 -i "$srcdir/0016-output-Doze-as-an-always-on-display.patch"
+	# A second screen (e.g. virtual over VNC): new windows open on the screen of the last click or
+	# tap, a window picked in a task bar there or in Phosh's overview on the phone comes to it
+	patch -d phoc -Np1 -i "$srcdir/0018-view-Windows-open-and-come-to-the-screen-they-were-picked-on.patch"
+	# Switching a headless output on again (wlr-randr --on) aborted phoc on assert(found): the
+	# client had bound while it was off and got no virtual mode
+	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0019-output-management-A-virtual-mode-for-every-client-of-a-head.patch"
+	# With a second screen the phone still shows windows maximized; on the second screen an app
+	# floats with the size and position it had there the last time (per app id, kept on disk)
+	patch -d phoc -Np1 -i "$srcdir/0020-view-The-phone-stays-a-phone-a-second-screen-floats-as-last-time.patch"
+	# The same when the app grid or a notification activates a running app (xdg-activation,
+	# gtk-shell), not only for the overview and task bars
+	patch -d phoc -Np1 -i "$srcdir/0021-view-An-app-picked-in-the-app-grid-comes-to-that-screen-too.patch"
+	# While dozing only the always-on display gets frame callbacks: plinius-ambient and Phosh drew
+	# on under it (30 per second), so the CRTC never went off and the phone could not suspend
+	patch -d phoc -Np1 -i "$srcdir/0022-output-Only-the-always-on-display-draws-while-dozing.patch"
+	# The lock screen coming up while dozing no longer flashes up: the panel only gets the always-on
+	# display and keeps its picture until that is back on top
+	patch -d phoc -Np1 -i "$srcdir/0023-output-A-dozing-panel-only-gets-the-always-on-display.patch"
+	# The screen behind VNC exists only on request, over DBus (plinius-desktop): an output that is
+	# there all the time, even switched off, makes every client see two screens
+	patch -d phoc -Np1 -i "$srcdir/0024-server-A-virtual-output-on-request.patch"
+	# A window moved to the phone hung across both screens
+	patch -d phoc -Np1 -i "$srcdir/0025-view-A-window-moved-to-another-screen-is-scaled-for-that-screen.patch"
+	# An app started on the phone fills it with a second screen too
+	patch -d phoc -Np1 -i "$srcdir/0026-view-An-app-started-on-the-phone-is-maximized-with-a-second-screen-too.patch"
+	# Turning the phone or coming back from the desktop left an app shrunken for good
+	patch -d phoc -Np1 -i "$srcdir/0027-view-A-window-s-scale-starts-over-when-it-gets-arranged-anew.patch"
+	# The start-up logo from the first frame on, even over a modeset shield, with its step below
+	patch -d phoc -Np1 -i "$srcdir/0028-output-shield-The-start-up-logo-from-the-first-frame.patch"
+	# The on-screen keyboard shrank Settings to 0.81 and switched it to two columns: a plain
+	# resize did not count as a pending configure
+	patch -d phoc -Np1 -i "$srcdir/0029-xdg-toplevel-A-plain-resize-counts-as-a-pending-configure-too.patch"
+	patch -d phoc -Np1 -i "$srcdir/0030-output-A-doze-ends-with-the-shell-that-asked-for-it.patch"
+	# The OSK stays on top of a fullscreen window also when the window has no input method (games
+	# through SDL, DOSBox): it was unfolded behind it and only showed while the screen was touched
+	patch -d phoc -Np1 -i "$srcdir/0031-output-A-shown-OSK-stays-on-top-of-a-fullscreen-view.patch"
+	# The bell of the apps (GTK's error bell, a terminal's bell) did nothing: it goes to feedbackd
+	# as bell-window-system, whose sound and vibration Settings sets (Sounds and Vibration >
+	# Alert Sound, gnome-control-center-plinius 0097)
+	patch -d phoc -Np1 -i "$srcdir/0032-gtk-shell-The-bell-of-the-apps-goes-to-feedbackd.patch"
+	# 120 Hz in the settings kept the panel at 60 Hz: MediaTek switches the timing through its
+	# CRTC property DISP_MODE_IDX, not through MODE_ID alone
+	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0033-backend-drm-MediaTek-runs-the-panel-timing-of-DISP_MODE_IDX.patch"
+	# Auto brightness followed the picture: the light sensor behind the OLED sees the panel's light,
+	# and its firmware only takes that off when it knows the colour shown over the sensor. phoc
+	# reads that part of the screen back and writes the colour to $XDG_RUNTIME_DIR; the sensor's
+	# box and weights come from phoc.ini (device package), plinius-backlight-wake hands it on
+	patch -d phoc -Np1 -i "$srcdir/0034-output-Tell-the-light-sensor-what-the-panel-shows-over-it.patch"
+	# Back from the VNC desktop an app could stay at half size in its desktop layout: a maximized
+	# window whose screen went away kept that screen's size and scale-to-fit took it as the answer
+	patch -d phoc -Np1 -i "$srcdir/0035-desktop-A-maximized-window-whose-screen-went-away-is.patch"
+	# A window dragged under a panel (top bar, the desktop's task bar) keeps half its title bar
+	# out of it, so it can be grabbed again
+	patch -d phoc -Np1 -i "$srcdir/0036-cursor-A-dragged-window-keeps-half-its-title-bar-out.patch"
+	# The desktop's task bar minimizes a window that is in front, phoc ignored that request
+	patch -d phoc -Np1 -i "$srcdir/0037-view-Windows-can-be-minimized.patch"
+	# The OSK stays on the phone with the desktop over VNC: its layer surface goes to the built-in
+	# panel, not under the cursor, and a field on the desktop (typed into with the PC's keyboard)
+	# does not unfold it
+	patch -d phoc -Np1 -i "$srcdir/0038-input-method-relay-The-OSK-only-for-the-phone-s-own-.patch"
+}
+
+build() {
+	arch-meson phoc build \
+		-Dembed-wlroots=enabled \
+		-Ddefault_library=static \
+		-Dtests=false \
+		-Dman=false
+	meson compile -C build
+}
+
+package() {
+	# Only phoc itself; do not install the embedded wlroots/gvdb (conflicts with wlroots0.20)
+	meson install -C build --destdir "$pkgdir" --skip-subprojects
+}

@@ -1,0 +1,27 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-rollback
+pkgver=0.1
+pkgrel=2
+pkgdesc="Take back the last system update from the pacman cache"
+arch=(any)
+license=(MIT)
+# ALARM has no archive of old versions: the way back is the cache on the device, which the hook
+# trims to two versions per package (docs/PAKETIERUNG.md, "Rückweg auf dem Gerät").
+# GNOME Settings › System › Self-Test runs it through pkexec (polkit) as a systemd unit.
+depends=(bash pacman pacman-contrib gawk sed libarchive coreutils systemd polkit)
+source=(plinius-rollback
+	plinius-rollback.hook
+	org.plinius.rollback.policy
+	LICENSE)
+sha256sums=('7cd4bff98084c0b3b256a7d5b699078da0c241279b042b0cc60cc84e0c8d7452'
+	'0599a46d718bb4c34027f1282729bfb8992e1fe15c4286a85661bbc555b1d35a'
+	'8f0ef4358c9ee966660604fd3be0b3c9d7cee0b1e5eeac7ededc3d67cbf05a7c'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-rollback -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-rollback.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	install -Dm644 org.plinius.rollback.policy -t "$pkgdir/usr/share/polkit-1/actions"
+}

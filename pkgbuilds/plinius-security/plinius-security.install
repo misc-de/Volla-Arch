@@ -1,0 +1,39 @@
+# pacman install script of plinius-security: lists pam_plinius_secstate.so at the end of the
+# password stack of /etc/pam.d/passwd (a backup file of the shadow package), so a new login
+# password (the screen lock PIN) gets rated for GNOME Settings. Removed with the package.
+
+_pam_line='password	optional	pam_plinius_secstate.so'
+
+_add_pam_line() {
+	local f=/etc/pam.d/passwd
+	[[ -f $f ]] || return 0
+	grep -q 'pam_plinius_secstate\.so' "$f" && return 0
+	# Last: it rates only a password that the modules before it have set
+	printf '%s\n' "$_pam_line" >> "$f"
+}
+
+# Up to 0.1-13 the module left the modes to passwd's umask (077 from GNOME Settings): Settings,
+# running as the user, could not read the ratings. Directories 0755, each rating 0640 for its user.
+_fix_rating_modes() {
+	local d=/var/lib/plinius-security f g
+	[[ -d $d/lock ]] || return 0
+	chmod 0755 "$d" "$d/lock"
+	for f in "$d"/lock/*; do
+		[[ -f $f && ! -L $f ]] || continue
+		g=$(id -gn "${f##*/}" 2>/dev/null) || continue
+		chown "root:$g" "$f" && chmod 0640 "$f"
+	done
+}
+
+post_install() {
+	_add_pam_line
+}
+
+post_upgrade() {
+	_add_pam_line
+	_fix_rating_modes
+}
+
+pre_remove() {
+	sed -i '/pam_plinius_secstate\.so/d' /etc/pam.d/passwd 2>/dev/null || true
+}

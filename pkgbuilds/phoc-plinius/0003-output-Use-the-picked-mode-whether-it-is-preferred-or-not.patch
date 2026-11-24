@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 00:28:10 +0100
+Subject: [PATCH] output: Use the picked mode whether it is preferred or not
+
+Since 47099669 ("output: Actually handle preferred mode") a mode from the
+output configuration is only taken when it is the preferred one; any other
+mode falls through to the custom mode, which is empty, and the output stays
+at (or goes back to) its preferred mode. On a panel where only 60 Hz is
+preferred, picking 90 or 120 Hz in GNOME Settings modesets to 60 Hz again.
+
+head->state.mode is NULL only when the client sets a custom mode, so take
+it whenever it is there.
+
+Fixes: 47099669 ("output: Actually handle preferred mode")
+---
+ src/output.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/output.c b/src/output.c
+index d95d6db..d38a31a 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -1943,7 +1943,8 @@ phoc_output_config_head_to_output_config (PhocOutput
+   PhocOutputConfig *oc = phoc_output_config_new (phoc_output_get_identifier (self));
+ 
+   oc->enable = TRUE;
+-  if (head->state.mode && head->state.mode->preferred) {
++  /* Any mode the client picked; only a custom mode leaves it NULL */
++  if (head->state.mode) {
+     oc->mode.width = head->state.mode->width;
+     oc->mode.height = head->state.mode->height;
+     oc->mode.refresh_rate = head->state.mode->refresh / 1000.0;

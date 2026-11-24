@@ -1,0 +1,62 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] render/gles2: wait for the GPU without implicit sync
+
+Android EGL drivers used through libhybris (Mali on the Volla Phone Plinius)
+attach no implicit fences to dma-bufs, and the MediaTek DRM driver has no
+syncobjs for explicit sync. KMS then scans out frames the GPU has not
+finished; the command mode panel keeps showing them until the next flip.
+With the Android EGL vendor, end render passes without a signal timeline
+with glFinish() instead of glFlush().
+---
+diff -ruN a/include/render/gles2.h b/include/render/gles2.h
+--- a/include/render/gles2.h
++++ b/include/render/gles2.h
+@@ -42,6 +42,8 @@
+ 
+ 	struct wlr_egl *egl;
+ 	int drm_fd;
++	// Wait for the GPU at the end of each render pass without explicit sync
++	bool finish_frames;
+ 
+ 	struct wlr_drm_format_set shm_texture_formats;
+ 
+diff -ruN a/render/gles2/pass.c b/render/gles2/pass.c
+--- a/render/gles2/pass.c
++++ b/render/gles2/pass.c
+@@ -56,6 +56,8 @@
+ 		if (!ok) {
+ 			goto out;
+ 		}
++	} else if (renderer->finish_frames) {
++		glFinish();
+ 	} else {
+ 		glFlush();
+ 	}
+diff -ruN a/render/gles2/renderer.c b/render/gles2/renderer.c
+--- a/render/gles2/renderer.c
++++ b/render/gles2/renderer.c
+@@ -5,6 +5,7 @@
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <time.h>
+ #include <unistd.h>
+ #include <wayland-server-protocol.h>
+@@ -541,6 +542,16 @@
+ 	wlr_log(WLR_INFO, "GL renderer: %s", glGetString(GL_RENDERER));
+ 	wlr_log(WLR_INFO, "Supported GLES2 extensions: %s", exts_str);
+ 
++	// Android drivers (through libhybris) attach no implicit fences to their
++	// dma-bufs. Without explicit sync, KMS could then scan out a frame the GPU
++	// is still drawing, and a command mode panel keeps showing it.
++	const char *egl_vendor = eglQueryString(egl->display, EGL_VENDOR);
++	renderer->finish_frames = egl_vendor != NULL && strcmp(egl_vendor, "Android") == 0;
++	if (renderer->finish_frames) {
++		wlr_log(WLR_INFO, "No implicit sync with this EGL vendor: "
++			"waiting for the GPU after render passes without explicit sync");
++	}
++
+ 	if (!renderer->egl->exts.EXT_image_dma_buf_import) {
+ 		wlr_log(WLR_ERROR, "EGL_EXT_image_dma_buf_import not supported");
+ 		free(renderer);

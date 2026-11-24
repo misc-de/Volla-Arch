@@ -1,0 +1,147 @@
+From 3c84644575486c39986bcffbaed3cb16f08be06f Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:38:53 +0100
+Subject: [PATCH] top-panel: Show the calendar week
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plinius: with "Week Numbers" switched on in GNOME Settings > Date &
+Time (org.gnome.desktop.calendar show-weekdate), the top bar shows the
+calendar week left of the clock ("Week 44  Thu 15:40"), and the date
+in the opened panel gets it too ("Thursday, October 29 · Week 44").
+GNOME Shell shows it in its calendar, Phosh had no place for it.
+
+The string comes from the gettext domain plinius-control-center, which
+gnome-control-center-plinius installs.
+---
+ src/top-panel.c | 76 ++++++++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 73 insertions(+), 3 deletions(-)
+
+diff --git a/src/top-panel.c b/src/top-panel.c
+index c0587163..15d00cb9 100644
+--- a/src/top-panel.c
++++ b/src/top-panel.c
+@@ -104,6 +104,8 @@ typedef struct _PhoshTopPanel {
+   GnomeXkbInfo *xkbinfo;
+   GSettings *input_settings;
+   GSettings *interface_settings;
++  /* Plinius: "Week Numbers" in GNOME Settings > Date & Time */
++  GSettings *calendar_settings;
+   GdkSeat *seat;
+ 
+   GSimpleActionGroup *actions;
+@@ -376,6 +378,41 @@ on_launch_mobile_panel_activated (GSimpleAction *action, GVariant *param, gpoint
+ }
+ 
+ 
++/* Plinius: "Week 44" (localized) while "Week Numbers" is on, else NULL */
++static char *
++get_week_text (PhoshTopPanel *self)
++{
++  g_autoptr (GDateTime) now = NULL;
++
++  if (!self->calendar_settings ||
++      !g_settings_get_boolean (self->calendar_settings, "show-weekdate"))
++    return NULL;
++
++  now = g_date_time_new_now_local ();
++  /* The string lives in the gettext domain of gnome-control-center-plinius, which brings
++     the switch for it */
++  return g_strdup_printf (g_dgettext ("plinius-control-center", "Week %d"),
++                          g_date_time_get_week_of_year (now));
++}
++
++
++/* Plinius: the top bar clock, with the calendar week to its left */
++static void
++update_top_bar_clock (PhoshTopPanel *self)
++{
++  g_autofree char *clock = NULL;
++  g_autofree char *week = get_week_text (self);
++
++  g_object_get (phosh_wall_clock_get_default (), "date-time", &clock, NULL);
++  if (week) {
++    g_autofree char *with_week = g_strdup_printf ("%s  %s", week, clock);
++    gtk_label_set_label (GTK_LABEL (self->lbl_clock), with_week);
++  } else {
++    gtk_label_set_label (GTK_LABEL (self->lbl_clock), clock);
++  }
++}
++
++
+ static void
+ wall_clock_notify_cb (PhoshTopPanel  *self,
+                       GParamSpec     *pspec,
+@@ -391,10 +428,31 @@ wall_clock_notify_cb (PhoshTopPanel  *self,
+   gtk_label_set_text (GTK_LABEL (self->lbl_clock2), str);
+ 
+   date = phosh_wall_clock_local_date (wall_clock);
++
++  /* Plinius: the calendar week after the date */
++  {
++    g_autofree char *week = get_week_text (self);
++
++    if (week) {
++      char *with_week = g_strdup_printf ("%s · %s", date, week);
++
++      g_free (date);
++      date = with_week;
++    }
++  }
++
+   gtk_label_set_label (GTK_LABEL (self->lbl_date), date);
+ }
+ 
+ 
++static void
++on_show_weekdate_changed (PhoshTopPanel *self)
++{
++  wall_clock_notify_cb (self, NULL, phosh_wall_clock_get_default ());
++  update_top_bar_clock (self);
++}
++
++
+ static gboolean
+ needs_keyboard_label (PhoshTopPanel *self)
+ {
+@@ -707,9 +765,12 @@ phosh_top_panel_constructed (GObject *object)
+                           self, "on-lockscreen",
+                           G_BINDING_SYNC_CREATE);
+ 
+-  g_object_bind_property (wall_clock, "date-time",
+-                          self->lbl_clock, "label",
+-                          G_BINDING_SYNC_CREATE);
++  /* Plinius: set by update_top_bar_clock (), with the calendar week */
++  g_signal_connect_object (wall_clock,
++                           "notify::date-time",
++                           G_CALLBACK (update_top_bar_clock),
++                           self,
++                           G_CONNECT_SWAPPED);
+   g_object_bind_property (self, "on-lockscreen",
+                           self->lbl_clock,
+                           "visible",
+@@ -720,7 +781,15 @@ phosh_top_panel_constructed (GObject *object)
+                            self,
+                            G_CONNECT_SWAPPED);
+ 
++  self->calendar_settings = g_settings_new ("org.gnome.desktop.calendar");
++  g_signal_connect_object (self->calendar_settings,
++                           "changed::show-weekdate",
++                           G_CALLBACK (on_show_weekdate_changed),
++                           self,
++                           G_CONNECT_SWAPPED);
++
+   wall_clock_notify_cb (self, NULL, wall_clock);
++  update_top_bar_clock (self);
+ 
+   gtk_window_set_title (GTK_WINDOW (self), "phosh panel");
+ 
+@@ -816,6 +885,7 @@ phosh_top_panel_dispose (GObject *object)
+   g_clear_object (&self->xkbinfo);
+   g_clear_object (&self->input_settings);
+   g_clear_object (&self->interface_settings);
++  g_clear_object (&self->calendar_settings);
+   g_clear_object (&self->actions);
+   g_clear_pointer (&self->action_names, g_strfreev);
+   if (self->seat) {

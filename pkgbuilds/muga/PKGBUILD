@@ -1,0 +1,42 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=muga
+pkgver=0.5.22
+pkgrel=1
+pkgdesc="Photo and video gallery, the image viewer of the Plinius"
+arch=(any)
+url="https://github.com/misc-de/Muga"
+license=(MIT)
+# A package and not Muga's Flatpak: GTK and libadwaita are on the system anyway, the Flatpak's
+# runtime would add 1.9 GiB for them, and a sandbox cannot reach the GPU through libhybris.
+depends=(gtk4 libadwaita libsecret gstreamer python python-cairo python-defusedxml python-gobject 'python-pillow>=13')
+makedepends=(git python-build python-installer python-setuptools python-wheel)
+optdepends=(
+	'ffmpeg: thumbnails of videos'
+	'libgexiv2: metadata written by the camera'
+)
+# Commit of the release: a tag can be moved later, a commit hash cannot.
+_commit=2862c4e270061840b9c3b69d1a089191976b9808
+source=("git+$url.git#commit=$_commit"
+	de.cais.Muga.desktop
+	mimeapps.list)
+sha256sums=('SKIP'
+	'e13649332938f02f723e7a7bd84261415bbf72561baf6013ec4bd131d4cab88b'
+	'16ae6c0629da193479c5ce46ad5fda1a9b9189db1df4b2ad3d4d3b88bc740a62')
+# Upgrades must not overwrite a default the user changed
+backup=(etc/xdg/mimeapps.list)
+
+build() {
+	cd Muga
+	# Muga asks for a newer setuptools only because of an sdist it publishes; a wheel builds with Arch's
+	python -m build --wheel --no-isolation --skip-dependency-check
+}
+
+package() {
+	cd Muga
+	python -m installer --destdir="$pkgdir" dist/*.whl
+	# In the app grid it is the image viewer. Everything GNOME gives to Loupe goes to it.
+	install -Dm644 "$srcdir/de.cais.Muga.desktop" -t "$pkgdir/usr/share/applications"
+	install -Dm644 "$srcdir/mimeapps.list" -t "$pkgdir/etc/xdg"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

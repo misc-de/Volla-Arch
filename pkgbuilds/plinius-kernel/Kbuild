@@ -1,0 +1,12 @@
+# Out-of-tree modules for the Volla Phone Plinius (UT's halium GKI kernel)
+obj-m += plinius-backlight.o
+# uleds from the kernel source (CONFIG_LEDS_USER is off): userspace LEDs for the torch
+obj-m += uleds.o
+# No VT switch on suspend: the graphical session stays active (docs/STANDBY.md)
+obj-m += plinius-novt.o
+# No Bluetooth host suspend over vhci: the phone suspends with Bluetooth on (docs/STANDBY.md)
+obj-m += plinius-btsuspend.o
+# IPsec AH header matches (CONFIG_IP_NF_MATCH_AH / CONFIG_IP6_NF_MATCH_AH are off): MediaTek's
+# WPFA in the RIL sets up its Wi-Fi calling filters with "-m ah --ahspi" (docs/VOWIFI.md)
+obj-m += ipt_ah.o
+obj-m += ip6t_ah.o

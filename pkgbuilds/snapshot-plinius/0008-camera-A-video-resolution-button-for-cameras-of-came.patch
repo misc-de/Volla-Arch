@@ -1,0 +1,515 @@
+From bb949a086090b9c448670b655cd2a3ea39090d46 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 13:38:30 +0100
+Subject: [PATCH] camera: A video resolution button for cameras of
+ camera-hal-bridge
+
+camera-hal-bridge offers each camera's stream in the sizes its HAL lists
+for YUV output (720p, 1080p, 4K), 720p first. Aperture took the best
+caps by its own rules, which leave out portrait sizes above 1080 lines
+and so always took the first, 720p.
+
+The viewfinder gets a video-size property: the shorter side of the
+camera format to use, 0 for the best one as before; a change starts the
+stream again with that format. In video mode, a button beside the scene
+button shows the resolution (720p, 1080p, 4K) and goes on to the next
+one on offer when tapped; the choice is kept in the settings
+(video-resolution, 1080 by default). 4K is offered only with the
+hardware encoder, which software encoding cannot keep up with. In
+picture mode the stream keeps the camera's default: photos come from the
+HAL at full size anyway.
+---
+ aperture/src/camera.rs                 | 22 ++++++
+ aperture/src/utils.rs                  | 32 +++++++++
+ aperture/src/viewfinder.rs             | 49 +++++++++++++-
+ data/org.gnome.Snapshot.gschema.xml.in |  5 ++
+ data/resources/ui/camera.ui            | 33 +++++++++
+ po/de.po                               |  4 ++
+ po/es.po                               |  4 ++
+ po/fr.po                               |  4 ++
+ po/it.po                               |  4 ++
+ po/nl.po                               |  4 ++
+ po/pl.po                               |  4 ++
+ po/pt.po                               |  4 ++
+ po/ru.po                               |  4 ++
+ src/widgets/camera.rs                  | 92 ++++++++++++++++++++++++++
+ 14 files changed, 264 insertions(+), 1 deletion(-)
+
+diff --git a/aperture/src/camera.rs b/aperture/src/camera.rs
+index fbe0f06..7d4492c 100644
+--- a/aperture/src/camera.rs
++++ b/aperture/src/camera.rs
+@@ -151,6 +151,28 @@ impl Camera {
+         Ok(element)
+     }
+ 
++    /// The shorter sides of the camera's formats with a fixed size, from the
++    /// smallest: 720 and 1080 for a camera that offers 1280x720 and 1920x1080
++    pub fn short_sides(&self) -> Vec<u32> {
++        self.caps()
++            .map(|caps| utils::caps::short_sides(&caps))
++            .unwrap_or_default()
++    }
++
++    /// The camera's format whose shorter side is `short_side`; the best caps
++    /// when it is 0 or not on offer
++    pub(crate) fn caps_for_size(&self, short_side: u32) -> gst::Caps {
++        if short_side > 0
++            && let Some(caps) = self
++                .caps()
++                .and_then(|caps| utils::caps::with_short_side(&caps, short_side))
++        {
++            log::debug!("Using caps for {short_side}p: {caps:#?}");
++            return caps;
++        }
++        self.best_caps()
++    }
++
+     pub(crate) fn best_caps(&self) -> gst::Caps {
+         let caps = self
+             .caps()
+diff --git a/aperture/src/utils.rs b/aperture/src/utils.rs
+index 72ab13b..fd4ba4c 100644
+--- a/aperture/src/utils.rs
++++ b/aperture/src/utils.rs
+@@ -29,6 +29,38 @@ pub(crate) mod caps {
+         caps.intersect_with_mode(&crate::SUPPORTED_CAPS, gst::CapsIntersectMode::First)
+     }
+ 
++    /// The fixed size of a structure, if it has one
++    fn fixed_size(structure: &gst::StructureRef) -> Option<(i32, i32)> {
++        Some((
++            structure.get::<i32>("width").ok()?,
++            structure.get::<i32>("height").ok()?,
++        ))
++    }
++
++    /// The first format whose shorter side is `short_side` (720 for 1280x720
++    /// either way round), if there is one
++    pub(crate) fn with_short_side(caps: &gst::Caps, short_side: u32) -> Option<gst::Caps> {
++        let structure = caps.iter().find(|s| {
++            fixed_size(s).is_some_and(|(w, h)| u32::try_from(w.min(h)) == Ok(short_side))
++        })?;
++        let mut found = gst::Caps::new_empty();
++        found.get_mut()?.append_structure(structure.to_owned());
++        Some(found)
++    }
++
++    /// The shorter sides of the formats with a fixed size, from the smallest,
++    /// each once
++    pub(crate) fn short_sides(caps: &gst::Caps) -> Vec<u32> {
++        let mut sides: Vec<u32> = caps
++            .iter()
++            .filter_map(fixed_size)
++            .filter_map(|(w, h)| u32::try_from(w.min(h)).ok())
++            .collect();
++        sides.sort_unstable();
++        sides.dedup();
++        sides
++    }
++
+     pub(crate) fn best_mode(caps: &gst::Caps) -> Option<Size> {
+         const MIN_WIDTH: i32 = 640;
+         const MIN_HEIGHT: i32 = 480;
+diff --git a/aperture/src/viewfinder.rs b/aperture/src/viewfinder.rs
+index 3918671..b05d251 100644
+--- a/aperture/src/viewfinder.rs
++++ b/aperture/src/viewfinder.rs
+@@ -53,6 +53,8 @@ mod imp {
+         video_format: Cell<VideoFormat>,
+         #[property(get, set = Self::set_enable_hw_encoding, explicit_notify)]
+         enable_hw_encoding: Cell<bool>,
++        #[property(get, set = Self::set_video_size, explicit_notify)]
++        video_size: Cell<u32>,
+ 
+         pub qrcode_branch: RefCell<Option<gst::Element>>,
+         pub devices: OnceCell<crate::DeviceProvider>,
+@@ -196,6 +198,44 @@ mod imp {
+             }
+         }
+ 
++        /// The shorter side of the camera's format, 0 for the best one; the
++        /// stream starts again with the new format
++        fn set_video_size(&self, value: u32) {
++            let obj = self.obj();
++
++            if value == self.video_size.replace(value) {
++                return;
++            }
++            obj.notify_video_size();
++
++            let Some(camera) = self.camera.borrow().clone() else {
++                return;
++            };
++            if !matches!(obj.state(), ViewfinderState::Ready)
++                || self.is_taking_picture.get()
++                || self.is_recording_video.borrow().is_some()
++            {
++                log::error!("Could not change the video size now, it applies with the next camera");
++                return;
++            }
++            let streaming = obj.is_realized()
++                && matches!(
++                    self.camerabin().current_state(),
++                    gst::State::Playing | gst::State::Paused
++                );
++            if streaming {
++                obj.stop_stream();
++            }
++            if let Err(err) = obj.setup_camera_element(&camera) {
++                log::error!("Could not reconfigure camera element: {err}");
++                self.set_state(ViewfinderState::Error);
++                return;
++            }
++            if streaming {
++                obj.start_stream();
++            }
++        }
++
+         fn set_enable_hw_encoding(&self, value: bool) {
+             let obj = self.obj();
+ 
+@@ -504,6 +544,13 @@ glib::wrapper! {
+     ///
+     ///  Readable | Writable
+     ///
++    /// ### `video-size`
++    /// The shorter side of the camera format to use, such as 1080 for
++    /// 1920x1080; 0 (the default) picks the best format. Changing it starts the
++    /// stream again with that format.
++    ///
++    ///  Readable | Writable
++    ///
+     /// ### `enable-hw-encoding`
+     /// Whether to enable hardware video encoding.
+     /// `[crate::is_hardware_encoding_supported]` can be used to detect whether
+@@ -1223,7 +1270,7 @@ impl Viewfinder {
+         }
+ 
+         if let Some(capsfilter) = imp.capsfilter.get() {
+-            let caps = camera.best_caps();
++            let caps = camera.caps_for_size(self.video_size());
+             capsfilter.set_property("caps", &caps);
+         }
+ 
+diff --git a/data/org.gnome.Snapshot.gschema.xml.in b/data/org.gnome.Snapshot.gschema.xml.in
+index ae8380d..aa329d2 100644
+--- a/data/org.gnome.Snapshot.gschema.xml.in
++++ b/data/org.gnome.Snapshot.gschema.xml.in
+@@ -116,6 +116,11 @@
+       <summary>Noise reduction</summary>
+       <description>Whether the camera HAL may combine several frames into one photo against noise, for cameras of camera-hal-bridge. Slower, and fine detail comes out softer</description>
+     </key>
++    <key name="video-resolution" type="u">
++      <default>1080</default>
++      <summary>Video resolution</summary>
++      <description>The shorter side of the video format for recordings with cameras of camera-hal-bridge, such as 1080 for 1920x1080; when the camera does not offer it, the largest smaller one, else the smallest</description>
++    </key>
+     <key name="last-camera-id" type="s">
+       <default>""</default>
+       <summary>Last Camera Used ID</summary>
+diff --git a/data/resources/ui/camera.ui b/data/resources/ui/camera.ui
+index 96eb06a..551ba3b 100644
+--- a/data/resources/ui/camera.ui
++++ b/data/resources/ui/camera.ui
+@@ -228,6 +228,19 @@
+                                 </style>
+                               </object>
+                             </child>
++                            <child type="resolution-button">
++                              <object class="GtkButton" id="resolution_button">
++                                <property name="valign">center</property>
++                                <property name="halign">center</property>
++                                <property name="visible">False</property>
++                                <property name="label">1080p</property>
++                                <property name="tooltip-text" translatable="yes">Video Resolution</property>
++                                <signal name="clicked" handler="on_resolution_clicked" swapped="yes"/>
++                                <style>
++                                  <class name="flat" />
++                                </style>
++                              </object>
++                            </child>
+                             <child type="primary-menu">
+                               <object class="GtkMenuButton">
+                                 <property name="icon-name">open-menu-symbolic</property>
+@@ -362,6 +375,11 @@
+                                                 <property name="id">scene-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">resolution-button</property>
++                                              </object>
++                                            </child>
+                                             <child>
+                                               <object class="AdwLayoutSlot">
+                                                 <property name="id">countdown-button</property>
+@@ -437,6 +455,11 @@
+                                                 <property name="id">scene-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">resolution-button</property>
++                                              </object>
++                                            </child>
+                                             <child>
+                                               <object class="AdwLayoutSlot">
+                                                 <property name="id">countdown-button</property>
+@@ -553,6 +576,11 @@
+                                                 <property name="id">scene-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">resolution-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                         <child type="center">
+@@ -612,6 +640,11 @@
+                                                 <property name="id">scene-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">resolution-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                         <child type="center">
+diff --git a/po/de.po b/po/de.po
+index c21b03f..ad251c1 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -563,3 +563,7 @@ msgstr "Glühlampe"
+ 
+ #~ msgid "PNG"
+ #~ msgstr "PNG"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Videoauflösung"
+diff --git a/po/es.po b/po/es.po
+index 1a4c589..060fd59 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -548,3 +548,7 @@ msgstr "Incandescente"
+ 
+ #~ msgid "_About Snapshot"
+ #~ msgstr "Acerca _de Captura"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Resolución de vídeo"
+diff --git a/po/fr.po b/po/fr.po
+index cc2b295..2d28524 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -566,3 +566,7 @@ msgstr "Incandescent"
+ 
+ #~ msgid "Picture Format"
+ #~ msgstr "Format d’image"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Résolution vidéo"
+diff --git a/po/it.po b/po/it.po
+index ad1830e..98c88cf 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -544,3 +544,7 @@ msgstr "Incandescenza"
+ 
+ #~ msgid "Whether to save videos as mp4 or webm"
+ #~ msgstr "Se salvare i video come mp4 o webm"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Risoluzione video"
+diff --git a/po/nl.po b/po/nl.po
+index e59e136..6daacee 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -564,3 +564,7 @@ msgstr "Gloeilamp"
+ 
+ #~ msgid "PNG"
+ #~ msgstr "PNG"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Videoresolutie"
+diff --git a/po/pl.po b/po/pl.po
+index 6adedb7..f4bfd63 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -542,3 +542,7 @@ msgstr "Świetlówka"
+ #: data/resources/ui/camera.ui
+ msgid "Incandescent"
+ msgstr "Żarówka"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Rozdzielczość wideo"
+diff --git a/po/pt.po b/po/pt.po
+index fd7f8b6..e8ace09 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -564,3 +564,7 @@ msgstr "Incandescente"
+ 
+ #~ msgid "PNG"
+ #~ msgstr "PNG"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Resolução de vídeo"
+diff --git a/po/ru.po b/po/ru.po
+index 1cd281a..228f6a5 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -558,3 +558,7 @@ msgstr "Лампа накаливания"
+ 
+ #~ msgid "PNG"
+ #~ msgstr "PNG"
++
++#: data/resources/ui/camera.ui
++msgid "Video Resolution"
++msgstr "Разрешение видео"
+diff --git a/src/widgets/camera.rs b/src/widgets/camera.rs
+index c7311ff..e86b6fe 100644
+--- a/src/widgets/camera.rs
++++ b/src/widgets/camera.rs
+@@ -98,6 +98,8 @@ mod imp {
+         pub light_level_scale: TemplateChild<gtk::Scale>,
+         #[template_child]
+         pub scene_button: TemplateChild<gtk::MenuButton>,
++        #[template_child]
++        pub resolution_button: TemplateChild<gtk::Button>,
+ 
+         #[template_child]
+         pub bottom_sheet: TemplateChild<adw::BottomSheet>,
+@@ -139,9 +141,15 @@ mod imp {
+                     .set_detect_codes(matches!(capture_mode, CaptureMode::QrDetection));
+ 
+                 self.obj().notify_capture_mode();
++                self.obj().update_video_resolution();
+             }
+         }
+ 
++        #[template_callback]
++        fn on_resolution_clicked(&self) {
++            self.obj().next_video_resolution();
++        }
++
+         pub fn settings(&self) -> &gio::Settings {
+             self.settings
+                 .get_or_init(|| gio::Settings::new(config::APP_ID))
+@@ -735,6 +743,8 @@ impl Camera {
+                         "scene-mode" | "white-balance" | "exposure-compensation" | "noise-reduction"
+                     ) {
+                         obj.send_bridge_settings();
++                    } else if key == "video-resolution" {
++                        obj.update_video_resolution();
+                     }
+                 }
+             ),
+@@ -744,9 +754,83 @@ impl Camera {
+             self,
+             move |_| {
+                 obj.send_bridge_settings();
++                obj.update_video_resolution();
++            }
++        ));
++        imp.viewfinder.connect_is_recording_notify(glib::clone!(
++            #[weak(rename_to = obj)]
++            self,
++            move |_| {
++                obj.update_video_resolution();
+             }
+         ));
+         self.send_bridge_settings();
++        self.update_video_resolution();
++    }
++
++    /// The video resolutions on offer, as shorter sides from the smallest:
++    /// those of the camera's formats, for cameras of camera-hal-bridge only
++    /// (others keep the format they choose themselves). 4K only with the
++    /// hardware encoder: software encoding cannot keep up with it.
++    fn video_resolutions(&self) -> Vec<u32> {
++        let Some(camera) = self.imp().viewfinder.camera() else {
++            return Vec::new();
++        };
++        if CameraBridge::node(&camera).is_none() {
++            return Vec::new();
++        }
++        let hardware = gst::ElementFactory::find("pliniush264enc").is_some();
++        camera
++            .short_sides()
++            .into_iter()
++            .filter(|&side| side <= 1080 || hardware)
++            .collect()
++    }
++
++    /// The resolution videos get: the chosen one, else the largest smaller
++    /// one on offer, else the smallest; 0 without a choice
++    fn video_resolution(&self, sizes: &[u32]) -> u32 {
++        let wanted = self.imp().settings().uint("video-resolution");
++        sizes
++            .iter()
++            .rev()
++            .find(|&&side| side <= wanted)
++            .or(sizes.first())
++            .copied()
++            .unwrap_or(0)
++    }
++
++    /// In video mode the stream takes the format of the video resolution, the
++    /// button beside the scene button shows it; photos come from the HAL at
++    /// full size anyway, so the stream keeps the camera's default for them
++    fn update_video_resolution(&self) {
++        let imp = self.imp();
++        let sizes = self.video_resolutions();
++        let side = self.video_resolution(&sizes);
++        let video = matches!(self.capture_mode(), crate::CaptureMode::Video);
++        imp.resolution_button.set_visible(video && sizes.len() > 1);
++        imp.resolution_button.set_label(&resolution_label(side));
++        imp.resolution_button
++            .set_sensitive(!imp.viewfinder.is_recording());
++        imp.viewfinder.set_video_size(if video { side } else { 0 });
++    }
++
++    /// The button goes on to the next resolution on offer, after the largest
++    /// back to the smallest
++    fn next_video_resolution(&self) {
++        let sizes = self.video_resolutions();
++        let current = self.video_resolution(&sizes);
++        let next = sizes
++            .iter()
++            .find(|&&side| side > current)
++            .or(sizes.first())
++            .copied();
++        if let Some(next) = next {
++            self.imp()
++                .settings()
++                .set_uint("video-resolution", next)
++                .unwrap();
++        }
+     }
+ 
+     fn send_bridge_settings(&self) {
+@@ -1000,3 +1084,11 @@ async fn stream() -> anyhow::Result<OwnedFd> {
+ fn id_from_pw(camera: &aperture::Camera) -> glib::GString {
+     camera.display_name()
+ }
++
++/// 720p, 1080p, and 4K for 2160
++fn resolution_label(short_side: u32) -> String {
++    match short_side {
++        2160 => "4K".to_string(),
++        side => format!("{side}p"),
++    }
++}
+-- 
+2.56.0
+

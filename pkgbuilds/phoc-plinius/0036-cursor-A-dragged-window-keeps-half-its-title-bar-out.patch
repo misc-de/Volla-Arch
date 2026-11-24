@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 16:19:33 +0100
+Subject: [PATCH] cursor: A dragged window keeps half its title bar out of a
+ panel
+
+A panel (Phosh's top bar on the phone, the task bar of the desktop on
+a second screen) covers the windows below it. A window dragged up under
+it hid its title bar there, and with it the only place to grab it again.
+
+While a window is dragged, its top edge now stays within the usable
+area of the output under the cursor, give or take half a title bar
+(23 px of the about 46 px header bar of GTK 3 and libadwaita, times the
+window's scale): at most half of the title bar goes under the panel, at
+the top as well as at a panel at the bottom. The rest stays in reach.
+---
+ src/cursor.c | 44 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/src/cursor.c b/src/cursor.c
+index a7a576bf..bddcb47b 100644
+--- a/src/cursor.c
++++ b/src/cursor.c
+@@ -1205,6 +1205,46 @@ phoc_cursor_update_focus (PhocCursor *self)
+   phoc_cursor_do_passthrough (self, timespec_to_msec (&now));
+ }
+ 
++/* Half of a header bar (GTK 3 and libadwaita draw it about 46 px high): at most this much of a
++ * window's title bar goes under a panel when the window is dragged, the rest stays to grab */
++#define PHOC_TITLEBAR_HALF 23
++
++/**
++ * keep_titlebar_reachable:
++ * @output: The output the cursor is on
++ * @output_box: Its box in the layout
++ * @view: The dragged view
++ * @geom: The view's geometry (the window without its shadow)
++ * @y: The view's new y position
++ *
++ * A panel (Phosh's top bar, a desktop's task bar) covers the windows below it. A window dragged
++ * under it with its title bar could not be grabbed again, so the window's top edge stays within
++ * the output's usable area, give or take half a title bar.
++ *
++ * Returns: The y position to move the view to
++ */
++static double
++keep_titlebar_reachable (PhocOutput     *output,
++                         struct wlr_box *output_box,
++                         PhocView       *view,
++                         struct wlr_box *geom,
++                         double          y)
++{
++  double scale = phoc_view_get_scale (view);
++  double half = PHOC_TITLEBAR_HALF * scale;
++  double usable_top = output_box->y + output->usable_area.y;
++  double usable_bottom = usable_top + output->usable_area.height;
++  double top = y + geom->y * scale;
++
++  if (top < usable_top - half)
++    top = usable_top - half;
++  else if (top > usable_bottom - half)
++    top = usable_bottom - half;
++
++  return top - geom->y * scale;
++}
++
++
+ static void
+ phoc_cursor_do_move (PhocCursor *self, uint32_t time)
+ {
+@@ -1250,7 +1290,9 @@ phoc_cursor_do_move (PhocCursor *self, uint32_t time)
+     phoc_cursor_clear_view_state_change (self);
+     phoc_view_restore (view);
+     phoc_view_move (view, self->view_x + dx - geom.x * phoc_view_get_scale (view),
+-                    self->view_y + dy - geom.y * phoc_view_get_scale (view));
++                    keep_titlebar_reachable (output, &output_box, view, &geom,
++                                             self->view_y + dy -
++                                             geom.y * phoc_view_get_scale (view)));
+   }
+ }
+ 
+-- 
+2.56.0
+

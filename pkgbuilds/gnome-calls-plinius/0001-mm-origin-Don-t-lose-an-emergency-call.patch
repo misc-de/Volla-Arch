@@ -1,0 +1,753 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 06:30:00 +0100
+Subject: [PATCH] mm-origin: Don't lose an emergency call
+
+An emergency call could get lost in three ways.
+
+With another call up, dial() returned without doing anything and without
+telling anybody. Hang up what's there, wait for it to go away (5 s at most) and
+dial then. add_call() hangs up every second call, it now spares this one. What
+comes in meanwhile is ignored instead of hung up: hanging up ends all calls
+further down, the emergency call included. Same for a number dialed in Calls
+itself.
+
+CallEmergencyContact returned success before anything was dialed, so Phosh's
+"Unable to place emergency call" could never appear for a failed dial. Answer
+when the dial went out or failed.
+
+A call that ended without ever reaching the other side was just gone. Android
+tries again, for IMS on the modem's redial indication. Try up to 3 times unless
+it was hung up from here: the plugin below takes the other way when the last
+attempt never connected. Then tell, with the new signal EmergencyCallFailed.
+
+Also fix on_origins_changed (): it looked at the wrong origins when more than
+one was added.
+---
+diff --git a/plugins/provider/mm/calls-mm-call.c b/plugins/provider/mm/calls-mm-call.c
+index b129d23..2abbf70 100644
+--- a/plugins/provider/mm/calls-mm-call.c
++++ b/plugins/provider/mm/calls-mm-call.c
+@@ -37,6 +37,7 @@ struct _CallsMMCall {
+   GObject parent_instance;
+   MMCall *mm_call;
+   char   *disconnect_reason;
++  gboolean hung_up_here;
+ };
+ 
+ static void calls_mm_call_message_source_interface_init (CallsMessageSourceInterface *iface);
+@@ -242,7 +243,15 @@ operation_cb (MMCall                      *mm_call,
+   }
+ 
+ DEFINE_OPERATION (accept, calls_mm_call_answer, "accepting");
+-DEFINE_OPERATION (hangup, calls_mm_call_hang_up, "hanging up");
++DEFINE_OPERATION (hangup, calls_mm_call_do_hang_up, "hanging up");
++
++static void
++calls_mm_call_hang_up (CallsCall *call)
++{
++  CALLS_MM_CALL (call)->hung_up_here = TRUE;
++  calls_mm_call_do_hang_up (call);
++}
++
+ DEFINE_OPERATION (start, calls_mm_call_start_call, "starting outgoing call");
+ 
+ 
+@@ -419,6 +428,21 @@ calls_mm_call_get_object_path (CallsMMCall *call)
+ }
+ 
+ 
++/**
++ * calls_mm_call_get_hung_up_here:
++ * @self: The #CallsMMCall
++ *
++ * Returns: Whether the call was hung up from this end
++ */
++gboolean
++calls_mm_call_get_hung_up_here (CallsMMCall *self)
++{
++  g_return_val_if_fail (CALLS_IS_MM_CALL (self), FALSE);
++
++  return self->hung_up_here;
++}
++
++
+ const char *
+ calls_mm_call_get_disconnect_reason (CallsMMCall *call)
+ {
+diff --git a/plugins/provider/mm/calls-mm-call.h b/plugins/provider/mm/calls-mm-call.h
+index 35ad7e4..4173eea 100644
+--- a/plugins/provider/mm/calls-mm-call.h
++++ b/plugins/provider/mm/calls-mm-call.h
+@@ -37,6 +37,7 @@ G_DECLARE_FINAL_TYPE (CallsMMCall, calls_mm_call, CALLS, MM_CALL, CallsCall)
+ 
+ CallsMMCall *calls_mm_call_new                   (MMCall *mm_call);
+ const char  *calls_mm_call_get_object_path       (CallsMMCall *call);
++gboolean     calls_mm_call_get_hung_up_here (CallsMMCall *self);
+ const char  *calls_mm_call_get_disconnect_reason (CallsMMCall *call);
+ 
+ G_END_DECLS
+diff --git a/plugins/provider/mm/calls-mm-origin.c b/plugins/provider/mm/calls-mm-origin.c
+index f8d05ab..141b773 100644
+--- a/plugins/provider/mm/calls-mm-origin.c
++++ b/plugins/provider/mm/calls-mm-origin.c
+@@ -59,8 +59,32 @@ struct _CallsMMOrigin {
+   char            *country_code;
+   const char      *network_country_code;
+   GStrv            emergency_numbers;
++
++  /* The emergency call being set up, see emergency_dial () */
++  char            *em_number;       /* Also keeps the call from being hung up in add_call () */
++  GList           *em_tasks;        /* Waiting to hear whether the dial went out */
++  CallsMMCall     *em_call;         /* Not a ref, removed in call_deleted_cb () */
++  guint            em_attempts;
++  guint            em_source_id;    /* Waiting for a dial to start */
++  gboolean         em_reached;      /* The other side has been reached */
++  gboolean         em_clearing;     /* Other calls are being hung up */
+ };
+ 
++/* The plugin below takes the other way when the last attempt never connected */
++#define EMERGENCY_MAX_ATTEMPTS 3
++/* A call that won't go away must not keep the emergency call from being dialed */
++#define EMERGENCY_CLEAR_TIMEOUT_S 5
++/* Between attempts: the old call is gone here, the modem might not be done with it yet */
++#define EMERGENCY_REDIAL_DELAY_S 1
++/*
++ * A dial tries up to 3 ways in the modem, 15 s each, and may have to wait for the radio to
++ * come up. This is the default of the D-Bus call otherwise (25 s): a dial that is still being
++ * tried would be taken as a failed one.
++ */
++#define EMERGENCY_DIAL_TIMEOUT_MS 60000
++/* The call shows up right after the dial */
++#define EMERGENCY_FORGET_TIMEOUT_S 10
++
+ static void calls_mm_origin_message_source_interface_init (CallsOriginInterface *iface);
+ static void calls_mm_origin_origin_interface_init (CallsOriginInterface *iface);
+ static void calls_mm_origin_ussd_interface_init (CallsUssdInterface *iface);
+@@ -327,6 +351,248 @@ dial_cb (MMModemVoice  *voice,
+ }
+ 
+ 
++static gboolean
++is_emergency_number (CallsMMOrigin *self,
++                     const char    *number)
++{
++  return self->emergency_numbers &&
++    g_strv_contains ((const char * const *) self->emergency_numbers, number);
++}
++
++
++static void
++emergency_return (CallsMMOrigin *self,
++                  const GError  *error)
++{
++  g_autolist (GTask) tasks = g_steal_pointer (&self->em_tasks);
++
++  for (GList *node = tasks; node; node = node->next) {
++    if (error)
++      g_task_return_error (G_TASK (node->data), g_error_copy (error));
++    else
++      g_task_return_boolean (G_TASK (node->data), TRUE);
++  }
++}
++
++
++static void
++emergency_done (CallsMMOrigin *self)
++{
++  g_clear_handle_id (&self->em_source_id, g_source_remove);
++  g_clear_pointer (&self->em_number, g_free);
++  self->em_call = NULL;
++  self->em_attempts = 0;
++  self->em_reached = FALSE;
++  self->em_clearing = FALSE;
++}
++
++
++static void
++emergency_failed (CallsMMOrigin *self)
++{
++  g_autofree char *number = g_strdup (self->em_number);
++
++  emergency_done (self);
++  g_signal_emit_by_name (self, "emergency-call-failed", number,
++                         _("The call ended before it connected. Try again."));
++}
++
++
++static gboolean
++on_emergency_forget (gpointer user_data)
++{
++  CallsMMOrigin *self = CALLS_MM_ORIGIN (user_data);
++
++  self->em_source_id = 0;
++  if (!self->em_call)
++    emergency_done (self);
++
++  return G_SOURCE_REMOVE;
++}
++
++
++static void emergency_schedule_dial (CallsMMOrigin *self);
++
++
++static void
++emergency_dial_cb (MMModemVoice  *voice,
++                   GAsyncResult  *res,
++                   CallsMMOrigin *self)
++{
++  g_autoptr (CallsMMOrigin) owned = self;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (MMCall) call = NULL;
++  gboolean asked;
++
++  call = mm_modem_voice_create_call_finish (voice, res, &error);
++  if (!self->em_number)
++    return;
++
++  if (call) {
++    emergency_return (self, NULL);
++    /* Don't turn away incoming calls for good if the call never shows up */
++    if (!self->em_call) {
++      g_clear_handle_id (&self->em_source_id, g_source_remove);
++      self->em_source_id = g_timeout_add_seconds (EMERGENCY_FORGET_TIMEOUT_S,
++                                                  on_emergency_forget, self);
++    }
++    return;
++  }
++
++  g_warning ("Attempt %u to dial emergency number on `%s' failed: %s",
++             self->em_attempts, self->name, error->message);
++  if (self->em_attempts < EMERGENCY_MAX_ATTEMPTS) {
++    emergency_schedule_dial (self);
++    return;
++  }
++
++  /* Dialed from Calls itself, there's nobody waiting for the answer */
++  asked = self->em_tasks != NULL;
++  emergency_return (self, error);
++  if (!asked)
++    emergency_failed (self);
++  else
++    emergency_done (self);
++}
++
++
++static void
++emergency_start_dial (CallsMMOrigin *self)
++{
++  g_autoptr (MMCallProperties) call_props = mm_call_properties_new ();
++
++  self->em_clearing = FALSE;
++  self->em_attempts++;
++  g_debug ("Emergency call on `%s', attempt %u", self->name, self->em_attempts);
++
++  mm_call_properties_set_number (call_props, self->em_number);
++  g_dbus_proxy_set_default_timeout (G_DBUS_PROXY (self->voice), EMERGENCY_DIAL_TIMEOUT_MS);
++  mm_modem_voice_create_call (self->voice,
++                              call_props,
++                              NULL,
++                              (GAsyncReadyCallback) emergency_dial_cb,
++                              g_object_ref (self));
++}
++
++
++static gboolean
++on_emergency_timeout (gpointer user_data)
++{
++  CallsMMOrigin *self = CALLS_MM_ORIGIN (user_data);
++
++  self->em_source_id = 0;
++  emergency_start_dial (self);
++
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++emergency_schedule_dial (CallsMMOrigin *self)
++{
++  g_clear_handle_id (&self->em_source_id, g_source_remove);
++  self->em_source_id = g_timeout_add_seconds (EMERGENCY_REDIAL_DELAY_S, on_emergency_timeout, self);
++}
++
++
++/*
++ * Ends all other calls and sets up the emergency call. It is tried again if it ends without
++ * reaching the other side, unless it's hung up from here: the modem may have told IMS to give
++ * up on it, and the plugin below then takes the other way. Android does the same. Once there's
++ * nothing left to try, CallsOrigin::emergency-call-failed tells.
++ */
++static void
++emergency_dial (CallsMMOrigin *self,
++                const char    *number,
++                GTask         *task)
++{
++  GHashTableIter iter;
++  gpointer call;
++
++  if (task)
++    self->em_tasks = g_list_append (self->em_tasks, g_object_ref (task));
++
++  if (self->em_number && g_strcmp0 (self->em_number, number) == 0) {
++    /* It is being dialed already. If the call is up, there's nothing to wait for. */
++    if (self->em_call)
++      emergency_return (self, NULL);
++    return;
++  }
++
++  emergency_done (self);
++  self->em_number = g_strdup (number);
++
++  if (g_hash_table_size (self->calls) == 0) {
++    emergency_start_dial (self);
++    return;
++  }
++
++  g_debug ("Hanging up %u call(s) for an emergency call", g_hash_table_size (self->calls));
++  self->em_clearing = TRUE;
++  self->em_source_id = g_timeout_add_seconds (EMERGENCY_CLEAR_TIMEOUT_S, on_emergency_timeout, self);
++  g_hash_table_iter_init (&iter, self->calls);
++  while (g_hash_table_iter_next (&iter, NULL, &call))
++    calls_call_hang_up (CALLS_CALL (call));
++}
++
++
++/* Called with the call removed from self->calls */
++static void
++emergency_on_call_removed (CallsMMOrigin *self,
++                           CallsMMCall   *call)
++{
++  if (self->em_clearing) {
++    if (g_hash_table_size (self->calls) == 0) {
++      g_clear_handle_id (&self->em_source_id, g_source_remove);
++      emergency_start_dial (self);
++    }
++    return;
++  }
++
++  if (call != self->em_call)
++    return;
++
++  self->em_call = NULL;
++  if (self->em_reached || calls_mm_call_get_hung_up_here (call)) {
++    emergency_done (self);
++    return;
++  }
++
++  g_warning ("Emergency call on `%s' ended without connecting, attempt %u",
++             self->name, self->em_attempts);
++  if (self->em_attempts < EMERGENCY_MAX_ATTEMPTS) {
++    emergency_schedule_dial (self);
++    return;
++  }
++
++  emergency_failed (self);
++}
++
++
++static void
++dial_emergency (CallsOrigin        *origin,
++                const char         *number,
++                GAsyncReadyCallback callback,
++                gpointer            user_data)
++{
++  CallsMMOrigin *self = CALLS_MM_ORIGIN (origin);
++  g_autoptr (GTask) task = g_task_new (self, NULL, callback, user_data);
++
++  g_assert (self->voice != NULL);
++
++  emergency_dial (self, number, task);
++}
++
++
++static gboolean
++dial_emergency_finish (CallsOrigin  *origin,
++                       GAsyncResult *result,
++                       GError      **error)
++{
++  return g_task_propagate_boolean (G_TASK (result), error);
++}
++
++
+ static void
+ dial (CallsOrigin *origin,
+       const char  *number)
+@@ -336,6 +602,11 @@ dial (CallsOrigin *origin,
+ 
+   g_assert (self->voice != NULL);
+ 
++  if (is_emergency_number (self, number)) {
++    emergency_dial (self, number, NULL);
++    return;
++  }
++
+   /* FIXME: remove once add_call doesn't hang up secondary calls */
+   if (g_hash_table_size (self->calls) >= 1)
+     return;
+@@ -390,6 +661,14 @@ remove_calls (CallsMMOrigin *self, const char *reason)
+   GList *paths;
+   gpointer call;
+ 
++  if (self->em_number) {
++    g_autoptr (GError) error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                                                    reason ?: "Modem removed");
++
++    emergency_return (self, error);
++    emergency_done (self);
++  }
++
+   paths = g_hash_table_get_keys (self->calls);
+ 
+   for (GList *node = paths; node != NULL; node = node->next) {
+@@ -458,6 +737,15 @@ call_state_changed_cb (CallsCall     *call,
+   g_assert (CALLS_IS_MM_ORIGIN (self));
+   g_assert (CALLS_IS_MM_CALL (call));
+ 
++  if (CALLS_MM_CALL (call) == self->em_call) {
++    CallsCallState state = calls_call_get_state (call);
++
++    if (state == CALLS_CALL_STATE_ALERTING ||
++        state == CALLS_CALL_STATE_ACTIVE ||
++        state == CALLS_CALL_STATE_HELD)
++      self->em_reached = TRUE;
++  }
++
+   if (calls_call_get_state (call) != CALLS_CALL_STATE_DISCONNECTED)
+     return;
+ 
+@@ -471,8 +759,30 @@ add_call (CallsMMOrigin *self,
+ {
+   CallsMMCall *call;
+   char *path;
++  gboolean emergency;
++
++  /* The call being dialed, as opposed to someone calling at the same moment */
++  emergency = self->em_number && !self->em_call &&
++    mm_call_get_direction (mm_call) == MM_CALL_DIRECTION_OUTGOING &&
++    g_strcmp0 (mm_call_get_number (mm_call), self->em_number) == 0;
++
++  /*
++   * Don't let anybody calling get in the way. Hanging up isn't an option: it ends all calls
++   * further down (ofono2mm: HangupAll, MediaTek's IMS: hangupAll), the emergency call included.
++   * So it's not picked up here: no ringing, it goes away by itself. A call that started while
++   * the emergency call was up stays out of sight until then.
++   */
++  if (self->em_number && !emergency) {
++    g_warning ("Ignoring call `%s' during an emergency call", mm_call_get_path (mm_call));
++    return;
++  }
+ 
+   call = calls_mm_call_new (mm_call);
++  if (emergency) {
++    self->em_call = call;
++    g_clear_handle_id (&self->em_source_id, g_source_remove);
++    emergency_return (self, NULL);
++  }
+ 
+   g_signal_connect (call, "notify::state",
+                     G_CALLBACK (call_state_changed_cb),
+@@ -494,7 +804,7 @@ add_call (CallsMMOrigin *self,
+   /* FIXME: Hang up the call, since accepting a secondary call does not currently work.
+    * CallsMMCall[28822]: WARNING: Error accepting ModemManager call to `+4916XXXXXXXX': GDBus.Error:org.freedesktop.ModemManager1.Error.Core.Failed: This call was not ringing, cannot accept
+    */
+-  if (g_hash_table_size (self->calls) > 1)
++  if (!emergency && g_hash_table_size (self->calls) > 1)
+     calls_call_hang_up (CALLS_CALL (call));
+ }
+ 
+@@ -608,6 +918,8 @@ call_deleted_cb (MMModemVoice *voice,
+                          call,
+                          mm_reason ?: "Call removed");
+ 
++  emergency_on_call_removed (self, CALLS_MM_CALL (call));
++
+   g_object_unref (call);
+ 
+   g_debug ("Removed call `%s'", path);
+@@ -1101,6 +1413,8 @@ calls_mm_origin_origin_interface_init (CallsOriginInterface *iface)
+ {
+   iface->dial = dial;
+   iface->supports_protocol = supports_protocol;
++  iface->dial_emergency = dial_emergency;
++  iface->dial_emergency_finish = dial_emergency_finish;
+   iface->get_country_code = get_country_code;
+   iface->get_network_country_code = get_network_country_code;
+ }
+diff --git a/src/calls-emergency-calls-manager.c b/src/calls-emergency-calls-manager.c
+index d170431..c19f645 100644
+--- a/src/calls-emergency-calls-manager.c
++++ b/src/calls-emergency-calls-manager.c
+@@ -12,9 +12,12 @@
+ 
+ #include "calls-emergency-calls-manager.h"
+ #include "calls-emergency-call-types.h"
++#include "calls-call.h"
+ #include "calls-origin.h"
+ #include "calls-manager.h"
+ 
++#include <glib/gi18n.h>
++
+ /**
+  * SECTION:calls-emergency-calls-manager
+  * @short_description: Provide a DBus interface for emergency calls
+@@ -45,6 +48,16 @@ on_emergency_numbers_changed (CallsEmergencyCallsManager *self)
+ }
+ 
+ 
++static void
++on_emergency_call_failed (CallsEmergencyCallsManager *self,
++                          const char                 *number,
++                          const char                 *message)
++{
++  calls_dbus_emergency_calls_emit_emergency_call_failed (CALLS_DBUS_EMERGENCY_CALLS (self),
++                                                         number, message);
++}
++
++
+ static void
+ on_origins_changed (CallsEmergencyCallsManager *self,
+                     guint                       position,
+@@ -54,18 +67,63 @@ on_origins_changed (CallsEmergencyCallsManager *self,
+   g_assert (CALLS_IS_EMERGENCY_CALLS_MANAGER (self));
+ 
+   for (int i = 0; i < added; i++) {
+-    g_autoptr (CallsOrigin) origin = g_list_model_get_item (self->origins, position - i);
++    g_autoptr (CallsOrigin) origin = g_list_model_get_item (self->origins, position + i);
+ 
+     g_signal_connect_object (origin, "notify::emergency-numbers",
+                              G_CALLBACK (on_emergency_numbers_changed),
+                              self,
+                              G_CONNECT_SWAPPED);
++    g_signal_connect_object (origin, "emergency-call-failed",
++                             G_CALLBACK (on_emergency_call_failed),
++                             self,
++                             G_CONNECT_SWAPPED);
+   }
+ 
+   g_signal_emit_by_name (self, "emergency-numbers-changed", 0);
+ }
+ 
+ 
++static void
++on_dial_emergency_ready (GObject      *source,
++                         GAsyncResult *result,
++                         gpointer      user_data)
++{
++  GDBusMethodInvocation *invocation = G_DBUS_METHOD_INVOCATION (user_data);
++  g_autoptr (GError) error = NULL;
++
++  if (calls_origin_dial_emergency_finish (CALLS_ORIGIN (source), result, &error)) {
++    g_dbus_method_invocation_return_value (invocation, NULL);
++    return;
++  }
++
++  g_warning ("Emergency call failed: %s", error->message);
++  /* What the modem has to say about it doesn't help the person holding the phone */
++  g_dbus_method_invocation_return_error_literal (invocation,
++                                                 G_DBUS_ERROR, G_DBUS_ERROR_FAILED,
++                                                 _("The call could not be set up. Try again."));
++}
++
++
++/* A call on another SIM or over SIP keeps the modem or the audio busy */
++static void
++hang_up_other_origins (CallsEmergencyCallsManager *self,
++                       CallsOrigin                *dialing)
++{
++  for (guint i = 0; i < g_list_model_get_n_items (self->origins); i++) {
++    g_autoptr (CallsOrigin) origin = g_list_model_get_item (self->origins, i);
++    GList *calls;
++
++    if (origin == dialing)
++      continue;
++
++    calls = calls_origin_get_calls (origin);
++    for (GList *node = calls; node; node = node->next)
++      calls_call_hang_up (CALLS_CALL (node->data));
++    g_list_free (calls);
++  }
++}
++
++
+ static gboolean
+ handle_call_emergency_contact (CallsDBusEmergencyCalls *object,
+                                GDBusMethodInvocation   *invocation,
+@@ -88,8 +146,9 @@ handle_call_emergency_contact (CallsDBusEmergencyCalls *object,
+     for (int j = 0; j < g_strv_length (emergency_numbers); j++) {
+       if (g_strcmp0 (arg_id, emergency_numbers[j]) == 0) {
+         g_debug ("Dialing %s via %s", arg_id, calls_origin_get_name (origin));
+-        calls_origin_dial (origin, arg_id);
+-        calls_dbus_emergency_calls_complete_call_emergency_contact (object, invocation);
++        hang_up_other_origins (self, origin);
++        /* The reply takes over the reference from here */
++        calls_origin_dial_emergency (origin, arg_id, on_dial_emergency_ready, invocation);
+         goto done;
+       }
+     }
+diff --git a/src/calls-origin.c b/src/calls-origin.c
+index 88373ad..bf27021 100644
+--- a/src/calls-origin.c
++++ b/src/calls-origin.c
+@@ -38,6 +38,7 @@ G_DEFINE_INTERFACE (CallsOrigin, calls_origin, CALLS_TYPE_MESSAGE_SOURCE)
+ enum {
+   SIGNAL_CALL_ADDED,
+   SIGNAL_CALL_REMOVED,
++  SIGNAL_EMERGENCY_CALL_FAILED,
+   SIGNAL_LAST_SIGNAL,
+ };
+ static guint signals[SIGNAL_LAST_SIGNAL];
+@@ -91,6 +92,23 @@ calls_origin_default_init (CallsOriginInterface *iface)
+                         G_TYPE_STRV,
+                         G_PARAM_READABLE));
+ 
++  /**
++   * CallsOrigin::emergency-call-failed:
++   * @self: The #CallsOrigin
++   * @number: The number that was dialed
++   * @message: Why it failed, to be shown to the user
++   *
++   * An emergency call ended without ever reaching the other side, and the origin
++   * gave up on trying again.
++   */
++  signals[SIGNAL_EMERGENCY_CALL_FAILED] =
++    g_signal_new ("emergency-call-failed",
++                  G_TYPE_FROM_INTERFACE (iface),
++                  G_SIGNAL_RUN_LAST,
++                  0, NULL, NULL, NULL,
++                  G_TYPE_NONE,
++                  2, G_TYPE_STRING, G_TYPE_STRING);
++
+   signals[SIGNAL_CALL_ADDED] =
+     g_signal_newv ("call-added",
+                    G_TYPE_FROM_INTERFACE (iface),
+@@ -208,6 +226,56 @@ calls_origin_dial (CallsOrigin *self,
+   return iface->dial (self, number);
+ }
+ 
++/**
++ * calls_origin_dial_emergency:
++ * @self: a #CallsOrigin
++ * @number: the emergency number to dial
++ * @callback: called once the call is being set up, or can't be
++ * @user_data: data for @callback
++ *
++ * Dials an emergency number, reporting whether that worked. An origin that has
++ * nothing better to offer just dials and reports success.
++ */
++void
++calls_origin_dial_emergency (CallsOrigin        *self,
++                             const char         *number,
++                             GAsyncReadyCallback callback,
++                             gpointer            user_data)
++{
++  CallsOriginInterface *iface;
++  g_autoptr (GTask) task = NULL;
++
++  g_return_if_fail (CALLS_IS_ORIGIN (self));
++  g_return_if_fail (number != NULL);
++
++  iface = CALLS_ORIGIN_GET_IFACE (self);
++  if (iface->dial_emergency) {
++    iface->dial_emergency (self, number, callback, user_data);
++    return;
++  }
++
++  calls_origin_dial (self, number);
++  task = g_task_new (self, NULL, callback, user_data);
++  g_task_return_boolean (task, TRUE);
++}
++
++
++gboolean
++calls_origin_dial_emergency_finish (CallsOrigin  *self,
++                                    GAsyncResult *result,
++                                    GError      **error)
++{
++  CallsOriginInterface *iface;
++
++  g_return_val_if_fail (CALLS_IS_ORIGIN (self), FALSE);
++
++  iface = CALLS_ORIGIN_GET_IFACE (self);
++  if (iface->dial_emergency_finish)
++    return iface->dial_emergency_finish (self, result, error);
++
++  return g_task_propagate_boolean (G_TASK (result), error);
++}
++
+ /**
+  * calls_origin_supports_protocol:
+  * @self: A #CallsOrigin
+diff --git a/src/calls-origin.h b/src/calls-origin.h
+index 7e11864..b61f004 100644
+--- a/src/calls-origin.h
++++ b/src/calls-origin.h
+@@ -26,6 +26,7 @@
+ 
+ #include "calls-call.h"
+ 
++#include <gio/gio.h>
+ #include <glib-object.h>
+ 
+ G_BEGIN_DECLS
+@@ -46,6 +47,13 @@ struct _CallsOriginInterface {
+   const char *   (*get_country_code)                    (CallsOrigin *self);
+   /* TODO: should we have an additional CALLS_MODEM_ORIGIN interface for modems? */
+   const char *   (*get_network_country_code)            (CallsOrigin *self);
++  void           (*dial_emergency)                      (CallsOrigin        *self,
++                                                         const char         *number,
++                                                         GAsyncReadyCallback callback,
++                                                         gpointer            user_data);
++  gboolean       (*dial_emergency_finish)               (CallsOrigin  *self,
++                                                         GAsyncResult *result,
++                                                         GError      **error);
+ };
+ 
+ typedef void (*CallsOriginForeachCallFunc) (gpointer param, CallsCall* call, CallsOrigin* origin);
+@@ -60,6 +68,13 @@ void                   calls_origin_dial                    (CallsOrigin *self,
+                                                              const char  *number);
+ gboolean               calls_origin_supports_protocol       (CallsOrigin *self,
+                                                              const char *protocol);
++void                   calls_origin_dial_emergency          (CallsOrigin        *self,
++                                                             const char         *number,
++                                                             GAsyncReadyCallback callback,
++                                                             gpointer            user_data);
++gboolean               calls_origin_dial_emergency_finish   (CallsOrigin  *self,
++                                                             GAsyncResult *result,
++                                                             GError      **error);
+ GStrv                  calls_origin_get_emergency_numbers   (CallsOrigin *self);
+ const char *           calls_origin_get_country_code        (CallsOrigin *self);
+ const char *           calls_origin_get_network_country_code (CallsOrigin *self);
+diff --git a/src/dbus/org.gnome.Calls.EmergencyCalls.xml b/src/dbus/org.gnome.Calls.EmergencyCalls.xml
+index 55e9e79..db15997 100644
+--- a/src/dbus/org.gnome.Calls.EmergencyCalls.xml
++++ b/src/dbus/org.gnome.Calls.EmergencyCalls.xml
+@@ -24,7 +24,8 @@
+      <!--
+         CallEmergencyContact:
+         @id: The id retrieved via @GetEmergencyContacts (for cellular networks this is the phone number)
+-        Calls an emergency contact by its id.
++        Calls an emergency contact by its id. Returns once the call is being set up, or with an
++        error if it can't be. That can take a while: use a generous timeout.
+       -->
+     <method name="CallEmergencyContact">
+        <arg name="id" direction="in" type="s"/>
+@@ -37,5 +38,18 @@
+         signal is meant as a hint (it might be emitted although the list of numbers is unchanged).
+       -->
+     <signal name="EmergencyNumbersChanged"/>
++
++     <!--
++        EmergencyCallFailed:
++        @id: The id that was called
++        @message: Why it failed, meant to be shown to the user
++
++        An emergency call that was being set up ended without ever reaching the other side, and
++        Calls gave up on trying again. The user has to know: they are waiting for help.
++      -->
++    <signal name="EmergencyCallFailed">
++      <arg name="id" type="s"/>
++      <arg name="message" type="s"/>
++    </signal>
+   </interface>
+ </node>

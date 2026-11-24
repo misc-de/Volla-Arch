@@ -1,0 +1,14 @@
+[Unit]
+Description=Ask which USB port stays active when a pogo accessory is attached
+PartOf=graphical-session.target
+After=graphical-session.target
+# Only on the Plinius Plus, the others have no pogo pins
+ConditionPathExists=/sys/usb/pogo_state
+
+[Service]
+ExecStart=/usr/bin/plinius-usb-prompt
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,16 @@
+# Core packages that are only updated after approval, even without a link dependency of our
+# packages: if one of them breaks, the phone does not boot or stays silent (docs/PAKETIERUNG.md).
+# tools/freigabe.py adds the linked libraries by itself.
+glibc
+systemd
+phosh
+mesa
+pipewire
+wireplumber
+networkmanager
+# Android container: nothing of ours links against it, but without it no hardware works
+lxc
+# Recovery path: SSH over USB (docs/PAKETIERUNG.md, way back on the device)
+openssh
+# plinius-pkg parses pacman's output
+pacman

@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 19:40:00 +0100
+Subject: [PATCH] xdg-toplevel: A plain resize counts as a pending configure
+ too
+
+A maximized view that only changes its size, not its position, is
+resized through resize(), which did not keep the configure's serial
+(move_resize() does). view->configure_pending then said nothing was
+pending, and a commit from before the configure was taken for the
+client's answer.
+
+That is what the on-screen keyboard did: it shrinks the usable area at
+the bottom, phoc sends the smaller size, and GNOME Settings' next commit,
+still at the old height (1058 over a usable 858), made view_update_scale()
+pick 0.81. The window was then configured to 586x1058 and Settings
+switched to its two-column layout, its header bar under the top panel.
+
+resize() now keeps its serial in a field of its own, so move_resize()'s
+handling of the position stays as it is, and both count for
+configure_pending.
+---
+ src/xdg-toplevel.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/src/xdg-toplevel.c b/src/xdg-toplevel.c
+index 3fa5ddb..130db72 100644
+--- a/src/xdg-toplevel.c
++++ b/src/xdg-toplevel.c
+@@ -70,6 +70,9 @@ typedef struct _PhocXdgToplevel {
+   struct wl_event_source    *frame_done_idle;
+ 
+   uint32_t                   pending_move_resize_configure_serial;
++  /* Plinius: the configure of a plain resize (the position stays), which move_resize's serial
++   * above does not track. Only for view->configure_pending. */
++  uint32_t                   pending_resize_configure_serial;
+ 
+   PhocXdgToplevelDecoration *decoration;
+   char *tag;
+@@ -186,8 +189,12 @@ resize (PhocView *view, uint32_t width, uint32_t height)
+       wlr_xdg_toplevel->scheduled.height == constrained_height)
+     return;
+ 
++  /* Plinius: remember the serial, so that a commit from before it is not taken for the client's
++   * answer (the on-screen keyboard shrinks a maximized window this way: same position, less
++   * height; the old, taller commit made view_update_scale() shrink the window to 0.81) */
+   if (wlr_xdg_toplevel->base->initialized)
+-    wlr_xdg_toplevel_set_size (wlr_xdg_toplevel, constrained_width, constrained_height);
++    PHOC_XDG_TOPLEVEL (view)->pending_resize_configure_serial =
++      wlr_xdg_toplevel_set_size (wlr_xdg_toplevel, constrained_width, constrained_height);
+ 
+   send_frame_done_if_not_visible (PHOC_XDG_TOPLEVEL (view));
+ }
+@@ -502,8 +509,11 @@ handle_surface_commit (struct wl_listener *listener, void *data)
+   }
+ 
+   /* A later configure may have been acknowledged instead of ours, that one counts as well */
++  if (self->pending_resize_configure_serial <= xdg_toplevel->base->current.configure_serial)
++    self->pending_resize_configure_serial = 0;
+   view->configure_pending =
+-    self->pending_move_resize_configure_serial > xdg_toplevel->base->current.configure_serial;
++    self->pending_move_resize_configure_serial > xdg_toplevel->base->current.configure_serial ||
++    self->pending_resize_configure_serial > xdg_toplevel->base->current.configure_serial;
+   view_update_size (view, size.width, size.height);
+ 
+   struct wlr_box geometry;

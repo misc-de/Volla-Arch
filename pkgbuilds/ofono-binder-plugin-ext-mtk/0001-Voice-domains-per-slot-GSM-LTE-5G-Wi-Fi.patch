@@ -1,0 +1,1011 @@
+diff --git a/Makefile b/Makefile
+index 6c4d70a..f385d6c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -45,6 +45,7 @@ SRC = \
+   mtk_radio_ext_aidl.c \
+   mtk_plugin.c \
+   mtk_slot.c \
++  mtk_voice.c \
+   nm_dbus.c \
+   binder_util.c
+ 
+diff --git a/src/mtk_ims.c b/src/mtk_ims.c
+index edb9a63..6700a0d 100644
+--- a/src/mtk_ims.c
++++ b/src/mtk_ims.c
+@@ -43,6 +43,7 @@
+ #include "mtk_slot.h"
+ #include "mtk_radio_ext.h"
+ #include "mtk_radio_ext_types.h"
++#include "mtk_voice.h"
+ 
+ #include "nm_dbus.h"
+ 
+@@ -63,6 +64,7 @@ typedef struct mtk_ims {
+     BINDER_EXT_IMS_STATE ims_state;
+     NMInfo nm_info;
+     char ifname[32];
++    MtkVoice* voice;
+ } MtkIms;
+ 
+ static
+@@ -196,8 +198,9 @@ mtk_ims_registration_info_changed(
+     }
+ }
+ 
++/* Wi-Fi address updates for VoWiFi; unused until Wi-Fi calling works (Plinius) */
+ static
+-void
++void G_GNUC_UNUSED
+ mtk_ims_nm_callback_wrapper(
+     const char* ipv4_addr,
+     guint32 ipv4_prefix_len,
+@@ -243,34 +246,16 @@ mtk_ims_set_registration(
+ {
+     MtkIms* self = THIS(ext);
+     const gboolean enabled = (registration != BINDER_EXT_IMS_REGISTRATION_OFF);
+-    gboolean have_wifi_interface;
+ 
+     DBG("%s, IMS registration: %d", self->slot, enabled);
+ 
+-    property_get("wifi.interface", self->ifname, ""); // seems to exist on mediateks, should be enough?
+-    have_wifi_interface = strcmp(self->ifname, "") != 0;
+-
+-    mtk_radio_ext_set_ims_cfg_feature_value(self->radio_ext,
+-        FEATURE_TYPE_VOICE_OVER_LTE, NETWORK_TYPE_LTE, enabled,
+-        have_wifi_interface ? ISLAST_FALSE : ISLAST_TRUE,
+-        NULL, NULL, NULL);
+-
+-    if (have_wifi_interface) {
+-        mtk_radio_ext_set_ims_cfg_feature_value(self->radio_ext,
+-            FEATURE_TYPE_VOICE_OVER_WIFI, NETWORK_TYPE_IWLAN, enabled, ISLAST_TRUE,
+-            NULL, NULL, NULL);
+-
+-        mtk_radio_ext_set_wifi_enabled(self->radio_ext,
+-            self->ifname, enabled ? 1 /* isWifiEnabled */ : 0, 0 /* isFlightModeOn */,
+-            NULL, NULL, NULL);
+-
+-        DBG("wifi interface is %s", self->ifname);
+-        if (nm_initialize(&self->nm_info, self->ifname, mtk_ims_nm_callback_wrapper, self)) {
+-            DBG("NM initialization successful for interface %s", self->ifname);
+-        } else {
+-            DBG("NM initialization failed for interface %s", self->ifname);
+-        }
+-    }
++    /*
++     * Plinius: which of VoLTE, VoNR and VoWiFi are on, and whether GSM stays
++     * as the fallback, is the user's choice per slot (mtk_voice.c). This
++     * replaces the feature values UBports sent here (VoLTE, and VoWiFi only
++     * with the wifi.interface property set).
++     */
++    mtk_voice_set_ims_allowed(self->voice, enabled);
+ 
+     MtkImsResultRequest* req = mtk_ims_result_request_new(ext,
+         complete, destroy, user_data);
+@@ -336,7 +321,8 @@ mtk_ims_iface_init(
+ BinderExtIms*
+ mtk_ims_new(
+     const char* slot,
+-    MtkRadioExt* radio_ext)
++    MtkRadioExt* radio_ext,
++    MtkVoice* voice)
+ {
+     MtkIms* self = g_object_new(THIS_TYPE, NULL);
+ 
+@@ -347,6 +333,7 @@ mtk_ims_new(
+     self->slot = g_strdup(slot);
+     self->radio_ext = mtk_radio_ext_ref(radio_ext);
+     self->ims_state = BINDER_EXT_IMS_STATE_NOT_REGISTERED;
++    self->voice = voice;
+ 
+     if (self->radio_ext) {
+         mtk_radio_ext_add_ims_reg_status_handler(self->radio_ext,
+diff --git a/src/mtk_ims.h b/src/mtk_ims.h
+index eace84e..a5620a9 100644
+--- a/src/mtk_ims.h
++++ b/src/mtk_ims.h
+@@ -41,11 +41,14 @@
+ #include <binder_ext_ims.h>
+ 
+ typedef struct mtk_radio_ext MtkRadioExt;
++typedef struct mtk_voice MtkVoice;
+ 
++/* voice: the slot's voice domains (Plinius), owned by the slot */
+ BinderExtIms*
+ mtk_ims_new(
+     const char* slot,
+-    MtkRadioExt* radio_ext)
++    MtkRadioExt* radio_ext,
++    MtkVoice* voice)
+     G_GNUC_INTERNAL;
+ 
+ #endif /* MTK_IMS_H */
+diff --git a/src/mtk_radio_ext.c b/src/mtk_radio_ext.c
+index 1d97e32..e30cd12 100644
+--- a/src/mtk_radio_ext.c
++++ b/src/mtk_radio_ext.c
+@@ -91,6 +91,12 @@ typedef struct mtk_radio_ext_result_request {
+     MtkRadioExtResultFunc complete;
+ } MtkRadioExtResultRequest;
+ 
++/* A request whose response carries one int after the RadioResponseInfo */
++typedef struct mtk_radio_ext_int_request {
++    MtkRadioExtRequest base;
++    MtkRadioExtIntResultFunc complete;
++} MtkRadioExtIntRequest;
++
+ static GLogModule mtk_radio_ext_binder_log_module = {
+     .max_level = GLOG_LEVEL_VERBOSE,
+     .level = GLOG_LEVEL_VERBOSE,
+@@ -904,6 +910,114 @@ mtk_radio_ext_set_ims_cfg_feature_value(
+         feature_id, network, value, is_last);
+ }
+ 
++static
++void
++mtk_radio_ext_int_response(
++    MtkRadioExtRequest* req,
++    const RadioResponseInfo* info,
++    const GBinderReader* args)
++{
++    MtkRadioExtIntRequest* int_req = G_CAST(req, MtkRadioExtIntRequest, base);
++    GBinderReader reader;
++    gint32 value = 0;
++
++    gbinder_reader_copy(&reader, args);
++    if (!gbinder_reader_read_int32(&reader, &value) && !info->error) {
++        DBG("%s: response without a value", req->radio->slot);
++    }
++    if (int_req->complete) {
++        int_req->complete(req->radio, info->error, value, req->user_data);
++    }
++}
++
++/* Sends an IMS request with int arguments (after the serial, before the
++ * AIDL clientId). Requests the interface does not know (code -1, all HIDL
++ * versions for the Plinius additions) are not sent and return 0. */
++static
++guint
++mtk_radio_ext_int_args_request_submit(
++    MtkRadioExt* self,
++    MTK_RADIO_REQ req_id,
++    IMS_RADIO_RESP resp_id,
++    MtkRadioExtRequestHandlerFunc handler,
++    gsize req_size,
++    GCallback complete,
++    GDestroyNotify destroy,
++    void* user_data,
++    guint n_args,
++    const gint32* argv)
++{
++    const gint32 req_code = mtk_radio_ext_req_code_for(self, req_id);
++    const gint32 resp_code = mtk_radio_ext_resp_code_for(self, resp_id);
++    GBinderLocalRequest* args;
++    GBinderWriter writer;
++    MtkRadioExtRequest* req;
++    guint i, id;
++
++    if (!self || req_code < 0 || resp_code < 0 ||
++        self->iface_type != MTK_RADIO_IFACE_AIDL) {
++        return 0;
++    }
++
++    req = mtk_radio_ext_request_alloc(self, resp_code, handler, destroy,
++        user_data, req_size);
++    /* Both request types keep their completion right after the base */
++    ((MtkRadioExtResultRequest*)req)->complete =
++        (MtkRadioExtResultFunc)complete;
++    id = req->id;
++
++    args = gbinder_client_new_request2(self->client, req_code);
++    gbinder_local_request_init_writer(args, &writer);
++    gbinder_writer_append_int32(&writer, id);
++    for (i = 0; i < n_args; i++) {
++        gbinder_writer_append_int32(&writer, argv[i]);
++    }
++    if (self->iface && self->iface->client_id >= 0) {
++        gbinder_writer_append_int32(&writer, self->iface->client_id);
++    }
++    mtk_radio_ext_submit_request(req, req_code, id, MTK_AIDL_IMS, args);
++    gbinder_local_request_unref(args);
++    if (req->tx) {
++        return id;
++    }
++    g_hash_table_remove(self->requests, KEY(id));
++    return 0;
++}
++
++guint
++mtk_radio_ext_get_ims_cfg_resource_cap_value(
++    MtkRadioExt* self,
++    guint32 feature_id,
++    MtkRadioExtIntResultFunc complete,
++    GDestroyNotify destroy,
++    void* user_data)
++{
++    const gint32 argv[] = { feature_id };
++
++    return mtk_radio_ext_int_args_request_submit(self,
++        MTK_RADIO_REQ_GET_IMS_CFG_RESOURCE_CAP_VALUE,
++        IMS_RADIO_RESP_GET_IMS_CFG_RESOURCE_CAP_VALUE,
++        mtk_radio_ext_int_response, sizeof(MtkRadioExtIntRequest),
++        G_CALLBACK(complete), destroy, user_data, G_N_ELEMENTS(argv), argv);
++}
++
++guint
++mtk_radio_ext_set_voice_domain_preference(
++    MtkRadioExt* self,
++    guint32 vdp,
++    MtkRadioExtResultFunc complete,
++    GDestroyNotify destroy,
++    void* user_data)
++{
++    const gint32 argv[] = { vdp };
++
++    return mtk_radio_ext_int_args_request_submit(self,
++        MTK_RADIO_REQ_SET_VOICE_DOMAIN_PREFERENCE,
++        IMS_RADIO_RESP_SET_VOICE_DOMAIN_PREFERENCE,
++        mtk_radio_ext_result_response, sizeof(MtkRadioExtResultRequest),
++        G_CALLBACK(complete), destroy, user_data, G_N_ELEMENTS(argv), argv);
++}
++
+ static
+ void
+ mtk_radio_ext_set_ims_cfg_args(
+diff --git a/src/mtk_radio_ext.h b/src/mtk_radio_ext.h
+index b28262a..4c2f0ce 100644
+--- a/src/mtk_radio_ext.h
++++ b/src/mtk_radio_ext.h
+@@ -28,6 +28,12 @@ typedef void (*MtkRadioExtResultFunc)(
+     int result,
+     void* user_data);
+ 
++typedef void (*MtkRadioExtIntResultFunc)(
++    MtkRadioExt* radio,
++    int result,
++    int value,
++    void* user_data);
++
+ typedef void (*MtkRadioExtImsRegStatusFunc)(
+     MtkRadioExt* radio,
+     guint status,
+@@ -84,6 +90,25 @@ mtk_radio_ext_set_ims_cfg_feature_value(
+     GDestroyNotify destroy,
+     void* user_data);
+ 
++/* IMS resource capability of a feature (MTK ImsConfig feature id), AIDL only */
++guint
++mtk_radio_ext_get_ims_cfg_resource_cap_value(
++    MtkRadioExt* radio,
++    guint32 feature_id,
++    MtkRadioExtIntResultFunc complete,
++    GDestroyNotify destroy,
++    void* user_data);
++
++/* Voice domain preference (3GPP TS 24.167: 1 CS only, 2 CS preferred,
++ * 3 IMS preferred, 4 IMS only), AIDL only */
++guint
++mtk_radio_ext_set_voice_domain_preference(
++    MtkRadioExt* radio,
++    guint32 vdp,
++    MtkRadioExtResultFunc complete,
++    GDestroyNotify destroy,
++    void* user_data);
++
+ guint
+ mtk_radio_ext_set_ims_cfg(
+     MtkRadioExt* self,
+diff --git a/src/mtk_radio_ext_aidl_types.h b/src/mtk_radio_ext_aidl_types.h
+index 44a86bd..5112be8 100644
+--- a/src/mtk_radio_ext_aidl_types.h
++++ b/src/mtk_radio_ext_aidl_types.h
+@@ -53,8 +53,10 @@
+ #define MTK_RADIO_AIDL_IMS_CALL(c) \
+     c(0,  imsBearerStateConfirm,  IMS_BEARER_STATE_CONFIRM) \
+     c(4,  sendImsSmsEx,           SEND_IMS_SMS_EX) \
++    c(36, getImsCfgResourceCapValue, GET_IMS_CFG_RESOURCE_CAP_VALUE) \
+     c(38, setImsCfgFeatureValue,  SET_IMS_CFG_FEATURE_VALUE) \
+     c(40, setImscfg,              SET_IMS_CFG) \
++    c(41, setVoiceDomainPreference, SET_VOICE_DOMAIN_PREFERENCE) \
+     c(52, setWifiEnabled,         SET_WIFI_ENABLED) \
+     c(53, setWifiIpAddress,       SET_WIFI_IP_ADDRESS) \
+     c(57, setResponseFunctionsMtk, SET_RESPONSE_FUNCTIONS_IMS)
+@@ -65,7 +67,9 @@
+     c(0,  imsBearerStateConfirmResponse, IMS_BEARER_STATE_CONFIRM) \
+     c(4,  sendImsSmsExResponse,          SEND_IMS_SMS_EX) \
+     c(34, setImscfgResponse,             SET_IMS_CFG) \
+-    c(36, setImsCfgFeatureValueResponse, SET_IMS_CFG_FEATURE_VALUE)
++    c(36, setImsCfgFeatureValueResponse, SET_IMS_CFG_FEATURE_VALUE) \
++    c(40, getImsCfgResourceCapValueResponse, GET_IMS_CFG_RESOURCE_CAP_VALUE) \
++    c(42, setVoiceDomainPreferenceResponse, SET_VOICE_DOMAIN_PREFERENCE)
+ 
+ /* IMtkRadioExImsIndication transaction codes */
+ /* e(offset, name, NAME) */
+diff --git a/src/mtk_radio_ext_code_map.h b/src/mtk_radio_ext_code_map.h
+index 7850ab5..bc5f7c9 100644
+--- a/src/mtk_radio_ext_code_map.h
++++ b/src/mtk_radio_ext_code_map.h
+@@ -17,6 +17,8 @@ typedef enum mtk_radio_req {
+     MTK_RADIO_REQ_SET_IMS_ENABLED,
+     MTK_RADIO_REQ_SET_IMS_CFG,
+     MTK_RADIO_REQ_SET_IMS_CFG_FEATURE_VALUE,
++    MTK_RADIO_REQ_GET_IMS_CFG_RESOURCE_CAP_VALUE,
++    MTK_RADIO_REQ_SET_VOICE_DOMAIN_PREFERENCE,
+     /* Call-related request codes */
+     MTK_RADIO_REQ_HANGUP_ALL,
+     MTK_RADIO_REQ_SET_CALL_INDICATION,
+@@ -82,6 +84,8 @@ typedef enum ims_radio_resp {
+     IMS_RADIO_RESP_SET_WIFI_IP_ADDRESS,
+     IMS_RADIO_RESP_SET_IMS_CFG_FEATURE_VALUE,
+     IMS_RADIO_RESP_IMS_BEARER_STATE_CONFIRM,
++    IMS_RADIO_RESP_GET_IMS_CFG_RESOURCE_CAP_VALUE,
++    IMS_RADIO_RESP_SET_VOICE_DOMAIN_PREFERENCE,
+ 
+     IMS_RADIO_RESP_COUNT
+ } IMS_RADIO_RESP;
+diff --git a/src/mtk_slot.c b/src/mtk_slot.c
+index 8db4f93..c0403f4 100644
+--- a/src/mtk_slot.c
++++ b/src/mtk_slot.c
+@@ -40,6 +40,7 @@
+ #include "mtk_ims_call.h"
+ #include "mtk_ims_sms.h"
+ #include "mtk_radio_ext.h"
++#include "mtk_voice.h"
+ 
+ #include <binder_ext_slot_impl.h>
+ 
+@@ -55,6 +56,7 @@ typedef struct mtk_slot {
+     BinderExtCall* ims_call;
+     BinderExtSms* ims_sms;
+     MtkRadioExt* radio_ext;
++    MtkVoice* voice;
+     RadioInstance* ims_aosp_instance;
+     RadioClient* ims_aosp_client;
+ } MtkSlot;
+@@ -83,6 +85,10 @@ mtk_slot_terminate(
+         binder_ext_sms_unref(self->ims_sms);
+         self->ims_sms = NULL;
+     }
++    if (self->voice) {
++        mtk_voice_free(self->voice);
++        self->voice = NULL;
++    }
+     if (self->radio_ext) {
+         mtk_radio_ext_unref(self->radio_ext);
+         self->radio_ext = NULL;
+@@ -185,7 +191,8 @@ mtk_slot_new(
+     }
+ 
+     if (self->radio_ext) {
+-        self->ims = mtk_ims_new(slot_name, self->radio_ext);
++        self->voice = mtk_voice_new(radio->slot_index, self->radio_ext);
++        self->ims = mtk_ims_new(slot_name, self->radio_ext, self->voice);
+         self->ims_call = mtk_ims_call_new(self->radio_ext, self->ims_aosp_client);
+         self->ims_sms = mtk_ims_sms_new(self->radio_ext, self->ims_aosp_client);
+     }
+diff --git a/src/mtk_voice.c b/src/mtk_voice.c
+new file mode 100644
+index 0000000..c99a36f
+--- /dev/null
++++ b/src/mtk_voice.c
+@@ -0,0 +1,562 @@
++/*
++ * Voice domains per SIM slot (Volla Phone Plinius).
++ *
++ * The user switches the ways a call may take on or off: GSM (circuit
++ * switched), LTE (VoLTE), 5G (VoNR) and Wi-Fi (VoWiFi). Falling back between
++ * them (Wi-Fi -> LTE -> GSM) is left to the modem. A way is offered only when
++ * it is possible: the modem reports per feature whether the SIM's operator
++ * profile allows it (getImsCfgResourceCapValue), and Wi-Fi calling also has
++ * to be switched on in /etc/ofono/plinius-voice.conf ([Settings]
++ * WifiCalling=true) while its data path is not working on this system yet.
++ *
++ * The choice is kept per slot in /var/lib/ofono/plinius-voice.conf and is
++ * offered on the system bus as org.plinius.Voice, object
++ * /org/plinius/Voice/ril_<slot index> (the oFono modem path of the slot),
++ * interface org.plinius.Voice1:
++ *   properties  Gsm, Lte, Nr, Wifi                  (b, the user's choice)
++ *               GsmAvailable, LteAvailable, NrAvailable, WifiAvailable (b)
++ *   method      SetEnabled(s domain, b enabled)    domain: gsm, lte, nr, wifi
++ * The last way left on cannot be switched off; emergency calls are up to the
++ * modem in any case.
++ *
++ * Copyright (C) 2026 misc-de <misc-de@users.noreply.github.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include "mtk_voice.h"
++#include "mtk_radio_ext.h"
++
++#include <ofono/log.h>
++
++#include <gio/gio.h>
++
++#define VOICE_BUS_NAME     "org.plinius.Voice"
++#define VOICE_PATH_PREFIX  "/org/plinius/Voice/ril_"
++#define VOICE_IFACE        "org.plinius.Voice1"
++#define VOICE_ERROR        "org.plinius.Voice.Error"
++#define VOICE_STATE_FILE   "/var/lib/ofono/plinius-voice.conf"
++#define VOICE_CONFIG_FILE  "/etc/ofono/plinius-voice.conf"
++
++/* MTK ImsConfig feature ids and networks (as Volla OS' MtkImsConfigImpl
++ * sends them with setMultiFeatureValues) */
++#define FEATURE_VOLTE   0
++#define FEATURE_VOWIFI  2
++#define FEATURE_VONR    6
++#define NETWORK_LTE     13
++#define NETWORK_IWLAN   18
++#define NETWORK_NR      20
++
++/* Voice domain preference, 3GPP TS 24.167 */
++#define VDP_CS_ONLY        1
++#define VDP_IMS_PREFERRED  3
++#define VDP_IMS_ONLY       4
++
++/* Capability queries while the modem's IMS configuration is not loaded yet */
++#define CAP_RETRY_SECONDS  10
++#define CAP_RETRY_MAX      12
++
++typedef enum voice_domain {
++    DOMAIN_GSM,
++    DOMAIN_LTE,
++    DOMAIN_NR,
++    DOMAIN_WIFI,
++    DOMAIN_COUNT
++} VOICE_DOMAIN;
++
++static const struct voice_domain_info {
++    const char* key;        /* D-Bus argument and key in the state file */
++    const char* prop;       /* property with the user's choice */
++    const char* avail_prop; /* property with the availability */
++    gboolean def;           /* default choice */
++    gint32 feature;         /* MTK feature id, -1 for GSM */
++} voice_domains[DOMAIN_COUNT] = {
++    { "gsm",  "Gsm",  "GsmAvailable",  TRUE,  -1 },
++    { "lte",  "Lte",  "LteAvailable",  TRUE,  FEATURE_VOLTE },
++    { "nr",   "Nr",   "NrAvailable",   TRUE,  FEATURE_VONR },
++    { "wifi", "Wifi", "WifiAvailable", FALSE, FEATURE_VOWIFI }
++};
++
++struct mtk_voice {
++    guint slot_index;
++    char* group;    /* "ril_<slot index>", group in the state file */
++    char* path;     /* D-Bus object path */
++    MtkRadioExt* radio_ext;
++    gboolean enabled[DOMAIN_COUNT];   /* the user's choice */
++    gboolean cap[DOMAIN_COUNT];       /* what the modem allows */
++    gboolean caps_known;
++    guint caps_pending;               /* outstanding capability answers */
++    guint cap_req[DOMAIN_COUNT];      /* their request ids */
++    gboolean caps_failed;
++    guint cap_timer;
++    guint cap_tries;
++    gboolean ims_allowed;
++    gboolean ims_allowed_known;
++    guint reg_id;
++};
++
++static GDBusConnection* voice_bus = NULL;
++static GDBusNodeInfo* voice_node = NULL;
++static guint voice_owner_id = 0;
++static guint voice_count = 0;
++static gboolean voice_wifi_calling = FALSE;
++
++static const char voice_introspection[] =
++    "<node>"
++    " <interface name='" VOICE_IFACE "'>"
++    "  <method name='SetEnabled'>"
++    "   <arg type='s' name='domain' direction='in'/>"
++    "   <arg type='b' name='enabled' direction='in'/>"
++    "  </method>"
++    "  <property name='Gsm' type='b' access='read'/>"
++    "  <property name='Lte' type='b' access='read'/>"
++    "  <property name='Nr' type='b' access='read'/>"
++    "  <property name='Wifi' type='b' access='read'/>"
++    "  <property name='GsmAvailable' type='b' access='read'/>"
++    "  <property name='LteAvailable' type='b' access='read'/>"
++    "  <property name='NrAvailable' type='b' access='read'/>"
++    "  <property name='WifiAvailable' type='b' access='read'/>"
++    " </interface>"
++    "</node>";
++
++static
++gboolean
++mtk_voice_available(
++    MtkVoice* self,
++    VOICE_DOMAIN d)
++{
++    switch (d) {
++    case DOMAIN_GSM:
++        return TRUE;
++    case DOMAIN_LTE:
++        /* VoLTE works on this phone already: assume it until the modem
++         * tells otherwise */
++        return self->caps_known ? self->cap[d] : TRUE;
++    case DOMAIN_WIFI:
++        return voice_wifi_calling && self->caps_known && self->cap[d];
++    default:
++        return self->caps_known && self->cap[d];
++    }
++}
++
++static
++gboolean
++mtk_voice_on(
++    MtkVoice* self,
++    VOICE_DOMAIN d)
++{
++    return self->enabled[d] && mtk_voice_available(self, d);
++}
++
++/*==========================================================================*
++ * State file
++ *==========================================================================*/
++
++static
++void
++mtk_voice_load(
++    MtkVoice* self)
++{
++    GKeyFile* kf = g_key_file_new();
++    int d;
++
++    g_key_file_load_from_file(kf, VOICE_STATE_FILE, G_KEY_FILE_NONE, NULL);
++    for (d = 0; d < DOMAIN_COUNT; d++) {
++        GError* error = NULL;
++        gboolean on = g_key_file_get_boolean(kf, self->group,
++            voice_domains[d].key, &error);
++
++        self->enabled[d] = error ? voice_domains[d].def : on;
++        g_clear_error(&error);
++    }
++    g_key_file_unref(kf);
++
++    kf = g_key_file_new();
++    if (g_key_file_load_from_file(kf, VOICE_CONFIG_FILE, G_KEY_FILE_NONE,
++        NULL)) {
++        voice_wifi_calling = g_key_file_get_boolean(kf, "Settings",
++            "WifiCalling", NULL);
++    }
++    g_key_file_unref(kf);
++}
++
++static
++void
++mtk_voice_save(
++    MtkVoice* self)
++{
++    GKeyFile* kf = g_key_file_new();
++    GError* error = NULL;
++    int d;
++
++    /* Keep the other slots' groups */
++    g_key_file_load_from_file(kf, VOICE_STATE_FILE, G_KEY_FILE_KEEP_COMMENTS,
++        NULL);
++    for (d = 0; d < DOMAIN_COUNT; d++) {
++        g_key_file_set_boolean(kf, self->group, voice_domains[d].key,
++            self->enabled[d]);
++    }
++    if (!g_key_file_save_to_file(kf, VOICE_STATE_FILE, &error)) {
++        ofono_error("voice %s: %s", self->group, error->message);
++        g_error_free(error);
++    }
++    g_key_file_unref(kf);
++}
++
++/*==========================================================================*
++ * Modem
++ *==========================================================================*/
++
++static
++void
++mtk_voice_apply(
++    MtkVoice* self)
++{
++    gboolean volte, vonr, vowifi, ims;
++    guint32 vdp;
++
++    if (!self->ims_allowed_known) {
++        return;
++    }
++
++    volte = self->ims_allowed && mtk_voice_on(self, DOMAIN_LTE);
++    vonr = self->ims_allowed && mtk_voice_on(self, DOMAIN_NR);
++    vowifi = self->ims_allowed && mtk_voice_on(self, DOMAIN_WIFI);
++    ims = volte || vonr || vowifi;
++
++    /* Without a way over IMS only GSM is left, whatever the choice says */
++    if (!ims) {
++        vdp = VDP_CS_ONLY;
++    } else if (mtk_voice_on(self, DOMAIN_GSM)) {
++        vdp = VDP_IMS_PREFERRED;
++    } else {
++        vdp = VDP_IMS_ONLY;
++    }
++
++    ofono_info("voice %s: VoLTE %d, VoNR %d, VoWiFi %d, domain preference %u",
++        self->group, volte, vonr, vowifi, vdp);
++
++    /* isLast on the final one: the RIL sends AT+EIMSCFG then */
++    mtk_radio_ext_set_ims_cfg_feature_value(self->radio_ext, FEATURE_VOLTE,
++        NETWORK_LTE, volte, FALSE, NULL, NULL, NULL);
++    mtk_radio_ext_set_ims_cfg_feature_value(self->radio_ext, FEATURE_VONR,
++        NETWORK_NR, vonr, FALSE, NULL, NULL, NULL);
++    mtk_radio_ext_set_ims_cfg_feature_value(self->radio_ext, FEATURE_VOWIFI,
++        NETWORK_IWLAN, vowifi, TRUE, NULL, NULL, NULL);
++    mtk_radio_ext_set_voice_domain_preference(self->radio_ext, vdp,
++        NULL, NULL, NULL);
++}
++
++static
++void
++mtk_voice_emit_changed(
++    MtkVoice* self)
++{
++    GVariantBuilder props;
++    int d;
++
++    if (!voice_bus || !self->reg_id) {
++        return;
++    }
++
++    g_variant_builder_init(&props, G_VARIANT_TYPE("a{sv}"));
++    for (d = 0; d < DOMAIN_COUNT; d++) {
++        g_variant_builder_add(&props, "{sv}", voice_domains[d].prop,
++            g_variant_new_boolean(self->enabled[d]));
++        g_variant_builder_add(&props, "{sv}", voice_domains[d].avail_prop,
++            g_variant_new_boolean(mtk_voice_available(self, d)));
++    }
++    g_dbus_connection_emit_signal(voice_bus, NULL, self->path,
++        "org.freedesktop.DBus.Properties", "PropertiesChanged",
++        g_variant_new("(sa{sv}as)", VOICE_IFACE, &props, NULL), NULL);
++}
++
++typedef struct mtk_voice_cap_query {
++    MtkVoice* voice;
++    VOICE_DOMAIN domain;
++} MtkVoiceCapQuery;
++
++static
++void
++mtk_voice_cap_done(
++    MtkRadioExt* radio,
++    int result,
++    int value,
++    void* user_data)
++{
++    MtkVoiceCapQuery* q = user_data;
++    MtkVoice* self = q->voice;
++
++    self->cap_req[q->domain] = 0;
++    DBG("voice %s: %s capability %d (error %d)", self->group,
++        voice_domains[q->domain].key, value, result);
++    if (result) {
++        self->caps_failed = TRUE;
++    } else {
++        self->cap[q->domain] = (value != 0);
++    }
++
++    if (self->caps_pending && !--self->caps_pending && !self->caps_failed) {
++        self->caps_known = TRUE;
++        ofono_info("voice %s: modem allows VoLTE %d, VoNR %d, VoWiFi %d",
++            self->group, self->cap[DOMAIN_LTE], self->cap[DOMAIN_NR],
++            self->cap[DOMAIN_WIFI]);
++        if (self->cap_timer) {
++            g_source_remove(self->cap_timer);
++            self->cap_timer = 0;
++        }
++        mtk_voice_emit_changed(self);
++        mtk_voice_apply(self);
++    }
++}
++
++static
++void
++mtk_voice_query_caps(
++    MtkVoice* self)
++{
++    int d;
++
++    if (self->caps_known || self->caps_pending) {
++        return;
++    }
++
++    self->caps_failed = FALSE;
++    for (d = DOMAIN_LTE; d < DOMAIN_COUNT; d++) {
++        MtkVoiceCapQuery* q = g_new(MtkVoiceCapQuery, 1);
++
++        q->voice = self;
++        q->domain = d;
++        self->cap_req[d] = mtk_radio_ext_get_ims_cfg_resource_cap_value(
++            self->radio_ext, voice_domains[d].feature, mtk_voice_cap_done,
++            g_free, q);
++        if (self->cap_req[d]) {
++            self->caps_pending++;
++        } else {
++            g_free(q);
++            self->caps_failed = TRUE;
++        }
++    }
++}
++
++static
++gboolean
++mtk_voice_cap_timer(
++    gpointer user_data)
++{
++    MtkVoice* self = user_data;
++
++    if (self->caps_known || ++self->cap_tries > CAP_RETRY_MAX) {
++        self->cap_timer = 0;
++        return G_SOURCE_REMOVE;
++    }
++    if (!self->caps_pending) {
++        mtk_voice_query_caps(self);
++    }
++    return G_SOURCE_CONTINUE;
++}
++
++/*==========================================================================*
++ * D-Bus
++ *==========================================================================*/
++
++static
++void
++mtk_voice_method_call(
++    GDBusConnection* connection,
++    const char* sender,
++    const char* object_path,
++    const char* interface_name,
++    const char* method_name,
++    GVariant* parameters,
++    GDBusMethodInvocation* invocation,
++    gpointer user_data)
++{
++    MtkVoice* self = user_data;
++    const char* key;
++    gboolean on;
++    int d, target = -1, others = 0;
++
++    if (g_strcmp0(method_name, "SetEnabled")) {
++        g_dbus_method_invocation_return_dbus_error(invocation,
++            VOICE_ERROR ".UnknownMethod", method_name);
++        return;
++    }
++
++    g_variant_get(parameters, "(&sb)", &key, &on);
++    for (d = 0; d < DOMAIN_COUNT; d++) {
++        if (!g_strcmp0(key, voice_domains[d].key)) {
++            target = d;
++        } else if (mtk_voice_on(self, d)) {
++            others++;
++        }
++    }
++
++    if (target < 0) {
++        g_dbus_method_invocation_return_dbus_error(invocation,
++            VOICE_ERROR ".InvalidArgs", "Unknown voice domain");
++        return;
++    }
++    if (on && !mtk_voice_available(self, target)) {
++        g_dbus_method_invocation_return_dbus_error(invocation,
++            VOICE_ERROR ".NotAvailable", "Not possible with this SIM");
++        return;
++    }
++    if (!on && !others) {
++        g_dbus_method_invocation_return_dbus_error(invocation,
++            VOICE_ERROR ".LastDomain", "One way for calls has to stay on");
++        return;
++    }
++
++    g_dbus_method_invocation_return_value(invocation, NULL);
++    if (self->enabled[target] != on) {
++        self->enabled[target] = on;
++        mtk_voice_save(self);
++        mtk_voice_emit_changed(self);
++        mtk_voice_apply(self);
++    }
++}
++
++static
++GVariant*
++mtk_voice_get_property(
++    GDBusConnection* connection,
++    const char* sender,
++    const char* object_path,
++    const char* interface_name,
++    const char* property_name,
++    GError** error,
++    gpointer user_data)
++{
++    MtkVoice* self = user_data;
++    int d;
++
++    for (d = 0; d < DOMAIN_COUNT; d++) {
++        if (!g_strcmp0(property_name, voice_domains[d].prop)) {
++            return g_variant_new_boolean(self->enabled[d]);
++        }
++        if (!g_strcmp0(property_name, voice_domains[d].avail_prop)) {
++            return g_variant_new_boolean(mtk_voice_available(self, d));
++        }
++    }
++    g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_PROPERTY,
++        "No property %s", property_name);
++    return NULL;
++}
++
++static const GDBusInterfaceVTable mtk_voice_vtable = {
++    .method_call = mtk_voice_method_call,
++    .get_property = mtk_voice_get_property
++};
++
++static
++void
++mtk_voice_register(
++    MtkVoice* self)
++{
++    GError* error = NULL;
++
++    if (!voice_bus) {
++        voice_bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);
++        if (!voice_bus) {
++            ofono_error("voice: no system bus: %s", error->message);
++            g_error_free(error);
++            return;
++        }
++        voice_node = g_dbus_node_info_new_for_xml(voice_introspection, NULL);
++        voice_owner_id = g_bus_own_name_on_connection(voice_bus,
++            VOICE_BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, NULL, NULL, NULL,
++            NULL);
++    }
++
++    self->reg_id = g_dbus_connection_register_object(voice_bus, self->path,
++        voice_node->interfaces[0], &mtk_voice_vtable, self, NULL, &error);
++    if (!self->reg_id) {
++        ofono_error("voice %s: %s", self->path, error->message);
++        g_error_free(error);
++    }
++}
++
++/*==========================================================================*
++ * API
++ *==========================================================================*/
++
++MtkVoice*
++mtk_voice_new(
++    guint slot_index,
++    MtkRadioExt* radio_ext)
++{
++    MtkVoice* self = g_new0(MtkVoice, 1);
++
++    self->slot_index = slot_index;
++    self->group = g_strdup_printf("ril_%u", slot_index);
++    self->path = g_strdup_printf(VOICE_PATH_PREFIX "%u", slot_index);
++    self->radio_ext = mtk_radio_ext_ref(radio_ext);
++    mtk_voice_load(self);
++    voice_count++;
++    mtk_voice_register(self);
++
++    /* The modem knows its IMS configuration some seconds after the RIL */
++    self->cap_timer = g_timeout_add_seconds(CAP_RETRY_SECONDS,
++        mtk_voice_cap_timer, self);
++    return self;
++}
++
++void
++mtk_voice_set_ims_allowed(
++    MtkVoice* self,
++    gboolean allowed)
++{
++    if (!self) {
++        return;
++    }
++
++    self->ims_allowed = allowed;
++    self->ims_allowed_known = TRUE;
++    mtk_voice_query_caps(self);
++    mtk_voice_apply(self);
++}
++
++void
++mtk_voice_free(
++    MtkVoice* self)
++{
++    int d;
++
++    if (!self) {
++        return;
++    }
++
++    if (self->cap_timer) {
++        g_source_remove(self->cap_timer);
++    }
++    for (d = 0; d < DOMAIN_COUNT; d++) {
++        if (self->cap_req[d]) {
++            mtk_radio_ext_cancel(self->radio_ext, self->cap_req[d]);
++        }
++    }
++    if (self->reg_id) {
++        g_dbus_connection_unregister_object(voice_bus, self->reg_id);
++    }
++    if (!--voice_count && voice_bus) {
++        g_bus_unown_name(voice_owner_id);
++        voice_owner_id = 0;
++        g_dbus_node_info_unref(voice_node);
++        voice_node = NULL;
++        g_clear_object(&voice_bus);
++    }
++    mtk_radio_ext_unref(self->radio_ext);
++    g_free(self->group);
++    g_free(self->path);
++    g_free(self);
++}
++
++/*
++ * Local Variables:
++ * mode: C
++ * c-basic-offset: 4
++ * indent-tabs-mode: nil
++ * End:
++ */
+diff --git a/src/mtk_voice.h b/src/mtk_voice.h
+new file mode 100644
+index 0000000..63ab1f0
+--- /dev/null
++++ b/src/mtk_voice.h
+@@ -0,0 +1,50 @@
++/*
++ * Voice domains per SIM slot (Volla Phone Plinius): which ways a call may take
++ * (GSM, LTE, 5G, Wi-Fi), what the modem allows, and the D-Bus service for the
++ * settings (org.plinius.Voice).
++ *
++ * Copyright (C) 2026 misc-de <misc-de@users.noreply.github.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef MTK_VOICE_H
++#define MTK_VOICE_H
++
++#include <glib.h>
++
++typedef struct mtk_radio_ext MtkRadioExt;
++typedef struct mtk_voice MtkVoice;
++
++MtkVoice*
++mtk_voice_new(
++    guint slot_index,
++    MtkRadioExt* radio_ext)
++    G_GNUC_INTERNAL;
++
++void
++mtk_voice_free(
++    MtkVoice* voice)
++    G_GNUC_INTERNAL;
++
++/*
++ * oFono's IMS registration switch: with IMS off only GSM is left, with IMS on
++ * the user's choice applies. Sends the configuration to the modem.
++ */
++void
++mtk_voice_set_ims_allowed(
++    MtkVoice* voice,
++    gboolean allowed)
++    G_GNUC_INTERNAL;
++
++#endif /* MTK_VOICE_H */
++
++/*
++ * Local Variables:
++ * mode: C
++ * c-basic-offset: 4
++ * indent-tabs-mode: nil
++ * End:
++ */

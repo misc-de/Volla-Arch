@@ -1,0 +1,932 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 12:00:00 +0100
+Subject: [PATCH] portal-access-manager: Allow Once, Always Allow and Don't
+ Allow
+
+Plinius: every access question of the phone has the same three buttons,
+one below the other: "Allow Once", "Always Allow" and "Don't Allow"
+(AppAuthPrompt:buttons). The access dialog asks every portal request
+that way; plinius-appaccess's questions about USB cameras, security keys
+and the network come through the same dialog.
+
+xdg-desktop-portal 1.22.1 (read in its source: camera.c, location.c,
+screenshot.c, wallpaper.c, background.c) knows granted (0) and denied
+(1) only and keeps the answer in the permission store for good:
+
+- camera: table "devices", id "camera", "yes"/"no", written only when
+  the app had no entry (measured on the phone: Snapshot, Fractal and
+  Emilia with ['yes'])
+- location: table "location", id "location", [accuracy, last use],
+  e.g. ['EXACT', '<timestamp>'] (measured for Fractal); asked only
+  without an entry, written after every dialog, "NONE" for a denial
+- screenshot, wallpaper: tables and ids of that name, "yes"/"no", only
+  without an entry
+- background: asked only while the entry says "ask", nothing written
+
+"Always Allow" answers granted, "Don't Allow" denied; both are stored
+as before. "Allow Once", and a dialog swiped away, answer granted or
+denied, but the entry xdg-desktop-portal writes for them is deleted
+again (access-once.c): before the answer the app's entries of the four
+tables above are looked up, then the first Changed signal of the
+permission store (emitted for every table on every change, read in
+document-portal/xdg-permission-store.c) within 10 s that gives the app
+an entry it had not is undone with DeletePermission. Limits: another
+new entry of the same app in one of these tables within these 10 s is
+deleted instead; a write later than that stays.
+
+A caller that handles "Allow Once" itself passes "plinius-once" (b),
+its entries are left alone; "plinius-buttons" (as of "once", "always",
+"never") names the buttons to show. Every answer has "plinius-choice"
+(s: "once", "always", "never" or "cancel"). The icon may also be a
+file, as desktop files name icons.
+---
+ src/access-once.c           | 341 ++++++++++++++++++++++++++++++++++++
+ src/access-once.h           |  41 +++++
+ src/app-auth-prompt.c       | 149 +++++++++++++++-
+ src/app-auth-prompt.h       |   8 +
+ src/meson.build             |   2 +
+ src/portal-access-manager.c |  53 +++---
+ src/stylesheet/common.css   |  13 ++
+ src/ui/app-auth-prompt.ui   |  34 ++++
+ 8 files changed, 613 insertions(+), 28 deletions(-)
+ create mode 100644 src/access-once.c
+ create mode 100644 src/access-once.h
+
+diff --git a/src/access-once.c b/src/access-once.c
+new file mode 100644
+index 00000000..ff34f2dd
+--- /dev/null
++++ b/src/access-once.c
+@@ -0,0 +1,341 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-access-once"
++
++#include "access-once.h"
++
++/**
++ * SECTION:access-once
++ *
++ * Plinius: the answers of the access dialog (org.freedesktop.impl.portal.Access) with the
++ * buttons "Allow Once", "Always Allow" and "Don't Allow".
++ *
++ * xdg-desktop-portal (1.22) knows only granted (response 0) and denied (1), and after its
++ * dialog it stores the answer for good in the permission store, as the app's entry of
++ * one table and id:
++ *
++ * - camera: table "devices", id "camera", "yes" or "no", written only if the app had no entry
++ * - location: table "location", id "location", the accuracy ("EXACT", "NONE") and the time of
++ *   the last use; asked only without an entry, written after every dialog
++ * - screenshot and wallpaper: tables and ids "screenshot" and "wallpaper", "yes" or "no",
++ *   written only if the app had no entry
++ * - background: asked only while the entry says "ask", nothing written after the dialog
++ *
++ * "Always Allow" answers granted and "Don't Allow" denied; xdg-desktop-portal stores them as
++ * before. "Allow Once" answers granted, and the dialog closed without a button (swiped away)
++ * denied, but for both the entry xdg-desktop-portal writes then is deleted again, so the app
++ * is asked anew next time.
++ *
++ * Which entry that is, only the permission store's Changed signal tells (emitted for every
++ * table on every change, with all apps of that id). Before answering, the app's entries of
++ * the tables above are looked up; the first Changed for one of them, within a short time after
++ * the answer, that has an entry of the app it lacked before, is that write: the app's
++ * permission there is deleted (DeletePermission). Limits: the same app getting a new entry in
++ * one of these tables by other means within that time (another portal of it asking at the same
++ * moment) loses that one instead; a write later than that time (an overloaded phone) stays.
++ * An entry the app had already is never touched, e.g. the location's time of the last use.
++ *
++ * A caller that handles "Allow Once" itself (plinius-appaccess) says so with the option
++ * "plinius-once" (b); its permission store entries are left alone. It may also name the
++ * buttons to show with "plinius-buttons" (as: "once", "always", "never"; default all three).
++ * Every answer carries the button in "plinius-choice" (s: "once", "always", "never" or
++ * "cancel").
++ */
++
++#define PERMISSION_STORE_NAME      "org.freedesktop.impl.portal.PermissionStore"
++#define PERMISSION_STORE_PATH      "/org/freedesktop/impl/portal/PermissionStore"
++#define PERMISSION_STORE_INTERFACE "org.freedesktop.impl.portal.PermissionStore"
++
++/* How long after the answer the entry xdg-desktop-portal writes is waited for */
++#ifndef ACCESS_ONCE_WINDOW_MS
++#define ACCESS_ONCE_WINDOW_MS 10000
++#endif
++#define ACCESS_ONCE_LOOKUP_MS 2000
++
++/* The entries xdg-desktop-portal 1.22 writes after its access dialog: table, id */
++static const char *const watched[][2] = {
++  { "devices", "camera" },
++  { "location", "location" },
++  { "screenshot", "screenshot" },
++  { "wallpaper", "wallpaper" },
++};
++#define N_WATCHED G_N_ELEMENTS (watched)
++
++typedef struct {
++  GDBusConnection       *bus;
++  char                  *app_id;
++  GDBusMethodInvocation *invocation;    /* until answered */
++  GVariant              *reply;
++  guint                  pending;       /* lookups not back yet */
++  gboolean               had[N_WATCHED];
++  guint                  subscription;
++  guint                  timeout_id;
++} AccessOnce;
++
++static const struct {
++  const char        *name;
++  PhoshAccessChoice  choice;
++} button_names[] = {
++  { "once", PHOSH_ACCESS_CHOICE_ONCE },
++  { "always", PHOSH_ACCESS_CHOICE_ALWAYS },
++  { "never", PHOSH_ACCESS_CHOICE_NEVER },
++};
++
++/**
++ * phosh_access_choice_buttons:
++ * @options: the a{sv} of AccessDialog
++ *
++ * Returns: the buttons to show, from "plinius-buttons"; all three without it or without a
++ * known name in it
++ */
++guint
++phosh_access_choice_buttons (GVariant *options)
++{
++  g_autofree const char **names = NULL;
++  guint buttons = 0;
++
++  if (options && g_variant_lookup (options, "plinius-buttons", "^a&s", &names)) {
++    for (const char **n = names; *n; n++) {
++      for (guint i = 0; i < G_N_ELEMENTS (button_names); i++) {
++        if (g_str_equal (*n, button_names[i].name))
++          buttons |= button_names[i].choice;
++      }
++    }
++  }
++  return buttons ? buttons : PHOSH_ACCESS_CHOICE_ALL;
++}
++
++
++const char *
++phosh_access_choice_to_string (PhoshAccessChoice choice)
++{
++  for (guint i = 0; i < G_N_ELEMENTS (button_names); i++) {
++    if (button_names[i].choice == choice)
++      return button_names[i].name;
++  }
++  return "cancel";
++}
++
++/* The portal's response: 0 granted, 1 denied (the user cancelled) */
++guint
++phosh_access_choice_to_response (PhoshAccessChoice choice)
++{
++  return (choice == PHOSH_ACCESS_CHOICE_ONCE || choice == PHOSH_ACCESS_CHOICE_ALWAYS) ? 0 : 1;
++}
++
++
++static void
++access_once_free (AccessOnce *self)
++{
++  if (self->subscription)
++    g_dbus_connection_signal_unsubscribe (self->bus, self->subscription);
++  g_clear_handle_id (&self->timeout_id, g_source_remove);
++  g_clear_pointer (&self->reply, g_variant_unref);
++  g_clear_object (&self->bus);
++  g_free (self->app_id);
++  g_free (self);
++}
++
++
++static gboolean
++on_window_over (gpointer user_data)
++{
++  AccessOnce *self = user_data;
++
++  g_debug ("No new permission of %s to forget", self->app_id);
++  self->timeout_id = 0;
++  access_once_free (self);
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++on_deleted (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autofree char *what = user_data;
++  g_autoptr (GVariant) reply = NULL;
++  g_autoptr (GError) err = NULL;
++
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (reply)
++    g_debug ("Allowed once, forgot %s", what);
++  else
++    g_warning ("Could not forget %s: %s", what, err->message);
++}
++
++
++static int
++watched_index (const char *table, const char *id)
++{
++  for (guint i = 0; i < N_WATCHED; i++) {
++    if (g_str_equal (table, watched[i][0]) && g_str_equal (id, watched[i][1]))
++      return i;
++  }
++  return -1;
++}
++
++
++static gboolean
++has_app (GVariant *permissions, const char *app_id)
++{
++  g_autoptr (GVariant) perms = g_variant_lookup_value (permissions, app_id, G_VARIANT_TYPE_STRING_ARRAY);
++
++  return perms != NULL;
++}
++
++
++static void
++on_changed (GDBusConnection *bus,
++            const char      *sender,
++            const char      *path,
++            const char      *iface,
++            const char      *signal,
++            GVariant        *params,
++            gpointer         user_data)
++{
++  AccessOnce *self = user_data;
++  const char *table, *id;
++  gboolean deleted;
++  g_autoptr (GVariant) permissions = NULL;
++  int i;
++
++  if (!g_variant_is_of_type (params, G_VARIANT_TYPE ("(ssbva{sas})")))
++    return;
++  g_variant_get (params, "(&s&sbv@a{sas})", &table, &id, &deleted, NULL, &permissions);
++  i = watched_index (table, id);
++  if (i < 0 || deleted || !has_app (permissions, self->app_id))
++    return;
++
++  /* Not answered yet: not from the dialog, an entry the app had already */
++  if (self->invocation || self->had[i]) {
++    self->had[i] = TRUE;
++    return;
++  }
++
++  g_dbus_connection_call (self->bus,
++                          PERMISSION_STORE_NAME,
++                          PERMISSION_STORE_PATH,
++                          PERMISSION_STORE_INTERFACE,
++                          "DeletePermission",
++                          g_variant_new ("(sss)", table, id, self->app_id),
++                          NULL,
++                          G_DBUS_CALL_FLAGS_NONE,
++                          -1,
++                          NULL,
++                          on_deleted,
++                          g_strdup_printf ("%s/%s of %s", table, id, self->app_id));
++  access_once_free (self);
++}
++
++
++static void
++answer (AccessOnce *self)
++{
++  g_dbus_method_invocation_return_value (self->invocation, g_steal_pointer (&self->reply));
++  self->invocation = NULL;
++  self->timeout_id = g_timeout_add (ACCESS_ONCE_WINDOW_MS, on_window_over, self);
++}
++
++
++typedef struct {
++  AccessOnce *self;
++  guint       index;
++} Lookup;
++
++
++static void
++on_looked_up (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autofree Lookup *lookup = user_data;
++  AccessOnce *self = lookup->self;
++  g_autoptr (GVariant) reply = NULL;
++
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, NULL);
++  /* No entry for the id (or no permission store): the app had none */
++  if (reply) {
++    g_autoptr (GVariant) permissions = g_variant_get_child_value (reply, 0);
++
++    if (has_app (permissions, self->app_id))
++      self->had[lookup->index] = TRUE;
++  }
++  if (--self->pending == 0)
++    answer (self);
++}
++
++
++/**
++ * phosh_access_once_complete:
++ * @invocation: the AccessDialog call to answer
++ * @app_id: the app it asks for
++ * @options: its a{sv}
++ * @choice: the button pressed
++ * @choices: the dialog's choices (a(ss))
++ *
++ * Answers the AccessDialog call. For "Allow Once" and a cancelled dialog the entry
++ * xdg-desktop-portal then writes is deleted again, unless the caller handles that itself
++ * ("plinius-once").
++ */
++void
++phosh_access_once_complete (GDBusMethodInvocation *invocation,
++                            const char            *app_id,
++                            GVariant              *options,
++                            PhoshAccessChoice      choice,
++                            GVariant              *choices)
++{
++  g_autoptr (GVariantDict) results = g_variant_dict_new (NULL);
++  gboolean caller_handles = FALSE;
++  GVariant *reply;
++  AccessOnce *self;
++
++  g_variant_dict_insert_value (results, "choices", choices);
++  g_variant_dict_insert (results, "plinius-choice", "s", phosh_access_choice_to_string (choice));
++  reply = g_variant_new ("(u@a{sv})", phosh_access_choice_to_response (choice),
++                         g_variant_dict_end (results));
++
++  if (options)
++    g_variant_lookup (options, "plinius-once", "b", &caller_handles);
++  if (caller_handles || (choice != PHOSH_ACCESS_CHOICE_ONCE && choice != PHOSH_ACCESS_CHOICE_CANCEL)) {
++    g_dbus_method_invocation_return_value (invocation, reply);
++    return;
++  }
++
++  self = g_new0 (AccessOnce, 1);
++  self->bus = g_object_ref (g_dbus_method_invocation_get_connection (invocation));
++  self->app_id = g_strdup (app_id ? app_id : "");
++  self->invocation = invocation;
++  self->reply = g_variant_ref_sink (reply);
++  /* Before the lookups: a change while they run is no write of the dialog's answer either */
++  self->subscription = g_dbus_connection_signal_subscribe (self->bus,
++                                                           PERMISSION_STORE_NAME,
++                                                           PERMISSION_STORE_INTERFACE,
++                                                           "Changed",
++                                                           PERMISSION_STORE_PATH,
++                                                           NULL,
++                                                           G_DBUS_SIGNAL_FLAGS_NONE,
++                                                           on_changed,
++                                                           self,
++                                                           NULL);
++  self->pending = N_WATCHED;
++  for (guint i = 0; i < N_WATCHED; i++) {
++    Lookup *lookup = g_new (Lookup, 1);
++
++    lookup->self = self;
++    lookup->index = i;
++    g_dbus_connection_call (self->bus,
++                            PERMISSION_STORE_NAME,
++                            PERMISSION_STORE_PATH,
++                            PERMISSION_STORE_INTERFACE,
++                            "Lookup",
++                            g_variant_new ("(ss)", watched[i][0], watched[i][1]),
++                            G_VARIANT_TYPE ("(a{sas}v)"),
++                            G_DBUS_CALL_FLAGS_NONE,
++                            ACCESS_ONCE_LOOKUP_MS,
++                            NULL,
++                            on_looked_up,
++                            lookup);
++  }
++}
+diff --git a/src/access-once.h b/src/access-once.h
+new file mode 100644
+index 00000000..6d84b2cc
+--- /dev/null
++++ b/src/access-once.h
+@@ -0,0 +1,41 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include <gio/gio.h>
++
++G_BEGIN_DECLS
++
++/**
++ * PhoshAccessChoice:
++ * @PHOSH_ACCESS_CHOICE_CANCEL: the dialog was closed without a button (swiped away)
++ * @PHOSH_ACCESS_CHOICE_ONCE: "Allow Once"
++ * @PHOSH_ACCESS_CHOICE_ALWAYS: "Always Allow"
++ * @PHOSH_ACCESS_CHOICE_NEVER: "Don't Allow"
++ *
++ * The answers of an access dialog with the three buttons; as flags, the buttons it shows.
++ */
++typedef enum {
++  PHOSH_ACCESS_CHOICE_CANCEL = 0,
++  PHOSH_ACCESS_CHOICE_ONCE   = 1 << 0,
++  PHOSH_ACCESS_CHOICE_ALWAYS = 1 << 1,
++  PHOSH_ACCESS_CHOICE_NEVER  = 1 << 2,
++} PhoshAccessChoice;
++
++#define PHOSH_ACCESS_CHOICE_ALL \
++  (PHOSH_ACCESS_CHOICE_ONCE | PHOSH_ACCESS_CHOICE_ALWAYS | PHOSH_ACCESS_CHOICE_NEVER)
++
++guint       phosh_access_choice_buttons (GVariant *options);
++const char *phosh_access_choice_to_string (PhoshAccessChoice choice);
++guint       phosh_access_choice_to_response (PhoshAccessChoice choice);
++void        phosh_access_once_complete (GDBusMethodInvocation *invocation,
++                                        const char            *app_id,
++                                        GVariant              *options,
++                                        PhoshAccessChoice      choice,
++                                        GVariant              *choices);
++
++G_END_DECLS
+diff --git a/src/app-auth-prompt.c b/src/app-auth-prompt.c
+index 07bfc7ad..499c412f 100644
+--- a/src/app-auth-prompt.c
++++ b/src/app-auth-prompt.c
+@@ -10,6 +10,7 @@
+ 
+ #include "phosh-config.h"
+ 
++#include "access-once.h"
+ #include "app-auth-prompt.h"
+ #include "auth-prompt-option.h"
+ #include "shell-priv.h"
+@@ -24,6 +25,10 @@
+  *
+  * The #PhoshAppAuthPrompt is used to authorize applications. It's used
+  * by the #PhoshLocationManager and for org.freedesktop.impl.Access.
++ *
++ * Plinius: with #PhoshAppAuthPrompt:buttons it asks with "Allow Once", "Always Allow" and
++ * "Don't Allow" (all or some of them) one below the other instead of grant and deny;
++ * phosh_app_auth_prompt_get_choice() tells which was pressed.
+  */
+ 
+ enum {
+@@ -43,6 +48,7 @@ enum {
+   PROP_GRANT_LABEL,
+   PROP_OFFER_REMEMBER,
+   PROP_CHOICES,
++  PROP_BUTTONS,
+   PROP_LAST_PROP,
+ };
+ static GParamSpec *props[PROP_LAST_PROP];
+@@ -58,6 +64,7 @@ typedef struct _PhoshAppAuthPrompt {
+   char            *grant_label;
+   gboolean         offer_remember;
+   GVariant        *choices;
++  guint            buttons;
+ 
+   GtkWidget       *icon_app;
+   GtkWidget       *lbl_subtitle;
+@@ -66,7 +73,11 @@ typedef struct _PhoshAppAuthPrompt {
+   GtkWidget       *btn_deny;
+   GtkWidget       *checkbtn_remember;
+   GtkWidget       *list_box_choices;
++  GtkWidget       *btn_once;
++  GtkWidget       *btn_always;
++  GtkWidget       *btn_never;
+ 
++  PhoshAccessChoice choice;
+   gboolean         grant_access;
+   gboolean         remember;
+ } PhoshAppAuthPrompt;
+@@ -107,6 +118,9 @@ phosh_app_auth_prompt_set_property (GObject      *obj,
+   case PROP_CHOICES:
+     self->choices = g_value_dup_variant (value);
+     break;
++  case PROP_BUTTONS:
++    self->buttons = g_value_get_uint (value);
++    break;
+   default:
+     G_OBJECT_WARN_INVALID_PROPERTY_ID (obj, prop_id, pspec);
+     break;
+@@ -144,6 +158,9 @@ phosh_app_auth_prompt_get_property (GObject    *obj,
+   case PROP_CHOICES:
+     g_value_set_variant (value, self->choices);
+     break;
++  case PROP_BUTTONS:
++    g_value_set_uint (value, self->buttons);
++    break;
+   default:
+     G_OBJECT_WARN_INVALID_PROPERTY_ID (obj, prop_id, pspec);
+     break;
+@@ -162,6 +179,38 @@ on_btn_grant_clicked (PhoshAppAuthPrompt *self, GtkButton *btn)
+ }
+ 
+ 
++static void
++answer_with (PhoshAppAuthPrompt *self, PhoshAccessChoice choice)
++{
++  self->choice = choice;
++  self->grant_access = phosh_access_choice_to_response (choice) == 0;
++
++  g_signal_emit (self, signals[CLOSED], 0);
++  phosh_system_modal_dialog_close (PHOSH_SYSTEM_MODAL_DIALOG (self));
++}
++
++
++static void
++on_btn_once_clicked (PhoshAppAuthPrompt *self, GtkButton *btn)
++{
++  answer_with (self, PHOSH_ACCESS_CHOICE_ONCE);
++}
++
++
++static void
++on_btn_always_clicked (PhoshAppAuthPrompt *self, GtkButton *btn)
++{
++  answer_with (self, PHOSH_ACCESS_CHOICE_ALWAYS);
++}
++
++
++static void
++on_btn_never_clicked (PhoshAppAuthPrompt *self, GtkButton *btn)
++{
++  answer_with (self, PHOSH_ACCESS_CHOICE_NEVER);
++}
++
++
+ static void
+ on_dialog_canceled (PhoshAppAuthPrompt *self)
+ {
+@@ -301,7 +350,38 @@ phosh_app_auth_prompt_constructed (GObject *object)
+ 
+   G_OBJECT_CLASS (phosh_app_auth_prompt_parent_class)->constructed (object);
+ 
+-  gtk_widget_grab_default (self->btn_grant);
++  if (self->buttons) {
++    struct {
++      GtkWidget        *button;
++      PhoshAccessChoice choice;
++    } stack[] = {
++      { self->btn_once, PHOSH_ACCESS_CHOICE_ONCE },
++      { self->btn_always, PHOSH_ACCESS_CHOICE_ALWAYS },
++      { self->btn_never, PHOSH_ACCESS_CHOICE_NEVER },
++    };
++    gboolean has_default = FALSE;
++
++    /* One below the other: three labels side by side don't fit a phone */
++    gtk_orientable_set_orientation (GTK_ORIENTABLE (gtk_widget_get_parent (self->btn_grant)),
++                                    GTK_ORIENTATION_VERTICAL);
++    gtk_widget_set_visible (self->btn_grant, FALSE);
++    gtk_widget_set_visible (self->btn_deny, FALSE);
++    for (guint i = 0; i < G_N_ELEMENTS (stack); i++) {
++      gboolean shown = !!(self->buttons & stack[i].choice);
++
++      gtk_widget_set_visible (stack[i].button, shown);
++      if (shown && !has_default) {
++        gtk_widget_grab_default (stack[i].button);
++        has_default = TRUE;
++      }
++    }
++    gtk_widget_set_visible (self->lbl_subtitle, self->subtitle && *self->subtitle);
++    gtk_widget_set_visible (self->lbl_body, self->body && *self->body);
++    gtk_widget_set_visible (self->list_box_choices,
++                            self->choices && g_variant_n_children (self->choices) > 0);
++  } else {
++    gtk_widget_grab_default (self->btn_grant);
++  }
+ 
+   if (self->choices != NULL) {
+     GVariantIter iter_choices;
+@@ -399,6 +479,20 @@ phosh_app_auth_prompt_class_init (PhoshAppAuthPromptClass *klass)
+       NULL,
+       G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
+ 
++  /**
++   * PhoshAppAuthPrompt:buttons:
++   *
++   * Plinius: the #PhoshAccessChoice buttons to ask with instead of grant and deny, 0 for
++   * grant and deny
++   */
++  props[PROP_BUTTONS] =
++    g_param_spec_uint (
++      "buttons",
++      "",
++      "",
++      0, PHOSH_ACCESS_CHOICE_ALL, 0,
++      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
++
+   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
+ 
+   signals[CLOSED] = g_signal_new ("closed",
+@@ -414,7 +508,13 @@ phosh_app_auth_prompt_class_init (PhoshAppAuthPromptClass *klass)
+   gtk_widget_class_bind_template_child (widget_class, PhoshAppAuthPrompt, btn_deny);
+   gtk_widget_class_bind_template_child (widget_class, PhoshAppAuthPrompt, checkbtn_remember);
+   gtk_widget_class_bind_template_child (widget_class, PhoshAppAuthPrompt, list_box_choices);
++  gtk_widget_class_bind_template_child (widget_class, PhoshAppAuthPrompt, btn_once);
++  gtk_widget_class_bind_template_child (widget_class, PhoshAppAuthPrompt, btn_always);
++  gtk_widget_class_bind_template_child (widget_class, PhoshAppAuthPrompt, btn_never);
+   gtk_widget_class_bind_template_callback (widget_class, on_btn_grant_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_btn_once_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_btn_always_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_btn_never_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_dialog_canceled);
+ }
+ 
+@@ -456,6 +556,53 @@ phosh_app_auth_prompt_new (GIcon      *icon,
+                        NULL);
+ }
+ 
++/**
++ * phosh_app_auth_prompt_new_with_buttons:
++ * @icon: the icon to show
++ * @title: the title
++ * @subtitle: the subtitle, hidden when empty
++ * @body: the body, hidden when empty
++ * @buttons: the #PhoshAccessChoice buttons to show
++ * @choices: the choices to offer (a(ssa(ss)s)) or %NULL
++ *
++ * Plinius: a prompt that asks with "Allow Once", "Always Allow" and "Don't Allow"
++ *
++ * Returns: the prompt
++ */
++GtkWidget *
++phosh_app_auth_prompt_new_with_buttons (GIcon      *icon,
++                                        const char *title,
++                                        const char *subtitle,
++                                        const char *body,
++                                        guint       buttons,
++                                        GVariant   *choices)
++{
++  return g_object_new (PHOSH_TYPE_APP_AUTH_PROMPT,
++                       "monitor", phosh_shell_get_active_window_monitor (phosh_shell_get_default ()),
++                       "icon", icon,
++                       "title", title,
++                       "subtitle", subtitle,
++                       "body", body,
++                       "buttons", buttons ? buttons : PHOSH_ACCESS_CHOICE_ALL,
++                       "choices", choices,
++                       NULL);
++}
++
++/**
++ * phosh_app_auth_prompt_get_choice:
++ * @self: the prompt
++ *
++ * Returns: the button pressed, %PHOSH_ACCESS_CHOICE_CANCEL when closed without one (or
++ * before it was answered)
++ */
++PhoshAccessChoice
++phosh_app_auth_prompt_get_choice (GtkWidget *self)
++{
++  g_return_val_if_fail (PHOSH_IS_APP_AUTH_PROMPT (self), PHOSH_ACCESS_CHOICE_CANCEL);
++
++  return PHOSH_APP_AUTH_PROMPT (self)->choice;
++}
++
+ gboolean
+ phosh_app_auth_prompt_get_grant_access (GtkWidget *self)
+ {
+diff --git a/src/app-auth-prompt.h b/src/app-auth-prompt.h
+index eccf3709..3c1b9269 100644
+--- a/src/app-auth-prompt.h
++++ b/src/app-auth-prompt.h
+@@ -8,6 +8,7 @@
+ 
+ #include <gtk/gtk.h>
+ #include <glib-object.h>
++#include "access-once.h"
+ #include "system-modal-dialog.h"
+ 
+ G_BEGIN_DECLS
+@@ -26,6 +27,13 @@ GtkWidget *phosh_app_auth_prompt_new (GIcon *icon,
+                                       const char *deny_label,
+                                       gboolean offer_remember,
+                                       GVariant *choices);
++GtkWidget *phosh_app_auth_prompt_new_with_buttons (GIcon      *icon,
++                                                   const char *title,
++                                                   const char *subtitle,
++                                                   const char *body,
++                                                   guint       buttons,
++                                                   GVariant   *choices);
++PhoshAccessChoice phosh_app_auth_prompt_get_choice (GtkWidget *self);
+ gboolean phosh_app_auth_prompt_get_grant_access (GtkWidget *self);
+ GVariant* phosh_app_auth_prompt_get_selected_choices (GtkWidget *self);
+ gboolean phosh_app_auth_prompt_get_remember (GtkWidget *self);
+diff --git a/src/meson.build b/src/meson.build
+index 6a317980..27d74365 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -115,6 +115,7 @@ phosh_generated_sources = [phosh_glib_generated_sources, wl_proto_sources]
+ phosh_generated_headers = [phosh_glib_generated_headers, wl_proto_headers]
+ 
+ phosh_tool_headers = files(
++  'access-once.h',
+   'activity.h',
+   'airplane-info.h',
+   'ambient.h',
+@@ -199,6 +200,7 @@ phosh_tool_headers = files(
+ 
+ # Available in tools and unit tests:
+ phosh_tool_sources = files(
++  'access-once.c',
+   'activity.c',
+   'airplane-info.c',
+   'ambient.c',
+diff --git a/src/portal-access-manager.c b/src/portal-access-manager.c
+index 9b935cc8..36b2194e 100644
+--- a/src/portal-access-manager.c
++++ b/src/portal-access-manager.c
+@@ -8,6 +8,7 @@
+ 
+ #define G_LOG_DOMAIN "phosh-portal-access-manager"
+ 
++#include "access-once.h"
+ #include "app-auth-prompt.h"
+ #include "dbus/portal-dbus.h"
+ #include "portal-access-manager.h"
+@@ -17,15 +18,15 @@
+ 
+ #define PORTAL_DBUS_NAME "mobi.phosh.Shell.Portal"
+ #define PORTAL_OBJECT_PATH "/org/freedesktop/portal/desktop"
+-#define PORTAL_ACCESS_DIALOG_GRANTED      0
+-#define PORTAL_ACCESS_DIALOG_DENIED       1
+-#define PORTAL_ACCESS_DIALOG_ALREADY_OPEN 2
+ 
+ 
+ /**
+  * PhoshPortalAccessManager:
+  *
+  * Implements org.freedesktop.impl.portal
++ *
++ * Plinius: every access dialog asks with "Allow Once", "Always Allow" and "Don't Allow"; what
++ * becomes of "Allow Once" in xdg-desktop-portal's permission store is in access-once.c.
+  */
+ 
+ typedef struct _PhoshPortalAccessManager {
+@@ -35,6 +36,8 @@ typedef struct _PhoshPortalAccessManager {
+   PhoshAppAuthPrompt               *app_auth_prompt;
+   GDBusMethodInvocation            *invocation;
+   GVariant                         *choices;
++  char                             *app_id;
++  GVariant                         *options;
+ } PhoshPortalAccessManager;
+ 
+ static void
+@@ -50,23 +53,16 @@ G_DEFINE_TYPE_WITH_CODE (PhoshPortalAccessManager,
+ static void
+ on_access_dialog_closed (PhoshPortalAccessManager *self)
+ {
+-  g_autoptr (GVariantDict) results = g_variant_dict_new (NULL);
+   GVariant *choices = NULL;
+-  gboolean granted = phosh_app_auth_prompt_get_grant_access (GTK_WIDGET (self->app_auth_prompt));
+-  guint response = PORTAL_ACCESS_DIALOG_DENIED;
++  PhoshAccessChoice choice = phosh_app_auth_prompt_get_choice (GTK_WIDGET (self->app_auth_prompt));
+ 
+   g_clear_object (&self->request);
+ 
+-  if (granted)
+-    response = PORTAL_ACCESS_DIALOG_GRANTED;
+-
+   choices = phosh_app_auth_prompt_get_selected_choices (GTK_WIDGET (self->app_auth_prompt));
+-  g_variant_dict_insert_value (results, "choices", choices);
+-  phosh_dbus_impl_portal_access_complete_access_dialog (PHOSH_DBUS_IMPL_PORTAL_ACCESS (self),
+-                                                        self->invocation,
+-                                                        response,
+-                                                        g_variant_dict_end (results));
++  phosh_access_once_complete (self->invocation, self->app_id, self->options, choice, choices);
+   self->invocation = NULL;
++  g_clear_pointer (&self->app_id, g_free);
++  g_clear_pointer (&self->options, g_variant_unref);
+ 
+   if (self->app_auth_prompt != NULL)
+     gtk_widget_set_visible (GTK_WIDGET (self->app_auth_prompt), FALSE);
+@@ -86,8 +82,6 @@ handle_access_dialog (PhoshDBusImplPortalAccess *object,
+                       GVariant                  *arg_options)
+ {
+   const char *sender;
+-  const char *grant_label = NULL;
+-  const char *deny_label = NULL;
+   g_autoptr (GIcon) icon = NULL;
+   GVariant *choices = NULL;
+   GVariant *icon_variant = g_variant_lookup_value (arg_options, "icon", G_VARIANT_TYPE_STRING);
+@@ -102,25 +96,28 @@ handle_access_dialog (PhoshDBusImplPortalAccess *object,
+   }
+   if (icon_variant != NULL) {
+     const char *icon_name_str = g_variant_get_string (icon_variant, NULL);
+-    icon = g_themed_icon_new (icon_name_str);
++
++    /* Plinius: also an app's icon as its desktop file names it, a name or a file */
++    icon = g_icon_new_for_string (icon_name_str, NULL);
++    if (icon == NULL)
++      icon = g_themed_icon_new (icon_name_str);
+   }
+-  g_variant_lookup (arg_options, "grant_label", "&s", grant_label);
+-  g_variant_lookup (arg_options, "deny_label",  "&s", deny_label);
+   choices = g_variant_lookup_value (arg_options, "choices",
+                                     G_VARIANT_TYPE (PHOSH_APP_AUTH_PROMPT_CHOICES_FORMAT));
+ 
+   self->invocation = invocation;
+   self->choices = choices;
++  self->app_id = g_strdup (arg_app_id);
++  self->options = g_variant_ref (arg_options);
+   self->request = g_steal_pointer (&request);
++  /* Plinius: the three buttons (or those the caller names) instead of grant and deny */
+   self->app_auth_prompt = PHOSH_APP_AUTH_PROMPT (
+-    phosh_app_auth_prompt_new (icon,
+-                               arg_title,
+-                               arg_subtitle,
+-                               arg_body,
+-                               grant_label,
+-                               deny_label,
+-                               FALSE,
+-                               choices));
++    phosh_app_auth_prompt_new_with_buttons (icon,
++                                            arg_title,
++                                            arg_subtitle,
++                                            arg_body,
++                                            phosh_access_choice_buttons (arg_options),
++                                            choices));
+ 
+   g_signal_connect_object (self->app_auth_prompt,
+                            "closed",
+@@ -202,6 +199,8 @@ phosh_portal_access_manager_dispose (GObject *object)
+ 
+   g_clear_pointer (&self->app_auth_prompt, phosh_cp_widget_destroy);
+   g_clear_object (&self->request);
++  g_clear_pointer (&self->app_id, g_free);
++  g_clear_pointer (&self->options, g_variant_unref);
+ 
+   if (g_dbus_interface_skeleton_get_object_path (G_DBUS_INTERFACE_SKELETON (self)))
+     g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (self));
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 10bbcac0..4fe56354 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -858,6 +858,19 @@ phosh-notch-search .card list row.provider-header label {
+   border-bottom-right-radius: 11px;
+ }
+ 
++/* Plinius: the access dialog's buttons one below the other, the last one rounded */
++.phosh-app-auth-prompt .phosh-system-modal-dialog-buttons.vertical button,
++.phosh-app-auth-prompt .phosh-system-modal-dialog-buttons.vertical button:first-child {
++  border-right-width: 0;
++  border-bottom-left-radius: 0;
++  border-bottom-right-radius: 0;
++}
++
++.phosh-app-auth-prompt .phosh-system-modal-dialog-buttons.vertical button:last-child {
++  border-bottom-left-radius: 11px;
++  border-bottom-right-radius: 11px;
++}
++
+ .phosh-system-modal-dialog-content {
+   padding-left:  18px;
+   padding-right: 18px;
+diff --git a/src/ui/app-auth-prompt.ui b/src/ui/app-auth-prompt.ui
+index ad2c9135..87818527 100644
+--- a/src/ui/app-auth-prompt.ui
++++ b/src/ui/app-auth-prompt.ui
+@@ -73,6 +73,40 @@
+         </style>
+       </object>
+     </child>
++    <!-- Plinius: the buttons of PhoshAppAuthPrompt:buttons, one below the other -->
++    <child type="phosh-dialog-button">
++      <object class="GtkButton" id="btn_once">
++        <property name="label" translatable="yes">Allow Once</property>
++        <property name="visible">0</property>
++        <property name="can-focus">1</property>
++        <property name="can-default">1</property>
++        <property name="valign">center</property>
++        <signal name="clicked" handler="on_btn_once_clicked" object="PhoshAppAuthPrompt" swapped="yes"/>
++        <style>
++          <class name="suggested-action"/>
++        </style>
++      </object>
++    </child>
++    <child type="phosh-dialog-button">
++      <object class="GtkButton" id="btn_always">
++        <property name="label" translatable="yes">Always Allow</property>
++        <property name="visible">0</property>
++        <property name="can-focus">1</property>
++        <property name="can-default">1</property>
++        <property name="valign">center</property>
++        <signal name="clicked" handler="on_btn_always_clicked" object="PhoshAppAuthPrompt" swapped="yes"/>
++      </object>
++    </child>
++    <child type="phosh-dialog-button">
++      <object class="GtkButton" id="btn_never">
++        <property name="label" translatable="yes">Don't Allow</property>
++        <property name="visible">0</property>
++        <property name="can-focus">1</property>
++        <property name="can-default">1</property>
++        <property name="valign">center</property>
++        <signal name="clicked" handler="on_btn_never_clicked" object="PhoshAppAuthPrompt" swapped="yes"/>
++      </object>
++    </child>
+     <style>
+       <class name="phosh-app-auth-prompt"/>
+     </style>
+-- 
+2.56.0
+

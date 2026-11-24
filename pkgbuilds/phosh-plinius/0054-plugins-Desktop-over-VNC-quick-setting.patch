@@ -1,0 +1,388 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 11:43:48 +0100
+Subject: [PATCH] plugins: Desktop over VNC quick setting
+
+Plinius: a tile switches the desktop over VNC on and off, through the
+user's socket unit of plinius-desktop. It goes on only while the phone
+is unlocked; switching off always works and also ends a running session.
+The tile tells when a viewer is connected, a long press opens the page in
+GNOME Settings. Its strings come from plinius-desktop's translations,
+and without that package it stays hidden.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../desktop-vnc-quick-setting.c                    | 151 +++++++++++++++++++++
+ .../desktop-vnc-quick-setting.desktop.in.in        |   8 ++
+ .../desktop-vnc-quick-setting.h                    |  17 +++
+ .../icons/desktop-vnc-quick-setting-symbolic.svg   |   5 +
+ .../icons/desktop-vnc-symbolic.svg                 |   5 +
+ plugins/desktop-vnc-quick-setting/meson.build      |  48 +++++++
+ .../phosh-plugin-desktop-vnc-quick-setting.c       |  39 ++++++
+ ...plugin-desktop-vnc-quick-setting.gresources.xml |   7 +
+ plugins/desktop-vnc-quick-setting/qs.ui            |  16 +++
+ plugins/meson.build                                |   1 +
+ 10 files changed, 297 insertions(+)
+
+diff --git a/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.c b/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.c
+new file mode 100644
+index 00000000..62e144df
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.c
+@@ -0,0 +1,151 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "desktop-vnc-quick-setting.h"
++#include "plugin-shell.h"
++#include "quick-setting.h"
++#include "status-icon.h"
++
++#include <glib/gi18n.h>
++
++/* The strings live in plinius-desktop's translations: without that package the tile is hidden */
++#define DOMAIN "plinius-desktop"
++#define SOCKET_UNIT "plinius-desktop.socket"
++#define SET_TOOL "/usr/lib/plinius-desktop/plinius-desktop-set"
++
++/**
++ * PhoshDesktopVncQuickSetting:
++ *
++ * The desktop over VNC on and off: enables the user's socket unit of plinius-desktop, so a
++ * VNC viewer on another computer can connect and log in. The tile tells when one is connected. It
++ * only goes on while the phone is unlocked, switching off always works and also ends a running
++ * session. A long press opens the page in GNOME Settings.
++ */
++struct _PhoshDesktopVncQuickSetting {
++  PhoshQuickSetting  parent;
++
++  PhoshStatusIcon   *info;
++
++  GFile             *enabled_file;
++  GFile             *client_file;
++  GFileMonitor      *enabled_monitor;
++  GFileMonitor      *client_monitor;
++};
++G_DEFINE_TYPE (PhoshDesktopVncQuickSetting, phosh_desktop_vnc_quick_setting, PHOSH_TYPE_QUICK_SETTING);
++
++
++static void
++update (PhoshDesktopVncQuickSetting *self)
++{
++  gboolean enabled = g_file_query_exists (self->enabled_file, NULL);
++  gboolean connected = g_file_query_exists (self->client_file, NULL);
++
++  phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), enabled);
++  phosh_status_icon_set_info (self->info,
++                              g_dgettext (DOMAIN, connected ? "VNC Desktop connected" : "VNC Desktop"));
++}
++
++
++static void
++on_systemctl_done (GObject *source, GAsyncResult *result, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++
++  if (!g_subprocess_wait_check_finish (G_SUBPROCESS (source), result, &err) &&
++      !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
++    g_warning ("systemctl failed: %s", err->message);
++  }
++}
++
++
++static void
++on_clicked (PhoshDesktopVncQuickSetting *self)
++{
++  g_autoptr (GSubprocess) process = NULL;
++  g_autoptr (GError) err = NULL;
++  gboolean enable = !g_file_query_exists (self->enabled_file, NULL);
++
++  /* Nobody opens the phone to the network from the lock screen */
++  if (enable && phosh_shell_get_locked (phosh_shell_get_default ()))
++    return;
++
++  process = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
++                              &err, "systemctl", "--user", enable ? "enable" : "disable", "--now",
++                              SOCKET_UNIT, NULL);
++  if (!process) {
++    g_warning ("Cannot run systemctl: %s", err->message);
++    return;
++  }
++  /* The monitors tell when it's done */
++  g_subprocess_wait_check_async (process, NULL, on_systemctl_done, NULL);
++}
++
++
++static GFileMonitor *
++watch (PhoshDesktopVncQuickSetting *self, GFile *file)
++{
++  g_autoptr (GError) err = NULL;
++  GFileMonitor *monitor = g_file_monitor_file (file, G_FILE_MONITOR_NONE, NULL, &err);
++
++  if (!monitor) {
++    g_warning ("Cannot watch %s: %s", g_file_peek_path (file), err->message);
++    return NULL;
++  }
++  g_signal_connect_object (monitor, "changed", G_CALLBACK (update), self, G_CONNECT_SWAPPED);
++  return monitor;
++}
++
++
++static void
++phosh_desktop_vnc_quick_setting_dispose (GObject *object)
++{
++  PhoshDesktopVncQuickSetting *self = PHOSH_DESKTOP_VNC_QUICK_SETTING (object);
++
++  g_clear_object (&self->enabled_monitor);
++  g_clear_object (&self->client_monitor);
++  g_clear_object (&self->enabled_file);
++  g_clear_object (&self->client_file);
++
++  G_OBJECT_CLASS (phosh_desktop_vnc_quick_setting_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_desktop_vnc_quick_setting_class_init (PhoshDesktopVncQuickSettingClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_desktop_vnc_quick_setting_dispose;
++
++  gtk_widget_class_set_template_from_resource (widget_class,
++                                               "/mobi/phosh/plugins/desktop-vnc-quick-setting/qs.ui");
++  gtk_widget_class_bind_template_child (widget_class, PhoshDesktopVncQuickSetting, info);
++  gtk_widget_class_bind_template_callback (widget_class, on_clicked);
++}
++
++
++static void
++phosh_desktop_vnc_quick_setting_init (PhoshDesktopVncQuickSetting *self)
++{
++  g_autofree char *enabled = g_build_filename (g_get_user_config_dir (), "systemd", "user",
++                                               "graphical-session.target.wants", SOCKET_UNIT, NULL);
++  g_autofree char *client = g_build_filename (g_get_user_runtime_dir (), "plinius-desktop", "client", NULL);
++
++  gtk_widget_init_template (GTK_WIDGET (self));
++  gtk_icon_theme_add_resource_path (gtk_icon_theme_get_default (),
++                                    "/mobi/phosh/plugins/desktop-vnc-quick-setting/icons");
++
++  /* No tile without the package */
++  gtk_widget_set_no_show_all (GTK_WIDGET (self), TRUE);
++  gtk_widget_set_visible (GTK_WIDGET (self), g_file_test (SET_TOOL, G_FILE_TEST_IS_EXECUTABLE));
++
++  self->enabled_file = g_file_new_for_path (enabled);
++  self->client_file = g_file_new_for_path (client);
++  self->enabled_monitor = watch (self, self->enabled_file);
++  self->client_monitor = watch (self, self->client_file);
++  update (self);
++}
+diff --git a/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.desktop.in.in b/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.desktop.in.in
+new file mode 100644
+index 00000000..f4a930ee
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.desktop.in.in
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=Desktop over VNC Quick Setting
++Types=quick-setting;
++Comment=A desktop on another computer's screen (plinius-desktop)
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=desktop-vnc-quick-setting
+diff --git a/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.h b/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.h
+new file mode 100644
+index 00000000..5e3f0d44
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/desktop-vnc-quick-setting.h
+@@ -0,0 +1,17 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "quick-setting.h"
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_DESKTOP_VNC_QUICK_SETTING phosh_desktop_vnc_quick_setting_get_type ()
++G_DECLARE_FINAL_TYPE (PhoshDesktopVncQuickSetting, phosh_desktop_vnc_quick_setting,
++                      PHOSH, DESKTOP_VNC_QUICK_SETTING, PhoshQuickSetting)
++
++G_END_DECLS
+diff --git a/plugins/desktop-vnc-quick-setting/icons/desktop-vnc-quick-setting-symbolic.svg b/plugins/desktop-vnc-quick-setting/icons/desktop-vnc-quick-setting-symbolic.svg
+new file mode 100644
+index 00000000..9c255a23
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/icons/desktop-vnc-quick-setting-symbolic.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <g fill="#222">
++    <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v7A1.5 1.5 0 0 0 2.5 12H7v1H5v1h6v-1H9v-1h4.5a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 2zM3 4h10v6H3z"/>
++  </g>
++</svg>
+diff --git a/plugins/desktop-vnc-quick-setting/icons/desktop-vnc-symbolic.svg b/plugins/desktop-vnc-quick-setting/icons/desktop-vnc-symbolic.svg
+new file mode 100644
+index 00000000..9c255a23
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/icons/desktop-vnc-symbolic.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <g fill="#222">
++    <path d="M2.5 2A1.5 1.5 0 0 0 1 3.5v7A1.5 1.5 0 0 0 2.5 12H7v1H5v1h6v-1H9v-1h4.5a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 2zM3 4h10v6H3z"/>
++  </g>
++</svg>
+diff --git a/plugins/desktop-vnc-quick-setting/meson.build b/plugins/desktop-vnc-quick-setting/meson.build
+new file mode 100644
+index 00000000..3e54e6a3
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/meson.build
+@@ -0,0 +1,48 @@
++# Plinius: the desktop over VNC on and off, through plinius-desktop's socket unit
++name = 'desktop-vnc-quick-setting'
++
++desktop_vnc_quick_setting_resources = gnome.compile_resources(
++  'phosh-plugin-desktop-vnc-quick-setting-resources',
++  'phosh-plugin-desktop-vnc-quick-setting.gresources.xml',
++  c_name: 'phosh_plugin_desktop_vnc_quick_setting',
++)
++
++desktop_vnc_quick_setting_plugin_sources = files(
++  'desktop-vnc-quick-setting.c',
++  'phosh-plugin-desktop-vnc-quick-setting.c',
++)
++
++phosh_desktop_vnc_quick_setting_plugin = shared_module(
++  'phosh-plugin-desktop-vnc-quick-setting',
++  desktop_vnc_quick_setting_plugin_sources,
++  desktop_vnc_quick_setting_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: plugin_dep,
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: meson.project_source_root() / 'po',
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/desktop-vnc-quick-setting-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+diff --git a/plugins/desktop-vnc-quick-setting/phosh-plugin-desktop-vnc-quick-setting.c b/plugins/desktop-vnc-quick-setting/phosh-plugin-desktop-vnc-quick-setting.c
+new file mode 100644
+index 00000000..4aa725d8
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/phosh-plugin-desktop-vnc-quick-setting.c
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Based on the location quick setting plugin
++ */
++
++#include "desktop-vnc-quick-setting.h"
++#include "phosh-plugin.h"
++
++#include <gio/gio.h>
++#include <gtk/gtk.h>
++
++char **g_io_phosh_plugin_desktop_vnc_quick_setting_query (void);
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET,
++                                  PHOSH_TYPE_DESKTOP_VNC_QUICK_SETTING,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++char **
++g_io_phosh_plugin_desktop_vnc_quick_setting_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+diff --git a/plugins/desktop-vnc-quick-setting/phosh-plugin-desktop-vnc-quick-setting.gresources.xml b/plugins/desktop-vnc-quick-setting/phosh-plugin-desktop-vnc-quick-setting.gresources.xml
+new file mode 100644
+index 00000000..1713ca67
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/phosh-plugin-desktop-vnc-quick-setting.gresources.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/desktop-vnc-quick-setting/">
++    <file preprocess="xml-stripblanks">qs.ui</file>
++    <file compressed="true">icons/desktop-vnc-symbolic.svg</file>
++  </gresource>
++</gresources>
+diff --git a/plugins/desktop-vnc-quick-setting/qs.ui b/plugins/desktop-vnc-quick-setting/qs.ui
+new file mode 100644
+index 00000000..d5ff7c7e
+--- /dev/null
++++ b/plugins/desktop-vnc-quick-setting/qs.ui
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <requires lib="gtk+" version="3.24"/>
++  <template class="PhoshDesktopVncQuickSetting" parent="PhoshQuickSetting">
++    <property name="status-icon">info</property>
++    <signal name="clicked" handler="on_clicked" object="PhoshDesktopVncQuickSetting" swapped="yes"/>
++    <!-- The page of GNOME Settings -->
++    <property name="long-press-action-name">panel.launch-panel</property>
++    <property name="long-press-action-target">(&quot;desktop-vnc&quot;, [&lt;&quot;&quot;&gt;])</property>
++  </template>
++  <object class="PhoshStatusIcon" id="info">
++    <property name="visible">1</property>
++    <property name="pixel-size">16</property>
++    <property name="icon-name">desktop-vnc-symbolic</property>
++  </object>
++</interface>
+diff --git a/plugins/meson.build b/plugins/meson.build
+index 6b294af6..184e944d 100644
+--- a/plugins/meson.build
++++ b/plugins/meson.build
+@@ -71,6 +71,7 @@ quick_setting_plugins = [
+   'caffeine-quick-setting',
+   'cast-quick-setting',
+   'dark-mode-quick-setting',
++  'desktop-vnc-quick-setting',
+   'location-quick-setting',
+   'mobile-data-quick-setting',
+   'nfc-quick-setting',

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <!-- Labels of one's own for the SIM cards (Settings > Mobile Network) -->
+  <schema id="org.plinius.sim" path="/org/plinius/sim/">
+    <key name="labels" type="a{ss}">
+      <default>{}</default>
+      <summary>Labels of the SIM cards</summary>
+      <description>The ICCID of a SIM card (without the filler F) mapped to a label, shown instead of the name of the network or provider. An empty label means none on purpose, so that the nickname of an eSIM profile is not taken over again. For an eSIM profile Settings also keeps the label as the profile's nickname on the eUICC.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=RetroArch
+Comment=Play classic console games with touch controls or a controller
+Comment[de]=Klassische Konsolenspiele mit Touch-Steuerung oder Controller spielen
+Exec=plinius-games
+Icon=com.libretro.RetroArch
+Terminal=false
+Type=Application
+Categories=Game;Emulator;
+Keywords=Emulator;RetroArch;Retro;Console;NES;SNES;GBA;PlayStation;N64;DS;Dreamcast;
+StartupNotify=false
+StartupWMClass=retroarch
+SingleMainWindow=true
+X-Purism-FormFactor=Workstation;Mobile;

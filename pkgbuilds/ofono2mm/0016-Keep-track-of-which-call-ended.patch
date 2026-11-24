@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 07:00:00 +0100
+Subject: [PATCH] Keep track of which call ended
+
+remove_call took the ModemManager call created last for the one that ended. A
+call dialed right after another one, as an emergency call that is tried again,
+lost its object when the old one went away.
+
+DeleteCall hung up all calls even for a call that was over. With an emergency
+call dialed while the old call was still going away, that ended the emergency
+call. It only hangs up a call that's not over now.
+
+Waiting for the data context after a call stopped everything for 2 s, an
+emergency call dialed after hanging up as well.
+---
+--- a/ofono2mm/mm_modem_voice.py
++++ b/ofono2mm/mm_modem_voice.py
+@@ -7,7 +7,6 @@
+ from ofono2mm.logger import Logger
+ 
+ import asyncio
+-import time
+ 
+ call_i = 1
+ 
+@@ -27,6 +26,8 @@
+             'Calls': Variant('ao', []),
+             'EmergencyOnly': Variant('b', False),
+         }
++        self.call_paths = {} # oFono path -> ModemManager path
++        self.call_objects = {} # ModemManager path -> MMCallInterface
+ 
+     def set_props(self):
+         old_props = self.props
+@@ -47,6 +48,10 @@
+         if 'org.ofono.VoiceCallManager' in self.ofono_interfaces:
+             self.ofono_interfaces['org.ofono.VoiceCallManager'].on_call_removed(self.remove_call)
+ 
++    def remember_call(self, ofono_path, mm_path, call):
++        self.call_paths[ofono_path] = mm_path
++        self.call_objects[mm_path] = call
++
+     async def add_call(self, path, props):
+         global call_i
+         if props['State'].value == 'incoming':
+@@ -67,19 +72,22 @@
+ 
+             mm_call_interface.voicecall = path
+             await mm_call_interface.init_call()
++            self.remember_call(path, f'/org/freedesktop/ModemManager1/Call/{call_i}', mm_call_interface)
+             self.bus.export(f'/org/freedesktop/ModemManager1/Call/{call_i}', mm_call_interface)
+             self.props['Calls'].value.append(f'/org/freedesktop/ModemManager1/Call/{call_i}')
+             self.emit_properties_changed({'Calls': self.props['Calls'].value})
+             self.CallAdded(f'/org/freedesktop/ModemManager1/Call/{call_i}')
+ 
+     async def remove_call(self, path):
+-        global call_i
+-
++        # The call that ended, not the one created last: an emergency call being dialed again
++        # right after the last attempt would lose its object.
+         try:
+-            self.props['Calls'].value.remove(f'/org/freedesktop/ModemManager1/Call/{call_i}')
+-            self.bus.unexport(f'/org/freedesktop/ModemManager1/Call/{call_i}')
++            mm_path = self.call_paths.pop(path)
++            self.call_objects.pop(mm_path, None)
++            self.props['Calls'].value.remove(mm_path)
++            self.bus.unexport(mm_path)
+             self.emit_properties_changed({'Calls': self.props['Calls'].value})
+-            self.CallDeleted(f'/org/freedesktop/ModemManager1/Call/{call_i}')
++            self.CallDeleted(mm_path)
+         except Exception as e:
+             pass
+ 
+@@ -108,7 +116,9 @@
+                     # print(f'activate context on apn {chosen_apn}')
+                     chosen_ctx_interface = self.ofono_client["ofono_context"][chosen_ctx_path]['org.ofono.ConnectionContext']
+                     # on some carriers context does not get reactivated after a call automatically, lets do it ourselves just in case
+-                    time.sleep(2) # wait a bit for the call to end
++                    # wait a bit for the call to end, without stopping everything else: an
++                    # emergency call may be waiting to be dialed
++                    await asyncio.sleep(2)
+                     try:
+                         await chosen_ctx_interface.call_set_property("Active", Variant('b', True))
+                     except Exception as e:
+@@ -121,7 +131,11 @@
+     @method()
+     async def DeleteCall(self, path: 'o'):
+         if path in self.props['Calls'].value:
+-            await self.ofono_interfaces['org.ofono.VoiceCallManager'].call_hangup_all()
++            # Hanging up ends all calls: not for a call that is over, it may be the emergency
++            # call being up already that goes with it.
++            call = self.call_objects.get(path)
++            if call is None or call.props['State'].value != 7: # MM_CALL_STATE_TERMINATED
++                await self.ofono_interfaces['org.ofono.VoiceCallManager'].call_hangup_all()
+             self.props['Calls'].value.remove(path)
+             self.bus.unexport(path)
+             self.emit_properties_changed({'Calls': self.props['Calls'].value})
+@@ -175,6 +189,7 @@
+ 
+         mm_call_interface.voicecall = last_call[0]
+         await mm_call_interface.init_call()
++        self.remember_call(last_call[0], f'/org/freedesktop/ModemManager1/Call/{call_i}', mm_call_interface)
+         self.bus.export(f'/org/freedesktop/ModemManager1/Call/{call_i}', mm_call_interface)
+         self.props['Calls'].value.append(f'/org/freedesktop/ModemManager1/Call/{call_i}')
+         self.emit_properties_changed({'Calls': self.props['Calls'].value})

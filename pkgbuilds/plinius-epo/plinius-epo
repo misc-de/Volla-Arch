@@ -1,0 +1,241 @@
+#!/bin/bash
+# plinius-epo: orbit predictions (EPO) for MediaTek's GNSS daemon mnld in the Android container,
+# so the GPS finds its first position in seconds instead of about a minute.
+#
+# mnld can not fetch them itself: the container has no DNS, and its download URL is only a
+# placeholder. Without the files, a start after a few hours needs 45-60 s for a fix with 5-7
+# satellites; with them 2-4 s and 20+ satellites (measured on the Plinius, 2026-11-14). The
+# files hold no position, the request carries nothing of the phone (no ID, no login).
+#
+#   apply   (root) write /data/vendor/gps/mnl.prop as /etc/plinius-epo.conf says; mnld reads
+#           it only when it starts, so it is restarted when the file changed
+#   fetch   (user aid_gps) download the files when they are older than 6 hours; with the
+#           setting off, remove them instead
+#   clear   (root) remove the files and switch EPO off in mnl.prop (package removal)
+#
+# Root never works in mnld's directory itself. It belongs to the gps user, and whoever runs as
+# gps (mnld, which parses the downloaded files) could swap any name in it for a link to a file
+# of root's or for a FIFO while root writes there. "apply" and "clear" therefore hand the file
+# work to a copy of this script running as gps (setpriv) and only restart mnld as root.
+#
+# plinius-epo.service runs "apply" and "fetch", plinius-epo.timer every hour; the switch is in
+# GNOME Settings > Privacy > Location (plinius-epo-set on|off).
+#
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+
+CONF=/etc/plinius-epo.conf
+# The real path, not the /data link: the service names it in ReadWritePaths=
+GPS_DIR=/android/data/vendor/gps
+STATE_DIR=/var/lib/plinius-epo
+# Android's gps user owns mnld's directory and files
+GPS_UID=1021
+GPS_GID=1021
+# This script, for the part that runs as gps
+SELF=/usr/lib/plinius-epo/plinius-epo
+# Exit status of write-prop when mnl.prop was changed (0: it was right already)
+CHANGED=3
+# MediaTek renews the files every hour; EPO_GR_3_1 covers three days from 00:00 UTC of its
+# day, the Q* files six hours. Every 6 hours keeps the three-day file fresh with a large margin.
+MAX_AGE=$((6 * 3600))
+
+# Remote name, local name (as mnld looks for them), remote checksum, host (epo or nav)
+FILES=(
+	"EPO_GR_3_1.DAT EPO.DAT EPO_GR_3_1.MD5 epo"
+	"QG_R.DAT QEPO.DAT QG_R.MD5 epo"
+	"QGA.DAT QEPO_GA.DAT QGA.MD5 epo"
+	"QBD2.DAT QEPO_BD.DAT QBD2.MD5 epo"
+	"MTKNAV.DAT MTKNAV.DAT MTKNAV.MD5 nav"
+)
+# Checksum files mnld keeps next to its data (the ones it would have downloaded itself)
+KEEP_MD5=(EPO_GR_3_1.MD5 MTKNAV.MD5)
+
+# Journal priorities through systemd's <N> prefix (the journal keeps notice and above)
+notice() { printf '<5>%s\n' "$*"; }
+warn() { printf '<4>%s\n' "$*"; }
+
+# Value of KEY in the config file, or DEFAULT
+conf_get() {
+	local key=$1 default=$2 line value=
+	if [[ -r $CONF ]]; then
+		while IFS= read -r line; do
+			[[ $line == "$key="* ]] && value=${line#*=}
+		done <"$CONF"
+	fi
+	printf '%s\n' "${value:-$default}"
+}
+
+enabled() {
+	[[ $(conf_get enabled yes) == yes ]]
+}
+
+# mnld's settings: EPO on or off; SUPL off (it would ask Google's SUPL server, and the
+# container has no network anyway); mnld's own downloads off (they fail and empty the files)
+mnl_prop() {
+	printf 'EPO_enabled=%s\nEPO_priority=64\nSUPL_enabled=0\nSUPLSI_enabled=0\nEPO_DOWNLOAD_ENABLE=0\nQEPO_DOWNLOAD_ENABLE=0\n' "$1"
+}
+
+restart_mnld() {
+	# Not running (early boot, no container): mnld reads the file when it starts
+	if lxc-info -n android -s 2>/dev/null | grep -q RUNNING; then
+		lxc-attach -n android -- /system/bin/setprop ctl.restart mnld || warn "mnld not restarted"
+	fi
+}
+
+# Run "$SELF <command> [args]" as the gps user: no other groups, no capabilities, no way back
+# to root, a clean environment. Its exit status is passed on.
+as_gps() {
+	setpriv --reuid="$GPS_UID" --regid="$GPS_GID" --clear-groups --no-new-privs --reset-env \
+		-- "$SELF" "$@"
+}
+
+# As gps: write mnl.prop with EPO on (1) or off (0). Exits 0 if it was right already,
+# $CHANGED if it was written. Only a regular file counts as "right": a FIFO or anything else
+# under that name is replaced (-f is false for it, and nothing reads from it).
+write_prop() {
+	local want tmp
+	want=$(mnl_prop "$1")
+	[[ -d $GPS_DIR ]] || return 0
+	if [[ -f $GPS_DIR/mnl.prop && ! -L $GPS_DIR/mnl.prop && $(<"$GPS_DIR/mnl.prop") == "$want" ]]; then
+		return 0
+	fi
+	tmp=$(mktemp "$GPS_DIR/.mnl.prop.XXXXXX")
+	printf '%s\n' "$want" >"$tmp"
+	chmod 0664 "$tmp"
+	mv -f "$tmp" "$GPS_DIR/mnl.prop"
+	notice "mnl.prop: EPO_enabled=$1"
+	return "$CHANGED"
+}
+
+# As root: let gps write mnl.prop, then restart mnld if the file changed
+set_prop() {
+	local rc=0
+	as_gps write-prop "$1" || rc=$?
+	case $rc in
+		0) ;;
+		"$CHANGED") restart_mnld ;;
+		*)
+			warn "mnl.prop not written (status $rc)"
+			return "$rc"
+			;;
+	esac
+}
+
+remove_files() {
+	local entry remote local_name md5 host removed=0
+	for entry in "${FILES[@]}"; do
+		read -r remote local_name md5 host <<<"$entry"
+		[[ -e $GPS_DIR/$local_name ]] && removed=1
+		rm -f "$GPS_DIR/$local_name"
+	done
+	for md5 in "${KEEP_MD5[@]}"; do
+		rm -f "$GPS_DIR/$md5"
+	done
+	rm -f "$STATE_DIR/last"
+	if ((removed)); then notice "EPO files removed"; fi
+	return 0
+}
+
+# First field of a checksum file ("<md5>    "), lower case
+md5_of_file() {
+	local sum
+	read -r sum _ <"$1" || true
+	printf '%s\n' "${sum,,}"
+}
+
+# Download one file and its checksum into $tmp and check them; on failure print why
+get_one() {
+	local url=$1 remote=$2 md5=$3 sum
+	if ! curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 20 --max-time 60 \
+		-o "$tmp/$remote" "$url/$remote" -o "$tmp/$md5" "$url/$md5" 2>/dev/null; then
+		echo download
+		return 1
+	fi
+	sum=$(md5sum "$tmp/$remote")
+	if [[ ! -s $tmp/$remote || ${sum%% *} != "$(md5_of_file "$tmp/$md5")" ]]; then
+		echo checksum
+		return 1
+	fi
+	# EPO records are 72 bytes each, one per satellite and 6-hour segment
+	if [[ $remote != MTKNAV.DAT ]] && (($(stat -c %s "$tmp/$remote") % 72)); then
+		echo size
+		return 1
+	fi
+}
+
+cmd_apply() {
+	if enabled; then set_prop 1; else set_prop 0; fi
+}
+
+cmd_clear() {
+	set_prop 0
+	as_gps remove-files
+}
+
+cmd_fetch() {
+	local now last=0 entry remote local_name md5 host url why keep got=0 failed=()
+	local epo_url nav_url
+
+	if ! enabled; then
+		remove_files
+		return 0
+	fi
+	[[ -d $GPS_DIR ]] || { warn "$GPS_DIR missing, nothing fetched"; return 0; }
+
+	now=$(date +%s)
+	[[ -r $STATE_DIR/last ]] && read -r last <"$STATE_DIR/last" || true
+	if [[ $last =~ ^[0-9]+$ ]] && ((now - last < MAX_AGE && now >= last)) && [[ -s $GPS_DIR/EPO.DAT ]]; then
+		return 0
+	fi
+
+	epo_url=$(conf_get epo_url https://uepodownload.mediatek.com)
+	nav_url=$(conf_get nav_url https://ugepodownload.mediatek.com)
+	# Global, for the EXIT trap; in mnld's directory, so the files move in at once
+	tmp=$(mktemp -d "$GPS_DIR/.plinius-epo.XXXXXX")
+	trap 'rm -rf "$tmp"' EXIT
+
+	for entry in "${FILES[@]}"; do
+		read -r remote local_name md5 host <<<"$entry"
+		[[ $host == nav ]] && url=$nav_url || url=$epo_url
+		if ! why=$(get_one "$url" "$remote" "$md5"); then
+			# The three-day file is the one that counts: without it (mostly no network), stop
+			# and try again at the next timer run
+			if [[ $remote == EPO_GR_3_1.DAT ]]; then
+				warn "EPO not downloaded ($remote: $why), next try within an hour"
+				return 75
+			fi
+			failed+=("$remote ($why)")
+			continue
+		fi
+		chmod 0664 "$tmp/$remote" "$tmp/$md5"
+		mv -f "$tmp/$remote" "$GPS_DIR/$local_name"
+		for keep in "${KEEP_MD5[@]}"; do
+			if [[ $md5 == "$keep" ]]; then mv -f "$tmp/$md5" "$GPS_DIR/$md5"; fi
+		done
+		got=$((got + 1))
+	done
+
+	if ((${#failed[@]})); then
+		warn "not downloaded: ${failed[*]}"
+	fi
+	printf '%s\n' "$now" >"$STATE_DIR/last.new"
+	chmod 0644 "$STATE_DIR/last.new"
+	mv -f "$STATE_DIR/last.new" "$STATE_DIR/last"
+	notice "EPO updated ($got of ${#FILES[@]} files)"
+}
+
+case ${1:-} in
+	apply) cmd_apply ;;
+	fetch) cmd_fetch ;;
+	clear) cmd_clear ;;
+	# Internal, run through as_gps by apply and clear
+	write-prop)
+		[[ ${2:-} == [01] ]] || exit 2
+		write_prop "$2"
+		;;
+	remove-files) remove_files ;;
+	*)
+		echo "usage: plinius-epo apply|fetch|clear" >&2
+		exit 2
+		;;
+esac

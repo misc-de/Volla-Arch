@@ -1,0 +1,13 @@
+# Volla Phone Plinius: hardware video decoding and encoding for the session (GStreamer plugins of
+# plinius-vdec).
+# The MediaTek decoder writes compressed HyFBC pictures, the MDP turns them into NV12.
+# The decoder stays with the group video: the plugin runs it in the app.
+# 70-plinius-android.rules gives every video* node to Android's camera and system IDs; the
+# container's codec HAL (media.c2) that used them serves no Linux app.
+ACTION=="add|change", SUBSYSTEM=="video4linux", ATTR{name}=="mtk-vcodec-dec", GROUP="video"
+# The encoder as well (pliniush264enc, in the app): Snapshot records through it
+ACTION=="add|change", SUBSYSTEM=="video4linux", ATTR{name}=="mtk-vcodec-enc", GROUP="video"
+# The MDP only for plinius-vdec-mdpd (its own user and group), not for every program of the
+# session: the plugin asks the daemon to convert each frame.
+ACTION=="add|change", KERNEL=="mtk_mdp", GROUP="plinius-vdec", MODE="0660"
+ACTION=="add|change", SUBSYSTEM=="misc", KERNEL=="mdp_sync", GROUP="plinius-vdec", MODE="0660"

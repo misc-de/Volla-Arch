@@ -1,0 +1,2 @@
+# Halium overlay: Android's hardware composer stays off. It holds DRM master on card0; without it
+# phoc drives the display directly through KMS (wlroots DRM backend, output DSI-1).

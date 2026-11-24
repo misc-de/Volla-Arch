@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 19:30:00 +0100
+Subject: [PATCH] app-grid: Fade the band without drawing the grid twice
+
+Plinius: 0094 drew the app grid once clipped and a second time through
+a cairo group for the band at the running apps' cards. While scrolling
+that made every third or fourth frame late: measured on the phone
+(display commits per 100 ms while the finger moves), 22-32 % of the
+samples under 40 fps with it, 4 % with 0.59.0-1, which has no fade.
+
+The grid is now drawn once, then the band is erased towards the cards
+with a gradient (DEST_OUT). Below the grid the home surface is
+transparent, so only the icons lose their alpha and the result looks
+the same. With a solid home (no background surface) the band gets a
+gradient of the background colour instead.
+---
+  src/app-grid.c | 40 +++++++++++++++++++++++++++-------------
+  1 file changed, 27 insertions(+), 13 deletions(-)
+
+diff --git a/src/app-grid.c b/src/app-grid.c
+index 86fa7e64..e4481778 100644
+--- a/src/app-grid.c
++++ b/src/app-grid.c
+@@ -668,8 +668,11 @@ on_plinius_settings_changed (PhoshAppGrid *self, const char *key, GSettings *set
+  * The overview gives the grid a band at that edge, taken from the cards' side
+  * (phosh_app_grid_set_plinius_band ()), and the grid's content leaves the band empty, so nothing
+  * moves while the grid is not scrolled. Icons scrolled into the band fade out towards the cards:
+- * on the grid they stay fully visible, they lose their visibility in the band. Only the band is
+- * drawn through a cairo group, the rest of the grid is drawn as usual.
++ * on the grid they stay fully visible, they lose their visibility in the band. The grid is drawn
++ * once as usual, then the band is erased towards the cards with a gradient (DEST_OUT): the home
++ * surface is transparent below the grid, so only the icons lose their alpha. Drawing the grid a
++ * second time through a cairo group for the band cost every third or fourth frame while scrolling.
++ * With a solid home (no background surface) the band gets a gradient of that colour instead.
+  */
+ static gboolean
+ on_scrolled_window_draw (GtkWidget *widget, cairo_t *cr, PhoshAppGrid *self)
+@@ -682,7 +685,9 @@ on_scrolled_window_draw (GtkWidget *widget, cairo_t *cr, PhoshAppGrid *self)
+   double rest = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj) - value;
+   gboolean top = priv->plinius_band_edge == GTK_POS_TOP;
+   int band = priv->plinius_band;
++  GtkWidget *solid;
+   cairo_pattern_t *mask;
++  GdkRGBA bg;
+   int y;
+ 
+   if (band <= 0 || height < 2 * band)
+@@ -691,24 +696,33 @@ on_scrolled_window_draw (GtkWidget *widget, cairo_t *cr, PhoshAppGrid *self)
+   if ((top && value <= 0) || (!top && rest <= 0))
+     return GDK_EVENT_PROPAGATE;
+ 
+-  cairo_save (cr);
+-  cairo_rectangle (cr, 0, top ? band : 0, width, height - band);
+-  cairo_clip (cr);
+   GTK_WIDGET_GET_CLASS (widget)->draw (widget, cr);
+-  cairo_restore (cr);
++
++  /* A solid home (no background surface) paints its own background below the grid */
++  for (solid = widget; solid; solid = gtk_widget_get_parent (solid)) {
++    if (gtk_style_context_has_class (gtk_widget_get_style_context (solid), "p-solid"))
++      break;
++  }
++  if (solid && !gtk_style_context_lookup_color (gtk_widget_get_style_context (solid),
++                                                "phosh_bg_color", &bg))
++    return GDK_EVENT_STOP;
+ 
+   y = top ? 0 : height - band;
+   cairo_save (cr);
+   cairo_rectangle (cr, 0, y, width, band);
+   cairo_clip (cr);
+-  cairo_push_group (cr);
+-  GTK_WIDGET_GET_CLASS (widget)->draw (widget, cr);
+-  cairo_pop_group_to_source (cr);
+-  /* Transparent at the cards, opaque where the grid starts */
++  /* Icons gone at the cards, untouched where the grid starts */
+   mask = cairo_pattern_create_linear (0, y, 0, y + band);
+-  cairo_pattern_add_color_stop_rgba (mask, 0, 0, 0, 0, top ? 0 : 1);
+-  cairo_pattern_add_color_stop_rgba (mask, 1, 0, 0, 0, top ? 1 : 0);
+-  cairo_mask (cr, mask);
++  if (solid) {
++    cairo_pattern_add_color_stop_rgba (mask, 0, bg.red, bg.green, bg.blue, top ? bg.alpha : 0);
++    cairo_pattern_add_color_stop_rgba (mask, 1, bg.red, bg.green, bg.blue, top ? 0 : bg.alpha);
++  } else {
++    cairo_pattern_add_color_stop_rgba (mask, 0, 0, 0, 0, top ? 1 : 0);
++    cairo_pattern_add_color_stop_rgba (mask, 1, 0, 0, 0, top ? 0 : 1);
++    cairo_set_operator (cr, CAIRO_OPERATOR_DEST_OUT);
++  }
++  cairo_set_source (cr, mask);
++  cairo_paint (cr);
+   cairo_pattern_destroy (mask);
+   cairo_restore (cr);
+ 

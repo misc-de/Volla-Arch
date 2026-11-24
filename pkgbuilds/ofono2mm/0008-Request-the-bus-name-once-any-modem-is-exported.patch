@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 00:20:09 +0100
+Subject: [PATCH] Request the bus name once any modem is exported
+
+At boot oFono's ModemAdded can arrive before the reply to GetModems.
+Its export claims the modems, find_ofono_modems() skips them and ends
+without an exported modem, and nothing requested
+org.freedesktop.ModemManager1: systemd stopped ModemManager after the
+start timeout and its clients (geoclue, GNOME Settings) waited for it.
+Request the name at the end of every export as well.
+
+Until oFono has modems GetModems was also asked in a busy loop (6.5 s
+of CPU at boot); wait half a second between the attempts.
+---
+ main.py | 22 +++++++++++++++++-----
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/main.py b/main.py
+index be8f872..73e4c8c 100755
+--- a/main.py
++++ b/main.py
+@@ -74,8 +74,6 @@ class MMInterface(ServiceInterface):
+ 
+     @async_locked
+     async def find_ofono_modems(self):
+-        global has_bus
+-
+         for mm_object in self.mm_modem_objects:
+             self.bus.unexport(mm_object)
+ 
+@@ -98,13 +96,26 @@ class MMInterface(ServiceInterface):
+                 ]
+             except DBusError:
+                 pass
++            # At boot oFono has no modems for a while: ask again, but not in a busy loop
++            if not self.ofono_modem_list:
++                await asyncio.sleep(0.5)
+ 
+         for modem in self.ofono_modem_list:
+             await self.export_new_modem(modem[0], modem[1])
+ 
+-        if not has_bus and len(self.mm_modem_objects) != 0:
+-            await self.bus.request_name('org.freedesktop.ModemManager1')
+-            has_bus = True
++        await self.request_bus_name()
++
++    async def request_bus_name(self):
++        # Once any modem is exported. ModemAdded can come before the reply to GetModems: then
++        # its export claims the modems, the loop above skips them and finds no exported modem,
++        # so the export itself has to request the name as well (at boot ModemManager1 never
++        # came up and systemd stopped it after the start timeout)
++        global has_bus
++
++        if has_bus or len(self.mm_modem_objects) == 0:
++            return
++        has_bus = True
++        await self.bus.request_name('org.freedesktop.ModemManager1')
+ 
+     def dbus_name_owner_changed(self, name, old_owner, new_owner):
+         if name == "org.ofono":
+@@ -161,6 +172,7 @@ class MMInterface(ServiceInterface):
+         await mm_modem_interface.init_mm_voice_interface()
+         self.mm_modem_interfaces.append(mm_modem_interface)
+         self.mm_modem_objects.append(f'/org/freedesktop/ModemManager1/Modem/{index}')
++        await self.request_bus_name()
+ 
+     def ofono_modem_removed(self, path):
+         self.exported_paths.discard(path)

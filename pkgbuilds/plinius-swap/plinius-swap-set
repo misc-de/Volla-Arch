@@ -1,0 +1,315 @@
+#!/bin/bash
+# plinius-swap-set: the swap file on the home filesystem and how readily the kernel swaps
+# (GNOME Settings › System › Memory and Swap runs this through pkexec). The choices live in
+# /etc/plinius-swap.conf.
+#
+# The phone has two swap areas. Android's init turns on zram (compressed RAM, as large as the
+# RAM, no flash writes) on every boot; this tool adds the file behind it, so flash is only
+# written once zram is full. Android also sets vm.swappiness to 100 at "on init", before its
+# swapon at "on boot". "apply" therefore waits for zram and only then sets our value.
+#
+# The value is at least 1: with MGLRU (on here) 0 keeps anonymous memory out of reclaim
+# altogether, so the kernel would kill processes with the swap still empty.
+#
+# The file stays off the root filesystem: root can be an image on a loop device, and paging
+# through a loop device can deadlock under memory pressure. It also stays off plain storage when
+# the system is encrypted: memory contents must not land outside the encryption.
+#
+#   plinius-swap-set apply            turn on what the file says (at boot, plinius-swap.service)
+#   plinius-swap-set enable|disable   turn the swap file on, or off and delete it
+#   plinius-swap-set size GIB         size of the swap file, remade if it is on
+#   plinius-swap-set swappiness N     vm.swappiness, 1-200
+#   plinius-swap-set drain            move everything from swap back to RAM
+#   plinius-swap-set remove           off and deleted, swappiness as Android sets it (package removal)
+#
+# Exit codes (GNOME Settings tells them apart):
+#   0  done
+#   1  other error
+#   2  usage error
+#   3  not enough free RAM for what is in swap
+#   4  not enough free storage for the file
+#   5  no swap file possible on this storage (see above)
+#
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+
+conf=/etc/plinius-swap.conf
+dir=/home/.plinius-swap
+file=$dir/swapfile
+lock=/run/plinius-swap.lock
+android_swappiness=100
+
+# Defaults as in the shipped file and in cc-plinius-swap.c
+default_enabled=yes
+default_size_gib=8
+default_swappiness=1
+
+# How long "apply" waits for Android's zram, in seconds (it comes about 20 s after boot)
+zram_wait=90
+# Storage left free next to the file
+reserve_kib=$((2 * 1024 * 1024))
+# zram is always used before the file; see turn_on
+zram_priority=100
+
+EXIT_RAM=3
+EXIT_DISK=4
+EXIT_LOCATION=5
+
+die() {
+	local code=$1
+	shift
+	echo "plinius-swap-set: $*" >&2
+	exit "$code"
+}
+
+# Reads one setting from the file; missing file or key: the given default
+get() {
+	local key=$1 def=$2 val
+	val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*\([a-z0-9]*\).*/\1/p" "$conf" 2>/dev/null | tail -n1) || true
+	echo "${val:-$def}"
+}
+
+# Writes one setting, keeping the comments and the other keys of the file
+put() {
+	local key=$1 val=$2 tmp
+	tmp=$(mktemp "$conf.XXXXXX")
+	[[ -e $conf ]] && grep -v "^[[:space:]]*$key[[:space:]]*=" "$conf" > "$tmp" || true
+	echo "$key=$val" >> "$tmp"
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$conf"
+}
+
+meminfo_kib() {
+	sed -n "s/^$1:[[:space:]]*\([0-9]*\) kB/\1/p" /proc/meminfo
+}
+
+# Swap in use in KiB: of one area, or of all without an argument. /proc/swaps counts in KiB.
+swap_used_kib() {
+	local name type size used prio total=0
+	while read -r name type size used prio; do
+		[[ $name == Filename ]] && continue
+		[[ $# -eq 0 || $name == "$1" ]] && total=$((total + used))
+	done < /proc/swaps
+	echo "$total"
+}
+
+is_active() {
+	local name rest
+	while read -r name rest; do
+		[[ $name == "$1" ]] && return 0
+	done < /proc/swaps
+	return 1
+}
+
+# What is in swap has to fit into RAM, with a twentieth of the RAM left over
+need_ram_for() {
+	local used=$1 room
+	((used > 0)) || return 0
+	room=$(($(meminfo_kib MemAvailable) - $(meminfo_kib MemTotal) / 20))
+	((used <= room)) || die $EXIT_RAM "$used KiB in swap, room for $room KiB in RAM"
+}
+
+device_type() {
+	lsblk -dno TYPE "$1" 2>/dev/null || true
+}
+
+# Whether the filesystem holding @path sits on dm-crypt anywhere below it. Follows loop devices
+# to the filesystem of their backing file: on the phone root is an image on a loop device, and
+# the encryption is below that (only looking at the top device, root never looked encrypted and
+# the check below never applied).
+on_crypt() {
+	local path=$1 dev back depth
+	for ((depth = 0; depth < 4; depth++)); do
+		dev=$(findmnt -nvo SOURCE -T "$path") || return 1
+		# Every device in the stack below dev, dev included
+		lsblk -snro TYPE "$dev" 2>/dev/null | grep -qx crypt && return 0
+		[[ $(device_type "$dev") == loop ]] || return 1
+		back=$(losetup -nO BACK-FILE "$dev" 2>/dev/null) || return 1
+		[[ -n $back && -e $back ]] || return 1
+		path=$back
+	done
+	return 1
+}
+
+# See the top of this file
+check_location() {
+	local home
+	home=$(findmnt -nvo SOURCE -T /home)
+	[[ $(device_type "$home") == loop ]] && die $EXIT_LOCATION "/home is on a loop device"
+	if on_crypt / && ! on_crypt /home; then
+		die $EXIT_LOCATION "the system is encrypted, /home is not"
+	fi
+	return 0
+}
+
+# Makes the file. Allocated, not written: fast and without wear, and unwritten blocks read back
+# as zeros instead of old data.
+create_file() {
+	local gib=$1 kib=$(($1 * 1024 * 1024)) avail old=0
+	check_location
+	avail=$(df --output=avail -k /home | tail -n1)
+	[[ -e $file ]] && old=$(($(stat -c %s "$file") / 1024))
+	((avail + old >= kib + reserve_kib)) || die $EXIT_DISK "$avail KiB free, $kib KiB and a reserve needed"
+
+	rm -f "$file"
+	install -d -m 700 "$dir"
+	(
+		umask 077
+		fallocate -l "${gib}G" "$file"
+	) || {
+		rm -f "$file"
+		die $EXIT_DISK "cannot allocate $gib GiB"
+	}
+	mkswap "$file" > /dev/null
+	# swapon refuses a file whose extents are not on disk yet
+	sync "$file"
+}
+
+# Turns the file on. Without a priority of its own it gets a negative one, below every area with
+# an explicit one and below an area turned on before it.
+file_on() {
+	is_active "$file" && return 0
+	check_location
+	local gib
+	gib=$(get size_gib $default_size_gib)
+	[[ -e $file && $(stat -c %s "$file") == $((gib * 1024 * 1024 * 1024)) ]] || create_file "$gib"
+	swapon "$file" 2> /dev/null && return 0
+	# A broken signature, say from an interrupted write: once more from scratch
+	create_file "$gib"
+	swapon "$file"
+}
+
+# Turns the file off and deletes it, so it takes no storage while off
+file_off() {
+	if is_active "$file"; then
+		need_ram_for "$(swap_used_kib "$file")"
+		swapoff "$file"
+	fi
+	rm -f "$file"
+	rmdir "$dir" 2> /dev/null || true
+}
+
+set_swappiness() {
+	echo "$1" > /proc/sys/vm/swappiness
+}
+
+wait_for_zram() {
+	local waited=0
+	while ((waited < zram_wait)); do
+		grep -q zram /proc/swaps && return 0
+		sleep 2
+		waited=$((waited + 2))
+	done
+	echo "plinius-swap-set: no zram after $zram_wait s, going on without it" >&2
+}
+
+cmd_apply() {
+	wait_for_zram
+	exec 9> "$lock"
+	flock 9
+	set_swappiness "$(get swappiness $default_swappiness)"
+	if [[ $(get enabled $default_enabled) == yes ]]; then
+		file_on
+	else
+		file_off
+	fi
+}
+
+cmd_size() {
+	local gib=$1 kib=$(($1 * 1024 * 1024)) avail old=0
+	if ! is_active "$file"; then
+		put size_gib "$gib"
+		return 0
+	fi
+	# Checked before anything changes; create_file checks again with the old file gone
+	[[ $(stat -c %s "$file") == $((gib * 1024 * 1024 * 1024)) ]] && {
+		put size_gib "$gib"
+		return 0
+	}
+	check_location
+	avail=$(df --output=avail -k /home | tail -n1)
+	old=$(($(stat -c %s "$file") / 1024))
+	((avail + old >= kib + reserve_kib)) || die $EXIT_DISK "$avail KiB free, $kib KiB and a reserve needed"
+	file_off
+	put size_gib "$gib"
+	file_on
+}
+
+# The path to reach an area with. /proc/swaps keeps the name it was turned on with, and Android's
+# init used /dev/block/zram0, which only exists inside the container.
+area_path() {
+	if [[ -e $1 ]]; then echo "$1"; else echo "/dev/${1##*/}"; fi
+}
+
+# Empties all swap areas: first all off, the file before zram (swapoff brings the pages into RAM),
+# then on again. zram gets an explicit priority, so that it stays in front of the file.
+cmd_drain() {
+	local name type rest
+	local files=() others=() failed=0
+	need_ram_for "$(swap_used_kib)"
+	while read -r name type rest; do
+		[[ $name == Filename ]] && continue
+		if [[ $type == file ]]; then files+=("$name"); else others+=("$name"); fi
+	done < /proc/swaps
+
+	# One area after the other; one that fails stays on and in use
+	for name in "${files[@]}" "${others[@]}"; do
+		swapoff "$(area_path "$name")" || failed=1
+	done
+	for name in "${others[@]}"; do
+		is_active "$name" || swapon --priority $zram_priority "$(area_path "$name")" || failed=1
+	done
+	for name in "${files[@]}"; do
+		is_active "$name" || swapon "$name" || failed=1
+	done
+	return $failed
+}
+
+cmd_remove() {
+	# Without room in RAM the file goes at the next boot: it is just not on after the removal
+	if is_active "$file"; then
+		swapoff "$file" || return 0
+	fi
+	rm -f "$file"
+	rmdir "$dir" 2> /dev/null || true
+	set_swappiness $android_swappiness
+}
+
+usage() {
+	die 2 "usage: plinius-swap-set apply | enable | disable | size GIB | swappiness N | drain | remove"
+}
+
+[[ $# -ge 1 ]] || usage
+[[ $(id -u) -eq 0 ]] || die 1 "needs root"
+
+# "apply" takes the lock itself, after its wait for zram
+if [[ $1 == apply ]]; then
+	cmd_apply
+	exit
+fi
+
+exec 9> "$lock"
+flock 9
+
+case $1 in
+	enable)
+		file_on
+		put enabled yes
+		;;
+	disable)
+		file_off
+		put enabled no
+		;;
+	size)
+		[[ ${2:-} =~ ^[1-9][0-9]*$ ]] && ((${2} >= 1 && ${2} <= 128)) || usage
+		cmd_size "$2"
+		;;
+	swappiness)
+		[[ ${2:-} =~ ^[1-9][0-9]*$ ]] && ((${2} >= 1 && ${2} <= 200)) || usage
+		set_swappiness "$2"
+		put swappiness "$2"
+		;;
+	drain) cmd_drain ;;
+	remove) cmd_remove ;;
+	*) usage ;;
+esac

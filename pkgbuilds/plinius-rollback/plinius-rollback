@@ -1,0 +1,117 @@
+#!/bin/bash
+# Takes back the last update from the pacman cache (docs/PAKETIERUNG.md, "Rückweg auf dem Gerät").
+# ALARM keeps no archive of old versions, so the way back is the device's own cache: the hook
+# plinius-rollback.hook keeps the installed and the previous version of every package.
+#
+# The last update is the last pacman transaction that upgraded something (/var/log/pacman.log).
+# A rollback only downgrades, so it never counts as an update itself: running it twice does not
+# undo the rollback. Packages the update installed new stay (other packages may need them),
+# packages it removed come back if they are still in the cache. All or nothing: if a previous
+# version is missing from the cache, nothing is changed.
+#
+# Usage: plinius-rollback list | summary | run [--noconfirm] [--unit]
+#   list     what the last update changed and whether the previous versions are in the cache
+#   summary  the same in short, for GNOME Settings › System › Self-Test: lines "when=TIME"
+#            (as in pacman.log), "packages=N" (previous versions in the cache), "missing=N"
+#   run      install the previous versions in one transaction (as root). --unit: in the system
+#            unit plinius-rollback.service, so that the caller ending (Settings closed) cannot
+#            stop pacman in the middle; output to the journal, the exit status is passed back.
+#            Settings runs "pkexec plinius-rollback run --noconfirm --unit" (polkit: PIN).
+# Exit status: 0 ok, 1 error, 3 previous versions missing from the cache, 4 nothing to roll back
+set -euo pipefail
+
+# The log can be swapped for tests
+LOG=${PLINIUS_ROLLBACK_LOG:-/var/log/pacman.log}
+CACHE=$(pacman-conf CacheDir | head -1)
+CACHE=${CACHE%/}
+
+die() { echo "plinius-rollback: $*" >&2; exit 1; }
+
+# Prints the ALPM lines of the last transaction with an "upgraded" entry, from
+# "transaction started" to "transaction completed"
+last_update() {
+	awk '
+		/\[ALPM\] transaction started/ { block = ""; upgraded = 0; next }
+		/\[ALPM\] (upgraded|installed|removed|downgraded|reinstalled) / {
+			block = block $0 "\n"
+			if ($3 == "upgraded") upgraded = 1
+			next
+		}
+		/\[ALPM\] transaction completed/ { if (upgraded) last = block }
+		END { printf "%s", last }
+	' "$LOG"
+}
+
+# Cache file of package $1 in version $2, without signature; empty if missing
+cached() {
+	local f
+	for f in "$CACHE/$1-$2"-*.pkg.tar.*; do
+		[[ -e $f && $f != *.sig ]] || continue
+		# The glob would also match "$1-$2.1-..." style versions: compare exactly
+		[[ $(bsdtar -xOf "$f" .PKGINFO | sed -n 's/^pkgver = //p') == "$2" ]] && { echo "$f"; return; }
+	done
+}
+
+cmd=${1:-}
+shift || true
+case $cmd in
+list | summary | run)
+	[[ $cmd != run ]] || [[ $(id -u) -eq 0 ]] || die "must run as root"
+	noconfirm=() unit=
+	for arg; do
+		case $arg in
+		--noconfirm) noconfirm=(--noconfirm) ;;
+		--unit) unit=1 ;;
+		*) die "unknown option: $arg" ;;
+		esac
+	done
+	if [[ $cmd == run && -n $unit ]]; then
+		# --wait passes the exit status back; no --pipe: a closed pipe of a caller that went
+		# would end pacman with SIGPIPE
+		exec systemd-run --quiet --wait --collect --service-type=exec --unit=plinius-rollback \
+			--description="Take back the last system update" \
+			"$(realpath "$0")" run "${noconfirm[@]}"
+	fi
+	if [[ $cmd == summary ]]; then
+		# list's lines for people go away; its summary line and status stay
+		out=$("$BASH" "$0" list 2>&1) && rc=0 || rc=$?
+		sed -n -E 's/^Last update: (.+), ([0-9]+) previous versions in the cache, ([0-9]+) missing$/when=\1\npackages=\2\nmissing=\3/p' <<< "$out"
+		exit "$rc"
+	fi
+	block=$(last_update)
+	[[ -n $block ]] || { echo "plinius-rollback: no update in $LOG"; exit 4; }
+	when=$(head -1 <<< "$block" | sed -E 's/^\[([^]]+)\].*/\1/')
+	files=() missing=() new=()
+	while read -r _time _alpm action name rest; do
+		case $action in
+		upgraded | removed)
+			# upgraded NAME (OLD -> NEW), removed NAME (OLD)
+			old=$(sed -E 's/^\(([^ )]+).*/\1/' <<< "$rest")
+			f=$(cached "$name" "$old")
+			if [[ -n $f ]]; then
+				files+=("$f")
+				echo "  $name $old  ($action, in the cache)"
+			else
+				missing+=("$name $old")
+				echo "  $name $old  ($action, MISSING from the cache)"
+			fi
+			;;
+		installed)
+			new+=("$name")
+			;;
+		esac
+	done <<< "$block"
+	echo "Last update: $when, ${#files[@]} previous versions in the cache, ${#missing[@]} missing"
+	((${#new[@]} == 0)) || echo "Installed new by it, stays: ${new[*]}"
+	((${#missing[@]} == 0)) || { echo "plinius-rollback: cannot roll back completely, nothing changed" >&2; exit 3; }
+	((${#files[@]})) || { echo "plinius-rollback: nothing to roll back"; exit 4; }
+	[[ $cmd == run ]] || exit 0
+	# One transaction: the previous plinius-freigabe comes back together with the packages it
+	# approved. pacman -U keeps the install reason (explicit/dependency) of installed packages.
+	pacman -U "${noconfirm[@]}" "${files[@]}"
+	echo "plinius-rollback: rolled back the update of $when; restart the phone to load everything"
+	;;
+*)
+	die "usage: plinius-rollback list | run [--noconfirm]"
+	;;
+esac

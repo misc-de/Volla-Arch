@@ -1,0 +1,10 @@
+[Unit]
+Description=Update dconf settings after the user was renamed
+ConditionPathExists=%h/.config/plinius-account/dconf-rename
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius-account/dconf-rename
+
+[Install]
+WantedBy=default.target

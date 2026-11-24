@@ -1,0 +1,10 @@
+# The hook only sees transactions of the patched packages; patch what was there first
+post_install() {
+	[ -f /usr/lib/firefox/firefox ] && /usr/bin/hybris-tls-relocate /usr/lib/firefox/firefox
+	[ -f /usr/lib/thunderbird/thunderbird ] && /usr/bin/hybris-tls-relocate /usr/lib/thunderbird/thunderbird
+	return 0
+}
+
+post_upgrade() {
+	post_install
+}

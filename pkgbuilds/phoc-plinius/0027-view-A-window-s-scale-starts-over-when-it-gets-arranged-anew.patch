@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 20:40:45 +0100
+Subject: [PATCH] view: A window's scale starts over when it gets arranged anew
+
+Scale-to-fit derives a maximized view's size from its scale (usable area
+divided by the scale) and the scale from its size (usable area divided by
+the size). So any scale confirms itself, and a window that had to shrink
+once never grew back:
+
+- Turning the phone: an app that doesn't fit landscape stayed shrunken in
+  portrait, and one that doesn't fit portrait in landscape, though it would
+  fit there at full size.
+- Coming back from the virtual desktop: a window that didn't fit the
+  desktop, which can be lower than the phone over VNC, stayed shrunken on
+  the phone.
+
+Whenever a view is arranged anew its scale now starts over from the minimum
+size the client announces; a client that doesn't announce one commits a
+bigger size as before. A commit from before the latest configure no longer
+counts as the client's answer, and a remembered window no longer reaches
+under the desktop's bar, which alone made it shrink there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/view.c         | 77 +++++++++++++++++++++++++++++++++++++++++++++++++++---
+ src/view.h         |  3 +++
+ src/xdg-toplevel.c | 14 ++++++++++
+ 3 files changed, 90 insertions(+), 4 deletions(-)
+
+diff --git a/src/view.c b/src/view.c
+index fa236b8..102e132 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -883,6 +883,45 @@ phoc_view_get_maximized_box (PhocView *self, PhocOutput *output, struct wlr_box
+ }
+ 
+ 
++/*
++ * A maximized view's size is the usable area divided by its scale, and the scale is the usable
++ * area divided by the view's size. So a scale, once picked, confirms itself: a window that had
++ * to shrink for landscape, or came from another screen, would stay shrunken for good. Whenever
++ * the view gets arranged anew its scale therefore starts over from the client's minimum size.
++ * A client that doesn't announce it commits a bigger size, view_update_scale() handles that.
++ */
++static void
++view_reset_scale (PhocView *self, PhocOutput *output)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  PhocViewPrivate *priv = phoc_view_get_instance_private (self);
++  int min_width = 0, min_height = 0;
++  float scale = 1.0f;
++
++  if (!PHOC_VIEW_GET_CLASS (self)->want_scaling (self))
++    return;
++
++  if (!priv->scale_to_fit && !phoc_desktop_get_scale_to_fit (desktop))
++    return;
++
++  if (!output)
++    output = phoc_view_get_output (self);
++
++  if (!output)
++    return;
++
++  if (PHOC_VIEW_GET_CLASS (self)->get_min_size)
++    PHOC_VIEW_GET_CLASS (self)->get_min_size (self, &min_width, &min_height);
++
++  if (min_width > output->usable_area.width)
++    scale = output->usable_area.width / (float)min_width;
++  if (min_height > output->usable_area.height)
++    scale = MIN (scale, output->usable_area.height / (float)min_height);
++
++  priv->scale = MAX (scale, 0.5f);
++}
++
++
+ static void
+ view_arrange_maximized (PhocView *self, PhocOutput *output)
+ {
+@@ -1019,6 +1058,7 @@ phoc_view_maximize (PhocView *self, PhocOutput *output)
+   priv->state = PHOC_VIEW_STATE_MAXIMIZED;
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_STATE]);
+ 
++  view_reset_scale (self, output);
+   view_arrange_maximized (self, output);
+ }
+ 
+@@ -1147,6 +1187,7 @@ phoc_view_set_fullscreen (PhocView *self, bool fullscreen, PhocOutput *output)
+     phoc_output_set_fullscreen_view (current_output, NULL);
+ 
+     if (priv->state == PHOC_VIEW_STATE_MAXIMIZED) {
++      view_reset_scale (self, current_output);
+       view_arrange_maximized (self, current_output);
+     } else if (priv->state == PHOC_VIEW_STATE_TILED) {
+       view_arrange_tiled (self, current_output);
+@@ -1274,6 +1315,14 @@ view_lookup_geometry (PhocView *self, PhocOutput *output, struct wlr_box *box)
+   if (wlr_box_empty (&out))
+     return FALSE;
+ 
++  /* Inside the usable area: a window reaching under the desktop's bar would get scaled down */
++  if (!wlr_box_empty (&output->usable_area)) {
++    out.x += output->usable_area.x;
++    out.y += output->usable_area.y;
++    out.width = output->usable_area.width;
++    out.height = output->usable_area.height;
++  }
++
+   /* A box that does not fit (other screen size, other position) comes centered */
+   box->width = MIN (box->width, out.width);
+   box->height = MIN (box->height, out.height);
+@@ -1300,6 +1349,10 @@ view_float_on_output (PhocView *self, PhocOutput *output)
+ 
+   known = view_lookup_geometry (self, output, &box);
+ 
++  /* The scale the window had on the phone means nothing here: it would be corrected after the
++   * first commit, which centers the window and loses its remembered position */
++  priv->scale = 1.0f;
++
+   if (phoc_view_is_maximized (self) || phoc_view_is_tiled (self)) {
+     priv->state = PHOC_VIEW_STATE_FLOATING;
+     g_object_notify_by_pspec (G_OBJECT (self), props[PROP_STATE]);
+@@ -1613,6 +1666,11 @@ view_update_scale (PhocView *self)
+   if (!PHOC_VIEW_GET_CLASS (self)->want_scaling (self))
+     return;
+ 
++  /* A commit from before the latest configure says nothing about the size the client needs:
++   * taking it for a refusal would shrink the window, e.g. when turning the phone */
++  if (self->configure_pending && phoc_view_is_maximized (self))
++    return;
++
+   PhocOutput *output = phoc_view_get_output (self);
+   if (!output)
+     return;
+@@ -1636,7 +1694,13 @@ view_update_scale (PhocView *self)
+     priv->scale = 1.0;
+   }
+ 
+-  if (priv->scale != oldscale)
++  if (priv->scale == oldscale)
++    return;
++
++  /* Keeps the scale just found, unlike phoc_view_arrange() */
++  if (phoc_view_is_maximized (self))
++    view_arrange_maximized (self, NULL);
++  else
+     phoc_view_arrange (self, NULL, TRUE);
+ }
+ 
+@@ -1932,8 +1996,12 @@ view_update_size (PhocView *self, int width, int height)
+   PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+   struct wlr_box before;
+ 
+-  if (self->box.width == width && self->box.height == height)
++  if (self->box.width == width && self->box.height == height) {
++    /* The client may answer a configure with the size it already has */
++    if (phoc_view_is_maximized (self))
++      view_update_scale (self);
+     return;
++  }
+ 
+   phoc_view_get_box (self, &before);
+   phoc_view_damage_whole (self);
+@@ -2999,9 +3067,10 @@ phoc_view_arrange (PhocView *self, PhocOutput *output, gboolean center)
+   g_assert (PHOC_IS_VIEW (self));
+   g_assert (output == NULL || PHOC_IS_OUTPUT (output));
+ 
+-  if (phoc_view_is_maximized (self))
++  if (phoc_view_is_maximized (self)) {
++    view_reset_scale (self, output);
+     view_arrange_maximized (self, output);
+-  else if (phoc_view_is_tiled (self))
++  } else if (phoc_view_is_tiled (self))
+     view_arrange_tiled (self, output);
+   else if (center)
+     view_center (self, output);
+diff --git a/src/view.h b/src/view.h
+index ef66b06..e63cd01 100644
+--- a/src/view.h
++++ b/src/view.h
+@@ -74,6 +74,8 @@ struct _PhocView {
+     uint32_t width, height;
+   } pending_move_resize;
+   bool                pending_centering;
++  /* A size was requested that the client didn't acknowledge yet */
++  bool                configure_pending;
+ 
+   PhocView           *parent;
+   struct wl_list      stack;
+@@ -120,6 +122,7 @@ typedef struct _PhocViewClass {
+   void (*resize)             (PhocView *self, uint32_t width, uint32_t height);
+   void (*move_resize)        (PhocView *self, double x, double y, uint32_t width, uint32_t height);
+   bool (*want_scaling)       (PhocView *self);
++  void (*get_min_size)       (PhocView *self, int *width, int *height);
+   bool (*want_auto_maximize) (PhocView *self);
+   void (*set_active)         (PhocView *self, bool active);
+   void (*set_fullscreen)     (PhocView *self, bool fullscreen);
+diff --git a/src/xdg-toplevel.c b/src/xdg-toplevel.c
+index 9f6b271..3fa5ddb 100644
+--- a/src/xdg-toplevel.c
++++ b/src/xdg-toplevel.c
+@@ -235,6 +235,16 @@ want_scaling (PhocView *view)
+   return true;
+ }
+ 
++static void
++get_min_size (PhocView *view, int *width, int *height)
++{
++  struct wlr_xdg_toplevel *xdg_toplevel = PHOC_XDG_TOPLEVEL (view)->xdg_toplevel;
++
++  *width = xdg_toplevel->current.min_width;
++  *height = xdg_toplevel->current.min_height;
++}
++
++
+ static bool
+ want_auto_maximize (PhocView *view)
+ {
+@@ -491,6 +501,9 @@ handle_surface_commit (struct wl_listener *listener, void *data)
+       self->pending_move_resize_configure_serial = 0;
+   }
+ 
++  /* A later configure may have been acknowledged instead of ours, that one counts as well */
++  view->configure_pending =
++    self->pending_move_resize_configure_serial > xdg_toplevel->base->current.configure_serial;
+   view_update_size (view, size.width, size.height);
+ 
+   struct wlr_box geometry;
+@@ -761,6 +774,7 @@ phoc_xdg_toplevel_class_init (PhocXdgToplevelClass *klass)
+   view_class->move_resize = move_resize;
+   view_class->want_auto_maximize = want_auto_maximize;
+   view_class->want_scaling = want_scaling;
++  view_class->get_min_size = get_min_size;
+   view_class->set_active = set_active;
+   view_class->set_fullscreen = set_fullscreen;
+   view_class->set_maximized = set_maximized;

@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 15:30:00 +0100
+Subject: [PATCH] ofono-binder: Keep the IRadio version of calls that the ext
+ also reports
+
+This takes back upstream commit 3bfe33b ("[voicecall] Use the ext's version
+of the calls that IRadio also reports. JB#65393") for now.
+
+With that commit every IRadio call whose id the ext also reports is dropped
+in favor of the ext's version. ofono-binder-plugin-ext-mtk creates each of
+its calls with BINDER_EXT_CALL_FLAG_INCOMING, so an outgoing VoLTE or
+emergency call could turn into an incoming one for oFono. The commit is
+about conference members; they stay as they were before 1.1.34.
+
+Drop this patch once the extension reports the direction of its calls.
+---
+ src/binder_voicecall.c | 51 ++----------------------------------------
+ 1 file changed, 2 insertions(+), 49 deletions(-)
+
+diff --git a/src/binder_voicecall.c b/src/binder_voicecall.c
+index 7fe6075..93a5880 100644
+--- a/src/binder_voicecall.c
++++ b/src/binder_voicecall.c
+@@ -403,52 +403,6 @@ binder_voicecall_merge_ext_calls(
+     return list;
+ }
+ 
+-static
+-gboolean
+-binder_voicecall_is_ext_call(
+-    BinderVoiceCall* self,
+-    guint call_id)
+-{
+-    if (self->ext) {
+-        /* binder_ext_call_get_calls never returns NULL */
+-        const BinderExtCallInfo* const* ptr =
+-            binder_ext_call_get_calls(self->ext);
+-
+-        for (; *ptr; ptr++) {
+-            if ((*ptr)->call_id == call_id) {
+-                return TRUE;
+-            }
+-        }
+-    }
+-    return FALSE;
+-}
+-
+-static
+-GSList*
+-binder_voicecall_drop_ext_calls(
+-    BinderVoiceCall* self,
+-    GSList* list)
+-{
+-    GSList* l = list;
+-
+-    /*
+-     * IRadio may also report the calls known to ext, including the
+-     * multiparty calls hidden by ext. Ext has the full picture of
+-     * those, its version is merged back later.
+-     */
+-    while (l) {
+-        GSList* next = l->next;
+-        BinderVoiceCallInfo* call = l->data;
+-
+-        if (binder_voicecall_is_ext_call(self, call->oc.id)) {
+-            binder_voicecall_info_free(call);
+-            list = g_slist_delete_link(list, l);
+-        }
+-        l = next;
+-    }
+-    return list;
+-}
+-
+ static
+ gboolean
+ binder_voicecall_have_ext_call(
+@@ -769,9 +723,8 @@ binder_voicecall_clcc_poll_cb(
+ 
+         /* Build sorted list */
+         gbinder_reader_copy(&reader, args);
+-        list = binder_voicecall_drop_ext_calls(self,
+-            g_slist_sort(self->api->read_call_list(&reader, resp),
+-            binder_voicecall_info_compare));
++        list = g_slist_sort(self->api->read_call_list(&reader, resp),
++            binder_voicecall_info_compare);
+     }
+ 
+     /* Merge the ongoing ext calls since IRadio may not report them */
+-- 
+2.56.0
+

@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 08:22:35 +0100
+Subject: [PATCH] printers: Say when the test page could not be printed
+
+Plinius: "Test Page" in the printer's options ignored the result of the
+job: a printer found on the network whose queue CUPS could not set up (CUPS
+2.4.20 gave such a queue the device URI "://") or one that cannot be
+reached printed nothing and nothing was said. A dialog says so now.
+---
+ panels/printers/pp-options-dialog.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/panels/printers/pp-options-dialog.c b/panels/printers/pp-options-dialog.c
+index 825ab36..4f50b13 100644
+--- a/panels/printers/pp-options-dialog.c
++++ b/panels/printers/pp-options-dialog.c
+@@ -584,10 +584,24 @@ get_testprint_filename (const gchar *datadir)
+     return filename;
+ }
+ 
++/* Plinius: a test page that CUPS refuses says so, instead of nothing at all (a printer found on
++ * the network whose queue could not be set up, one that cannot be reached) */
+ static void
+ print_test_page_cb (GObject *source_object, GAsyncResult *result, gpointer user_data)
+ {
+-    pp_printer_print_file_finish (PP_PRINTER (source_object), result, NULL);
++    g_autoptr(PpOptionsDialog) self = user_data;
++    AdwDialog *alert;
++
++    if (pp_printer_print_file_finish (PP_PRINTER (source_object), result, NULL))
++        return;
++    if (!gtk_widget_get_root (GTK_WIDGET (self)))
++        return; /* closed in the meantime */
++
++    alert = adw_alert_dialog_new (g_dgettext ("plinius-control-center", "Test Page Not Printed"),
++                                  g_dgettext ("plinius-control-center",
++                                              "The printer could not be set up or reached. Check that it is switched on and on the same network."));
++    adw_alert_dialog_add_response (ADW_ALERT_DIALOG (alert), "close", _("_Close"));
++    adw_dialog_present (alert, GTK_WIDGET (self));
+ }
+ 
+ static void
+@@ -614,7 +628,7 @@ test_page_cb (PpOptionsDialog *self)
+             printer = pp_printer_new (self->printer_name);
+             pp_printer_print_file_async (printer, filename,
+                                          /* Translators: Name of job which makes printer to print test page */
+-                                         _("Test Page"), NULL, print_test_page_cb, NULL);
++                                         _("Test Page"), NULL, print_test_page_cb, g_object_ref (self));
+         } else {
+             g_autoptr(PpMaintenanceCommand) command = NULL;
+ 
+-- 
+2.56.0
+

@@ -1,0 +1,207 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:40:00 +0100
+Subject: [PATCH] Emergency calls only for the session, root and the group
+ radio
+
+An emergency call skipped polkit for every caller (0018), so that it can
+never wait for it. That also let any uid through: "nobody" or a
+DynamicUser service could dial 112 (the radio comes on despite airplane
+mode, the false alarm goes to the owner), and while an emergency call
+ran, hang it up, hold it or send DTMF in it.
+
+Emergency requests still skip polkit and the sender's queue, but only
+for root, the user of the active session on seat0 (logind's
+/run/systemd/seats/seat0, read without a bus call) and members of the
+group radio. The uid comes from the bus daemon, which answers at once;
+should it not answer, the call goes through rather than keep an
+emergency call from going out. Anyone else gets Unauthorized.
+---
+ main.py                   | 79 +++++++++++++++++++++++++++++----------
+ ofono2mm/authorization.py | 49 +++++++++++++++++++++++-
+ 2 files changed, 107 insertions(+), 21 deletions(-)
+
+diff --git a/main.py b/main.py
+index 04a51d7..19e07bf 100755
+--- a/main.py
++++ b/main.py
+@@ -168,6 +168,15 @@ class ModemManagerBus(MessageBus):
+ 
+         action = authorization.required_action(msg.interface, msg.member, msg.path)
+         if action is not None and self._is_emergency_request(msg):
++            # Not behind polkit and not behind the sender's queue, but only for the session,
++            # root and the group radio (authorization.may_handle_emergency)
++            uid = self._sender_uids.get(msg.sender)
++            if uid is None:
++                asyncio.ensure_future(self._authorize_emergency(msg))
++                return
++            if not authorization.may_handle_emergency(uid):
++                self._refuse(msg, authorization.VOICE, uid)
++                return
+             Logger.info(f'{msg.interface}.{msg.member}: emergency call, not asking polkit')
+             return super()._process_message(msg)
+ 
+@@ -190,7 +199,9 @@ class ModemManagerBus(MessageBus):
+                 allowed = True
+                 if action is not None and not self._allow_cache.allowed(sender, action):
+                     try:
+-                        allowed = (self._is_emergency_request(msg)
++                        # An emergency call that started while this one waited
++                        allowed = ((self._is_emergency_request(msg) and authorization.may_handle_emergency(
++                                       await self._sender_uid(sender)))
+                                    or await self._check_authorization(sender, action))
+                     except Exception as e:
+                         Logger.error(f'Authorization of {msg.member} failed: {e}')
+@@ -211,30 +222,60 @@ class ModemManagerBus(MessageBus):
+                     except Exception as e:
+                         Logger.debug(f'{msg.interface}.{msg.member} on {msg.path} failed: {e}')
+                 else:
+-                    Logger.info(f'{msg.interface}.{msg.member} from {sender} '
+-                                f'(uid {self._sender_uids.get(sender)}): not authorized ({action})')
+-                    if not msg.flags & MessageFlag.NO_REPLY_EXPECTED:
+-                        self.send(Message.new_error(msg, authorization.UNAUTHORIZED,
+-                                                    f'Not authorized to perform {action}'))
++                    self._refuse(msg, action, self._sender_uids.get(sender))
+         finally:
+             del self._auth_queues[sender]
+ 
++    def _refuse(self, msg, action, uid):
++        Logger.info(f'{msg.interface}.{msg.member} from {msg.sender} (uid {uid}): '
++                    f'not authorized ({action})')
++        if not msg.flags & MessageFlag.NO_REPLY_EXPECTED:
++            self.send(Message.new_error(msg, authorization.UNAUTHORIZED,
++                                        f'Not authorized to perform {action}'))
++
++    async def _sender_uid(self, sender):
++        uid = self._sender_uids.get(sender)
++        if uid is not None:
++            return uid
++        # The bus daemon, not polkit: it answers at once
++        reply = await asyncio.wait_for(self.call(Message(
++            destination='org.freedesktop.DBus', path='/org/freedesktop/DBus',
++            interface='org.freedesktop.DBus', member='GetConnectionUnixUser',
++            signature='s', body=[sender])), self.AUTHORIZATION_TIMEOUT)
++        if reply.message_type != MessageType.METHOD_RETURN:
++            return None
++        self._sender_uids[sender] = reply.body[0]
++        return reply.body[0]
++
++    async def _authorize_emergency(self, msg):
++        try:
++            uid = await self._sender_uid(msg.sender)
++        except Exception as e:
++            # The bus daemon does not answer: rather let an emergency call through than keep it
++            # from going out (nobody can make the bus daemon fail for one caller)
++            Logger.error(f'Could not look up the user of {msg.sender} for an emergency call: {e!r}')
++            uid = 0
++        if self._disconnected:
++            return
++        if not authorization.may_handle_emergency(uid):
++            self._refuse(msg, authorization.VOICE, uid)
++            return
++        Logger.info(f'{msg.interface}.{msg.member}: emergency call, not asking polkit')
++        self._authorized_calls.add((msg.sender, msg.serial))
++        try:
++            self._process_message(msg)
++        except Exception as e:
++            Logger.debug(f'{msg.interface}.{msg.member} on {msg.path} failed: {e}')
++
+     async def _check_authorization(self, sender, action):
+         # root (NetworkManager, mmcli as root) is always allowed and must not depend on polkit
+-        uid = self._sender_uids.get(sender)
++        try:
++            uid = await self._sender_uid(sender)
++        except Exception as e:
++            Logger.error(f'Could not look up the user of {sender}: {e!r}')
++            return False
+         if uid is None:
+-            try:
+-                reply = await asyncio.wait_for(self.call(Message(
+-                    destination='org.freedesktop.DBus', path='/org/freedesktop/DBus',
+-                    interface='org.freedesktop.DBus', member='GetConnectionUnixUser',
+-                    signature='s', body=[sender])), self.AUTHORIZATION_TIMEOUT)
+-            except Exception as e:
+-                Logger.error(f'Could not look up the user of {sender}: {e!r}')
+-                return False
+-            if reply.message_type != MessageType.METHOD_RETURN:
+-                return False
+-            uid = reply.body[0]
+-            self._sender_uids[sender] = uid
++            return False
+         if uid == 0:
+             return True
+ 
+diff --git a/ofono2mm/authorization.py b/ofono2mm/authorization.py
+index 9aedd46..66e7cee 100644
+--- a/ofono2mm/authorization.py
++++ b/ofono2mm/authorization.py
+@@ -33,8 +33,14 @@
+ # - No interactive authorization: a background service must not raise a password dialog. The
+ #   actions a session needs are allowed without one (allow_active=yes), Control and Firmware
+ #   (auth_admin) stay with root.
+-# - An emergency call never waits for polkit (see is_emergency_request).
+-
++# - An emergency call never waits for polkit (see is_emergency_request), but only root, the
++#   user of the active session on seat0 and members of the group radio may make one, hang it up
++#   or send DTMF in it (see may_handle_emergency). Before, any uid could: "nobody" could dial 112
++#   (the radio comes on despite airplane mode, the false alarm goes to the owner) or end the
++#   user's emergency call.
++
++import grp
++import pwd
+ import time
+ 
+ PREFIX = 'org.freedesktop.ModemManager1.'
+@@ -91,6 +97,10 @@ ALWAYS_EMERGENCY = frozenset(('112', '911'))
+ # MMCallState: TERMINATED
+ CALL_STATE_TERMINATED = 7
+ 
++# logind's state of seat0: ACTIVE_UID= is the user of the session in front
++SEAT0_STATE = '/run/systemd/seats/seat0'
++EMERGENCY_GROUP = 'radio'
++
+ # How long an allowed (sender, action) is remembered. polkit answers within milliseconds, but
+ # Calls and NetworkManager send bursts of calls; a short lifetime still notices a session that
+ # became inactive. Only "allowed" is remembered, a refusal is asked again next time.
+@@ -148,6 +158,41 @@ def is_emergency_request(interface, member, body, call_numbers, active_call_numb
+     return False
+ 
+ 
++def active_seat_uid(path=SEAT0_STATE):
++    """The uid of the active session on seat0, or None. A file of logind's: read without a bus
++    call, so it can't hang."""
++    try:
++        with open(path, encoding='utf-8') as f:
++            for line in f:
++                if line.startswith('ACTIVE_UID='):
++                    return int(line.split('=', 1)[1])
++    except (OSError, ValueError):
++        pass
++    return None
++
++
++def in_group(uid, group=EMERGENCY_GROUP):
++    try:
++        entry = grp.getgrnam(group)
++        user = pwd.getpwuid(uid)
++    except KeyError:
++        return False
++    return user.pw_gid == entry.gr_gid or user.pw_name in entry.gr_mem
++
++
++def may_handle_emergency(uid, active_uid=None, member=None):
++    """Whether uid may make, end or control an emergency call without polkit."""
++    if uid is None:
++        return False
++    if uid == 0:
++        return True
++    if active_uid is None:
++        active_uid = active_seat_uid()
++    if uid == active_uid:
++        return True
++    return member(uid) if member else in_group(uid)
++
++
+ class AllowCache:
+     """Remembers allowed (sender, action) pairs for ALLOW_LIFETIME seconds."""
+ 

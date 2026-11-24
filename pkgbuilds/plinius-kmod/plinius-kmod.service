@@ -1,0 +1,18 @@
+[Unit]
+Description=Kernel modules for the Volla Phone Plinius (backlight device, userspace LEDs, no VT switch)
+# Built for one kernel release; with a kernel that has none the device goes without. A kernel of
+# plinius-kernel that is only the fallback has them in its kept copy.
+ConditionPathExists=|/usr/lib/plinius/modules/%v
+ConditionPathExists=|/var/lib/plinius-kernel/kept/%v/modules
+# Early: Phosh looks for the backlight device only when it starts
+DefaultDependencies=no
+After=systemd-udevd.service
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/plinius/plinius-kmod
+
+[Install]
+WantedBy=sysinit.target

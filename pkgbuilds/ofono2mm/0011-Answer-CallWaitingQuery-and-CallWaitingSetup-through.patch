@@ -1,0 +1,84 @@
+From 21753ae1feac9de2c599eb23422f51c106b87803 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 01:14:16 +0100
+Subject: [PATCH] Answer CallWaitingQuery and CallWaitingSetup through oFono's
+ CallSettings
+
+Both methods returned nothing, so every caller got a signature error
+(dbus_next SignatureBodyMismatch: 0 return values instead of 1) and GNOME
+Calls showed the call waiting state as unknown.
+
+Ask the network through org.ofono.CallSettings (VoiceCallWaiting), but
+only while the modem is registered: without a network the RIL may never
+answer and holds back the other requests of the slot. Requests that take
+longer than 30 seconds or fail end in a ModemManager error.
+---
+ ofono2mm/mm_modem_voice.py | 38 +++++++++++++++++++++++++++++++++-----
+ 1 file changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/ofono2mm/mm_modem_voice.py b/ofono2mm/mm_modem_voice.py
+index 4df73bf..a496ee5 100644
+--- a/ofono2mm/mm_modem_voice.py
++++ b/ofono2mm/mm_modem_voice.py
+@@ -1,11 +1,12 @@
+ from dbus_next.service import ServiceInterface, method, dbus_property, signal
+ from dbus_next.constants import PropertyAccess
+-from dbus_next import Variant
++from dbus_next import Variant, DBusError
+ 
+ from ofono2mm.mm_call import MMCallInterface
+ 
+ from ofono2mm.logger import Logger
+ 
++import asyncio
+ import time
+ 
+ call_i = 1
+@@ -178,13 +179,40 @@ class MMModemVoiceInterface(ServiceInterface):
+     async def Transfer(self):
+         await self.ofono_interfaces['org.ofono.VoiceCallManager'].call_transfer()
+ 
++    def call_settings(self):
++        """oFono's CallSettings of this modem, if the network can be asked about call waiting."""
++        if 'org.ofono.CallSettings' not in self.ofono_interfaces:
++            raise DBusError('org.freedesktop.ModemManager1.Error.Core.Unsupported',
++                            'call waiting is not supported by this modem')
++        # Call waiting is a supplementary service of the network: without a registration the RIL
++        # may never answer and holds back the other requests of the slot meanwhile.
++        status = self.ofono_interface_props.get('org.ofono.NetworkRegistration', {}).get('Status')
++        if status is None or status.value not in ('registered', 'roaming'):
++            raise DBusError('org.freedesktop.ModemManager1.Error.Core.WrongState',
++                            'not registered to a network')
++        return self.ofono_interfaces['org.ofono.CallSettings']
++
++    async def ask_network(self, call):
++        """Waits for a network request, at most 30 s, and turns failures into D-Bus errors."""
++        try:
++            return await asyncio.wait_for(call, 30)
++        except asyncio.TimeoutError:
++            raise DBusError('org.freedesktop.ModemManager1.Error.Core.Failed',
++                            'the network did not answer')
++        except DBusError as e:
++            raise DBusError('org.freedesktop.ModemManager1.Error.Core.Failed', e.text)
++
+     @method()
+-    def CallWaitingSetup(self, enable: 'b'):
+-        pass
++    async def CallWaitingSetup(self, enable: 'b'):
++        settings = self.call_settings()
++        await self.ask_network(settings.call_set_property(
++            'VoiceCallWaiting', Variant('s', 'enabled' if enable else 'disabled')))
+ 
+     @method()
+-    def CallWaitingQuery(self) -> 'b':
+-        pass
++    async def CallWaitingQuery(self) -> 'b':
++        settings = self.call_settings()
++        props = await self.ask_network(settings.call_get_properties())
++        return 'VoiceCallWaiting' in props and props['VoiceCallWaiting'].value == 'enabled'
+ 
+     @signal()
+     def CallAdded(self, path) -> 'o':
+-- 
+2.55.0
+

@@ -1,0 +1,15 @@
+# One desktop session: from a connection to the port until the viewer is gone
+[Unit]
+Description=Plinius Desktop: desktop over VNC in the phone's session
+Requires=plinius-desktop.socket
+After=plinius-desktop.socket graphical-session.target
+
+[Service]
+ExecStart=/usr/lib/plinius-desktop/plinius-desktop-session
+# Control socket, viewer's address and name of the screen; gone with the session
+RuntimeDirectory=plinius-desktop
+RuntimeDirectoryMode=0700
+TimeoutStopSec=10
+# The kernel's OOM killer ending one process (a bar menu, wayvnc) does not end the whole session;
+# the default "stop" did, apps started from the desktop included
+OOMPolicy=continue

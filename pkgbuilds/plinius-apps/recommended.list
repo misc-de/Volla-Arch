@@ -1,0 +1,42 @@
+# Recommended apps: the image preinstalls them, but they can be removed in plinius-software.
+# plinius-software lists missing ones under "Explore -> Recommended", so apps recommended
+# later also reach existing devices. Only what plinius-apps/PKGBUILD lists under depends is
+# fixed (cannot be removed).
+# One package per line; lines starting with "#" are comments.
+# Apps below the line "# Not preinstalled" are recommended as well, but the image builders
+# (image/mkimage.sh, image/mkpreview.sh) stop there: they come only when the user installs them.
+
+# First start
+phosh-tour
+# Everyday
+gnome-clocks
+gnome-weather
+gnome-calendar
+gnome-calculator
+gnome-maps
+gnome-text-editor
+gnome-console
+# Resource use: CPU, memory, storage per app
+gnome-usage
+nautilus
+# Media
+muga
+snapshot
+showtime
+decibels
+amberol
+gnome-sound-recorder
+# Printing (printer page in Settings; printer discovery via avahi; cups-plinius is Arch's cups
+# with the fix for printers found on the network)
+cups-plinius
+cups-pk-helper
+system-config-printer
+# Web and documents
+firefox
+papers
+# Passwords: KeePass databases (.kdbx), adaptive for the phone
+secrets
+
+# Not preinstalled
+# Game emulators: RetroArch and the DOS Installer, only as this one metapackage
+plinius-retro-games

@@ -1,0 +1,15 @@
+#!/bin/sh
+# NetworkManager dispatcher: evolution-data-server starts with the session, before the network, fails
+# to reach the servers of the online accounts and does not try again by itself (see plinius-goa-refresh).
+# It runs in the session of each logged-in user who has an online account.
+case "$2:${CONNECTIVITY_STATE:-}" in
+connectivity-change:FULL | up:*) ;;
+*) exit 0 ;;
+esac
+
+loginctl list-users --no-legend 2>/dev/null | while read -r uid user _rest; do
+	[ "$uid" -ge 1000 ] 2>/dev/null || continue
+	home=$(getent passwd "$uid" | cut -d: -f6)
+	[ -s "$home/.config/goa-1.0/accounts.conf" ] || continue
+	systemctl --user -M "$user@" start --no-block plinius-goa-refresh.service
+done

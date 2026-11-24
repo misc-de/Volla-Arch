@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 06 Nov 2026 06:00:00 +0100
+Subject: [PATCH] swipe-tracker: Don't let the swiped page move the finger
+
+A slow swipe on a touch screen made a carousel flicker: the page jumped by up
+to a whole screen between two frames while the finger moved a few pixels.
+
+GDK converts an event to the coordinates of its window when the event arrives,
+GtkGesture converts it back with the window's position at the time it is
+handled. HdyCarouselBox moves each page's window during a swipe, so when more
+events are waiting, every further one contains the window's move as if the
+finger had made it. Follow the finger on the surface instead.
+
+Measured on a phone with a 240 Hz touch screen, recording the screen and the
+raw touch positions: the lock screen's carousel showed offsets of 872, 421, 0,
+2398, 45, 2, 511 px in consecutive frames, while the finger moved from 1945 to
+1853 px steadily.
+---
+--- a/src/hdy-swipe-tracker.c
++++ b/src/hdy-swipe-tracker.c
+@@ -76,6 +76,8 @@
+ 
+   gint start_x;
+   gint start_y;
++  gdouble surface_start_x;
++  gdouble surface_start_y;
+   gboolean use_capture_phase;
+ 
+   gdouble initial_progress;
+@@ -516,6 +518,42 @@
+   gesture_end (self, distance, is_touchpad);
+ }
+ 
++/*
++ * Where the gesture's last event happened, relative to the surface.
++ *
++ * The offset GtkGestureDrag reports can't be used for this. GDK converts an event to the coordinates
++ * of its window when the event arrives, GtkGesture converts it back with the window's position at
++ * the time it is handled. The swiped page is such a window and each event moves it, so with more
++ * than one event waiting, every further one contains the move of those before it as if the finger
++ * had made it. As the page follows that again, the error grows until the page jumps by whole
++ * screens, which is easy to get with a slow swipe on a touch screen faster than the display.
++ *
++ * Root coordinates don't depend on any window, but are whole pixels. Windows are at whole pixels
++ * as well, so the fraction of the window coordinates is still the one of the finger.
++ */
++static gboolean
++get_surface_coords (GtkGesture *gesture,
++                    gdouble    *x,
++                    gdouble    *y)
++{
++  GdkEventSequence *sequence;
++  const GdkEvent *event;
++  gdouble event_x, event_y, root_x, root_y;
++
++  sequence = gtk_gesture_single_get_current_sequence (GTK_GESTURE_SINGLE (gesture));
++  event = gtk_gesture_get_last_event (gesture, sequence);
++
++  if (!event ||
++      !gdk_event_get_coords (event, &event_x, &event_y) ||
++      !gdk_event_get_root_coords (event, &root_x, &root_y))
++    return FALSE;
++
++  *x = floor (root_x) + event_x - floor (event_x);
++  *y = floor (root_y) + event_y - floor (event_y);
++
++  return TRUE;
++}
++
+ static void
+ drag_begin_cb (HdySwipeTracker *self,
+                gdouble          start_x,
+@@ -527,6 +565,11 @@
+ 
+   self->start_x = start_x;
+   self->start_y = start_y;
++
++  if (!get_surface_coords (GTK_GESTURE (gesture), &self->surface_start_x, &self->surface_start_y)) {
++    self->surface_start_x = start_x;
++    self->surface_start_y = start_y;
++  }
+ }
+ 
+ static void
+@@ -535,9 +578,14 @@
+                 gdouble          offset_y,
+                 GtkGestureDrag  *gesture)
+ {
+-  gdouble offset, distance, delta;
++  gdouble offset, distance, delta, surface_x, surface_y;
+   gboolean is_vertical, is_offset_vertical;
+ 
++  if (get_surface_coords (GTK_GESTURE (gesture), &surface_x, &surface_y)) {
++    offset_x = surface_x - self->surface_start_x;
++    offset_y = surface_y - self->surface_start_y;
++  }
++
+   distance = hdy_swipeable_get_distance (self->swipeable);
+ 
+   is_vertical = (self->orientation == GTK_ORIENTATION_VERTICAL);

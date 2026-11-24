@@ -1,0 +1,300 @@
+From 7aa4b568e198a8413f9eefd7a5518560f24d4fb3 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 09:28:25 +0100
+Subject: [PATCH] unl0kr: add a Russian keyboard layout
+
+Generated from squeekboard's ru.yaml (commit 27c359c4ccd7) and added to
+the existing layouts, which stay as they are: regenerating them from
+current squeekboard would change them as well. squeek2lvgl now knows
+squeekboard's BackSpace-wide key, which current layouts use on the
+number and symbol views.
+---
+ squeek2lvgl/squeek2lvgl.py   |   2 +
+ unl0kr/regenerate-layouts.sh |   2 +
+ unl0kr/sq2lv_layouts.c       | 205 ++++++++++++++++++++++++++++++++++-
+ unl0kr/sq2lv_layouts.h       |   3 +-
+ 4 files changed, 208 insertions(+), 4 deletions(-)
+
+diff --git a/squeek2lvgl/squeek2lvgl.py b/squeek2lvgl/squeek2lvgl.py
+index 26ef69c..816ccb5 100644
+--- a/squeek2lvgl/squeek2lvgl.py
++++ b/squeek2lvgl/squeek2lvgl.py
+@@ -312,6 +312,7 @@ keycap_for_key = {
+     '←': 'LV_SYMBOL_LEFT',
+     '→': 'LV_SYMBOL_RIGHT',
+     'BackSpace': 'LV_SYMBOL_BACKSPACE',
++    'BackSpace-wide': 'LV_SYMBOL_BACKSPACE',
+     'show_upper': 'SQ2LV_SYMBOL_SHIFT',
+     'Return': 'LV_SYMBOL_OK',
+     'Up': 'LV_SYMBOL_UP',
+@@ -334,6 +335,7 @@ def key_is_modifier(key, data_buttons):
+ 
+ repeatable_keys = {
+     'BackSpace',
++    'BackSpace-wide',
+     'Del',
+     'PageUp',
+     'PageDown',
+diff --git a/unl0kr/regenerate-layouts.sh b/unl0kr/regenerate-layouts.sh
+index 8a4e5f5..403aa54 100755
+--- a/unl0kr/regenerate-layouts.sh
++++ b/unl0kr/regenerate-layouts.sh
+@@ -15,6 +15,8 @@ pipenv run python squeek2lvgl.py \
+       --name "Español" \
+     --input fr.yaml \
+       --name "Français" \
++    --input ru.yaml \
++      --name "Русский" \
+     --extra-top-row-base "1 2 3 4 5 6 7 8 9 0" \
+     --extra-top-row-upper "! @ # $ % ^ & * ( )" \
+     --output ../unl0kr \
+diff --git a/unl0kr/sq2lv_layouts.c b/unl0kr/sq2lv_layouts.c
+index b8a5375..c733139 100644
+--- a/unl0kr/sq2lv_layouts.c
++++ b/unl0kr/sq2lv_layouts.c
+@@ -899,11 +899,201 @@ static const sq2lv_layer_t layers_fr[] = {
+     }
+ };
+ 
++/**
++ * Layout: Русский - generated from ru
++ **/
++
++static const char * const name_ru = "Русский";
++static const char * const short_name_ru = "ru";
++
++/* Layer: Lowercase letters - generated from base */
++
++static const uint32_t num_keys_lower_ru = 51;
++
++static const char * const keycaps_lower_ru[] = { \
++    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n", \
++    "й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "\n", \
++    "ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "\n", \
++    SQ2LV_SYMBOL_SHIFT, "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", LV_SYMBOL_BACKSPACE, "\n", \
++    "123", "ё", LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, "ъ", ".", LV_SYMBOL_OK, "" \
++};
++
++static const lv_buttonmatrix_ctrl_t attributes_lower_ru[] = { \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    SQ2LV_CTRL_MOD_INACTIVE | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3, \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | 2, 7, LV_BUTTONMATRIX_CTRL_POPOVER | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3 \
++};
++
++static const uint32_t num_modifiers_lower_ru = 0;
++
++static const uint32_t * const modifier_idxs_lower_ru = NULL;
++
++static const uint32_t num_switchers_lower_ru = 2;
++
++static const uint32_t switcher_idxs_lower_ru[] = { \
++    32, 43 \
++};
++
++static const int switcher_dests_lower_ru[] = { \
++    1, 2 \
++};
++
++/* Layer: Uppercase letters - generated from upper */
++
++static const uint32_t num_keys_upper_ru = 51;
++
++static const char * const keycaps_upper_ru[] = { \
++    "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "\n", \
++    "Й", "Ц", "У", "К", "Е", "Н", "Г", "Ш", "Щ", "З", "Х", "\n", \
++    "Ф", "Ы", "В", "А", "П", "Р", "О", "Л", "Д", "Ж", "Э", "\n", \
++    SQ2LV_SYMBOL_SHIFT, "Я", "Ч", "С", "М", "И", "Т", "Ь", "Б", "Ю", LV_SYMBOL_BACKSPACE, "\n", \
++    "123", "Ё", LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, "Ъ", ",", LV_SYMBOL_OK, "" \
++};
++
++static const lv_buttonmatrix_ctrl_t attributes_upper_ru[] = { \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    SQ2LV_CTRL_MOD_ACTIVE | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3, \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | 2, 7, LV_BUTTONMATRIX_CTRL_POPOVER | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3 \
++};
++
++static const uint32_t num_modifiers_upper_ru = 0;
++
++static const uint32_t * const modifier_idxs_upper_ru = NULL;
++
++static const uint32_t num_switchers_upper_ru = 2;
++
++static const uint32_t switcher_idxs_upper_ru[] = { \
++    32, 43 \
++};
++
++static const int switcher_dests_upper_ru[] = { \
++    0, 2 \
++};
++
++/* Layer: Numbers / symbols - generated from numbers */
++
++static const uint32_t num_keys_numbers_ru = 36;
++
++static const char * const keycaps_numbers_ru[] = { \
++    "<hidden>", "\n", \
++    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "²", "\n", \
++    "@", "#", "$", "%", "&", "-", "_", "+", "(", ")", "³", "\n", \
++    "*/=", ",", "\"", "'", ":", ";", "!", "?", LV_SYMBOL_BACKSPACE, "\n", \
++    "АБВ", " ", ".", LV_SYMBOL_OK, "" \
++};
++
++static const lv_buttonmatrix_ctrl_t attributes_numbers_ru[] = { \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | LV_BUTTONMATRIX_CTRL_HIDDEN | 3, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3, \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3 \
++};
++
++static const uint32_t num_modifiers_numbers_ru = 0;
++
++static const uint32_t * const modifier_idxs_numbers_ru = NULL;
++
++static const uint32_t num_switchers_numbers_ru = 2;
++
++static const uint32_t switcher_idxs_numbers_ru[] = { \
++    23, 32 \
++};
++
++static const int switcher_dests_numbers_ru[] = { \
++    3, 0 \
++};
++
++/* Layer: Symbols - generated from symbols */
++
++static const uint32_t num_keys_symbols_ru = 36;
++
++static const char * const keycaps_symbols_ru[] = { \
++    "<hidden>", "\n", \
++    "~", "`", "|", "·", "√", "π", "τ", "÷", "×", "¶", "²", "\n", \
++    "©", "®", "£", "€", "¥", "^", "°", "*", "{", "}", "³", "\n", \
++    "123", "\\", "/", "<", ">", "=", "[", "]", LV_SYMBOL_BACKSPACE, "\n", \
++    "АБВ", " ", ".", LV_SYMBOL_OK, "" \
++};
++
++static const lv_buttonmatrix_ctrl_t attributes_symbols_ru[] = { \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | LV_BUTTONMATRIX_CTRL_HIDDEN | 3, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3, \
++    SQ2LV_CTRL_NON_CHAR | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 3, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, LV_BUTTONMATRIX_CTRL_POPOVER | LV_BUTTONMATRIX_CTRL_NO_REPEAT | 2, SQ2LV_CTRL_NON_CHAR | 3 \
++};
++
++static const uint32_t num_modifiers_symbols_ru = 0;
++
++static const uint32_t * const modifier_idxs_symbols_ru = NULL;
++
++static const uint32_t num_switchers_symbols_ru = 2;
++
++static const uint32_t switcher_idxs_symbols_ru[] = { \
++    23, 32 \
++};
++
++static const int switcher_dests_symbols_ru[] = { \
++    2, 0 \
++};
++
++/* Layer array */
++
++static const int num_layers_ru = 4;
++
++static const sq2lv_layer_t layers_ru[] = {
++    {
++        .num_keys = num_keys_lower_ru,
++        .keycaps = keycaps_lower_ru,
++        .attributes = attributes_lower_ru,
++        .num_modifiers = num_modifiers_lower_ru,
++        .modifier_idxs = modifier_idxs_lower_ru,
++        .num_switchers = num_switchers_lower_ru,
++        .switcher_idxs = switcher_idxs_lower_ru,
++        .switcher_dests = switcher_dests_lower_ru
++    },
++    {
++        .num_keys = num_keys_upper_ru,
++        .keycaps = keycaps_upper_ru,
++        .attributes = attributes_upper_ru,
++        .num_modifiers = num_modifiers_upper_ru,
++        .modifier_idxs = modifier_idxs_upper_ru,
++        .num_switchers = num_switchers_upper_ru,
++        .switcher_idxs = switcher_idxs_upper_ru,
++        .switcher_dests = switcher_dests_upper_ru
++    },
++    {
++        .num_keys = num_keys_numbers_ru,
++        .keycaps = keycaps_numbers_ru,
++        .attributes = attributes_numbers_ru,
++        .num_modifiers = num_modifiers_numbers_ru,
++        .modifier_idxs = modifier_idxs_numbers_ru,
++        .num_switchers = num_switchers_numbers_ru,
++        .switcher_idxs = switcher_idxs_numbers_ru,
++        .switcher_dests = switcher_dests_numbers_ru
++    },
++    {
++        .num_keys = num_keys_symbols_ru,
++        .keycaps = keycaps_symbols_ru,
++        .attributes = attributes_symbols_ru,
++        .num_modifiers = num_modifiers_symbols_ru,
++        .modifier_idxs = modifier_idxs_symbols_ru,
++        .num_switchers = num_switchers_symbols_ru,
++        .switcher_idxs = switcher_idxs_symbols_ru,
++        .switcher_dests = switcher_dests_symbols_ru
++    }
++};
++
+ /**
+  * Public interface
+  **/
+ 
+-const int sq2lv_num_layouts = 4;
++const int sq2lv_num_layouts = 5;
+ 
+ const sq2lv_layout_t sq2lv_layouts[] = {
+     /* US English */
+@@ -933,6 +1123,13 @@ const sq2lv_layout_t sq2lv_layouts[] = {
+         .short_name = short_name_fr,
+         .num_layers = num_layers_fr,
+         .layers = layers_fr
++    },
++    /* Русский */
++    {
++        .name = name_ru,
++        .short_name = short_name_ru,
++        .num_layers = num_layers_ru,
++        .layers = layers_ru
+     }
+ };
+ 
+@@ -940,10 +1137,12 @@ const char * const sq2lv_layout_names =
+     "US English" "\n"
+     "Deutsch" "\n"
+     "Español" "\n"
+-    "Français";
++    "Français" "\n"
++    "Русский";
+ 
+ const char * const sq2lv_layout_short_names =
+     "us" "\n"
+     "de" "\n"
+     "es" "\n"
+-    "fr";
++    "fr" "\n"
++    "ru";
+diff --git a/unl0kr/sq2lv_layouts.h b/unl0kr/sq2lv_layouts.h
+index e9d053b..37f819f 100644
+--- a/unl0kr/sq2lv_layouts.h
++++ b/unl0kr/sq2lv_layouts.h
+@@ -15,7 +15,8 @@ typedef enum {
+     SQ2LV_LAYOUT_US = 0,
+     SQ2LV_LAYOUT_DE = 1,
+     SQ2LV_LAYOUT_ES = 2,
+-    SQ2LV_LAYOUT_FR = 3
++    SQ2LV_LAYOUT_FR = 3,
++    SQ2LV_LAYOUT_RU = 4
+ } sq2lv_layout_id_t;
+ 
+ /* Layer type */

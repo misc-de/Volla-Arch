@@ -1,0 +1,307 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 18:30:00 +0100
+Subject: [PATCH] overview: Icons fade out in a band at the running apps' cards
+
+Plinius: with 0093 the icons faded over the top 72 px of the app grid
+itself, so they got pale while still on the grid, and only as far as
+the grid was scrolled: shortly after scrolling the edge still cut them.
+
+Now, with cards of running apps, the app grid gets a band of 40 px at
+their edge (below the cards when they are above the grid, above them
+when they are below it, 0072), taken from the cards' room: the cards
+get 40 px lower. The grid's content leaves the band empty, so nothing
+moves while the grid is not scrolled. Icons scrolled into the band fade
+out towards the cards, fully: on the grid they stay fully visible, they
+lose their visibility in the band. Without running apps there is no
+band and no fade, and the far edge of the grid no longer fades.
+---
+ src/app-grid.c | 113 ++++++++++++++++++++++++++++++++++++---------------------
+ src/app-grid.h |   3 ++
+ src/overview.c |  70 ++++++++++++++++++++++++++++++++---
+ 3 files changed, 139 insertions(+), 47 deletions(-)
+
+diff --git a/src/app-grid.c b/src/app-grid.c
+index e06f8747..86fa7e64 100644
+--- a/src/app-grid.c
++++ b/src/app-grid.c
+@@ -77,6 +77,9 @@ struct _PhoshAppGridPrivate {
+   GtkFilterListModel *dock_model;
+   gboolean show_app_names;
+   gboolean folder_dock_enabled;
++  /* The band towards the running apps' cards in which icons fade out */
++  int plinius_band;
++  GtkPositionType plinius_band_edge;
+ 
+   PhoshFolderInfo *open_folder;
+   int              open_folder_idx;
+@@ -661,67 +664,92 @@ on_plinius_settings_changed (PhoshAppGrid *self, const char *key, GSettings *set
+ 
+ 
+ /*
+- * Plinius: icons don't end at a hard edge where the grid scrolls on (under the cards of the running
+- * apps, at the bottom of the screen) but fade out over PLINIUS_FADE_HEIGHT. The fade grows with
+- * the distance scrolled, so at the start and the end of the list nothing fades. Only the two
+- * strips are drawn through a group, the rest of the grid is drawn as usual.
++ * Plinius: where the grid meets the cards of the running apps its icons don't end at a hard edge.
++ * The overview gives the grid a band at that edge, taken from the cards' side
++ * (phosh_app_grid_set_plinius_band ()), and the grid's content leaves the band empty, so nothing
++ * moves while the grid is not scrolled. Icons scrolled into the band fade out towards the cards:
++ * on the grid they stay fully visible, they lose their visibility in the band. Only the band is
++ * drawn through a cairo group, the rest of the grid is drawn as usual.
+  */
+-#define PLINIUS_FADE_HEIGHT 72
+-
+-static void
+-plinius_draw_faded_strip (GtkWidget *widget, cairo_t *cr, int width, double y, double fade,
+-                          gboolean at_top)
+-{
+-  cairo_pattern_t *mask;
+-
+-  cairo_save (cr);
+-  cairo_rectangle (cr, 0, y, width, PLINIUS_FADE_HEIGHT);
+-  cairo_clip (cr);
+-  cairo_push_group (cr);
+-  GTK_WIDGET_GET_CLASS (widget)->draw (widget, cr);
+-  cairo_pop_group_to_source (cr);
+-
+-  /* From transparent at the edge to opaque PLINIUS_FADE_HEIGHT further in */
+-  mask = cairo_pattern_create_linear (0, y, 0, y + PLINIUS_FADE_HEIGHT);
+-  cairo_pattern_add_color_stop_rgba (mask, 0, 0, 0, 0, at_top ? 1 - fade : 1);
+-  cairo_pattern_add_color_stop_rgba (mask, 1, 0, 0, 0, at_top ? 1 : 1 - fade);
+-  cairo_mask (cr, mask);
+-  cairo_pattern_destroy (mask);
+-  cairo_restore (cr);
+-}
+-
+-
+ static gboolean
+-on_scrolled_window_draw (GtkWidget *widget, cairo_t *cr, gpointer unused)
++on_scrolled_window_draw (GtkWidget *widget, cairo_t *cr, PhoshAppGrid *self)
+ {
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
+   GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (widget));
+   int width = gtk_widget_get_allocated_width (widget);
+   int height = gtk_widget_get_allocated_height (widget);
+   double value = gtk_adjustment_get_value (adj);
+   double rest = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj) - value;
+-  double fade_top = CLAMP (value / PLINIUS_FADE_HEIGHT, 0, 1);
+-  double fade_bottom = CLAMP (rest / PLINIUS_FADE_HEIGHT, 0, 1);
+-  int top = fade_top > 0 ? PLINIUS_FADE_HEIGHT : 0;
+-  int bottom = fade_bottom > 0 ? PLINIUS_FADE_HEIGHT : 0;
++  gboolean top = priv->plinius_band_edge == GTK_POS_TOP;
++  int band = priv->plinius_band;
++  cairo_pattern_t *mask;
++  int y;
+ 
+-  if ((!top && !bottom) || height < 3 * PLINIUS_FADE_HEIGHT)
++  if (band <= 0 || height < 2 * band)
++    return GDK_EVENT_PROPAGATE;
++  /* Nothing scrolled into the band: it only holds the content's empty margin */
++  if ((top && value <= 0) || (!top && rest <= 0))
+     return GDK_EVENT_PROPAGATE;
+ 
+   cairo_save (cr);
+-  cairo_rectangle (cr, 0, top, width, height - top - bottom);
++  cairo_rectangle (cr, 0, top ? band : 0, width, height - band);
+   cairo_clip (cr);
+   GTK_WIDGET_GET_CLASS (widget)->draw (widget, cr);
+   cairo_restore (cr);
+ 
+-  if (top)
+-    plinius_draw_faded_strip (widget, cr, width, 0, fade_top, TRUE);
+-  if (bottom)
+-    plinius_draw_faded_strip (widget, cr, width, height - PLINIUS_FADE_HEIGHT, fade_bottom, FALSE);
++  y = top ? 0 : height - band;
++  cairo_save (cr);
++  cairo_rectangle (cr, 0, y, width, band);
++  cairo_clip (cr);
++  cairo_push_group (cr);
++  GTK_WIDGET_GET_CLASS (widget)->draw (widget, cr);
++  cairo_pop_group_to_source (cr);
++  /* Transparent at the cards, opaque where the grid starts */
++  mask = cairo_pattern_create_linear (0, y, 0, y + band);
++  cairo_pattern_add_color_stop_rgba (mask, 0, 0, 0, 0, top ? 0 : 1);
++  cairo_pattern_add_color_stop_rgba (mask, 1, 0, 0, 0, top ? 1 : 0);
++  cairo_mask (cr, mask);
++  cairo_pattern_destroy (mask);
++  cairo_restore (cr);
+ 
+   return GDK_EVENT_STOP;
+ }
+ 
+ 
++/**
++ * phosh_app_grid_set_plinius_band:
++ * @self: The app grid
++ * @edge: The edge towards the cards of the running apps, %GTK_POS_TOP or %GTK_POS_BOTTOM
++ * @band: The height of the band in which icons fade out, 0 for none
++ *
++ * Plinius: the overview gives the grid @band more room at @edge; the grid's content keeps that
++ * much margin there and icons scrolled into it fade out.
++ */
++void
++phosh_app_grid_set_plinius_band (PhoshAppGrid *self, GtkPositionType edge, int band)
++{
++  PhoshAppGridPrivate *priv;
++  GtkWidget *content;
++
++  g_return_if_fail (PHOSH_IS_APP_GRID (self));
++  priv = phosh_app_grid_get_instance_private (self);
++
++  if (priv->plinius_band == band && priv->plinius_band_edge == edge)
++    return;
++  priv->plinius_band = band;
++  priv->plinius_band_edge = edge;
++
++  /* The scrolled window's viewport and in it the box of favorites and apps */
++  content = gtk_bin_get_child (GTK_BIN (priv->scrolled_window));
++  if (GTK_IS_VIEWPORT (content))
++    content = gtk_bin_get_child (GTK_BIN (content));
++  g_return_if_fail (GTK_IS_WIDGET (content));
++
++  gtk_widget_set_margin_top (content, edge == GTK_POS_TOP ? band : 0);
++  gtk_widget_set_margin_bottom (content, edge == GTK_POS_BOTTOM ? band : 0);
++  gtk_widget_queue_draw (priv->scrolled_window);
++}
++
+ static void
+ phosh_app_grid_init (PhoshAppGrid *self)
+ {
+@@ -731,8 +759,9 @@ phosh_app_grid_init (PhoshAppGrid *self)
+   g_autoptr (GAction) action = NULL;
+ 
+   gtk_widget_init_template (GTK_WIDGET (self));
+-  /* Plinius: fade the icons out at the edges where the grid scrolls on */
+-  g_signal_connect (priv->scrolled_window, "draw", G_CALLBACK (on_scrolled_window_draw), NULL);
++  /* Plinius: icons fade out in the band towards the cards of the running apps */
++  priv->plinius_band_edge = GTK_POS_TOP;
++  g_signal_connect (priv->scrolled_window, "draw", G_CALLBACK (on_scrolled_window_draw), self);
+ 
+   favorites = phosh_favorite_list_model_get_default ();
+ 
+diff --git a/src/app-grid.h b/src/app-grid.h
+index ce4daac2..857a0047 100644
+--- a/src/app-grid.h
++++ b/src/app-grid.h
+@@ -29,6 +29,9 @@ void       phosh_app_grid_reset (PhoshAppGrid *self);
+ void       phosh_app_grid_focus_search (PhoshAppGrid *self);
+ gboolean   phosh_app_grid_handle_search (PhoshAppGrid *self, GdkEvent *event);
+ void       phosh_app_grid_set_filter_adaptive (PhoshAppGrid *self, gboolean enable);
++void       phosh_app_grid_set_plinius_band (PhoshAppGrid    *self,
++                                            GtkPositionType  edge,
++                                            int              band);
+ 
+ 
+ G_END_DECLS
+diff --git a/src/overview.c b/src/overview.c
+index e30f3187..00825d6d 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -971,7 +971,7 @@ on_n_pages_changed (PhoshOverview *self)
+  * not expand, its height being its minimum and its room its margins.
+  */
+ static void
+-plinius_lay_out_bottom (PhoshOverview *self, const GtkAllocation *alloc)
++plinius_lay_out_bottom (PhoshOverview *self, const GtkAllocation *alloc, int band)
+ {
+   PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
+   GtkWidget *carousel = GTK_WIDGET (priv->carousel_running_activities);
+@@ -983,8 +983,8 @@ plinius_lay_out_bottom (PhoshOverview *self, const GtkAllocation *alloc)
+   /* The usable area starts below the top bar */
+   phosh_shell_get_usable_area (phosh_shell_get_default (), NULL, &top_bar, NULL, NULL);
+   below = MAX (PLINIUS_CARD_GAP_MIN, top_bar);
+-  /* What the carousel gets above the grid */
+-  card_height = MAX (0, (alloc->height - PLINIUS_CARD_GRID_MARGIN) / 2);
++  /* What the carousel gets above the grid, less the app grid's band (see plinius_fade_band ()) */
++  card_height = MAX (0, (alloc->height - PLINIUS_CARD_GRID_MARGIN) / 2 - band);
+   /* A very low overview (landscape): less room below rather than smaller cards */
+   below = MIN (below, MAX (0, alloc->height - PLINIUS_CARD_GRID_MARGIN - card_height));
+ 
+@@ -999,6 +999,63 @@ plinius_lay_out_bottom (PhoshOverview *self, const GtkAllocation *alloc)
+ }
+ 
+ 
++/* Plinius: the band at the cards' edge in which the app grid's icons fade out */
++#define PLINIUS_FADE_BAND 40
++
++/*
++ * Plinius: with cards of running apps the app grid gets a band of PLINIUS_FADE_BAND at their edge,
++ * taken from the cards' room: the cards get that much lower, the grid's icons keep their place
++ * and fade out in the band (phosh_app_grid_set_plinius_band ()) instead of ending at a hard edge.
++ * Returns the band, 0 without cards.
++ */
++static int
++plinius_fade_band (PhoshOverview *self, const GtkAllocation *alloc)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  int band = 0;
++
++  if (gtk_widget_get_visible (GTK_WIDGET (priv->carousel_running_activities)))
++    band = MIN (PLINIUS_FADE_BAND, alloc->height / 10);  /* less in a very low overview */
++
++  phosh_app_grid_set_plinius_band (PHOSH_APP_GRID (priv->app_grid),
++                                   priv->plinius_bottom ? GTK_POS_BOTTOM : GTK_POS_TOP,
++                                   band);
++  return band;
++}
++
++
++/*
++ * Plinius: above the grid both expand and the box shares the room out, so the band moves from
++ * the carousel to the grid after the box's allocation. Below the grid the carousel asks for that
++ * much less (plinius_lay_out_bottom ()) and the box gives it to the grid by itself.
++ */
++static void
++plinius_move_band_to_grid (PhoshOverview *self, int band)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  GtkWidget *carousel = GTK_WIDGET (priv->carousel_running_activities);
++  GtkWidget *grid_box = gtk_widget_get_parent (priv->app_grid);
++  GtkAllocation cards, grid;
++
++  if (!band || priv->plinius_bottom)
++    return;
++
++  /* The allocations lack the margins, the allocation to give includes them */
++  gtk_widget_get_allocation (carousel, &cards);
++  cards.x -= gtk_widget_get_margin_start (carousel);
++  cards.y -= gtk_widget_get_margin_top (carousel);
++  cards.width += gtk_widget_get_margin_start (carousel) + gtk_widget_get_margin_end (carousel);
++  cards.height += gtk_widget_get_margin_top (carousel) + gtk_widget_get_margin_bottom (carousel);
++  cards.height -= band;
++  gtk_widget_size_allocate (carousel, &cards);
++
++  gtk_widget_get_allocation (grid_box, &grid);
++  grid.y -= band;
++  grid.height += band;
++  gtk_widget_size_allocate (grid_box, &grid);
++}
++
++
+ static void
+ phosh_overview_size_allocate (GtkWidget     *widget,
+                               GtkAllocation *alloc)
+@@ -1006,7 +1063,7 @@ phosh_overview_size_allocate (GtkWidget     *widget,
+   PhoshOverview *self = PHOSH_OVERVIEW (widget);
+   PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
+   g_autoptr (GList) children = NULL;
+-  int width, height;
++  int width, height, band;
+ 
+   phosh_shell_get_usable_area (phosh_shell_get_default (), NULL, NULL, &width, &height);
+   children = gtk_container_get_children (GTK_CONTAINER (priv->carousel_running_activities));
+@@ -1018,9 +1075,12 @@ phosh_overview_size_allocate (GtkWidget     *widget,
+                   NULL);
+   }
+ 
+-  plinius_lay_out_bottom (self, alloc);
++  band = plinius_fade_band (self, alloc);
++  plinius_lay_out_bottom (self, alloc, band);
+ 
+   GTK_WIDGET_CLASS (phosh_overview_parent_class)->size_allocate (widget, alloc);
++
++  plinius_move_band_to_grid (self, band);
+ }
+ 
+ 

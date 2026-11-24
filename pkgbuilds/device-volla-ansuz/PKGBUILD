@@ -1,0 +1,439 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=device-volla-ansuz
+pkgver=0.5
+pkgrel=89
+pkgdesc="Device configuration for Volla Phone Plinius (ansuz): binder, Android container, boot chain check, SSH over USB"
+arch=(any)
+license=(MIT)
+# plinius-freigabe: holds back updates of coupled packages; depended on by the device package so
+# it does not disappear together with a removable app (docs/PAKETIERUNG.md)
+# plinius-backlight-wake: the panel driver leaves the backlight dark after the display was off
+# plinius-usb: the USB gadget (network for SSH, file sharing), up to 0.5-38 an NCM-only gadget here
+# ccid: driver of USB smart card readers and of the smart card part of security keys (YubiKey
+#   OpenPGP/PIV); pcscd (pcsclite) starts through its socket, linked below
+# plinius-epo: orbit predictions for MediaTek's GNSS daemon, a GPS fix in seconds (on by default,
+#   Settings > Privacy > Location > Faster GPS Fix); here, so updated phones get it too
+# plinius-greeter: greetd shows it instead of agreety after a session ends (Log Out), so the phone
+#   logs in again instead of a black screen; image/mkimage.sh installs it, here for updated phones
+# libhybris >= 5: TLS padding preloaded below. hybris-gbm: GBM backend for wlroots on the GPU (linked below under the DRM driver's name)
+depends=(systemd openssh 'libhybris>=0.1.0.20260624-5' plinius-freigabe 'plinius-bootcheck>=0.2' lxc-android-halium 'plinius-backlight-wake>=0.3' hybris-gbm plinius-usb bluez-utils ccid plinius-epo plinius-greeter)
+# The hook that hides pulled-in launchers came from plinius-apps up to 0.11-5
+conflicts=('plinius-apps<0.11-6')
+# Adds the lines to /etc/bash.bashrc that source the prompt and the aliases
+install=device-volla-ansuz.install
+backup=(etc/ssh/sshd_config.d/50-plinius.conf etc/security/pwquality.conf.d/50-plinius-pin.conf etc/gbinder.d/50-plinius.conf etc/profile.d/plinius-hybris.sh etc/phosh/phoc.ini etc/ld.so.preload etc/ofono/binder.conf etc/ofono/main.conf)
+source=(
+	50-plinius.conf
+	90-plinius.gschema.override
+	50-plinius.gbinder.conf
+	bootcheck.list
+	mount-android-partitions-plinius.conf
+	halium-vndservicemanager.rc
+	halium-usb-gadget.rc
+	halium-bluetooth-1.1.rc
+	halium-livedisplay.rc
+	halium-prop.halium
+	50-plinius-hybris.conf
+	plinius-hybris.sh
+	50-plinius-hybris-system.conf
+	halium-hwcomposer.rc
+	halium-gralloc.rc
+	50-plinius-powerkey.conf
+	phoc.ini
+	60-plinius-render.conf
+	ld.so.preload
+	plinius-gpu.service
+	70-plinius-android.rules
+	61-plinius-keys.hwdb
+	plinius-android.sysusers
+	plinius-wlan
+	plinius-wlan.service
+	50-plinius-nm.conf
+	droid-get-bt-address.sh
+	bluebinder-plinius.conf
+	ofono-binder.conf
+	ofono-plinius.conf
+	ofono-main.conf
+	biomd-plinius.conf
+	plinius-nfc-power
+	nfcd-plinius.conf
+	gnss-nmea-bridge-plinius.conf
+	audio-hal-bridge-plinius.conf
+	50-plinius-audio.conf
+	55-plinius-media-roles.conf
+	sensor-proxy-bridge-plinius.conf
+	org.mobian_project.CallAudio.service
+	50-plinius-callaudio.conf
+	plinius-display-nfc
+	plinius-android-initrc
+	lxc-android-config-plinius.conf
+	plinius-user-sessions-generator
+	device.conf
+	display-panel.json
+	61-plinius-pen.rules
+	61-plinius-touch-log.rules
+	50-plinius-pin.conf
+	plinius-polkit-helper
+	plinius-polkit-helper.hook
+	LICENSE
+	boot-logo-mark.png
+	boot-logo-wordmark.png
+	50-plinius-journald.conf
+	plinius-preload.service
+	71-plinius-vcodec.rules
+	72-plinius-camera-no-uaccess.rules
+	72-plinius-input-session.rules
+	plinius-hide-apps
+	plinius-hide-apps.hook
+	plinius-udev-reload
+	35-systemd-udev-reload.hook
+	halium-android-off.rc
+	halium-android-off-apex.rc
+	halium-camera-service.rc
+	halium-neuralnetworks-shim.rc
+	plinius-hardware-info
+	plinius-hardware-info.service
+	plinius-new-device-default.lua
+	plinius-bt-hands-free-profile.lua
+	71-plinius-audio.rules
+	plinius-prompt.sh
+	skel-gtk.css
+	arch-black.png
+	plinius-backgrounds.xml
+	plinius-aliases.sh
+	keyring-prompter-wait
+	org.gnome.keyring.SystemPrompter.service
+	82-plinius-hide-storage.rules
+	org.freedesktop.IBus.service
+	org.freedesktop.portal.IBus.service
+	60-plinius-hardening.conf
+	60-plinius-memory.conf
+	nfcd-sandbox.conf
+	bluebinder-sandbox.conf
+	ofono-sandbox.conf
+	cups-sandbox.conf
+	biomd-sandbox.conf
+	plinius-mobile-firewall
+	plinius-drop-setuid.hook
+	plinius-drop-setuid
+	50-plinius-udisks-loop.rules
+	90-plinius-no-binder.conf
+	73-plinius-seat-late-noacl.rules
+	plinius-dev-acl
+	plinius-dev-acl.service)
+sha256sums=(
+	'ba5e6fb7d0b0fa1b4d69cb3aff66f8a416da2da0948a4b59e8304631d0e6753d'
+	'bb7dbfc5506b9eb4340a4fe8de04443ecf02954a75da7c03cf25faac7e89787f'
+	'c526c3b2a5936c082d8b9b18d52479961112ba821a4caac6d2948015a5dc2a29'
+	'c66d0dbe1a21d368d72215222f4fcdc8e2f53ddbb078d86603555fdfd28c9cc5'
+	'cd780f9cb97b2f2c6fd50c0a62cf1fcd96b96f2f2ed23be58421bac5a1cb160e'
+	'4c077a0b5226173d68e6f2d3bcfb72d2d8694cdf5d57686ed805371e44ef2df3'
+	'a5caffb86a530570bccd1f1c1ea05b1b14f4e43983eccbc04a9944366ca95ffd'
+	'191655d2580a1013e34014450ab62700a7bf2932d3893ecf66ea3b4759adcd65'
+	'1e96c4db1c1ed232f154cf71dff1658f23b609a30d005a21b5a9a9ed8e193ca3'
+	'586625276a9bb28cc6e9d8b42ec944f376fba0f477c3760578ab66d3a086f4bb'
+	'865864b383d80635ee4ec5100410b4bbc97349ffab8b81271d8645275ae3231f'
+	'10de384119f74a14867419c6ee62f2edac6f61139e08ad229483c2602d0f611f'
+	'cd83e1d166803da32ff15bceea1079accd90c1264aef18baf68a2768b4e6f466'
+	'e733d925947ee350e658b27a7bd3d2f4a736e21e1d5061bb837269e44963ae27'
+	'97a1a001b382c144dba199bd690dcd546866069f84b11cb72f3bef2947119fbe'
+	'8ed960bac965cf6e43ba21e994576d7519a4c08d3cc48452123149df664f7875'
+	'67d1bc9302da879bd9f229983b0e2a7d011aef1203895c048d190f29b32df18b'
+	'539d85c41c4fff1eddc7dd6392d7051066eede6bac66ec31486d3b8a55223919'
+	'bb5006cf00c848b410da0252db89eb1a72ca538a692a444aeaa7475e70aa06c0'
+	'ae029955e5022897df62964297f7cc7e6795d5a4ee1321d8a86a3c2c5037f2fe'
+	'504ab5a23c5326b1394fa57e0fddbb4786e604e75ebb31c8f51ff614060f3e99'
+	'96a568dff0545de8c8645194f4d6256c8bcc1840f89fc5fa9fb8119b44360d10'
+	'e5b6f05cd9e43166ab736d3b3bbe44dd6e4086f294cff4cfdb0e6c7a22d0daff'
+	'b833b087ec932d3cf5077d10aad6029aa6127cac44e0ba142587202301bcd33e'
+	'73c4207681787e90e086ce629d78c27d9427b3a91fb48ab98024010d8fb2e295'
+	'd43476809c7869882f4f6f21566a1c690d2d43f47385ce6f24ca23779b3771dd'
+	'1cbf4a85e42c0618bf2902fa3af4bd2ff9dc35538d417a8d72deaa4364c3ffcc'
+	'fc42667f192d4e347a8b77e67f5ce81062dfd7a19f7e785f7ba09922a3cc20f1'
+	'a8a4e926d02020b6373f81618722fbc108358bece6947fba3a3808091d4b5f5d'
+	'2e52214ae7479aecc4e5cf076be07045da30c8cafa628b9c801a1226d5fbff3d'
+	'e14633d5803a6bf3c8bc7ba0047b5e3c8abce611ab1d2719ada0985854716212'
+	'b2ec82bedd18b308a8a6a387c0dbc858bc42c697edddf19e3946c8536d5318af'
+	'671c0ffafc74b1a6cce1a14e075375531abfb8513a9352bba329b9eba6fe9302'
+	'690fbf0f64791b3ad0b85718aa083f58d3a202f051db9557e12665f9c500a47d'
+	'9126be8ef857d0136f8fdf35feb87eafd90a40ba8de81a06e515844488a6d9b6'
+	'445e4f93d6a998f28d79a6819bbf134aeb970e8d74255d585d56c0b5c92a3bdc'
+	'f4c059c7973ccdf755cad5d32f877a7271fdc45ca80b2419c838991b026abf4a'
+	'b0612bf1b540426f54209ae3a3e123dc1dc31e71de5251a42c78b4b9b505e6fc'
+	'1d844b576b6891040cdd6b3ae98e4a9e392f8c0446d703361bac42a45448c2bf'
+	'926221bcdd8c2248561dff07a97c3e86401c7c3db11727f02d3616b15cbb8a7b'
+	'a1a3e18d8eb6439cb06fefd52c63d908ff03bc392740a4a79486e35a55838fd2'
+	'bfdbcbdcca1e3c3f77fe2fad07fd59daf3f62b6947e356c3d65c84df0e7cce27'
+	'd5950fe8aa004283fb1c50427b46758d5cad03f616e6cd427ebbfc19d817d7a6'
+	'71d01511545255430c1081a3f349e3e0ee328e5ece1dbcdb1d87048de6eb859c'
+	'09c962c83f872ff82cfdb1f8e1f5021a6420c1ec5fc00663723ee583c6d61f5b'
+	'ca6b62080b2fce77ff7970f62261e3770996ce2cc614e5dfdcde42f729ea8609'
+	'2bf55fa48bbe58b14e2c378b0d85d2bfc891085d9258b697c82b522986b18f99'
+	'a592262afcdfbb0f14d2004fa208232da7b360a3f61f16ed87f5aec49a05586a'
+	'bb5e9b26f37142a6b336010fc31ee7ee24e76881ec6ecedefb978af8a7de6c7f'
+	'14c2f9b462f82af2006d0d4e2f53eef2815f7b7664ff4518af7cc37b96772826'
+	'dbd6a07020195a9142df38111f4f35bbbab9c759468e3b9090608fed54c4ac96'
+	'87e86bb397a4daaf4149fbf269caa7088b34eb4469b10a65cd023e9fc9e4fe29'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
+	'34075e83a93029c4a3c1caf582a63bb55db96e177c37d107b3731ea646d66ba3'
+	'b6c4b6de424d46cb7197e794429733476176a40da27a7d09821490b4822bea0c'
+	'f1d998794196f4d4d104da70e665e2e090b6e50604583d0321337d3af1698009'
+	'3cc663be46ddf5210e8426ddb7747f73071a5d8429068eca0e7401efb6d5908d'
+	'acb10aa3f203ee61778c4bb8fee09f1a443c50afeaee377637d75548fb1f9eaa'
+	'ff04bbd4f055bdd200a050ad3d83f25942f8f6450421849fc31057f337480575'
+	'41cd7b327854b4d067096b74702fc9f3228bc535ee375c8c84fe654139d3eb3b'
+	'f40799aee47b8251cfded48ac1ec90fc43d2db4948239b089b33a746618b026e'
+	'7660155bc696a5adf03fc0ed01b927b21bf9efaf9a5975ad94cc4dc0c392f24c'
+	'92d8d318a1d7305e51699d4be51deb7f1d503791901ba4c5463914ed5d60a3cd'
+	'1630fe11de8be795748b5ed3da9a5bde63ba1f617ee4cb775376659a42530d47'
+	'e20404242b8a587cddea679a764bb6622c14652c46cc9aabb7d6f61a29c21250'
+	'076197961f5f37606741c415d9592fec480b5af5171e9c271d3917732ca9e35b'
+	'3c6ef18ea03c5dc9d3b1ad8683204e9404a03740e2b1b88717817eab6a2eb72c'
+	'552afef6a829f2b2d666eede1d3aa74fa8109b26bd4fa6fb620f95be124f921b'
+	'b10ef963d6ffe7496b19c23be1fa8b3715dfebcd2e5c0e5deadc032063668cff'
+	'eb9dab3b37da3a341b4f673e921768d656f549fc3929b7b488f4b0ad61b66468'
+	'f830c7d0069c6b740e48d52298127f34ffc692ae3292efd287ed9437ecc5f425'
+	'55e54b7baa98cd4b161fc2ce9550d52930b78556dc4c18c9a3058c6c6c38858f'
+	'3ef784d20be5b1ce6daf78ebd22fd7271f0da8ea8d5f92facad428651793ed46'
+	'453ba86292074bb78b859ae704412cb829b0a6f6733810b198ef9ec016dc02a7'
+	'e8923a4af103342f02bf34dbcba39360a3d2c8dd7abdaec654781fd780f6fd7b'
+	'adc194130bab90e3e6a2110e9d71c31ce996c9c6a2e5cd2cdbf1108e6921d8c6'
+	'53ddaed291ab6e4ed86fb9f7d242017c971ca877008fd44f1f875a888c757840'
+	'4532dd8edae9272ed6f25bda317514fb302725687db3de81d793eba97a2c526b'
+	'bb84d979d622ca3e7e97ce8fdd769e6f0d1ac018088df866d22faf54c0136f56'
+	'77fc28388722b4db9e7b97255b12d5dcfc860dbc11cfaf326ab6068a3b2cd2d1'
+	'9b876fdc72b6b587fd287ee8605fc94898d3ddd393d0040b2e1b27c01435289c'
+	'9251f2051ced06d17578be9254a53c03801e5fe8129b8290f63f81b8e0e54de3'
+	'5f497e6a7f833df29bd9e4101a4c1b01081f721a08126f12497982db6ef92968'
+	'4e693960382049997cefc0845806337befd07a9c2b798e0f80467dc61eacf04e'
+	'cb87abfa4a929ce9611101e5acabd6d0dab8cd56c3714c561e73331b3d6ccadb'
+	'4535cacc62f50503f75a7af84db0a5bb3a49df0213b2fada032cf17620991717'
+	'fd14b8bc4f0350a2503928eef375870f589a6f2d16aeff903cc76f455f751782'
+	'600fe11ecbeafbfb02075017f89cb1ac0138b4a690a374fd5800216aa919cc1b'
+	'4a8eb74a43c85ae71985d6ba788c959ba57f39f10eebd052d9989a75a3bff7f9'
+	'9bab70bdce3854a16a122c66880539b1c01e054ab804472a3fd8955f1f893077'
+	'e42cd59691a7222e8d36353463dd6f5dc287cf007bbac39f6b1f4132dfdb711a'
+	'e67fd41418b2fda22e3082d098f09efb037e07f563c820b16e51f4ba84288148'
+	'd7158f51d84027ce9c2bd93ff9ffe674bdb09f1bcb5b5a5161f065fb274fc32c'
+	'868568857e79e3a9362884f0c5a0c7cae49d96282eb266d88ed7fa6286d6e123'
+	'f25d84776135779d0ad9d1a9476b275b8a3d5b04dfaaf7b620e09bc50865d7d5'
+	'884b46efdb8c2d3958c1b02d9bbc53a07f48a219b9cb5c749aff95536527455a'
+	'32ce5f28c5a4c33e474c57fb437ceece7fec905bf5e1773fea6f6e0291de0bd5'
+	'a8dd8c7420c0f1ee953fa478b97d54c2be5e05f3db16a9240395e9380cd0c406')
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm644 50-plinius.conf -t "$pkgdir/etc/ssh/sshd_config.d"
+	install -Dm644 90-plinius.gschema.override -t "$pkgdir/usr/share/glib-2.0/schemas"
+	# The accent color (Arch blue, see the override) for libadwaita apps of new users
+	install -Dm644 skel-gtk.css "$pkgdir/etc/skel/.config/gtk-4.0/gtk.css"
+	# Default wallpaper (see the override), also offered in Settings
+	install -Dm644 arch-black.png -t "$pkgdir/usr/share/backgrounds/plinius"
+	install -Dm644 plinius-backgrounds.xml "$pkgdir/usr/share/gnome-background-properties/plinius.xml"
+	install -Dm644 50-plinius.gbinder.conf "$pkgdir/etc/gbinder.d/50-plinius.conf"
+	install -Dm644 bootcheck.list "$pkgdir/usr/lib/plinius-bootcheck.d/ansuz.list"
+	# udev's v4l_id opens every video device; opening the camera's imgsys node while the camera HAL in
+	# the Android container uses it hits a kernel BUG in mtk_imgsys_v4l2_fh_open (list corruption,
+	# panic and reboot, seen 2026-10-28). Ubuntu Touch disables the rules file for the same reason.
+	install -d "$pkgdir/etc/udev/rules.d"
+	ln -s /dev/null "$pkgdir/etc/udev/rules.d/60-persistent-v4l.rules"
+	# Device access for the active session (uaccess) only where /dev holds ACLs: without them the
+	# builtin only logs errors, so plinius-dev-acl then puts a 73-seat-late.rules without it in /run
+	install -Dm644 73-plinius-seat-late-noacl.rules "$pkgdir/usr/lib/plinius/udev/73-seat-late-noacl.rules"
+	install -Dm755 plinius-dev-acl -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 plinius-dev-acl.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+	ln -s ../plinius-dev-acl.service "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/"
+	# Halium overlay: mount-halium-overlay binds these over the files of the Android image
+	# (vendor/etc/init/*.rc: replaced or switched off; see each file)
+	local o="$pkgdir/usr/share/halium-overlay"
+	install -Dm644 halium-vndservicemanager.rc "$o/vendor/etc/init/vndservicemanager.rc"
+	install -Dm644 halium-usb-gadget.rc "$o/vendor/etc/init/android.hardware.usb.gadget-aidl-service.mediatek.rc"
+	install -Dm644 halium-bluetooth-1.1.rc "$o/vendor/etc/init/android.hardware.bluetooth@1.1-service-mediatek.rc"
+	install -Dm644 halium-livedisplay.rc "$o/vendor/etc/init/vendor.lineage.livedisplay-service.sysfs.rc"
+	install -Dm644 halium-hwcomposer.rc "$o/vendor/etc/init/android.hardware.graphics.composer@3.2-service.rc"
+	install -Dm644 halium-gralloc.rc "$o/vendor/etc/init/android.hardware.graphics.allocator-V2-service-mediatek.rc"
+	install -Dm644 halium-prop.halium "$o/system/etc/prop.halium"
+	# android-off: services without a client on the Linux side, see halium-android-off.rc
+	local f
+	for f in system/etc/init/{mediaextractor,mediametrics,idmap2d,credstore,storaged,gpuservice,wificond,incidentd,installd,perfetto}.rc \
+		system/etc/init/hw/{drmserver,mediaserver}.zygote64{,_32}.rc \
+		vendor/etc/init/android.hardware.drm-service.clearkey.rc \
+		vendor/etc/init/android.hardware.media.c2@1.2-mediatek-64b.rc; do
+		install -Dm644 halium-android-off.rc "$o/$f"
+	done
+	install -Dm644 halium-android-off-apex.rc "$o/vendor/etc/init/cas-default.rc"
+	install -Dm644 halium-camera-service.rc "$o/system/etc/init/camera_service.rc"
+	install -Dm644 halium-neuralnetworks-shim.rc "$o/vendor/etc/init/android.hardware.neuralnetworks-shim-service-mtk.rc"
+	install -Dm644 50-plinius-powerkey.conf -t "$pkgdir/usr/lib/systemd/logind.conf.d"
+	# Phosh session: display scale, GL without Vulkan for apps
+	install -Dm644 phoc.ini -t "$pkgdir/etc/phosh"
+	# Processor name and scale steps for GNOME Settings (gnome-control-center-plinius)
+	install -Dm644 device.conf -t "$pkgdir/usr/share/plinius"
+	# Panel of the built-in display in gmobile's format (camera cutout as Android's overlay
+	# describes it: 30x36 dp at 480 dpi, centered); phosh-plinius lays the top bar out from it
+	install -Dm644 display-panel.json -t "$pkgdir/usr/share/plinius"
+	# PIN rules for GNOME Settings' password dialog (libpwquality): at least 6 digits
+	install -Dm644 50-plinius-pin.conf -t "$pkgdir/etc/security/pwquality.conf.d"
+	install -Dm644 60-plinius-render.conf -t "$pkgdir/usr/lib/environment.d"
+	# libgbm looks for a backend named after the DRM driver (mediatek) before its own
+	install -d "$pkgdir/usr/lib/gbm"
+	ln -s hybris_gbm.so "$pkgdir/usr/lib/gbm/mediatek_gbm.so"
+	# Every process: keeps glibc's static TLS off the bionic slots Mali uses (libhybris)
+	install -Dm644 ld.so.preload -t "$pkgdir/etc"
+	# GPU clock floor while rendering (GED has no frame hints without SurfaceFlinger), set once
+	# the vendor modules have made GED's files
+	install -Dm644 plinius-gpu.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+	ln -s ../plinius-gpu.service "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/"
+	# Owners and modes of the vendor device nodes (the container's ueventd cannot set them),
+	# with the Android IDs as host users; generated by tools/ueventd2udev.py
+	install -Dm644 70-plinius-android.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# The touch controller's pen input as no tablet: no pen works on it (Graphics Tablets hidden)
+	install -Dm644 61-plinius-pen.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# No log of the touches with their coordinates (PIN, typed text)
+	install -Dm644 61-plinius-touch-log.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# The hardware video encoder for the session (v4l2h264enc), after 70-plinius-android.rules
+	install -Dm644 71-plinius-vcodec.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# The camera's nodes for the HAL only, before 73-seat-late.rules (see the file)
+	install -Dm644 72-plinius-camera-no-uaccess.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# Touch, keys and pen not for every program of the session, two devices for its services
+	install -Dm644 72-plinius-input-session.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# The phone's own partitions and Android's images stay out of Files, after 80-udisks2.rules
+	install -Dm644 82-plinius-hide-storage.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# Attaching a disk image takes the PIN, so no app can mount a prepared filesystem unseen
+	install -Dm644 50-plinius-udisks-loop.rules -t "$pkgdir/usr/share/polkit-1/rules.d"
+	# Audio HAL nodes from init.mt6878.rc (/dev/usip: speech parameters to the modem)
+	install -Dm644 71-plinius-audio.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# Hall sensor (flip cover) as a key no app sees and phoc does not wake on
+	install -Dm644 61-plinius-keys.hwdb -t "$pkgdir/usr/lib/udev/hwdb.d"
+	# Logo while the session starts, instead of phoc's spinner (phoc-plinius 0004): the Arch Linux
+	# logo (trademark: https://terms.archlinux.org/docs/trademark-policy/), mark and wordmark
+	install -Dm644 boot-logo-mark.png "$pkgdir/usr/share/plinius/boot-logo/mark.png"
+	install -Dm644 boot-logo-wordmark.png "$pkgdir/usr/share/plinius/boot-logo/wordmark.png"
+	install -Dm644 plinius-android.sysusers "$pkgdir/usr/lib/sysusers.d/plinius-android.conf"
+	# WLAN: driver from vendor_dlkm, NVRAM from the container, then power on
+	install -Dm755 plinius-wlan -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 plinius-wlan.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-wlan.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 50-plinius-nm.conf -t "$pkgdir/usr/lib/NetworkManager/conf.d"
+	# Chip and firmware versions for Settings > System > Hardware, collected as root at boot
+	install -Dm755 plinius-hardware-info -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 plinius-hardware-info.service -t "$pkgdir/usr/lib/systemd/system"
+	ln -s ../plinius-hardware-info.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	# Bluetooth: bluebinder after the container, address from NVRAM
+	install -Dm755 droid-get-bt-address.sh -t "$pkgdir/usr/bin/droid"
+	install -Dm644 bluebinder-plinius.conf "$pkgdir/usr/lib/systemd/system/bluebinder.service.d/plinius.conf"
+	# Play, pause and next from a car or headset (AVRCP) reach the media players: BlueZ only knows
+	# players registered with it, and mpris-proxy does that for MPRIS. Arch ships the unit disabled
+	install -d "$pkgdir/usr/lib/systemd/user/default.target.wants"
+	ln -s ../mpris-proxy.service "$pkgdir/usr/lib/systemd/user/default.target.wants/"
+	# Smart cards and the smart card part of security keys: pcscd starts on first use through its
+	# socket. Arch ships the socket disabled
+	install -d "$pkgdir/usr/lib/systemd/system/sockets.target.wants"
+	ln -s ../pcscd.socket "$pkgdir/usr/lib/systemd/system/sockets.target.wants/"
+	# Mobile network: ofono-binder-plugin on the AIDL radio HAL, ofono after the container
+	install -Dm644 ofono-binder.conf "$pkgdir/etc/ofono/binder.conf"
+	# Mobile data on the SIM that is there, with two slots oFono picks none by itself
+	install -Dm644 ofono-main.conf "$pkgdir/etc/ofono/main.conf"
+	install -Dm644 ofono-plinius.conf "$pkgdir/usr/lib/systemd/system/ofono.service.d/plinius.conf"
+	# biomd goes down and up with the Android container, whose fingerprint HAL it uses
+	install -Dm644 biomd-plinius.conf "$pkgdir/usr/lib/systemd/system/biomd.service.d/plinius.conf"
+	# NFC: nfcd after the container, adapter powered on start
+	install -Dm755 plinius-nfc-power -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 nfcd-plinius.conf "$pkgdir/usr/lib/systemd/system/nfcd.service.d/plinius.conf"
+	# Sandboxes for the services that parse input from outside (docs/DIENSTE-HAERTEN.md)
+	local _unit
+	for _unit in nfcd bluebinder ofono cups biomd; do
+		install -Dm644 $_unit-sandbox.conf \
+			"$pkgdir/usr/lib/systemd/system/$_unit.service.d/10-plinius-sandbox.conf"
+	done
+	install -Dm755 plinius-display-nfc "$pkgdir/usr/lib/plinius/display.d/50-nfc"
+	# GPS: gnss-nmea-bridge after the container
+	install -Dm644 gnss-nmea-bridge-plinius.conf \
+		"$pkgdir/usr/lib/systemd/system/gnss-nmea-bridge.service.d/plinius.conf"
+	# Audio: audio-hal-bridge with the HAL in the vendor namespace, raw ALSA card hidden
+	install -Dm644 audio-hal-bridge-plinius.conf \
+		"$pkgdir/usr/lib/systemd/user/audio-hal-bridge.service.d/plinius.conf"
+	install -Dm644 50-plinius-audio.conf -t "$pkgdir/usr/share/wireplumber/wireplumber.conf.d"
+	# Role based volumes (media, notifications, calls, alarms, ringtones, alerts), each a share
+	# of the output; Arch builds feedbackd without its media-roles option
+	install -Dm644 55-plinius-media-roles.conf -t "$pkgdir/usr/share/wireplumber/wireplumber.conf.d"
+	# A Bluetooth or USB audio device that connects becomes the default
+	install -Dm644 plinius-new-device-default.lua "$pkgdir/usr/share/wireplumber/scripts/plinius/new-device-default.lua"
+	# Hands-free on a Bluetooth headset only while audio-hal-bridge needs it
+	install -Dm644 plinius-bt-hands-free-profile.lua "$pkgdir/usr/share/wireplumber/scripts/plinius/bt-hands-free-profile.lua"
+	# Call audio (callaudiod's D-Bus API) from audio-hal-bridge
+	install -Dm644 org.mobian_project.CallAudio.service -t "$pkgdir/usr/share/plinius/dbus-1/services"
+	install -Dm644 50-plinius-callaudio.conf -t "$pkgdir/usr/lib/environment.d"
+	# Sensors: sensor-proxy-bridge after the container
+	install -Dm644 sensor-proxy-bridge-plinius.conf \
+		"$pkgdir/usr/lib/systemd/system/sensor-proxy-bridge.service.d/plinius.conf"
+	# libhybris environment: user sessions, login shells, system services
+	install -Dm644 50-plinius-hybris.conf -t "$pkgdir/usr/lib/environment.d"
+	install -Dm644 plinius-hybris.sh -t "$pkgdir/etc/profile.d"
+	# Bash prompt: the user name in the accent color, sourced by /etc/bash.bashrc (see .install)
+	install -Dm644 plinius-prompt.sh "$pkgdir/usr/lib/plinius/bash-prompt.sh"
+	# Default aliases (ll, l, .., rm -i ...), sourced by /etc/bash.bashrc the same way
+	install -Dm644 plinius-aliases.sh "$pkgdir/usr/lib/plinius/bash-aliases.sh"
+	# Keyring prompt at boot in phosh's style instead of gcr's bare window: a session service of
+	# the same name that waits for phosh, found first like the call audio one below
+	install -Dm755 keyring-prompter-wait -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 org.gnome.keyring.SystemPrompter.service -t "$pkgdir/usr/share/plinius/dbus-1/services"
+	# iBus stays installed for gnome-shell and libibus, but no longer starts
+	install -Dm644 org.freedesktop.IBus.service org.freedesktop.portal.IBus.service \
+		-t "$pkgdir/usr/share/plinius/dbus-1/services"
+	install -Dm644 50-plinius-hybris-system.conf "$pkgdir/usr/lib/systemd/system.conf.d/50-plinius-hybris.conf"
+	install -Dm644 mount-android-partitions-plinius.conf \
+		"$pkgdir/usr/lib/systemd/system/mount-android-partitions.service.d/plinius.conf"
+	# Container start without the 5 s wait for keystore2 in Android's init.rc
+	install -Dm755 plinius-android-initrc -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 lxc-android-config-plinius.conf \
+		"$pkgdir/usr/lib/systemd/system/lxc-android-config.service.d/plinius.conf"
+	# Login without waiting for NetworkManager (network.target)
+	install -Dm755 plinius-user-sessions-generator -t "$pkgdir/usr/lib/systemd/system-generators"
+	# polkit password checks: the kernel (6.1) lacks the pidfd sockets of polkit's agent helper
+	# socket, so it is masked and a pacman hook makes the helper setuid (see the script)
+	install -d "$pkgdir/etc/systemd/system"
+	ln -s /dev/null "$pkgdir/etc/systemd/system/polkit-agent-helper.socket"
+	install -Dm755 plinius-polkit-helper -t "$pkgdir/usr/share/libalpm/scripts"
+	install -Dm644 plinius-polkit-helper.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	# No setuid bit on programs the phone does not use (ksu, mount.cifs, lxc-user-nic, chfn, chsh)
+	install -Dm644 plinius-drop-setuid.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	install -Dm755 plinius-drop-setuid -t "$pkgdir/usr/share/libalpm/scripts"
+	# No binder for services that read the network or the radio and do not need it
+	local unit
+	for unit in cups bluetooth wpa_supplicant ModemManager geoclue plinius-netlogd; do
+		install -Dm644 90-plinius-no-binder.conf -t "$pkgdir/usr/lib/systemd/system/$unit.service.d"
+	done
+	# Launchers other packages pull in (developer tools, stoken via openconnect, CUPS's web
+	# interface) hidden from the app grid, on every install and upgrade of those packages
+	install -Dm755 plinius-hide-apps -t "$pkgdir/usr/share/libalpm/scripts"
+	install -Dm644 plinius-hide-apps.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	# Updates that touch udev rules: no error from drivers that refuse "change" (see the script)
+	install -Dm755 plinius-udev-reload -t "$pkgdir/usr/share/libalpm/scripts"
+	install -Dm644 35-systemd-udev-reload.hook -t "$pkgdir/etc/pacman.d/hooks"
+	# Not on this phone. iio-sensor-proxy: sensor-proxy-bridge owns its bus name, systemd refused
+	# the pair at every boot. IBus: Stevia is the input method, its daemons took 22 MB. bluez.conf
+	# only loads crypto_user, which this kernel does not have.
+	install -d "$pkgdir/etc/systemd/user" "$pkgdir/etc/modules-load.d"
+	ln -s /dev/null "$pkgdir/etc/systemd/system/iio-sensor-proxy.service"
+	ln -s /dev/null "$pkgdir/etc/systemd/user/org.freedesktop.IBus.session.GNOME.service"
+	ln -s /dev/null "$pkgdir/etc/modules-load.d/bluez.conf"
+	# Kernel hardening without a cost in daily use (Lynis audit, docs/SICHERHEIT.md) and the
+	# free memory the kernel keeps at hand (60-plinius-memory.conf)
+	install -Dm644 60-plinius-hardening.conf 60-plinius-memory.conf -t "$pkgdir/usr/lib/sysctl.d"
+	# No connections from the internet over mobile data (the IMS interface for VoLTE stays open);
+	# also before the connection is up, through pre-up.d
+	install -Dm755 plinius-mobile-firewall "$pkgdir/usr/lib/NetworkManager/dispatcher.d/10-plinius-mobile-firewall"
+	install -d "$pkgdir/usr/lib/NetworkManager/dispatcher.d/pre-up.d"
+	ln -s ../10-plinius-mobile-firewall "$pkgdir/usr/lib/NetworkManager/dispatcher.d/pre-up.d/"
+	# Journal size on the memory card
+	install -Dm644 50-plinius-journald.conf -t "$pkgdir/usr/lib/systemd/journald.conf.d"
+	# Files phoc reads at start, into the page cache before the container keeps the card busy
+	install -Dm644 plinius-preload.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+	ln -s ../plinius-preload.service "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/"
+}

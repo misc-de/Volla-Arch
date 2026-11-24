@@ -1,0 +1,147 @@
+From 150c2811f36f1b84890c6d9604d1861c3ff96d0c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 14:40:54 +0100
+Subject: [PATCH] output: Doze as an always-on display
+
+Phosh asks for the new power mode "doze" when the screen goes off with
+the always-on display enabled. Keep the output on then and let the DRM
+backend put the panel into its low-power mode (MediaTek DOZE_ACTIVE);
+outputs without one go off as before.
+
+A dozing output is off for input: touches don't reach the clients and
+only wake-up keys count as activity, like with the output disabled.
+---
+ .../wlr-output-power-management-unstable-v1.xml    |  3 ++
+ src/output.c                                       | 47 ++++++++++++++++++++++
+ src/output.h                                       |  2 +
+ src/seat.c                                         |  6 +--
+ 4 files changed, 55 insertions(+), 3 deletions(-)
+
+diff --git a/protocols/wlr-output-power-management-unstable-v1.xml b/protocols/wlr-output-power-management-unstable-v1.xml
+index a977839..d62b355 100644
+--- a/protocols/wlr-output-power-management-unstable-v1.xml
++++ b/protocols/wlr-output-power-management-unstable-v1.xml
+@@ -76,6 +76,9 @@
+              summary="Output is turned off."/>
+       <entry name="on" value="1"
+              summary="Output is turned on, no power saving"/>
++      <!-- Plinius extension (phoc-plinius, phosh-plinius), not in the upstream protocol -->
++      <entry name="doze" value="2"
++             summary="Output in a low-power mode that keeps showing a picture (always-on display)"/>
+     </enum>
+ 
+     <enum name="error">
+diff --git a/src/output.c b/src/output.c
+index 806c554..368d0c6 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -2135,6 +2135,7 @@ phoc_output_handle_output_power_manager_set_mode (struct wl_listener *listener,
+   struct wlr_output_state pending;
+   PhocOutput *self;
+   bool enable = true;
++  bool doze = false;
+   bool current;
+ 
+   g_return_if_fail (event && event->output && event->output->data);
+@@ -2148,11 +2149,24 @@ phoc_output_handle_output_power_manager_set_mode (struct wl_listener *listener,
+   case ZWLR_OUTPUT_POWER_V1_MODE_ON:
+     enable = true;
+     break;
++  case ZWLR_OUTPUT_POWER_V1_MODE_DOZE:
++    /* Plinius: always-on display. Without a panel that can doze the output goes off. */
++    doze = phoc_output_supports_doze (self);
++    enable = doze;
++    break;
+   default:
+     g_warning ("Unhandled power state %d for %p", event->mode, self->wlr_output->name);
+     return;
+   }
+ 
++  if (wlr_output_is_drm (self->wlr_output) &&
++      wlr_drm_connector_get_doze (self->wlr_output) != doze) {
++    wlr_drm_connector_set_doze (self->wlr_output, doze);
++    /* An output that stays on takes the change with its next frame */
++    if (self->wlr_output->enabled && enable)
++      phoc_output_damage_whole (self);
++  }
++
+   current = self->wlr_output->enabled;
+   if (enable == current)
+     return;
+@@ -2171,6 +2185,39 @@ phoc_output_handle_output_power_manager_set_mode (struct wl_listener *listener,
+     phoc_output_damage_whole (self);
+ }
+ 
++/**
++ * phoc_output_supports_doze:
++ *
++ * Returns: %TRUE if the output's panel has a low-power mode that keeps showing a
++ * picture (always-on display), %FALSE otherwise.
++ */
++gboolean
++phoc_output_supports_doze (PhocOutput *self)
++{
++  g_return_val_if_fail (PHOC_IS_OUTPUT (self), FALSE);
++
++  return wlr_output_is_drm (self->wlr_output) &&
++    wlr_drm_connector_supports_doze (self->wlr_output);
++}
++
++/**
++ * phoc_output_is_awake:
++ *
++ * Returns: %TRUE if the output is on for the user: enabled and not dozing as an
++ * always-on display. Input on a dozing output must not wake it.
++ */
++gboolean
++phoc_output_is_awake (PhocOutput *self)
++{
++  g_return_val_if_fail (PHOC_IS_OUTPUT (self), FALSE);
++
++  if (!self->wlr_output->enabled)
++    return FALSE;
++
++  return !(wlr_output_is_drm (self->wlr_output) &&
++           wlr_drm_connector_get_doze (self->wlr_output));
++}
++
+ /**
+  * phoc_output_is_builtin:
+  *
+diff --git a/src/output.h b/src/output.h
+index 524e1e8..0e813f4 100644
+--- a/src/output.h
++++ b/src/output.h
+@@ -164,6 +164,8 @@ gboolean    phoc_output_damage_region (PhocOutput *self, const pixman_region32_t
+ void        phoc_output_update_shell_reveal (PhocOutput *self);
+ void        phoc_output_force_shell_reveal (PhocOutput *self, gboolean force);
+ gboolean    phoc_output_is_builtin (PhocOutput *self);
++gboolean    phoc_output_supports_doze (PhocOutput *self);
++gboolean    phoc_output_is_awake (PhocOutput *self);
+ gboolean    phoc_output_is_match (PhocOutput *self,
+                                   const char *make,
+                                   const char *model,
+diff --git a/src/seat.c b/src/seat.c
+index c0e2ac1..5caeb8a 100644
+--- a/src/seat.c
++++ b/src/seat.c
+@@ -219,8 +219,8 @@ handle_touch_down (struct wl_listener *listener, void *data)
+   struct wlr_touch_down_event *event = data;
+   PhocOutput *output = g_hash_table_lookup (desktop->input_output_map, event->touch->base.name);
+ 
+-  if (output && !output->wlr_output->enabled) {
+-    g_debug ("Touch event ignored since output '%s' is disabled.",
++  if (output && !phoc_output_is_awake (output)) {
++    g_debug ("Touch event ignored since output '%s' is disabled or dozing.",
+              output->wlr_output->name);
+     return;
+   }
+@@ -813,7 +813,7 @@ on_keyboard_activity (PhocSeat *self, uint32_t keycode, PhocKeyboard *keyboard)
+   output = phoc_desktop_get_builtin_output (desktop);
+   is_wakeup = phoc_keyboard_is_wakeup_key (keyboard, keycode);
+ 
+-  if (output && !output->wlr_output->enabled && !is_wakeup) {
++  if (output && !phoc_output_is_awake (output) && !is_wakeup) {
+     g_debug ("Activity notify skipped: output '%s' is disabled and keycode %d is not a wakeup key.",
+              output->wlr_output->name, keycode);
+     return;

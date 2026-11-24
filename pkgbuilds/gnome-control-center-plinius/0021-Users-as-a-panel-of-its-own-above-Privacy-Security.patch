@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 12:18:58 +0100
+Subject: [PATCH] Users as a panel of its own above Privacy & Security
+
+Plinius: Users was a page inside System. On the phone it is used much more
+often than the rest of System, so it gets a row of its own in the panel
+list, right above Privacy & Security. The page itself is unchanged; its
+desktop file opens "gnome-control-center users" now.
+---
+ panels/system/cc-system-panel.blp                | 10 +---------
+ panels/system/cc-system-panel.c                  |  5 -----
+ panels/system/users/gnome-users-panel.desktop.in |  4 ++--
+ shell/cc-panel-list.c                            |  1 +
+ shell/cc-panel-loader.c                          |  4 +++-
+ 5 files changed, 7 insertions(+), 17 deletions(-)
+
+diff --git a/panels/system/cc-system-panel.blp b/panels/system/cc-system-panel.blp
+index fa39bf699..ea6dc2080 100644
+--- a/panels/system/cc-system-panel.blp
++++ b/panels/system/cc-system-panel.blp
+@@ -28,15 +28,7 @@ template $CcSystemPanel: $CcPanel {
+           action-target: "'datetime'";
+         }
+ 
+-        $CcListRow users_row {
+-          title: _("_Users");
+-          subtitle: _("Add and remove accounts, change password");
+-          icon-name: "org.gnome.Settings-users-symbolic";
+-          use-underline: true;
+-          show-arrow: true;
+-          action-name: "navigation.push";
+-          action-target: "'users'";
+-        }
++        // Plinius: Users is a panel of its own (shell/cc-panel-loader.c)
+ 
+         $CcListRow remote_desktop_row {
+           title: _("R_emote Desktop");
+diff --git a/panels/system/cc-system-panel.c b/panels/system/cc-system-panel.c
+index 81f77f76d..48fdf316d 100644
+--- a/panels/system/cc-system-panel.c
++++ b/panels/system/cc-system-panel.c
+@@ -33,7 +33,6 @@
+ #include "region/cc-region-page.h"
+ #include "remote-desktop/cc-remote-desktop-page.h"
+ #include "secure-shell/cc-secure-shell-page.h"
+-#include "users/cc-users-page.h"
+ 
+ struct _CcSystemPanel {
+     CcPanel parent_instance;
+@@ -42,7 +41,6 @@ struct _CcSystemPanel {
+     AdwActionRow *datetime_row;
+     AdwActionRow *region_row;
+     AdwActionRow *remote_desktop_row;
+-    AdwActionRow *users_row;
+ 
+     CcSecureShellPage *secure_shell_dialog;
+     AdwPreferencesGroup *software_updates_group;
+@@ -135,7 +133,6 @@ cc_system_panel_class_init (CcSystemPanelClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, datetime_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, region_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, remote_desktop_row);
+-    gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, users_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, software_updates_group);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, cc_system_page_open_software_update);
+@@ -147,7 +144,6 @@ cc_system_panel_class_init (CcSystemPanelClass *klass)
+     g_type_ensure (CC_TYPE_REGION_PAGE);
+     g_type_ensure (CC_TYPE_REMOTE_DESKTOP_PAGE);
+     g_type_ensure (CC_TYPE_SECURE_SHELL_PAGE);
+-    g_type_ensure (CC_TYPE_USERS_PAGE);
+ }
+ 
+ static void
+@@ -168,5 +164,4 @@ cc_system_panel_init (CcSystemPanel *self)
+     cc_panel_add_static_subpage (CC_PANEL (self), "datetime", CC_TYPE_DATE_TIME_PAGE);
+     cc_panel_add_static_subpage (CC_PANEL (self), "region", CC_TYPE_REGION_PAGE);
+     cc_panel_add_static_subpage (CC_PANEL (self), "remote-desktop", CC_TYPE_REMOTE_DESKTOP_PAGE);
+-    cc_panel_add_static_subpage (CC_PANEL (self), "users", CC_TYPE_USERS_PAGE);
+ }
+diff --git a/panels/system/users/gnome-users-panel.desktop.in b/panels/system/users/gnome-users-panel.desktop.in
+index 2cec29454..d5d20cd02 100644
+--- a/panels/system/users/gnome-users-panel.desktop.in
++++ b/panels/system/users/gnome-users-panel.desktop.in
+@@ -1,14 +1,14 @@
+ [Desktop Entry]
+ Name=Users
+ Comment=Add or remove users and change your password
+-Exec=gnome-control-center system users
++Exec=gnome-control-center users
+ # Translators: Do NOT translate or transliterate this text (this is an icon file name)!
+ Icon=org.gnome.Settings-users-symbolic
+ Terminal=false
+ Type=Application
+ NoDisplay=true
+ StartupNotify=true
+-Categories=GNOME;GTK;Settings;X-GNOME-Settings-Panel;X-GNOME-SystemSettings;
++Categories=GNOME;GTK;Settings;X-GNOME-Settings-Panel;X-GNOME-DetailsSettings;
+ OnlyShowIn=GNOME;Unity;
+ # Translators: Search terms to find the Users panel. Do NOT translate or localize the semicolons! The list MUST also end with a semicolon!
+ Keywords=Login;Name;Fingerprint;Avatar;Logo;Face;Password;Parental;Restrictions;Usage;Kid;Child;
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index 198c7a14d..3e3972bab 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -371,6 +371,7 @@ static const gchar *const panel_order[] = {
+     "separator",
+ 
+     "universal-access",
++    "users",
+     "privacy",
+     "system",
+     "reset-settings",
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index add0aaab3..db684466b 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -57,6 +57,7 @@ extern GType cc_search_panel_get_type (void);
+ extern GType cc_sharing_panel_get_type (void);
+ extern GType cc_sound_panel_get_type (void);
+ extern GType cc_system_panel_get_type (void);
++extern GType cc_users_page_get_type (void);
+ extern GType cc_ua_panel_get_type (void);
+ #ifdef BUILD_WACOM
+ extern GType cc_wacom_panel_get_type (void);
+@@ -113,6 +114,8 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("sound", cc_sound_panel_get_type, NULL),
+     PANEL_TYPE ("system", cc_system_panel_get_type, NULL),
+     PANEL_TYPE ("universal-access", cc_ua_panel_get_type, NULL),
++    /* Plinius: Users as a panel of its own, above Privacy & Security, not inside System */
++    PANEL_TYPE ("users", cc_users_page_get_type, NULL),
+ #ifdef BUILD_WACOM
+     PANEL_TYPE ("wacom", cc_wacom_panel_get_type, cc_wacom_panel_static_init_func),
+ #endif
+@@ -137,7 +140,6 @@ static CcSubpageLoaderVtable default_subpages[] = {
+     { CC_CATEGORY_SYSTEM, "about" },
+     { CC_CATEGORY_SYSTEM, "datetime" },
+     { CC_CATEGORY_SYSTEM, "region" },
+-    { CC_CATEGORY_SYSTEM, "users" },
+ };
+ static CcSubpageLoaderVtable *subpages_vtable = default_subpages;
+ static gsize supages_vtable_len = G_N_ELEMENTS (default_subpages);

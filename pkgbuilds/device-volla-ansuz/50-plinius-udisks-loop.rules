@@ -1,0 +1,12 @@
+// Attaching a disk image as a loop device takes the PIN. udisks allows it to every active user
+// without asking, and the image then shows up in Files to be mounted, again without asking. So
+// any program running as the user could mount an image it downloaded and hand the kernel's
+// filesystem code whatever it likes, without the user seeing a thing (tried with f2fs on
+// 11.11.2026). Filesystem bugs found with fuzzers are mostly of this kind, and the vendor
+// kernels never get their fixes. A USB stick or memory card, which needs someone at the phone,
+// still mounts as before.
+polkit.addRule(function(action, subject) {
+	if (action.id == "org.freedesktop.udisks2.loop-setup") {
+		return polkit.Result.AUTH_ADMIN_KEEP;
+	}
+});

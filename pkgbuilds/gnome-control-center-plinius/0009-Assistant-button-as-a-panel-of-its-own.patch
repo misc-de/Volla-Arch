@@ -1,0 +1,113 @@
+From 9bb7e0e635cf5177535c28c2f261a1ed280dbb76 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 15:41:20 +0100
+Subject: [PATCH] Assistant button as a panel of its own
+
+Plinius: the assistant button actions move from the Power page to a
+panel "Assistant Button" in the sidebar, after Power. The panel
+(cc-assistant-panel.*) and its desktop file with translations come as
+separate files; the panel is only listed with plinius-assist.
+---
+ panels/assistant/meson.build  | 20 ++++++++++++++++++++
+ panels/meson.build            |  1 +
+ panels/power/cc-power-panel.c |  3 ---
+ shell/cc-panel-list.c         |  1 +
+ shell/cc-panel-loader.c       |  3 +++
+ 5 files changed, 25 insertions(+), 3 deletions(-)
+ create mode 100644 panels/assistant/meson.build
+
+diff --git a/panels/assistant/meson.build b/panels/assistant/meson.build
+new file mode 100644
+index 000000000..d68614f7a
+--- /dev/null
++++ b/panels/assistant/meson.build
+@@ -0,0 +1,20 @@
++# Plinius: assistant button panel. The sources and the desktop file (with its translations)
++# come as separate files of gnome-control-center-plinius.
++panels_list += cappletname
++
++install_data(
++  'gnome-assistant-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
++sources = files(
++  'cc-assistant-panel.c',
++)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps,
++  c_args: cflags,
++)
+diff --git a/panels/meson.build b/panels/meson.build
+index 07c7733bb..5a5a39c37 100644
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -6,6 +6,7 @@ dependent_panels = [
+ 
+ panels = [
+   'applications',
++  'assistant',
+   'background',
+   'color',
+   'display',
+diff --git a/panels/power/cc-power-panel.c b/panels/power/cc-power-panel.c
+index 7f637ea8a..8d7cbe7e5 100644
+--- a/panels/power/cc-power-panel.c
++++ b/panels/power/cc-power-panel.c
+@@ -29,7 +29,6 @@
+ #include "cc-battery-row.h"
+ #include "cc-hostname.h"
+ #include "cc-number-row.h"
+-#include "cc-plinius-buttons.h"
+ #include "cc-power-panel.h"
+ #include "cc-power-profile-info-row.h"
+ #include "cc-power-profile-row.h"
+@@ -1233,8 +1232,6 @@ cc_power_panel_init (CcPowerPanel *self)
+                      "active", G_SETTINGS_BIND_DEFAULT);
+ 
+     setup_general_section (self);
+-    /* Plinius: the assistant button, after "General" */
+-    cc_plinius_buttons_setup (self->general_page);
+ 
+     /* populate batteries */
+     if (self->up_client) {
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index f2d1e2647..464adb395 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -346,6 +346,7 @@ static const gchar *const panel_order[] = {
+     "display",
+     "sound",
+     "power",
++    "assistant",
+     "multitasking",
+     "background",
+ 
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index d6466a6dc..0bf8bd9e0 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -32,6 +32,8 @@
+ 
+ /* Extension points */
+ extern GType cc_applications_panel_get_type (void);
++extern GType cc_assistant_panel_get_type (void);
++extern void cc_assistant_panel_static_init_func (void);
+ extern GType cc_background_panel_get_type (void);
+ #ifdef BUILD_BLUETOOTH
+ extern GType cc_bluetooth_panel_get_type (void);
+@@ -84,6 +86,7 @@ extern void cc_wwan_panel_static_init_func (void);
+ 
+ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("applications", cc_applications_panel_get_type, NULL),
++    PANEL_TYPE ("assistant", cc_assistant_panel_get_type, cc_assistant_panel_static_init_func),
+     PANEL_TYPE ("background", cc_background_panel_get_type, NULL),
+ #ifdef BUILD_BLUETOOTH
+     PANEL_TYPE ("bluetooth", cc_bluetooth_panel_get_type, NULL),
+-- 
+2.55.0
+

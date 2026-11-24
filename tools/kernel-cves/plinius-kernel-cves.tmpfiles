@@ -1,0 +1,5 @@
+# The lists the phones fetch, written by the service user
+d /var/www/plinius/security/kernel 0755 plinius-kcve plinius-kcve -
+# One file of built kernel sources per kernel release, uploaded by tools/publish-kernel-cves.sh
+d /etc/plinius-kernel-cves 0755 root root -
+d /etc/plinius-kernel-cves/manifests 0755 root root -

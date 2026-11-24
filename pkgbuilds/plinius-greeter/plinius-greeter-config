@@ -1,0 +1,392 @@
+#!/usr/bin/python3 -I
+"""greetd's configuration for the phone, and the login of the account picked in the greeter.
+
+  plinius-greeter-config greetd   (greetd.service's ExecStart, as root) writes the configuration
+                                  for this start of greetd and runs greetd with it
+  plinius-greeter-config login    (plinius-greeter-login.service, as root) starts the session of
+                                  the account the greeter asked for
+  plinius-greeter-config password (plinius-greeter-password.service, as root) sets the first
+                                  password or PIN of an account that has none yet, then starts
+                                  its session
+
+The configuration is /etc/greetd/config.toml (image/mkimage.sh: Phosh for the phone's first
+user, logged in at once) with two changes:
+
+  * default_session, what greetd shows without a session, is plinius-greeter (in phoc, as the
+    user greeter) instead of agreety on the text console;
+  * initial_session, the login without a password that greetd does once per boot, stays only
+    with a single login account. With more than one the phone starts in the greeter.
+
+A tap in the greeter only names an account (/run/plinius-greeter/request, the greeter's own
+directory). "login" checks it, notes it in /run/plinius-login/next-user and restarts greetd
+without its run file, so that greetd does its initial_session again, now for that account.
+Phosh then locks itself as at every start: PIN or pattern, the waiting after wrong PINs and the
+biometrics stay those of the lock screen. The greeter asks for no password, and its user can
+start nothing but Phosh for a login account, never a command of its own (greetd would let a
+greeter start any command after authentication).
+
+The first start: an image made for everybody (Plinius Boot) has an account without a password,
+and Phosh's lock screen could never be passed. Such an account gets no automatic login; the
+greeter shows instead (its name in /run/plinius-login/first-start) and asks once whether the user
+wants a PIN or a password, the one the lock screen, Settings and every other question for the
+password ask from then on. The greeter hands it to root in its own directory (password); root
+reads and removes it at once, sets it only for an account that still has none, never the same as
+the password of the encryption (that one is typed at every start, the PIN many times a day in
+view of others), and logs the account in.
+
+SPDX-License-Identifier: MIT
+"""
+
+import json
+import os
+import pwd
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tomllib
+
+sys.path.insert(0, "/usr/lib/plinius-greeter")
+import plinius_greeter_accounts as accounts  # noqa: E402
+
+ETC_CONFIG = "/etc/greetd/config.toml"
+GREETD = "/usr/bin/greetd"
+GREETD_RUN = "/run/greetd.run"
+RUN_DIR = "/run/plinius-login"
+CONFIG = RUN_DIR + "/greetd.toml"
+NEXT_USER = RUN_DIR + "/next-user"
+REQUEST = "/run/plinius-greeter/request"
+LAST_USER = "/var/lib/plinius-greeter/last-user"
+SHADOW = "/etc/shadow"
+# The account that still needs its first password, for the greeter; and what came of the greeter's
+# password (PASSWORD_RESULT: ok, same, invalid, failed)
+FIRST_START = RUN_DIR + "/first-start"
+PASSWORD = "/run/plinius-greeter/password"
+PASSWORD_RESULT = RUN_DIR + "/password-result"
+# Password fields of an account that never had a password: nobody can log in with one (useradd's
+# "!", the image's "!*"). A locked account keeps its hash after the "!" and is not among them. An
+# empty field is not a first start either: it is what removing a password leaves (passwd -d, which
+# accountsservice runs for "set at next login"), and the first start would hand that account to
+# whoever holds the phone.
+NO_PASSWORD = {"!", "!!", "*", "!*"}
+# The mappings of plinius-crypt (pam_plinius_crypt.c): the root of a system with its own initramfs,
+# the data partition of the phone's Halium system
+CRYPT_MAPPINGS = ("plinius-root", "plinius-data")
+GREETER_USER = "greeter"
+GREETER_COMMAND = "/usr/lib/plinius-greeter/plinius-greeter-session"
+# As image/mkimage.sh writes it, for a configuration without an initial_session
+PHOSH_COMMAND = ("env XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=phosh "
+                 "XDG_CURRENT_DESKTOP=Phosh:GNOME phosh-session")
+
+
+def log(message):
+    print(f"plinius-greeter-config: {message}", file=sys.stderr, flush=True)
+
+
+def write_atomic(path, text, mode=0o644):
+    tmp = f"{path}.tmp"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode), "w",
+              encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+TOML_ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f",
+                "\r": "\\r"}
+
+
+def toml_string(value):
+    """A TOML basic string: UTF-8 as it is, only the quote, the backslash and control characters
+    escaped. (json.dumps writes characters outside the BMP as two \\u escapes of a surrogate pair,
+    which TOML does not take.)"""
+    out = []
+    for c in value:
+        if c in TOML_ESCAPES:
+            out.append(TOML_ESCAPES[c])
+        elif ord(c) < 0x20 or ord(c) == 0x7F:
+            out.append(f"\\u{ord(c):04x}")
+        elif 0xD800 <= ord(c) <= 0xDFFF:
+            # Not a character: UTF-8 cannot hold it, TOML has no escape for it
+            raise ValueError("a lone surrogate cannot be written to TOML")
+        else:
+            out.append(c)
+    return '"' + "".join(out) + '"'
+
+
+def toml_key(key):
+    """A bare key where TOML allows one, else a quoted one."""
+    if key and all(c.isascii() and (c.isalnum() or c in "_-") for c in key):
+        return key
+    return toml_string(key)
+
+
+def toml_value(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return toml_string(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(v) for v in value) + "]"
+    raise ValueError(f"cannot write {type(value).__name__} to TOML")
+
+
+def toml_dump(config):
+    lines = []
+    for section, table in config.items():
+        if not isinstance(table, dict):
+            raise ValueError(f"top-level key {section} is not a table")
+        lines.append(f"[{toml_key(section)}]")
+        for key, value in table.items():
+            lines.append(f"{toml_key(key)} = {toml_value(value)}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def take_next_user():
+    """The account "login" asked for, used once."""
+    try:
+        with open(NEXT_USER, encoding="utf-8") as f:
+            name = f.read().strip()
+    except FileNotFoundError:
+        return None
+    finally:
+        try:
+            os.unlink(NEXT_USER)
+        except FileNotFoundError:
+            pass
+    if accounts.is_login_user(name):
+        return name
+    log(f"ignoring {NEXT_USER}: {name!r} is not a login account")
+    return None
+
+
+def needs_password(name):
+    """Whether the account has no password yet (see NO_PASSWORD); False if it cannot be read."""
+    try:
+        with open(SHADOW, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                fields = line.rstrip("\n").split(":")
+                if len(fields) > 1 and fields[0] == name:
+                    return fields[1] in NO_PASSWORD
+    except OSError as e:
+        log(f"cannot read {SHADOW}: {e}")
+    return False
+
+
+def note_first_start(users):
+    """The first login account without a password, for the greeter (FIRST_START); None if there is
+    none, and then the file is gone."""
+    name = next((u.pw_name for u in users if needs_password(u.pw_name)), None)
+    if name:
+        write_atomic(FIRST_START, name + "\n")
+    else:
+        try:
+            os.unlink(FIRST_START)
+        except FileNotFoundError:
+            pass
+    return name
+
+
+def make_config():
+    with open(ETC_CONFIG, "rb") as f:
+        config = tomllib.load(f)
+
+    try:
+        pwd.getpwnam(GREETER_USER)
+        greeter = os.access(GREETER_COMMAND, os.X_OK)
+    except KeyError:
+        greeter = False
+    if greeter:
+        config["default_session"] = {"command": GREETER_COMMAND, "user": GREETER_USER}
+
+    users = accounts.login_users()
+    initial = config.get("initial_session")
+    command = initial.get("command", PHOSH_COMMAND) if isinstance(initial, dict) else PHOSH_COMMAND
+    picked = take_next_user()
+    first = note_first_start(users) if greeter else None
+    if picked:
+        config["initial_session"] = {"command": command, "user": picked}
+        log(f"starting the session of {picked}")
+    elif first:
+        config.pop("initial_session", None)
+        log(f"{first} has no password yet: starting with the greeter")
+    elif len(users) > 1 and greeter:
+        config.pop("initial_session", None)
+        log(f"{len(users)} login accounts: starting with the greeter")
+    return config
+
+
+def run_greetd():
+    os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
+    try:
+        os.unlink(PASSWORD_RESULT)
+    except FileNotFoundError:
+        pass
+    path = CONFIG
+    try:
+        write_atomic(CONFIG, toml_dump(make_config()))
+    except Exception as e:  # noqa: BLE001 - whatever went wrong, greetd must start
+        log(f"using {ETC_CONFIG} as it is: {e}")
+        path = ETC_CONFIG
+    os.execv(GREETD, [GREETD, "--config", path])
+
+
+def user_session_on_seat():
+    """A user session (not the greeter's) on the phone's seat; SSH logins have no seat."""
+    out = subprocess.run(["loginctl", "list-sessions", "--json=short"], check=True,
+                         capture_output=True, text=True).stdout
+    for session in json.loads(out or "[]"):
+        if session.get("seat") and session.get("class") in ("user", "user-early", "user-incomplete"):
+            return session.get("user")
+    return None
+
+
+def remove_request(path=None):
+    """The request goes, whatever the greeter put there: while anything is at the path,
+    plinius-greeter-login.path (PathExists=) starts the service again and again."""
+    path = path or REQUEST
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except IsADirectoryError:
+        # The greeter's own directory: rmtree neither follows links nor leaves it
+        try:
+            shutil.rmtree(path)
+        except OSError as e:
+            log(f"cannot remove {path}: {e}")
+
+
+def read_request(path, limit):
+    """What the greeter wrote at path, at most limit characters, then the file is gone; None if it is not
+    there or not the greeter's own regular file."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    try:
+        greeter_uid = pwd.getpwnam(GREETER_USER).pw_uid
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != greeter_uid:
+            log(f"ignoring a request not written by {GREETER_USER}")
+            return None
+        with open(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), encoding="utf-8", errors="replace") as f:
+            return f.read(limit)
+    finally:
+        remove_request(path)
+
+
+def login():
+    if not os.path.lexists(REQUEST):
+        return 0
+    name = read_request(REQUEST, 256)
+    if name is None:
+        return 1
+    name = name.strip()
+    if not accounts.is_login_user(name):
+        log(f"ignoring the request: {name!r} is not a login account")
+        return 1
+    return start_session(name)
+
+
+def start_session(name):
+    """Logs the account in through greetd's next start; never while a user's session runs."""
+    # Only the greeter may be ended this way, never someone's session
+    running = user_session_on_seat()
+    if running:
+        log(f"ignoring the request for {name}: the session of {running} is running")
+        return 1
+
+    os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
+    write_atomic(NEXT_USER, name + "\n")
+    os.makedirs(os.path.dirname(LAST_USER), mode=0o755, exist_ok=True)
+    write_atomic(LAST_USER, name + "\n")
+    # greetd does its initial_session only without this file
+    try:
+        os.unlink(GREETD_RUN)
+    except FileNotFoundError:
+        pass
+    log(f"restarting greetd for {name}")
+    subprocess.run(["systemctl", "--no-block", "restart", "greetd.service"], check=True)
+    return 0
+
+
+def secret_problem(secret):
+    """Why this cannot be the account's password, or "": a PIN of 4 to 12 digits, or a password of 6 to
+    128 characters without control characters (chpasswd takes one line, the lock screen one field)."""
+    if re.fullmatch(r"[0-9]+", secret):
+        return "" if 4 <= len(secret) <= 12 else "invalid"
+    if not 6 <= len(secret) <= 128 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in secret):
+        return "invalid"
+    return ""
+
+
+def encryption_password(secret):
+    """Whether secret opens the encryption of this system (only a check, nothing is activated)."""
+    for mapping in CRYPT_MAPPINGS:
+        status = subprocess.run(["cryptsetup", "status", mapping], capture_output=True, text=True)
+        device = re.search(r"^\s*device:\s*(/dev/\S+)\s*$", status.stdout, re.M) if status.returncode == 0 else None
+        if device and subprocess.run(["cryptsetup", "open", "--test-passphrase", "--key-file", "-", device.group(1)],
+                                     input=secret, capture_output=True, text=True).returncode == 0:
+            return True
+    return False
+
+
+def password_result(result):
+    os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
+    write_atomic(PASSWORD_RESULT, result + "\n")
+    return 0 if result == "ok" else 1
+
+
+def password():
+    """The first password or PIN the greeter asked for: {"user": NAME, "secret": TEXT}."""
+    if not os.path.lexists(PASSWORD):
+        return 0
+    text = read_request(PASSWORD, 4096)
+    try:
+        request = json.loads(text) if text is not None else None
+    except ValueError:
+        request = None
+    if not isinstance(request, dict) or not isinstance(request.get("user"), str) \
+            or not isinstance(request.get("secret"), str):
+        log("ignoring a password request that is not one")
+        return password_result("invalid")
+    name, secret = request["user"], request["secret"]
+    # Only the first one: an account with a password changes it in Settings, asked for the old one
+    if not accounts.is_login_user(name) or not needs_password(name):
+        log(f"ignoring the password request: {name!r} is no login account without a password")
+        return password_result("invalid")
+    problem = secret_problem(secret)
+    if problem:
+        return password_result(problem)
+    if encryption_password(secret):
+        log(f"refusing the password of the encryption for {name}")
+        return password_result("same")
+    done = subprocess.run(["chpasswd"], input=f"{name}:{secret}\n", capture_output=True, text=True)
+    if done.returncode != 0:
+        log(f"chpasswd for {name} failed: {done.stderr.strip()}")
+        return password_result("failed")
+    log(f"{name} has a password now")
+    try:
+        os.unlink(FIRST_START)
+    except FileNotFoundError:
+        pass
+    password_result("ok")
+    return start_session(name)
+
+
+def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "greetd":
+        run_greetd()
+    if len(sys.argv) == 2 and sys.argv[1] == "login":
+        return login()
+    if len(sys.argv) == 2 and sys.argv[1] == "password":
+        return password()
+    print("usage: plinius-greeter-config greetd | login | password", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

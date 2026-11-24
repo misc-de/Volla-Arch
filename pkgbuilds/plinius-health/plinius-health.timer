@@ -1,0 +1,9 @@
+[Unit]
+Description=Phone self-test a few minutes after boot
+
+[Timer]
+# The modem and the session need a while after boot; earlier checks would report false failures
+OnBootSec=3min
+
+[Install]
+WantedBy=timers.target

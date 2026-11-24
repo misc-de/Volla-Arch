@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:18:18 +0100
+Subject: [PATCH] style-manager: A custom accent color from the settings
+
+Plinius: GNOME's accent color can only be one of nine. GNOME Settings
+(gnome-control-center-plinius) also offers a color of the user's choice,
+stored as org.plinius.appearance accent-color ("#rrggbb"); when it is
+set, it is the compositor's accent color (logo at the start, cursor,
+focus frame). GNOME's key then holds the preset nearest to it. Without
+the schema nothing changes.
+
+A change of the color is now also announced (notify::accent-color),
+which the focus frame already listens for.
+---
+ src/style-manager.c | 49 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 48 insertions(+), 1 deletion(-)
+
+diff --git a/src/style-manager.c b/src/style-manager.c
+index 83c5d65..72f3630 100644
+--- a/src/style-manager.c
++++ b/src/style-manager.c
+@@ -15,9 +15,15 @@
+ #include <gdesktop-enums.h>
+ #include <gio/gio.h>
+ 
++#include <stdio.h>
++
+ #define IF_KEY_ACCENT_COLOR     "accent-color"
+ #define IF_SCHEMA_NAME          "org.gnome.desktop.interface"
+ 
++/* Plinius: a custom accent color from GNOME Settings (gnome-control-center-plinius) */
++#define PLINIUS_SCHEMA_NAME     "org.plinius.appearance"
++#define PLINIUS_KEY_ACCENT_COLOR "accent-color"
++
+ /* Accent colors from gnome-shell src/st/st-theme-context.c */
+ #define ACCENT_COLOR_BLUE       PHOC_HEX_COLOR (0x35, 0x84, 0xe4)
+ #define ACCENT_COLOR_TEAL       PHOC_HEX_COLOR (0x21, 0x90, 0xa4)
+@@ -49,13 +55,38 @@ struct _PhocStyleManager {
+   PhocColor  accent_color;
+ 
+   GSettings *interface_settings;
++  GSettings *plinius_settings;
+ };
+ G_DEFINE_TYPE (PhocStyleManager, phoc_style_manager, G_TYPE_OBJECT)
+ 
+ 
++/* The custom accent color, if one is set as "#rrggbb" */
++static gboolean
++get_custom_accent_color (PhocStyleManager *self, PhocColor *color)
++{
++  g_autofree char *value = NULL;
++  unsigned int r, g, b;
++  int end = 0;
++
++  if (!self->plinius_settings)
++    return FALSE;
++
++  value = g_settings_get_string (self->plinius_settings, PLINIUS_KEY_ACCENT_COLOR);
++  if (sscanf (value, "#%2x%2x%2x%n", &r, &g, &b, &end) != 3 || value[end] != '\0')
++    return FALSE;
++
++  *color = PHOC_HEX_COLOR (r, g, b);
++  return TRUE;
++}
++
++
+ static void
+ on_accent_color_changed (PhocStyleManager *self)
+ {
++  /* Plinius: the custom color wins; GNOME's key then holds the color nearest to it */
++  if (get_custom_accent_color (self, &self->accent_color))
++    goto out;
++
+   switch (g_settings_get_enum (self->interface_settings, IF_KEY_ACCENT_COLOR)) {
+   case G_DESKTOP_ACCENT_COLOR_TEAL:
+     self->accent_color = ACCENT_COLOR_TEAL;
+@@ -86,12 +117,14 @@ on_accent_color_changed (PhocStyleManager *self)
+     self->accent_color = ACCENT_COLOR_BLUE;
+   }
+ 
++ out:
+   g_debug ("Setting accent bg color to %.2f/%.2f/%.2f",
+            self->accent_color.red,
+            self->accent_color.green,
+            self->accent_color.blue);
+ 
+-
++  /* Plinius: the focus frame listens for changes */
++  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ACCENT_COLOR]);
+ }
+ 
+ 
+@@ -120,6 +153,7 @@ phoc_style_manager_dispose (GObject *object)
+   PhocStyleManager *self = PHOC_STYLE_MANAGER (object);
+ 
+   g_clear_object (&self->interface_settings);
++  g_clear_object (&self->plinius_settings);
+ 
+   G_OBJECT_CLASS (phoc_style_manager_parent_class)->dispose (object);
+ }
+@@ -145,12 +179,25 @@ phoc_style_manager_class_init (PhocStyleManagerClass *klass)
+ static void
+ phoc_style_manager_init (PhocStyleManager *self)
+ {
++  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++  g_autoptr (GSettingsSchema) schema = NULL;
++
+   self->interface_settings = g_settings_new (IF_SCHEMA_NAME);
+ 
+   g_signal_connect_swapped (self->interface_settings,
+                             "changed::" IF_KEY_ACCENT_COLOR,
+                             G_CALLBACK (on_accent_color_changed),
+                             self);
++  /* Plinius: only with the schema, which comes with phosh-plinius */
++  if (source)
++    schema = g_settings_schema_source_lookup (source, PLINIUS_SCHEMA_NAME, TRUE);
++  if (schema) {
++    self->plinius_settings = g_settings_new (PLINIUS_SCHEMA_NAME);
++    g_signal_connect_swapped (self->plinius_settings,
++                              "changed::" PLINIUS_KEY_ACCENT_COLOR,
++                              G_CALLBACK (on_accent_color_changed),
++                              self);
++  }
+   on_accent_color_changed (self);
+ }
+ 

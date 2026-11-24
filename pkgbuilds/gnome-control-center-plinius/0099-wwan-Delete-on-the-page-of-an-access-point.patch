@@ -1,0 +1,252 @@
+From 933e4796f76570e6bc7fc995d315535514495d89 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 12:30:00 +0100
+Subject: [PATCH] wwan: Delete on the page of an access point
+
+Mobile Network > Access Points had no way to remove an access point: the code
+to delete one (cc_wwan_data_delete_apn) was never called. The page of an
+access point saved on the phone now has Delete below Save, as the page of a
+known Wi-Fi network. It asks first ("Delete Access Point?" with Delete); the
+question says when mobile data uses the access point (it stops until another
+one is chosen) and when the entry stays in the list as a suggestion of the
+provider (one of mobile-broadband-provider-info: only what was saved on the
+phone is removed). A new access point (Add) has no Delete.
+---
+ panels/wwan/cc-wwan-apn-dialog.blp | 14 +++++
+ panels/wwan/cc-wwan-apn-dialog.c   | 83 ++++++++++++++++++++++++++++++
+ panels/wwan/cc-wwan-data.c         | 19 +++++++
+ panels/wwan/cc-wwan-data.h         |  3 ++
+ 4 files changed, 119 insertions(+)
+
+diff --git a/panels/wwan/cc-wwan-apn-dialog.blp b/panels/wwan/cc-wwan-apn-dialog.blp
+index 30c88c873..5d369269b 100644
+--- a/panels/wwan/cc-wwan-apn-dialog.blp
++++ b/panels/wwan/cc-wwan-apn-dialog.blp
+@@ -118,6 +118,20 @@ template $CcWwanApnDialog: Adw.Dialog {
+             ]
+           }
+         }
++
++        // Plinius: Delete below Save, only for an access point saved on the phone (as for a
++        // known Wi-Fi network); the title comes from the code (plinius-control-center)
++        Adw.PreferencesGroup delete_group {
++          visible: false;
++
++          Adw.ButtonRow delete_row {
++            activated => $cc_wwan_apn_delete_activated_cb(template);
++
++            styles [
++              "destructive-action",
++            ]
++          }
++        }
+       }
+     };
+   };
+diff --git a/panels/wwan/cc-wwan-apn-dialog.c b/panels/wwan/cc-wwan-apn-dialog.c
+index f28cab667..401348ce7 100644
+--- a/panels/wwan/cc-wwan-apn-dialog.c
++++ b/panels/wwan/cc-wwan-apn-dialog.c
+@@ -34,6 +34,8 @@
+ #include "cc-wwan-device.h"
+ #include "cc-wwan-resources.h"
+ 
++#define PLINIUS_DOMAIN "plinius-control-center"
++
+ /**
+  * @short_description: Dialog to manage Internet Access Points
+  */
+@@ -55,6 +57,8 @@ struct _CcWwanApnDialog {
+     GtkStack *apn_settings_stack;
+     AdwComboRow *lte_auth_combo;
+     AdwComboRow *lte_attach_combo;
++    AdwPreferencesGroup *delete_group;
++    AdwButtonRow *delete_row;
+ 
+     CcWwanData *wwan_data;
+     CcWwanDataApn *apn_to_save; /* The APN currently being edited */
+@@ -127,6 +131,7 @@ cc_wwan_apn_back_clicked_cb (CcWwanApnDialog *self)
+ 
+     if (view == GTK_WIDGET (self->apn_edit_view)) {
+         gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
++        gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+         gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+         gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
+     } else {
+@@ -144,6 +149,7 @@ cc_wwan_apn_add_clicked_cb (CcWwanApnDialog *self)
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->add_button), FALSE);
+     gtk_widget_set_visible (GTK_WIDGET (self->save_button), TRUE);
++    gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+ 
+     self->apn_to_save = NULL;
+     gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_edit_view));
+@@ -184,6 +190,7 @@ cc_wwan_apn_save_clicked_cb (CcWwanApnDialog *self)
+     cc_wwan_data_save_apn (self->wwan_data, apn, NULL, NULL, NULL);
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
++    gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+     /* Plinius: back on the list, Add is offered again */
+     gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+     gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
+@@ -253,6 +260,7 @@ cc_wwan_apn_edit_clicked_cb (CcWwanApnDialog *self, GtkButton *button)
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->save_button), TRUE);
+     gtk_widget_set_visible (GTK_WIDGET (self->add_button), FALSE);
++    gtk_widget_set_visible (GTK_WIDGET (self->delete_group), cc_wwan_data_apn_is_saved (apn));
+ 
+     gtk_editable_set_text (GTK_EDITABLE (self->name_entry), cc_wwan_data_apn_get_name (apn));
+     if (cc_wwan_data_apn_should_configure_initial_eps_bearer (apn)) {
+@@ -278,6 +286,76 @@ cc_wwan_apn_edit_clicked_cb (CcWwanApnDialog *self, GtkButton *button)
+     gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_edit_view));
+ }
+ 
++/* Plinius: the answer Delete removes the access point being edited from NetworkManager and
++ * returns to the list. One of the provider database stays listed (READ_ONLY), only what was
++ * saved on the phone is gone. */
++static void
++cc_wwan_apn_delete_response_cb (CcWwanApnDialog *self)
++{
++    g_autoptr(CcWwanDataApn) apn = NULL;
++    g_autoptr(GError) error = NULL;
++
++    if (!self->apn_to_save)
++        return;
++
++    /* the row holding the access point goes with it: keep it alive for the call */
++    apn = g_object_ref (self->apn_to_save);
++
++    if (!cc_wwan_data_delete_apn (self->wwan_data, apn, NULL, &error)
++        && !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_READ_ONLY)) {
++        AdwDialog *failed;
++
++        g_warning ("Deleting the access point failed: %s", error->message);
++        failed = adw_alert_dialog_new (g_dgettext (PLINIUS_DOMAIN, "Could Not Delete Access Point"),
++                                       error->message);
++        adw_alert_dialog_add_response (ADW_ALERT_DIALOG (failed), "close", _("_Close"));
++        adw_dialog_present (failed, GTK_WIDGET (self->delete_row));
++        return;
++    }
++
++    self->apn_to_save = NULL;
++    gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
++    gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
++    gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
++    gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
++}
++
++/* Plinius: Delete asks first (as for a known Wi-Fi network). It says when mobile data uses the
++ * access point and when the entry stays as a suggestion of the provider. */
++static void
++cc_wwan_apn_delete_activated_cb (CcWwanApnDialog *self)
++{
++    g_autoptr(GString) message = NULL;
++    AdwDialog *dialog;
++
++    if (!self->apn_to_save)
++        return;
++
++    message = g_string_new (NULL);
++    g_string_printf (message, g_dgettext (PLINIUS_DOMAIN, "The access point “%s” will be removed from this phone."),
++                     cc_wwan_data_apn_get_name (self->apn_to_save));
++    if (cc_wwan_data_get_default_apn (self->wwan_data) == self->apn_to_save) {
++        g_string_append_c (message, ' ');
++        g_string_append (message,
++                         g_dgettext (PLINIUS_DOMAIN, "Mobile data uses it and stops until another one is chosen."));
++    }
++    if (cc_wwan_data_apn_is_from_provider (self->apn_to_save)) {
++        g_string_append_c (message, ' ');
++        g_string_append (message,
++                         g_dgettext (PLINIUS_DOMAIN, "It stays in the list as a suggestion of the provider."));
++    }
++
++    dialog = adw_alert_dialog_new (g_dgettext (PLINIUS_DOMAIN, "Delete Access Point?"), message->str);
++    adw_alert_dialog_add_responses (ADW_ALERT_DIALOG (dialog), "cancel", _("_Cancel"), "delete",
++                                    g_dgettext (PLINIUS_DOMAIN, "_Delete"), NULL);
++    adw_alert_dialog_set_response_appearance (ADW_ALERT_DIALOG (dialog), "delete", ADW_RESPONSE_DESTRUCTIVE);
++    adw_alert_dialog_set_default_response (ADW_ALERT_DIALOG (dialog), "cancel");
++    adw_alert_dialog_set_close_response (ADW_ALERT_DIALOG (dialog), "cancel");
++    g_signal_connect_object (dialog, "response::delete", G_CALLBACK (cc_wwan_apn_delete_response_cb), self,
++                             G_CONNECT_SWAPPED);
++    adw_dialog_present (dialog, GTK_WIDGET (self->delete_row));
++}
++
+ static GtkWidget *
+ cc_wwan_apn_dialog_row_new (CcWwanDataApn *apn, CcWwanApnDialog *self)
+ {
+@@ -367,6 +445,7 @@ cc_wwan_apn_dialog_show (GtkWidget *widget)
+     gtk_widget_set_sensitive (GTK_WIDGET (self->save_button), FALSE);
+     gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+     gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
++    gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+     gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
+ 
+     GTK_WIDGET_CLASS (cc_wwan_apn_dialog_parent_class)->show (widget);
+@@ -399,6 +478,8 @@ cc_wwan_apn_dialog_class_init (CcWwanApnDialogClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_radio_button);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_settings_stack);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, back_button);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, delete_group);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, delete_row);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, lte_auth_combo);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, lte_attach_combo);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, name_entry);
+@@ -411,12 +492,14 @@ cc_wwan_apn_dialog_class_init (CcWwanApnDialogClass *klass)
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_save_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_entry_changed_cb);
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_activated_cb);
++    gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_delete_activated_cb);
+ }
+ 
+ static void
+ cc_wwan_apn_dialog_init (CcWwanApnDialog *self)
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->delete_row), g_dgettext (PLINIUS_DOMAIN, "Delete…"));
+ 
+     g_signal_connect_object (self->apn_settings_stack, "notify::visible-child",
+                              G_CALLBACK (cc_wwan_apn_view_changed_cb), self, G_CONNECT_SWAPPED);
+diff --git a/panels/wwan/cc-wwan-data.c b/panels/wwan/cc-wwan-data.c
+index 3bf670cfe..39d3beff9 100644
+--- a/panels/wwan/cc-wwan-data.c
++++ b/panels/wwan/cc-wwan-data.c
+@@ -1066,6 +1066,25 @@ cc_wwan_data_apn_new (void)
+  *
+  * Returns: (transfer none): The Name of @apn
+  */
++/* Plinius: whether @apn is saved in NetworkManager, that is, whether it can be deleted */
++gboolean
++cc_wwan_data_apn_is_saved (CcWwanDataApn *apn)
++{
++    g_return_val_if_fail (CC_IS_WWAN_DATA_APN (apn), FALSE);
++
++    return apn->remote_connection != NULL;
++}
++
++/* Plinius: whether @apn is one of the provider database; deleting it removes what is saved on
++ * the phone, the entry stays in the list (cc_wwan_data_delete_apn() then says G_IO_ERROR_READ_ONLY) */
++gboolean
++cc_wwan_data_apn_is_from_provider (CcWwanDataApn *apn)
++{
++    g_return_val_if_fail (CC_IS_WWAN_DATA_APN (apn), FALSE);
++
++    return apn->access_method != NULL;
++}
++
+ const gchar *
+ cc_wwan_data_apn_get_name (CcWwanDataApn *apn)
+ {
+diff --git a/panels/wwan/cc-wwan-data.h b/panels/wwan/cc-wwan-data.h
+index e1e2b54bb..101e05ab0 100644
+--- a/panels/wwan/cc-wwan-data.h
++++ b/panels/wwan/cc-wwan-data.h
+@@ -77,6 +77,9 @@ guint cc_wwan_data_apn_get_initial_eps_auth_method (CcWwanDataApn *apn);
+ void cc_wwan_data_apn_set_initial_eps_auth_method (CcWwanDataApn *apn, guint allowed_auth);
+ 
+ gboolean cc_wwan_data_apn_should_configure_initial_eps_bearer (CcWwanDataApn *apn);
++/* Plinius: saved on the phone (can be deleted), from the provider database (stays listed) */
++gboolean cc_wwan_data_apn_is_saved (CcWwanDataApn *apn);
++gboolean cc_wwan_data_apn_is_from_provider (CcWwanDataApn *apn);
+ 
+ void cc_wwan_data_apn_set_should_configure_initial_eps_bearer (CcWwanDataApn *apn, gboolean configure);
+ 

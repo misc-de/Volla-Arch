@@ -1,0 +1,14 @@
+[Unit]
+Description=Chip and firmware versions for Settings (System > Hardware)
+# /android/vendor and its build.prop; the Wi-Fi driver load logs the connectivity chip
+After=mount-android-partitions.service lxc-android-config.service plinius-wlan.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius/plinius-hardware-info
+# About 60 MB read from the firmware partitions: after everything else
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

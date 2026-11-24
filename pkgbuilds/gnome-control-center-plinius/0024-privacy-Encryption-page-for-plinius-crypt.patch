@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 23:21:35 +0100
+Subject: [PATCH] privacy: Encryption page for plinius-crypt
+
+Plinius: a row "Encryption" in Privacy & Security, shown when plinius-crypt
+is installed, opens a page with the state of the encryption and what fits
+it: encrypt at the next restart, cancel that, or change the password
+(cc-plinius-crypt.c).
+---
+--- a/panels/privacy/cc-privacy-panel.blp
++++ b/panels/privacy/cc-privacy-panel.blp
+@@ -21,6 +21,15 @@
+           action-target: "'screenlock'";
+         }
+ 
++        /* Plinius: texts and visibility from cc-plinius-crypt.c (plinius-crypt installed) */
++        $CcListRow encryption_row {
++          visible: false;
++          icon-name: "drive-harddisk-system-symbolic";
++          show-arrow: true;
++          action-name: "navigation.push";
++          action-target: "'encryption'";
++        }
++
+         $CcListRow location_row {
+           visible: false;
+           title: _("_Location");
+--- a/panels/privacy/cc-privacy-panel.c
++++ b/panels/privacy/cc-privacy-panel.c
+@@ -27,6 +27,7 @@
+ #endif
+ #include "camera/cc-camera-page.h"
+ #include "cc-list-row.h"
++#include "cc-plinius-crypt.h"
+ #include "cc-privacy-resources.h"
+ #include "diagnostics/cc-diagnostics-page.h"
+ #include "firmware-security/cc-firmware-security-page.h"
+@@ -38,6 +39,7 @@
+     CcPanel parent_instance;
+ 
+     CcListRow *bolt_row;
++    CcListRow *encryption_row;
+     CcListRow *location_row;
+ };
+ 
+@@ -76,6 +78,7 @@
+     gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/privacy/cc-privacy-panel.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, bolt_row);
++    gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, encryption_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, location_row);
+ 
+     g_type_ensure (CC_TYPE_CAMERA_PAGE);
+@@ -108,4 +111,12 @@
+ 
+     g_object_bind_property (location_page, "visible", self->location_row, "visible", G_BINDING_SYNC_CREATE);
+ #endif
++
++    /* Plinius: encryption with a password at startup (plinius-crypt) */
++    AdwNavigationPage *encryption_page = cc_plinius_crypt_page_new ();
++
++    if (encryption_page) {
++        cc_panel_add_subpage (CC_PANEL (self), "encryption", encryption_page);
++        cc_plinius_crypt_row_setup (ADW_ACTION_ROW (self->encryption_row));
++    }
+ }
+--- a/panels/privacy/meson.build
++++ b/panels/privacy/meson.build
+@@ -45,6 +45,7 @@
+   'firmware-security/cc-firmware-security-page.c',
+   'firmware-security/cc-firmware-security-utils.c',
+   'location/cc-location-page.c',
++  'cc-plinius-crypt.c',
+   'cc-privacy-panel.c',
+   'screen/cc-screen-page.c',
+   'usage/cc-usage-page.c',

@@ -1,0 +1,16 @@
+[Unit]
+Description=Read the files phoc needs at start into the page cache
+# phoc reads the whole libwacom database (634 files, the touch controller has a pen), libinput's
+# quirks and the cursor theme one file at a time. While the Android container reads its images
+# from the memory card that took 14.7 s before the session could start; alone it takes 1.1 s
+# (measured 2026-10-31). So read them right after the root file system, before the container.
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+# exec, not oneshot: sysinit.target must not wait for it
+Type=exec
+ExecStart=/bin/sh -c 'find /usr/share/libwacom /etc/libwacom /usr/share/libinput /etc/libinput /usr/share/icons/Adwaita/cursors -type f -print0 2>/dev/null | xargs -0 cat > /dev/null'
+
+[Install]
+WantedBy=sysinit.target

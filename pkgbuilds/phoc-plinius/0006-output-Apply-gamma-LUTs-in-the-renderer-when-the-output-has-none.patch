@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 00:40:08 +0100
+Subject: [PATCH] output: Apply gamma LUTs in the renderer when the output has
+ none
+
+The display of the Volla Phone (MediaTek, legacy KMS) cannot set a gamma
+LUT, so night light failed. Offer a fallback gamma size and hand the LUT
+to the renderer as the output color transform when the output reports
+no gamma size and the renderer supports it. Direct scanout of fullscreen
+surfaces is skipped meanwhile, their buffers would bypass the LUT.
+---
+ src/desktop.c |  2 ++
+ src/output.c  | 27 ++++++++++++++++++++++++---
+ 2 files changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/src/desktop.c b/src/desktop.c
+index 3f18fc5..ceda3bf 100644
+--- a/src/desktop.c
++++ b/src/desktop.c
+@@ -670,6 +670,8 @@ phoc_desktop_constructed (GObject *object)
+   self->security_context_manager_v1 = wlr_security_context_manager_v1_create (wl_display);
+ 
+   self->gamma_control_manager_v1 = wlr_gamma_control_manager_v1_create (wl_display);
++  /* Outputs without a gamma LUT apply it in the renderer (see phoc_output_set_gamma_lut) */
++  self->gamma_control_manager_v1->fallback_gamma_size = 256;
+   priv->gamma_control_set_gamma.notify = phoc_output_handle_gamma_control_set_gamma;
+   wl_signal_add (&self->gamma_control_manager_v1->events.set_gamma, &priv->gamma_control_set_gamma);
+ 
+diff --git a/src/output.c b/src/output.c
+index d38a31a..8b177fb 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -27,6 +27,7 @@
+ #include <time.h>
+ #include <wlr/backend/drm.h>
+ #include <wlr/config.h>
++#include <wlr/render/color.h>
+ #include <wlr/render/swapchain.h>
+ #include <wlr/types/wlr_compositor.h>
+ #include <wlr/types/wlr_gamma_control_v1.h>
+@@ -69,6 +70,8 @@ typedef struct _PhocOutputPrivate {
+ 
+   PhocOutputScaleFilter scale_filter;
+   gboolean gamma_lut_changed;
++  /* Gamma LUT applied by the renderer when the output has none */
++  struct wlr_color_transform *color_transform;
+ 
+   GQueue  *layer_surfaces[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY + 1];
+ 
+@@ -382,6 +385,19 @@ phoc_output_set_gamma_lut (PhocOutput *self, struct wlr_output_state *pending)
+                                                             self->wlr_output);
+   priv->gamma_lut_changed = FALSE;
+ 
++  if (wlr_output_get_gamma_size (self->wlr_output) == 0) {
++    /* No gamma LUT on the output: the renderer applies it to every frame */
++    g_clear_pointer (&priv->color_transform, wlr_color_transform_unref);
++    if (!self->wlr_output->renderer->features.output_color_transform) {
++      wlr_gamma_control_v1_send_failed_and_destroy (gamma_control);
++      return;
++    }
++    if (gamma_control)
++      priv->color_transform = wlr_gamma_control_v1_get_color_transform (gamma_control);
++    phoc_output_damage_whole (self);
++    return;
++  }
++
+   if (!wlr_gamma_control_v1_apply (gamma_control, pending))
+     return;
+ 
+@@ -582,8 +598,9 @@ phoc_output_draw (PhocOutput *self)
+ 
+   wlr_output_state_set_damage (&pending, &priv->damage_ring.current);
+ 
+-  /* Check if we can delegate the fullscreen surface to the output */
+-  if (self->fullscreen_view)
++  /* Check if we can delegate the fullscreen surface to the output. Not while the renderer
++   * applies the gamma LUT, the surface's buffer would be shown without it. */
++  if (self->fullscreen_view && !priv->color_transform)
+     scanned_out = scan_out_fullscreen_view (self, self->fullscreen_view, &pending);
+ 
+   if (scanned_out)
+@@ -596,7 +613,10 @@ phoc_output_draw (PhocOutput *self)
+   if (!buffer)
+     goto out;
+ 
+-  render_pass = wlr_renderer_begin_buffer_pass (wlr_output->renderer, buffer, NULL);
++  render_pass = wlr_renderer_begin_buffer_pass (wlr_output->renderer, buffer,
++                                                &(struct wlr_buffer_pass_options) {
++                                                  .color_transform = priv->color_transform,
++                                                });
+   if (!render_pass) {
+     wlr_buffer_unlock (buffer);
+     goto out;
+@@ -1140,6 +1160,7 @@ phoc_output_finalize (GObject *object)
+ 
+   g_clear_object (&priv->cutouts);
+   g_clear_object (&priv->shield);
++  g_clear_pointer (&priv->color_transform, wlr_color_transform_unref);
+ 
+   G_OBJECT_CLASS (phoc_output_parent_class)->finalize (object);
+ }

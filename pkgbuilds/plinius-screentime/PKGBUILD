@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-screentime
+pkgver=0.1
+pkgrel=2
+pkgdesc="Records screen time for the Wellbeing page of the Settings, which GNOME Shell does elsewhere"
+arch=(any)
+license=(MIT)
+# Display state from plinius-mce, lock state from Phosh, the switch from gsettings-desktop-schemas
+depends=(python python-gobject plinius-mce phosh gsettings-desktop-schemas)
+source=(plinius-screentime.py
+	plinius-screentime.desktop
+	LICENSE)
+sha256sums=('7fbcd7a6400e517b9f7571d808c548989c4f5163a32d7d1b19b83261d47e1493'
+	'72beabfe89868b2d2480c548a7156b7629755ccad23612ebc9725de09577337c'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-screentime.py "$pkgdir/usr/bin/plinius-screentime"
+	# Runs in the session: it needs the session's lock state and the user's data directory
+	install -Dm644 plinius-screentime.desktop -t "$pkgdir/etc/xdg/autostart"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

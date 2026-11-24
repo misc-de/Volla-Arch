@@ -1,0 +1,291 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 22:05:33 +0100
+Subject: [PATCH] output-shield: The start-up logo from the first frame, with
+ its step below
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Behind an encrypted disk, the ramdisk shows the boot logo and hands the
+display over to phoc while keeping its picture. phoc's first frames were
+black for a long time after that:
+
+- The shield with the logo only went up once the server set up the shell
+  mode, after all backends had started: 0.6 s after the output was added.
+  New outputs now raise it themselves while the start-up logo is due
+  (shell mode, shell not up yet).
+- A shield that was up already, like the black one of a modeset, never got
+  the spinner: start_render() returned early. It now adds the spinner to a
+  raised shield.
+
+Below the logo a subdued line names the step, "Starting Phosh…", in the
+session's language (a small table; phoc has no translations of its own).
+The box of the spinner grows downwards for it, the logo stays where it was,
+so the ramdisk's picture and phoc's match.
+---
+ src/output-shield.c | 14 +++++----
+ src/output.c        |  6 ++++
+ src/server.c        | 18 ++++++++++++
+ src/server.h        |  1 +
+ src/spinner.c       | 82 +++++++++++++++++++++++++++++++++++++++++++++++++----
+ 5 files changed, 110 insertions(+), 11 deletions(-)
+
+diff --git a/src/output-shield.c b/src/output-shield.c
+index eed2f7b..ff1750d 100644
+--- a/src/output-shield.c
++++ b/src/output-shield.c
+@@ -168,13 +168,14 @@ start_render (PhocOutputShield *self, gboolean show_spinner)
+   PhocBox output_box;
+   struct wlr_output *output = self->output->wlr_output;
+ 
+-  if (self->render_end_id)
+-    return;
+-
+   wlr_output_layout_get_box (desktop->layout, output, &output_box);
+ 
+-  phoc_color_rect_set_box (self->color_rect, &output_box);
+-  phoc_bling_map (PHOC_BLING (self->color_rect));
++  /* Plinius: a shield that is up already (e.g. the black one of a modeset) still gets the
++   * spinner when asked for; returning early here left the screen black until the shell came */
++  if (!self->render_end_id) {
++    phoc_color_rect_set_box (self->color_rect, &output_box);
++    phoc_bling_map (PHOC_BLING (self->color_rect));
++  }
+ 
+   if (show_spinner && !self->spinner) {
+     int lx, ly;
+@@ -189,6 +190,9 @@ start_render (PhocOutputShield *self, gboolean show_spinner)
+   if (show_spinner)
+     phoc_bling_map (PHOC_BLING (self->spinner));
+ 
++  if (self->render_end_id)
++    return;
++
+   self->render_end_id = g_signal_connect_swapped (renderer,
+                                                   "render-end",
+                                                   G_CALLBACK (on_render),
+diff --git a/src/output.c b/src/output.c
+index 6f53273..8507fdd 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -1207,6 +1207,12 @@ phoc_output_initable_init (GInitable    *initable,
+                              G_CONNECT_SWAPPED);
+   }
+ 
++  /* Plinius: the logo goes up with the output. Waiting for the shell mode, set up after all
++   * backends started (0.6 s on the Volla), showed a black frame after the boot logo of the
++   * ramdisk had handed the display over. */
++  if (phoc_server_get_startup_logo (server))
++    phoc_output_raise_shield (self, TRUE);
++
+   g_message ("Output '%s' added ('%s'/'%s'/'%s'), "
+              "%" PRId32 "mm x %" PRId32 "mm",
+              self->wlr_output->name,
+diff --git a/src/server.c b/src/server.c
+index a0c331d..23bdf3c 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -317,6 +317,24 @@ phoc_server_raise_nofile_rlimit (PhocServer *self)
+ }
+ 
+ 
++/**
++ * phoc_server_get_startup_logo:
++ * @self: The server
++ *
++ * Plinius: whether a new output starts with the shield and its logo (or spinner) up. That is
++ * the case in shell mode until the shell came up for the first time.
++ *
++ * Returns: %TRUE if a new output should raise the shield with the spinner
++ */
++gboolean
++phoc_server_get_startup_logo (PhocServer *self)
++{
++  g_assert (PHOC_IS_SERVER (self));
++
++  return (self->flags & PHOC_SERVER_FLAG_SHELL_MODE) && self->show_spinner;
++}
++
++
+ static void
+ on_shell_state_changed (PhocServer *self, GParamSpec *pspec, PhocPhoshPrivate *phosh)
+ {
+diff --git a/src/server.h b/src/server.h
+index 9b01896..3ce8f6d 100644
+--- a/src/server.h
++++ b/src/server.h
+@@ -63,6 +63,7 @@ gboolean               phoc_server_setup                   (PhocServer *self,
+ void                   phoc_server_set_debug_flags         (PhocServer *self,
+                                                             PhocServerDebugFlags flags);
+ PhocServerDebugFlags   phoc_server_get_debug_flags         (PhocServer *self);
++gboolean               phoc_server_get_startup_logo        (PhocServer *self);
+ gboolean               phoc_server_check_debug_flags       (PhocServer *self,
+                                                             PhocServerDebugFlags check);
+ void                   phoc_server_set_log_domains         (PhocServer *self,
+diff --git a/src/spinner.c b/src/spinner.c
+index 9bb76d9..a12ec11 100644
+--- a/src/spinner.c
++++ b/src/spinner.c
+@@ -21,6 +21,7 @@
+ #include "render-private.h"
+ 
+ #include <cairo.h>
++#include <pango/pangocairo.h>
+ 
+ /* Plinius: a logo instead of the spinner, if the device ships one. The mark turns around its
+  * vertical axis like a coin, once per spin cycle; the wordmark below it stands still. Both are
+@@ -33,6 +34,13 @@
+ #define LOGO_EDGE_OPACITY 0.55
+ /* Turns of the mark per spin cycle (1.2 s): one turn takes 2.4 s */
+ #define LOGO_TURNS_PER_CYCLE 0.5
++/* Text below the logo, in units of the logo's square (LOGO_SIZE 220 in output-shield.c): the
++ * extra height of the box for it, the gap above it, the size of the font */
++#define LOGO_TEXT_AREA (34.0 / 220)
++#define LOGO_TEXT_GAP (12.0 / 220)
++#define LOGO_TEXT_SIZE (15.0 / 220)
++#define LOGO_TEXT_FONT "Adwaita Sans"
++#define LOGO_TEXT_OPACITY 0.6
+ 
+ enum {
+   PROP_0,
+@@ -83,6 +91,7 @@ struct _PhocSpinner {
+   gboolean            redraw_spinner; /* set whenever angle changes */
+   cairo_surface_t    *mark;
+   cairo_surface_t    *wordmark;
++  const char         *text;
+ };
+ 
+ static void bling_interface_init (PhocBlingInterface *iface);
+@@ -99,16 +108,53 @@ on_animation_done (PhocSpinner *self)
+ }
+ 
+ 
++/* Plinius: what the start-up step is called below the logo, in the language of the session.
++ * A table rather than gettext: phoc has no translations of its own, and it is a single line. */
++static const char *
++get_logo_text (void)
++{
++  static const struct {
++    const char *lang;
++    const char *text;
++  } texts[] = {
++    { "de", "Phosh wird gestartet …" },
++    { "es", "Iniciando Phosh…" },
++    { "fr", "Démarrage de Phosh…" },
++    { "it", "Avvio di Phosh…" },
++    { "nl", "Phosh wordt gestart…" },
++    { "pl", "Uruchamianie Phosh…" },
++    { "pt", "A iniciar o Phosh…" },
++    { "ru", "Запуск Phosh…" },
++  };
++  const char * const *langs = g_get_language_names ();
++
++  for (int i = 0; langs[i]; i++) {
++    if (g_str_equal (langs[i], "C") || g_str_has_prefix (langs[i], "en"))
++      break;
++    for (guint j = 0; j < G_N_ELEMENTS (texts); j++) {
++      if (strncmp (langs[i], texts[j].lang, 2) == 0)
++        return texts[j].text;
++    }
++  }
++  return "Starting Phosh…";
++}
++
++
+ static PhocBox
+ bling_get_box (PhocBling *bling)
+ {
+   PhocSpinner *self = PHOC_SPINNER (bling);
++  int height = self->size;
++
++  /* With the logo the box reaches further down, for the text; the logo itself stays put */
++  if (phoc_spinner_has_logo ())
++    height += self->size * LOGO_TEXT_AREA;
+ 
+   return (PhocBox) {
+            .x = self->lx,
+            .y = self->ly,
+            .width = self->size,
+-           .height = self->size,
++           .height = height,
+   };
+ }
+ 
+@@ -268,7 +314,8 @@ tint_logo (cairo_surface_t *surface, const PhocColor *accent)
+ 
+ 
+ static void
+-draw_logo (cairo_t *cr, double angle, double size, cairo_surface_t *mark, cairo_surface_t *wordmark)
++draw_logo (cairo_t *cr, double angle, double size, cairo_surface_t *mark, cairo_surface_t *wordmark,
++           const char *text)
+ {
+   double mark_w = cairo_image_surface_get_width (mark);
+   double mark_h = cairo_image_surface_get_height (mark);
+@@ -302,6 +349,25 @@ draw_logo (cairo_t *cr, double angle, double size, cairo_surface_t *mark, cairo_
+   cairo_pattern_set_filter (cairo_get_source (cr), CAIRO_FILTER_GOOD);
+   cairo_paint (cr);
+   cairo_restore (cr);
++
++  /* Plinius: the start-up step, subdued, centred below the wordmark */
++  if (text) {
++    PangoLayout *layout = pango_cairo_create_layout (cr);
++    PangoFontDescription *desc = pango_font_description_from_string (LOGO_TEXT_FONT);
++    int text_w, text_h;
++
++    pango_font_description_set_absolute_size (desc, size * LOGO_TEXT_SIZE * PANGO_SCALE);
++    pango_layout_set_font_description (layout, desc);
++    pango_layout_set_text (layout, text, -1);
++    pango_layout_get_pixel_size (layout, &text_w, &text_h);
++    cairo_save (cr);
++    cairo_move_to (cr, (size - text_w) / 2, (size + height * scale) / 2 + size * LOGO_TEXT_GAP);
++    cairo_set_source_rgba (cr, 1, 1, 1, LOGO_TEXT_OPACITY);
++    pango_cairo_show_layout (cr, layout);
++    cairo_restore (cr);
++    pango_font_description_free (desc);
++    g_object_unref (layout);
++  }
+ }
+ 
+ 
+@@ -331,7 +397,7 @@ bling_render (PhocBling *bling, PhocRenderContext *ctx)
+   if (self->redraw_spinner) {
+     if (self->mark && self->wordmark) {
+       draw_logo (phoc_cairo_texture_get_context (self->texture), self->angle, box.width,
+-                 self->mark, self->wordmark);
++                 self->mark, self->wordmark, self->text);
+     } else {
+       draw_spinner (phoc_cairo_texture_get_context (self->texture), self->angle, box.width);
+     }
+@@ -356,17 +422,20 @@ bling_map (PhocBling *bling)
+   PhocServer *server = phoc_server_get_default ();
+   PhocDesktop *desktop = phoc_server_get_desktop (server);
+   PhocOutput *output = phoc_desktop_layout_get_output (desktop, self->lx, self->ly);
+-  int size = self->size;
++  PhocBox box = bling_get_box (bling);
++  int size = box.width, height = box.height;
+ 
+-  if (output)
++  if (output) {
+     size = size * phoc_output_get_scale (output);
++    height = height * phoc_output_get_scale (output);
++  }
+ 
+   cairo_t *cr;
+ 
+   if (self->texture)
+     return;
+ 
+-  self->texture = phoc_cairo_texture_new (size, size);
++  self->texture = phoc_cairo_texture_new (size, height);
+   cr = phoc_cairo_texture_get_context (self->texture);
+ 
+   if (!cr) {
+@@ -382,6 +451,7 @@ bling_map (PhocBling *bling)
+ 
+     self->mark = load_png (LOGO_MARK);
+     self->wordmark = load_png (LOGO_WORDMARK);
++    self->text = get_logo_text ();
+     if (self->mark)
+       tint_logo (self->mark, &accent);
+     if (self->wordmark)

@@ -1,0 +1,103 @@
+From 95563b4e6ed24cd792bb55cef2f4a9ad9486081b Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 18:55:16 +0100
+Subject: [PATCH] folder-info: List a folder's apps by name
+
+A folder listed its apps in the order they were added, so a folder
+grown over time looked unordered next to the app grid, which sorts by
+name. Sort them the same way (case folded, in the order of the
+locale); this also orders the folder button's preview.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/folder-info.c        | 13 ++++++++++++-
+ tests/test-folder-info.c | 31 ++++++++++++++++++++++++++++++-
+ 2 files changed, 42 insertions(+), 2 deletions(-)
+
+diff --git a/src/folder-info.c b/src/folder-info.c
+index 2e2d8a5e..ce74b635 100644
+--- a/src/folder-info.c
++++ b/src/folder-info.c
+@@ -202,6 +202,17 @@ on_settings_name_changed (PhoshFolderInfo *self, GSettings *settings, char *key)
+ }
+ 
+ 
++/* By name as in the app grid: case folded, in the order of the locale */
++static int
++compare_app_infos (gconstpointer a, gconstpointer b, gpointer user_data)
++{
++  g_autofree char *name_a = g_utf8_casefold (g_app_info_get_name (G_APP_INFO (a)) ?: "", -1);
++  g_autofree char *name_b = g_utf8_casefold (g_app_info_get_name (G_APP_INFO (b)) ?: "", -1);
++
++  return g_utf8_collate (name_a, name_b);
++}
++
++
+ static void
+ load_apps (PhoshFolderInfo *self)
+ {
+@@ -217,7 +228,7 @@ load_apps (PhoshFolderInfo *self)
+     else if (!g_app_info_should_show (G_APP_INFO (app_info)))
+       continue;
+     else
+-      g_list_store_append (self->app_infos, app_info);
++      g_list_store_insert_sorted (self->app_infos, app_info, compare_app_infos, NULL);
+   }
+ }
+ 
+diff --git a/tests/test-folder-info.c b/tests/test-folder-info.c
+index a16f82e1..a66d4f66 100644
+--- a/tests/test-folder-info.c
++++ b/tests/test-folder-info.c
+@@ -104,6 +104,33 @@ test_phosh_folder_info_get_app_infos (void)
+ }
+ 
+ 
++static void
++test_phosh_folder_info_sorted (void)
++{
++  g_autoptr (GSettings) settings = NULL;
++  g_autoptr (PhoshFolderInfo) folder_info = NULL;
++  /* "Terminal" before "Med" in the settings */
++  const char *app_ids[] = {"demo.app.First.desktop", "demo.app.Second.desktop", NULL};
++  GListModel *apps;
++  g_autoptr (GAppInfo) first = NULL;
++  g_autoptr (GAppInfo) second = NULL;
++
++  settings = g_settings_new_with_path ("org.gnome.desktop.app-folders.folder",
++                                       "/org/gnome/desktop/app-folders/folders/foo/");
++  g_settings_set_strv (settings, "apps", app_ids);
++  folder_info = phosh_folder_info_new_from_folder_path ("foo");
++
++  apps = phosh_folder_info_get_app_infos (folder_info);
++  g_assert_cmpuint (g_list_model_get_n_items (apps), ==, 2);
++
++  /* The folder lists its apps by name */
++  first = g_list_model_get_item (apps, 0);
++  second = g_list_model_get_item (apps, 1);
++  g_assert_cmpstr (g_app_info_get_name (first), ==, "Med");
++  g_assert_cmpstr (g_app_info_get_name (second), ==, "Terminal");
++}
++
++
+ static void
+ test_phosh_folder_info_contains (void)
+ {
+@@ -198,7 +225,8 @@ test_phosh_folder_info_add_app_info (void)
+ 
+   g_assert_cmpuint (g_list_model_get_n_items (apps), ==, 2);
+ 
+-  second_got = g_list_model_get_item (apps, 1);
++  /* Sorted by name: the added "Med" comes before "Terminal" */
++  second_got = g_list_model_get_item (apps, 0);
+   g_assert_true (g_app_info_equal (second, second_got));
+ }
+ 
+@@ -252,6 +280,7 @@ main (int argc, char *argv[])
+   g_test_add_func ("/phosh/folder-info/get_name", test_phosh_folder_info_get_name);
+   g_test_add_func ("/phosh/folder-info/set_name", test_phosh_folder_info_set_name);
+   g_test_add_func ("/phosh/folder-info/get_app_infos", test_phosh_folder_info_get_app_infos);
++  g_test_add_func ("/phosh/folder-info/sorted", test_phosh_folder_info_sorted);
+   g_test_add_func ("/phosh/folder-info/contains", test_phosh_folder_info_contains);
+   g_test_add_func ("/phosh/folder-info/refilter", test_phosh_folder_info_refilter);
+   g_test_add_func ("/phosh/folder-info/add_app_info", test_phosh_folder_info_add_app_info);

@@ -1,0 +1,36 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 14:50:00 +0100
+Subject: [PATCH] mixer-control: Every port takes the new profiles of its card
+
+update_card() replaces the card's profiles, gvc_mixer_card_set_profiles()
+frees the old ones. A port's list of profiles was renewed only through
+update_ui_device_on_port_changed(), that is only for a port with a UI
+device. A Bluetooth headset's hands-free port has none (it is not
+offered on its own), so its list kept pointing at freed profiles.
+
+The next stream update asked whether the stream's port is the hands-free
+one and read those profiles: Phosh crashed (SIGSEGV in g_str_has_prefix)
+when a headset connected or switched between music and hands-free.
+
+Take the new profiles for every port of the card.
+---
+ gvc-mixer-control.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+--- a/gvc-mixer-control.c
++++ b/gvc-mixer-control.c
+@@ -2729,6 +2729,12 @@
+ 
+                         if (g_strcmp0 (card_port->port, port->name) == 0) {
+                                 found = TRUE;
++                                /* gvc_mixer_card_set_profiles() above freed the card's old
++                                 * profiles. A port without a UI device (a headset's hands-free
++                                 * port) gets no new list from update_ui_device_on_port_changed(),
++                                 * so take the new profiles here for every port */
++                                g_list_free (card_port->profiles);
++                                card_port->profiles = determine_profiles_for_port (port, gvc_mixer_card_get_profiles (card));
+                                 update_ui_device_on_port_changed (control, card_port, port, card);
+                         }
+                 }
+-- 
+2.56.0

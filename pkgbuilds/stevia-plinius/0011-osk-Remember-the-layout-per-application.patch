@@ -1,0 +1,257 @@
+From 91c9ec7d81e2d1dc86dc715152c2bcd5cf87791d Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 21:41:40 +0100
+Subject: [PATCH] osk: Remember the layout per application
+
+The Settings offer "Switch input sources individually for each window",
+but under Phosh nothing did it: GNOME Shell does that part. Stevia reads
+a layout per application (override-layout) at each activation, yet
+nothing wrote it, so a layout picked in the menu applied to every app.
+
+With per-window on, a layout picked in the menu now becomes the active
+application's override. Emoji don't count, they are a detour. An app
+without a layout of its own gets the first input source instead of
+inheriting the previous app's layout.
+
+With per-window off, remembered layouts don't apply: a pick in the menu
+wouldn't replace them, so an app would jump back to its old layout.
+---
+ src/pos-activation-filter.c |  21 ++++++++
+ src/pos-activation-filter.h |   3 ++
+ src/pos-app.c               |   5 ++
+ src/pos-input-surface.c     | 118 ++++++++++++++++++++++++++++++++++++++++++--
+ 4 files changed, 142 insertions(+), 5 deletions(-)
+
+diff --git a/src/pos-activation-filter.c b/src/pos-activation-filter.c
+index b1102ba..6a5f224 100644
+--- a/src/pos-activation-filter.c
++++ b/src/pos-activation-filter.c
+@@ -425,3 +425,24 @@ pos_activation_filter_allow_active (PosActivationFilter *self)
+ {
+   return self->allow_active;
+ }
++
++
++/**
++ * pos_activation_filter_remember_layout:
++ * @self: The activation filter
++ * @type: The layout's type
++ * @id: The layout's id
++ *
++ * Makes this the layout of the currently active application.
++ */
++void
++pos_activation_filter_remember_layout (PosActivationFilter *self, const char *type, const char *id)
++{
++  g_return_if_fail (POS_IS_ACTIVATION_FILTER (self));
++
++  if (!self->active || !self->active->settings)
++    return;
++
++  g_debug ("Remembering layout (%s,%s) for %s", type, id, self->active->app_id);
++  g_settings_set (self->active->settings, "override-layout", "(ss)", type, id);
++}
+diff --git a/src/pos-activation-filter.h b/src/pos-activation-filter.h
+index 1392ad6..4665b91 100644
+--- a/src/pos-activation-filter.h
++++ b/src/pos-activation-filter.h
+@@ -14,3 +14,6 @@ G_DECLARE_FINAL_TYPE (PosActivationFilter, pos_activation_filter, POS, ACTIVATIO
+ 
+ PosActivationFilter *pos_activation_filter_new                    (gpointer foreign_toplevel_management);
+ gboolean             pos_activation_filter_allow_active           (PosActivationFilter *self);
++void                 pos_activation_filter_remember_layout        (PosActivationFilter *self,
++                                                                   const char          *type,
++                                                                   const char          *id);
+diff --git a/src/pos-app.c b/src/pos-app.c
+index e9b01d6..f314771 100644
+--- a/src/pos-app.c
++++ b/src/pos-app.c
+@@ -323,6 +323,11 @@ create_input_surface (PosApp *self)
+                            self->input_surface,
+                            G_CONNECT_SWAPPED);
+ 
++  g_signal_connect_object (self->input_surface, "layout-picked",
++                           G_CALLBACK (pos_activation_filter_remember_layout),
++                           self->activation_filter,
++                           G_CONNECT_SWAPPED);
++
+   if (_debug_flags & POS_DEBUG_FLAG_FORCE_SHOW) {
+     pos_input_surface_set_visible (self->input_surface, TRUE);
+   } else {
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index 9527a07..d6f65a4 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -99,6 +99,12 @@ enum {
+ };
+ static GParamSpec *props[PROP_LAST_PROP];
+ 
++enum {
++  LAYOUT_PICKED,
++  N_SIGNALS
++};
++static guint signals[N_SIGNALS];
++
+ typedef struct {
+   gboolean show;
+   double   progress;
+@@ -187,6 +193,7 @@ struct _PosInputSurface {
+   char                       *surround_before;
+   /* layout-override */
+   gboolean                    layout_overriden;
++  gboolean                    applying_override;
+   /* Keymap handling */
+   guint                       keymap_delayed_id;
+ 
+@@ -210,6 +217,7 @@ struct _PosInputSurface {
+ static void pos_input_surface_submit_symbol (PosInputSurface *self, const char *symbol);
+ static void update_dictation (PosInputSurface *self);
+ static void select_layout_by_im_purpose (PosInputSurface *self);
++static void pos_input_surface_layout_picked (PosInputSurface *self, const char *layout);
+ 
+ static void pos_input_surface_action_group_iface_init (GActionGroupInterface *iface);
+ static void pos_input_surface_action_map_iface_init (GActionMapInterface *iface);
+@@ -1064,6 +1072,9 @@ select_layout_change_state (GSimpleAction *action,
+ 
+   hdy_deck_set_visible_child (self->deck, widget);
+   g_simple_action_set_state (action, parameter);
++
++  if (!self->applying_override)
++    pos_input_surface_layout_picked (self, layout);
+ }
+ 
+ 
+@@ -2506,6 +2517,22 @@ pos_input_surface_class_init (PosInputSurfaceClass *klass)
+ 
+   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
+ 
++  /**
++   * PosInputSurface::layout-picked:
++   * @type: The layout's type: xkb, ibus or terminal
++   * @id: The layout's id
++   *
++   * The user picked a layout for the current application.
++   */
++  signals[LAYOUT_PICKED] = g_signal_new ("layout-picked",
++                                         G_TYPE_FROM_CLASS (klass),
++                                         G_SIGNAL_RUN_LAST,
++                                         0, NULL, NULL, NULL,
++                                         G_TYPE_NONE,
++                                         2,
++                                         G_TYPE_STRING,
++                                         G_TYPE_STRING);
++
+   gtk_widget_class_set_css_name (widget_class, "pos-input-surface");
+ }
+ 
+@@ -3116,14 +3143,97 @@ pos_input_surface_get_layout_name (PosInputSurface *self, const char* type, cons
+ }
+ 
+ 
++static gboolean
++pos_input_surface_is_per_window (PosInputSurface *self)
++{
++  return g_settings_get_boolean (self->input_settings, "per-window");
++}
++
++
++static void
++pos_input_surface_apply_layout (PosInputSurface *self, const char *name)
++{
++  GAction *action = g_action_map_lookup_action (G_ACTION_MAP (self->action_map), "select-layout");
++
++  self->applying_override = TRUE;
++  g_action_change_state (action, g_variant_new_string (name));
++  self->applying_override = FALSE;
++}
++
++
++/* The menu picked a layout: with one source per window this is the application's from now on */
++static void
++pos_input_surface_layout_picked (PosInputSurface *self, const char *layout)
++{
++  PosOskWidget *osk_widget;
++  g_autofree char *type = NULL;
++  g_autofree char *check = NULL;
++  const char *id = "";
++
++  if (!pos_input_surface_is_per_window (self))
++    return;
++
++  /* Emoji are a detour, not a keyboard */
++  if (g_str_equal (layout, "emoji"))
++    return;
++
++  if (g_str_equal (layout, "terminal")) {
++    type = g_strdup ("terminal");
++  } else {
++    const char *colon = strchr (layout, ':');
++
++    osk_widget = pos_input_surface_get_osk_widget (self, layout);
++    if (!colon || !osk_widget)
++      return;
++
++    type = g_strndup (layout, colon - layout);
++    id = pos_osk_widget_get_layout_id (osk_widget);
++  }
++
++  /* Only what can be turned back into this layout at the next activation */
++  check = pos_input_surface_get_layout_name (self, type, id);
++  if (g_strcmp0 (check, layout) != 0) {
++    g_debug ("Not remembering layout '%s' as (%s,%s)", layout, type, id);
++    return;
++  }
++
++  self->layout_overriden = TRUE;
++  g_signal_emit (self, signals[LAYOUT_PICKED], 0, type, id);
++}
++
++
++/* An application without a layout of its own doesn't inherit the one of the previous application */
++static void
++pos_input_surface_select_first_source (PosInputSurface *self)
++{
++  g_autoptr (GVariant) sources = g_settings_get_value (self->input_settings, "sources");
++  g_autofree char *name = NULL;
++  const char *type, *id;
++
++  if (g_variant_n_children (sources) == 0)
++    return;
++
++  g_variant_get_child (sources, 0, "(&s&s)", &type, &id);
++  name = pos_input_surface_get_layout_name (self, type, id);
++  if (name && pos_input_surface_get_osk_widget (self, name))
++    pos_input_surface_apply_layout (self, name);
++
++  select_layout_by_im_purpose (self);
++}
++
++
+ void
+ pos_input_surface_set_layout_override (PosInputSurface *self, const char* type, const char* id)
+ {
+-  GAction *action;
+   g_autofree char *name = NULL;
+ 
+-  if (g_str_equal (type, "")) {
++  /* Without one source per window a remembered layout doesn't apply */
++  if (g_str_equal (type, "") || !pos_input_surface_is_per_window (self)) {
++    gboolean was_overriden = self->layout_overriden;
++
+     self->layout_overriden = FALSE;
++    if (was_overriden && pos_input_surface_is_per_window (self))
++      pos_input_surface_select_first_source (self);
+     return;
+   }
+ 
+@@ -3136,9 +3246,7 @@ pos_input_surface_set_layout_override (PosInputSurface *self, const char* type,
+ 
+   g_debug ("for (%s,%s) built name : %s", type, id, name);
+ 
+-  action = g_action_map_lookup_action (G_ACTION_MAP (self->action_map), "select-layout");
+-
+-  g_action_change_state (action,g_variant_new_string (name));
++  pos_input_surface_apply_layout (self, name);
+ 
+   self->layout_overriden = TRUE;
+ }

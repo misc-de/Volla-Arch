@@ -1,0 +1,74 @@
+Plinius: "Hardware" in System, the phone's chips and firmware versions.
+
+A row above About opens a page with the components (SoC, graphics, storage, Wi-Fi and
+Bluetooth chip, touchscreen, NFC, wireless charging, audio), the firmware that starts before
+Linux (preloader, bootloader, Trusted Firmware-A, trusted OSes, hypervisor, power management,
+verified boot), the radios (modem, Wi-Fi, Bluetooth) and the Android vendor side, each with
+version and build date. The device package collects them at boot as root into
+/run/plinius-hardware (plinius-hardware-info); without its collector the row stays hidden.
+
+The page (cc-plinius-hardware.*) lives as a separate file in the package directory and is
+copied to panels/system/ in prepare().
+
+--- a/panels/system/cc-system-panel.blp
++++ b/panels/system/cc-system-panel.blp
+@@ -47,6 +47,14 @@
+           activated => $on_secure_shell_row_clicked(template);
+         }
+ 
++        // Plinius: title, subtitle and target in cc_plinius_hardware_row_setup ()
++        $CcListRow hardware_row {
++          icon-name: "phone-symbolic";
++          show-arrow: true;
++          action-name: "navigation.push";
++          visible: false;
++        }
++
+         $CcListRow about_row {
+           title: _("_About");
+           subtitle: _("Hardware details and software versions");
+--- a/panels/system/cc-system-panel.c
++++ b/panels/system/cc-system-panel.c
+@@ -24,6 +24,7 @@
+ #include <glib/gi18n-lib.h>
+ 
+ #include "cc-list-row.h"
++#include "cc-plinius-hardware.h"
+ #include "cc-system-panel.h"
+ #include "cc-system-resources.h"
+ #include "cc-systemd-service.h"
+@@ -39,6 +40,7 @@
+ 
+     AdwActionRow *about_row;
+     AdwActionRow *datetime_row;
++    AdwActionRow *hardware_row;
+     AdwActionRow *region_row;
+     AdwActionRow *remote_desktop_row;
+ 
+@@ -131,6 +133,7 @@
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, about_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, datetime_row);
++    gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, hardware_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, region_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, remote_desktop_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, software_updates_group);
+@@ -164,4 +167,8 @@
+     cc_panel_add_static_subpage (CC_PANEL (self), "datetime", CC_TYPE_DATE_TIME_PAGE);
+     cc_panel_add_static_subpage (CC_PANEL (self), "region", CC_TYPE_REGION_PAGE);
+     cc_panel_add_static_subpage (CC_PANEL (self), "remote-desktop", CC_TYPE_REMOTE_DESKTOP_PAGE);
++
++    /* Plinius: chips and firmware versions from the device package */
++    if (cc_plinius_hardware_add_page (CC_PANEL (self)))
++        cc_plinius_hardware_row_setup (self->hardware_row);
+ }
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -38,6 +38,7 @@
+ 
+ sources = files(
+   'cc-password-utils.c',
++  'cc-plinius-hardware.c',
+   'cc-system-panel.c',
+   'cc-systemd-service.c',
+   'about/cc-about-page.c',

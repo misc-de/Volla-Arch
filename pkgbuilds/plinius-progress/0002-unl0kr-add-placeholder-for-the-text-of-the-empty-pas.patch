@@ -1,0 +1,99 @@
+From 9432c64382137a4d81c43f5f361df0da384f34e9 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 09:05:20 +0100
+Subject: [PATCH] unl0kr: add --placeholder for the text of the empty password
+ field
+
+The placeholder "Enter password..." is fixed in English. Callers that
+show a translated message can now pass a matching placeholder.
+---
+ man/unl0kr.1.scd      | 2 ++
+ unl0kr/command_line.c | 9 ++++++++-
+ unl0kr/command_line.h | 2 ++
+ unl0kr/main.c         | 2 +-
+ 4 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/man/unl0kr.1.scd b/man/unl0kr.1.scd
+index ef9cc57..df7e17f 100644
+--- a/man/unl0kr.1.scd
++++ b/man/unl0kr.1.scd
+@@ -23,6 +23,8 @@ password is printed to STDOUT. All other output happens on STDERR.
+ 
+ *-m, --message*
+ 	A message that will be displayed to a user.
++*-p, --placeholder*
++	Placeholder text of the password field. Default: "Enter password...".
+ *-C, --config-override*
+ 	Path to a config override file. Can be supplied multiple times. Config
+ 	files are merged in the following order:
+diff --git a/unl0kr/command_line.c b/unl0kr/command_line.c
+index c079e86..6c0c953 100644
+--- a/unl0kr/command_line.c
++++ b/unl0kr/command_line.c
+@@ -42,6 +42,7 @@ static void init_opts(ul_cli_opts *opts) {
+     opts->num_config_files = 0;
+     opts->config_files = NULL;
+     opts->message = NULL;
++    opts->placeholder = "Enter password...";
+     opts->newline = true;
+ }
+ 
+@@ -55,6 +56,8 @@ static void print_usage() {
+         "\n"
+         "Mandatory arguments to long options are mandatory for short options too.\n"
+         "  -m, --message             A message that will be displayed to a user\n"
++        "  -p, --placeholder         Placeholder text of the password field\n"
++        "                            (default: \"Enter password...\")\n"
+         "  -C, --config-override     Path to a config override file. Can be supplied\n"
+         "                            multiple times. Config files are merged in the\n"
+         "                            following order:\n"
+@@ -84,6 +87,7 @@ void ul_cli_parse_opts(int argc, char *argv[], ul_cli_opts *opts) {
+ 
+     struct option long_opts[] = {
+         { "message",         required_argument, NULL, 'm' },
++        { "placeholder",     required_argument, NULL, 'p' },
+         { "config-override", required_argument, NULL, 'C' },
+         { "geometry",        required_argument, NULL, 'g' },
+         { "dpi",             required_argument, NULL, 'd' },
+@@ -95,11 +99,14 @@ void ul_cli_parse_opts(int argc, char *argv[], ul_cli_opts *opts) {
+ 
+     int opt, index = 0;
+ 
+-    while ((opt = getopt_long(argc, argv, "m:C:g:d:hnvV", long_opts, &index)) != -1) {
++    while ((opt = getopt_long(argc, argv, "m:p:C:g:d:hnvV", long_opts, &index)) != -1) {
+         switch (opt) {
+         case 'm':
+             opts->message = strdup(optarg);
+             break;
++        case 'p':
++            opts->placeholder = strdup(optarg);
++            break;
+         case 'C':
+             opts->config_files = realloc(opts->config_files, (opts->num_config_files + 1) * sizeof(char *));
+             if (!opts->config_files) {
+diff --git a/unl0kr/command_line.h b/unl0kr/command_line.h
+index 3ab7a92..fcbfbfa 100644
+--- a/unl0kr/command_line.h
++++ b/unl0kr/command_line.h
+@@ -23,6 +23,8 @@ typedef struct {
+     const char **config_files;
+     /* Message for a user */
+     const char *message;
++    /* Placeholder text of the password field */
++    const char *placeholder;
+     bool newline;
+ } ul_cli_opts;
+ 
+diff --git a/unl0kr/main.c b/unl0kr/main.c
+index 44f2235..a5b3410 100644
+--- a/unl0kr/main.c
++++ b/unl0kr/main.c
+@@ -555,7 +555,7 @@ int main(int argc, char *argv[]) {
+     lv_textarea_set_password_mode(textarea, conf_opts.textarea.obscured);
+     is_password_obscured = conf_opts.textarea.obscured;
+     lv_textarea_set_password_bullet(textarea, conf_opts.textarea.bullet);
+-    lv_textarea_set_placeholder_text(textarea, "Enter password...");
++    lv_textarea_set_placeholder_text(textarea, cli_opts.placeholder);
+     lv_obj_add_event_cb(textarea, textarea_ready_cb, LV_EVENT_READY, NULL);
+     lv_obj_set_flex_grow(textarea, 1);
+     lv_obj_add_state(textarea, LV_STATE_FOCUSED);

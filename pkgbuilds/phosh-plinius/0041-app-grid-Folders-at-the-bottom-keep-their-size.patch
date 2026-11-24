@@ -1,0 +1,33 @@
+From c2036e10b82c81a64b4e3806cd14ca12c33f7b8c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 19:36:32 +0100
+Subject: [PATCH] app-grid: Folders at the bottom keep their size
+
+The icon grid of a folder button has vexpand, and GTK hands that up
+through the flow box and the scrolled window to the dock's revealer.
+The overview's box then split the free height between the apps and
+the dock, so a folder at the bottom grew to a third of the screen.
+The dock now keeps its natural height, the folders stay as tall as in
+the grid.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ui/app-grid.ui | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/ui/app-grid.ui b/src/ui/app-grid.ui
+index 56005d0c..d1889d67 100644
+--- a/src/ui/app-grid.ui
++++ b/src/ui/app-grid.ui
+@@ -144,6 +144,11 @@
+             <child>
+               <object class="GtkRevealer" id="folder_dock_revealer">
+                 <property name="visible">1</property>
++                <!-- The folder buttons expand vertically (the icon grid of a folder button has
++                     vexpand), which GTK hands up to here: the dock then took half of the free
++                     height from the apps and stretched its folders. It keeps its natural height. -->
++                <property name="vexpand">0</property>
++                <property name="valign">end</property>
+                 <property name="transition-type">slide-up</property>
+                 <property name="reveal-child">0</property>
+                 <child>

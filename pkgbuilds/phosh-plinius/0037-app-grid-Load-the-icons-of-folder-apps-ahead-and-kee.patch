@@ -1,0 +1,258 @@
+From a10994b4874f0c4109af706e88e74dd34a9ab496 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 17:53:12 +0100
+Subject: [PATCH 37/37] app-grid: Load the icons of folder apps ahead and keep
+ the folder's buttons
+
+Opening a folder made new buttons whose icons GTK rendered in the
+first frame of the slide (SVGs at 64 px times the scale, 20-60 ms each
+on the phone), so the slide jumped. The main grid does not show the
+apps in folders, so their icons were not in GTK's cache.
+
+- The icons of the apps in folders are looked up as GtkImage does
+  (same names, size, scale and flags, so the same cache entry) and
+  loaded in a thread ahead of time; the grid holds the icon infos so
+  they stay in GTK's cache.
+- Opening the same folder again keeps its buttons instead of building
+  them anew.
+- Debug messages tell how long the buttons and the first frame took.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/app-grid.c | 169 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 168 insertions(+), 1 deletion(-)
+
+diff --git a/src/app-grid.c b/src/app-grid.c
+index 2595e6ac..2eb1e53f 100644
+--- a/src/app-grid.c
++++ b/src/app-grid.c
+@@ -31,6 +31,11 @@
+ #define SEARCH_DEBOUNCE 350
+ #define DEFAULT_GTK_DEBOUNCE 150
+ 
++/* The size of an app icon in the grid, as in app-grid-button.ui */
++#define APP_ICON_SIZE 64
++/* Icons of apps in folders are loaded this long after the apps changed */
++#define PRELOAD_DELAY_MS 1000
++
+ enum {
+   PROP_0,
+   PROP_FILTER_ADAPTIVE,
+@@ -76,6 +81,15 @@ struct _PhoshAppGridPrivate {
+   PhoshFolderInfo *open_folder;
+   int              open_folder_idx;
+   GListModel      *folder_model;
++  /* The folder whose buttons the folder page has, kept for opening it again */
++  PhoshFolderInfo *bound_folder;
++  gint64           folder_opened_us;
++  gulong           folder_paint_id;
++
++  /* The icons of the apps in folders, loaded ahead so a folder opens without rendering them */
++  GPtrArray       *preloaded_icons;
++  GCancellable    *preload_cancel;
++  guint            preload_id;
+ 
+   char *search_string;
+   gboolean filter_adaptive;
+@@ -194,7 +208,8 @@ create_folder_app_launcher (gpointer item, gpointer self)
+   PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
+ 
+   btn = phosh_app_grid_button_new (G_APP_INFO (item));
+-  phosh_app_grid_button_set_folder_info (PHOSH_APP_GRID_BUTTON (btn), priv->open_folder);
++  /* The bound folder: the page keeps its buttons, new ones can come while it is closed */
++  phosh_app_grid_button_set_folder_info (PHOSH_APP_GRID_BUTTON (btn), priv->bound_folder);
+   g_signal_connect (btn, "app-launched", G_CALLBACK (app_launched_cb), self);
+ 
+   gtk_widget_set_visible (btn, TRUE);
+@@ -222,6 +237,18 @@ get_app_info_index (PhoshAppGrid *self, GAppInfo *app_info)
+ }
+ 
+ 
++/* Logs how long the first frame of an opened folder took (G_MESSAGES_DEBUG=phosh-app-grid) */
++static void
++on_folder_first_paint (GdkFrameClock *frame_clock, PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++
++  g_clear_signal_handler (&priv->folder_paint_id, frame_clock);
++  g_debug ("Folder page painted %.1f ms after the tap",
++           (g_get_monotonic_time () - priv->folder_opened_us) / 1000.0);
++}
++
++
+ static void
+ folder_launched_cb (GtkWidget       *widget,
+                     PhoshFolderInfo *info,
+@@ -229,6 +256,13 @@ folder_launched_cb (GtkWidget       *widget,
+ {
+   PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
+   GListModel *model = phosh_folder_info_get_app_infos (info);
++  GdkFrameClock *frame_clock = gtk_widget_get_frame_clock (GTK_WIDGET (self));
++
++  priv->folder_opened_us = g_get_monotonic_time ();
++  if (frame_clock && priv->folder_paint_id == 0) {
++    priv->folder_paint_id = g_signal_connect (frame_clock, "after-paint",
++                                              G_CALLBACK (on_folder_first_paint), self);
++  }
+ 
+   hdy_deck_set_visible_child_name (HDY_DECK (priv->deck), "folder_page");
+   g_object_bind_property (info, "name", priv->folder_name_label, "label", G_BINDING_SYNC_CREATE);
+@@ -244,11 +278,122 @@ folder_launched_cb (GtkWidget       *widget,
+   gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (priv->folder_name_btn), FALSE);
+   show_folder_page (self);
+ 
++  /* Opened again: the buttons are still there with their icons rendered (the bound model
++   * keeps them up to date meanwhile), building them anew cost a frame or two */
++  if (priv->bound_folder == info)
++    return;
++
++  g_set_object (&priv->bound_folder, info);
+   gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->folder_apps),
+                            model,
+                            create_folder_app_launcher,
+                            self,
+                            NULL);
++  g_debug ("Folder buttons built in %.1f ms",
++           (g_get_monotonic_time () - priv->folder_opened_us) / 1000.0);
++}
++
++
++static void
++on_icon_preloaded (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GdkPixbuf) pixbuf = NULL;
++
++  pixbuf = gtk_icon_info_load_icon_finish (GTK_ICON_INFO (source), res, &err);
++  if (pixbuf == NULL && !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    g_debug ("Could not preload an icon: %s", err->message);
++}
++
++
++/*
++ * Opening a folder makes new buttons whose icons GTK renders in the first frame of the
++ * slide (SVGs at 64 px times the scale, 20-60 ms each on the phone), so the slide jumped.
++ * The main grid does not show these apps, so their icons were not in GTK's cache. Here they
++ * are looked up as GtkImage does (same names, size, scale and flags, so the same cache entry)
++ * and loaded in a thread. Holding the icon infos keeps them in GTK's icon cache.
++ */
++static gboolean
++preload_folder_icons (gpointer data)
++{
++  PhoshAppGrid *self = PHOSH_APP_GRID (data);
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++  GListModel *apps = G_LIST_MODEL (phosh_app_list_model_get_default ());
++  GtkIconTheme *theme = gtk_icon_theme_get_for_screen (gtk_widget_get_screen (GTK_WIDGET (self)));
++  int scale = gtk_widget_get_scale_factor (GTK_WIDGET (self));
++  GtkIconLookupFlags flags = GTK_ICON_LOOKUP_USE_BUILTIN | GTK_ICON_LOOKUP_FORCE_SIZE;
++  GPtrArray *icons = g_ptr_array_new_with_free_func (g_object_unref);
++  guint n_folders = 0;
++
++  priv->preload_id = 0;
++
++  /* GtkImage adds the text direction to the lookup flags */
++  if (gtk_widget_get_direction (GTK_WIDGET (self)) == GTK_TEXT_DIR_RTL)
++    flags |= GTK_ICON_LOOKUP_DIR_RTL;
++  else
++    flags |= GTK_ICON_LOOKUP_DIR_LTR;
++
++  g_cancellable_cancel (priv->preload_cancel);
++  g_clear_object (&priv->preload_cancel);
++  priv->preload_cancel = g_cancellable_new ();
++
++  for (guint i = 0; i < g_list_model_get_n_items (apps); i++) {
++    g_autoptr (GObject) item = g_list_model_get_item (apps, i);
++    GListModel *folder_apps;
++
++    if (!PHOSH_IS_FOLDER_INFO (item))
++      continue;
++
++    n_folders++;
++    folder_apps = phosh_folder_info_get_app_infos (PHOSH_FOLDER_INFO (item));
++    for (guint j = 0; j < g_list_model_get_n_items (folder_apps); j++) {
++      g_autoptr (GAppInfo) app_info = g_list_model_get_item (folder_apps, j);
++      g_autoptr (GIcon) icon = phosh_app_grid_button_get_app_icon (app_info);
++      GtkIconInfo *icon_info;
++
++      if (icon == NULL)
++        continue;
++
++      icon_info = gtk_icon_theme_lookup_by_gicon_for_scale (theme, icon, APP_ICON_SIZE,
++                                                            scale, flags);
++      if (icon_info == NULL)
++        continue;
++
++      /* Returns at once for an icon that is loaded already */
++      gtk_icon_info_load_icon_async (icon_info, priv->preload_cancel, on_icon_preloaded, NULL);
++      g_ptr_array_add (icons, icon_info);
++    }
++  }
++
++  /* The old infos go only now, so the ones still needed stay in GTK's cache */
++  g_clear_pointer (&priv->preloaded_icons, g_ptr_array_unref);
++  priv->preloaded_icons = icons;
++  g_debug ("Preloading %u icons of %u folders at scale %d", icons->len, n_folders, scale);
++
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++schedule_preload_folder_icons (PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++
++  g_clear_handle_id (&priv->preload_id, g_source_remove);
++  priv->preload_id = g_timeout_add_full (G_PRIORITY_LOW, PRELOAD_DELAY_MS,
++                                         preload_folder_icons, self, NULL);
++  g_source_set_name_by_id (priv->preload_id, "[phosh] preload folder icons");
++}
++
++
++static void
++on_icon_theme_changed (PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++
++  /* Rendered for the old theme or scale */
++  g_clear_pointer (&priv->preloaded_icons, g_ptr_array_unref);
++  schedule_preload_folder_icons (self);
+ }
+ 
+ 
+@@ -565,6 +710,16 @@ phosh_app_grid_init (PhoshAppGrid *self)
+                            self,
+                            NULL);
+ 
++  /* Plinius: the icons of the apps in folders are loaded ahead, see preload_folder_icons() */
++  g_signal_connect_object (phosh_app_list_model_get_default (), "items-changed",
++                           G_CALLBACK (schedule_preload_folder_icons), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (gtk_icon_theme_get_default (), "changed",
++                           G_CALLBACK (on_icon_theme_changed), self, G_CONNECT_SWAPPED);
++  g_signal_connect (self, "notify::scale-factor", G_CALLBACK (on_icon_theme_changed), NULL);
++  /* Also catches apps moved into a folder while the overview was away */
++  g_signal_connect (self, "map", G_CALLBACK (schedule_preload_folder_icons), NULL);
++  schedule_preload_folder_icons (self);
++
+   priv->settings = g_settings_new ("mobi.phosh.shell");
+   g_object_connect (priv->settings,
+                     "swapped-signal::changed::force-adaptive", on_filter_setting_changed, self,
+@@ -603,6 +758,18 @@ phosh_app_grid_dispose (GObject *object)
+   PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
+ 
+   g_clear_object (&priv->open_folder);
++  g_clear_object (&priv->bound_folder);
++  g_clear_handle_id (&priv->preload_id, g_source_remove);
++  g_cancellable_cancel (priv->preload_cancel);
++  g_clear_object (&priv->preload_cancel);
++  g_clear_pointer (&priv->preloaded_icons, g_ptr_array_unref);
++  if (priv->folder_paint_id) {
++    GdkFrameClock *frame_clock = gtk_widget_get_frame_clock (GTK_WIDGET (self));
++
++    if (frame_clock)
++      g_clear_signal_handler (&priv->folder_paint_id, frame_clock);
++    priv->folder_paint_id = 0;
++  }
+   g_clear_object (&priv->actions);
+   g_clear_object (&priv->model);
+   g_clear_object (&priv->dock_model);

@@ -1,0 +1,71 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-security
+pkgver=0.1
+pkgrel=18
+pkgdesc="Data for the Device Security page: password ratings, known vulnerabilities of the installed packages and the kernel"
+arch=(aarch64 x86_64)
+license=(MIT)
+# libxcrypt: the PAM module checks that the rated password is the one in /etc/shadow.
+# cracklib is loaded at run time by plinius-pwrate (also usable in the initramfs without it).
+# python, pacman (vercmp): plinius-cve-update; gnupg (gpgv) and plinius-keyring: it checks the
+# signature of the central assessments with the repository key.
+depends=(pam libxcrypt cracklib python pacman systemd gnupg plinius-keyring)
+# Lists pam_plinius_secstate.so in /etc/pam.d/passwd
+install=plinius-security.install
+source=(pwrate.h
+	plinius-pwrate.c
+	pam_plinius_secstate.c
+	plinius-cve-update
+	plinius-cve-update.service
+	plinius-cve-update.timer
+	90-plinius-cve
+	plinius-cve-match.service
+	plinius-cve.hook
+	assessments.json
+	plinius-security.sysusers
+	LICENSE)
+sha256sums=('00900985a8ed31beefe348a09dd5114a4e59a343f9e5f05ed532500321a76d1a'
+	'899daeb730c4e1743e01b5f7f232838037873c8c41801a30929a4885fe27a47d'
+	'f8cf7b5319e425b1c1eda93452aa40e80af046582024f489876e2eb7228801c3'
+	'a946c7cb4d9961296cca7f7905ab118d8784eda85ce8f11ebf7a6fd77241262e'
+	'05d07034eacbf3a87993d0ad34610f69183920dc401f75417b4cb8ec645de2a6'
+	'49847fefb2cf2ccc3b8c4c6028fb994efee412c1f74501888d8a39a06154dc57'
+	'd78552c998e891ed10dcd6659982f732f1ed557de8213d71a7e96014149d4d08'
+	'356b96dab912feb6dc27f1fe40771774c9c2455b8b7df26174171b2265c09fd6'
+	'b7fc619d41302b39eac6e90821766f3a59291b6bda514bca1061cc76bc8864a6'
+	'36a090cf1a009b39d837c346b1c9944ff169a5f06cc28c228346da28cee2d516'
+	'ed59809ff3f5cd902f21394a95cd3b750c25b530c33061dbb49eb78f406b7cbd'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2086
+	cc $CPPFLAGS $CFLAGS -Wall -Wextra -o plinius-pwrate plinius-pwrate.c $LDFLAGS -lm
+	# shellcheck disable=SC2086
+	cc $CPPFLAGS $CFLAGS -Wall -Wextra -fPIC -shared -o pam_plinius_secstate.so pam_plinius_secstate.c \
+		$LDFLAGS -lpam -lcrypt -lm
+}
+
+check() {
+	# The levels the Device Security page relies on
+	[[ $(printf '%s\n' 'Tr0ub4dor&3' | ./plinius-pwrate | head -1) == level=weak ]]
+	[[ $(printf '%s\n' 'kX9#mQ2$vL7!' | ./plinius-pwrate | head -1) == level=good ]]
+	[[ $(printf '%s\n' 'qwmzktbxplrv' | ./plinius-pwrate | head -1) == level=fair ]]
+	python3 -m py_compile plinius-cve-update
+}
+
+package() {
+	# Due at the first connection, not only by the daily timer
+	install -Dm755 90-plinius-cve -t "$pkgdir/usr/lib/NetworkManager/dispatcher.d"
+	install -Dm755 plinius-pwrate plinius-cve-update -t "$pkgdir/usr/lib/plinius-security"
+	install -Dm755 pam_plinius_secstate.so -t "$pkgdir/usr/lib/security"
+	install -Dm644 plinius-cve-update.service plinius-cve-update.timer plinius-cve-match.service \
+		-t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/timers.target.wants"
+	ln -s ../plinius-cve-update.timer "$pkgdir/usr/lib/systemd/system/timers.target.wants/"
+	install -Dm644 plinius-cve.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	install -Dm644 assessments.json -t "$pkgdir/usr/share/plinius-security"
+	# User of plinius-cve-update; its state directory stays readable for GNOME Settings
+	install -Dm644 plinius-security.sysusers "$pkgdir/usr/lib/sysusers.d/plinius-security.conf"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

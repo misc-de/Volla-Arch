@@ -1,0 +1,30 @@
+# Records which app connects where (plinius-netlogd), from early boot on, for the
+# Connections page of GNOME Settings (Device Security). Only watches, never blocks.
+[Unit]
+Description=Record outgoing connections per app
+After=dbus.socket
+Requires=dbus.socket
+
+[Service]
+Type=dbus
+BusName=org.plinius.NetLog1
+ExecStart=/usr/lib/plinius-netlog/plinius-netlogd
+StateDirectory=plinius-netlog
+StateDirectoryMode=0700
+Restart=on-failure
+# BPF and cgroup attach (BPF, NET_ADMIN, PERFMON), the DNS packet socket (NET_RAW),
+# cgroup ids to paths and /proc/<pid>/exe of every process (DAC_READ_SEARCH, SYS_PTRACE)
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_PERFMON CAP_NET_RAW CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_SYS_RESOURCE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_UNIX AF_PACKET AF_NETLINK
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

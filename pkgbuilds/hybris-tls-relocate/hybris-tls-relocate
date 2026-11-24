@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Move an aarch64 executable's own TLS block off bionic's TLS slots.
+
+Android code reads tpidr_el0[2..7] directly (TLS_SLOT_OPENGL and friends).
+Under glibc these bytes belong to the first static TLS block, which is the
+executable's if it has one; libhybris-tls-padding.so (preloaded) only gets
+there when the executable has no TLS. Firefox has some, and Mali's
+libGLES_mali.so overwrote it with its GL context and crashed.
+
+This tool raises the alignment of the executable's PT_TLS to 64, so glibc
+places the block at tp+64, and adds the shift to every thread-pointer offset
+the linker baked into the code. glibc fills the gap tp+16..tp+64 with the next
+module's block, which is the preloaded padding.
+
+Only offsets in linker-relaxed form (movz Xd, #0, lsl #16; movk Xd, #off) are
+supported; a binary that is not fully understood is refused, not patched: one
+that reaches the block from the thread pointer in another form (the local-exec
+"add Xd, tp, #:tprel_hi12:" GCC makes for a static __thread variable, or a load
+with an immediate offset into the block), or whose block is 64 KiB or larger.
+Running it again on a patched file changes nothing.
+
+Usage: hybris-tls-relocate [-n] EXECUTABLE...
+       hybris-tls-relocate --stdin   (paths from a pacman hook, NeedsTargets)
+"""
+import os
+import struct
+import sys
+import tempfile
+
+PT_LOAD, PT_INTERP, PT_TLS = 1, 3, 7
+PF_X = 1
+TCB_SIZE = 16          # aarch64: dtv pointer + private word before the blocks
+NEW_ALIGN = 64         # block starts at tp+64, right after bionic slot 7
+SHT_RELA, SHT_DYNSYM = 4, 11
+MRS_TP = 0xD53BD040    # mrs Xt, tpidr_el0
+# How far after reading the thread pointer its first use is looked for
+TP_WINDOW = 16
+STT_TLS = 6
+# Dynamic relocations against TLS: TLS_DTPMOD64, TLS_DTPREL64, TLS_TPREL64, TLSDESC
+TLS_RELOCS = {1028, 1029, 1030, 1031}
+
+
+class Refused(Exception):
+    pass
+
+
+def align_up(v, a):
+    return (v + a - 1) & ~(a - 1)
+
+
+def relocate(data):
+    """Patch data in place; return a message, or None if nothing was to do."""
+    if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        raise Refused("not a 64-bit little-endian ELF file")
+    e_type, e_machine = struct.unpack_from("<HH", data, 16)
+    if e_machine != 183 or e_type not in (2, 3):
+        raise Refused("not an aarch64 executable")
+    e_phoff, e_shoff = struct.unpack_from("<QQ", data, 32)
+    e_phentsize, e_phnum, e_shentsize, e_shnum = struct.unpack_from("<HHHH", data, 54)
+
+    # (file offset of the header, p_type, p_flags, p_offset, p_vaddr, ...)
+    phdrs = []
+    for i in range(e_phnum):
+        off = e_phoff + i * e_phentsize
+        phdrs.append((off,) + struct.unpack_from("<IIQQQQQQ", data, off))
+    # A shared library (also ET_DYN) has no fixed place in the static TLS
+    if not any(p[1] == PT_INTERP for p in phdrs):
+        raise Refused("not a dynamically linked executable")
+    tls = [p for p in phdrs if p[1] == PT_TLS]
+    if not tls:
+        return None
+    ph_off, _, _, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align = tls[0]
+    if p_align == NEW_ALIGN and p_vaddr % NEW_ALIGN == 0:
+        return None
+    if p_align > TCB_SIZE:
+        raise Refused(f"TLS alignment {p_align} not supported")
+    if p_filesz != 0:
+        # An init image would have to stay where p_vaddr points; not needed so far
+        raise Refused("TLS with initialised data (.tdata) not supported")
+    old_start = align_up(TCB_SIZE, p_align)
+    shift = NEW_ALIGN - old_start
+    lo, hi = old_start, old_start + p_memsz
+    # Offsets of 64 KiB and more need movz with a high half, which is not matched below
+    if hi + shift > 0xFFFF:
+        raise Refused(f"TLS block of {p_memsz} bytes not supported")
+
+    # Nothing outside the executable may know the block's position
+    for i in range(e_shnum):
+        sh = e_shoff + i * e_shentsize
+        sh_type = struct.unpack_from("<I", data, sh + 4)[0]
+        # sh_offset, sh_size, sh_link, sh_info, sh_addralign, sh_entsize
+        sh_offset, sh_size, _, _, _, sh_entsize = struct.unpack_from("<QQIIQQ", data, sh + 24)
+        if sh_type in (SHT_DYNSYM, SHT_RELA) and sh_entsize == 0:
+            raise Refused(f"section {i} without an entry size")
+        if sh_type == SHT_DYNSYM:
+            for s in range(sh_offset, sh_offset + sh_size, sh_entsize):
+                if data[s + 4] & 0xF == STT_TLS:
+                    raise Refused("exports TLS symbols")
+        elif sh_type == SHT_RELA:
+            for r in range(sh_offset, sh_offset + sh_size, sh_entsize):
+                if struct.unpack_from("<Q", data, r + 8)[0] & 0xFFFFFFFF in TLS_RELOCS:
+                    raise Refused("has TLS relocations")
+
+    patched = 0
+    for p in phdrs:
+        if p[1] != PT_LOAD or not p[2] & PF_X:
+            continue
+        for pos in range(p[3], p[3] + p[6] - 4, 4):
+            movz = struct.unpack_from("<I", data, pos)[0]
+            # movz Xd, #0, lsl #16: the high half of a relaxed TP offset
+            if movz & 0xFFFFFFE0 != 0xD2A00000:
+                continue
+            rd = movz & 0x1F
+            movk = struct.unpack_from("<I", data, pos + 4)[0]
+            # movk Xd, #imm16 (lsl #0) into the same register
+            if movk & 0xFFE0001F != 0xF2800000 | rd:
+                continue
+            imm = (movk >> 5) & 0xFFFF
+            if not lo <= imm < hi:
+                raise Refused(f"offset {imm:#x} at {pos:#x} lies outside the TLS block")
+            if imm + shift > 0xFFFF:
+                raise Refused(f"offset {imm:#x} at {pos:#x} does not fit a movk after the shift")
+            struct.pack_into("<I", data, pos + 4, (movk & ~(0xFFFF << 5)) | ((imm + shift) << 5))
+            patched += 1
+    if not patched:
+        raise Refused("no thread-pointer offsets found")
+    for p in phdrs:
+        if p[1] == PT_LOAD and p[2] & PF_X:
+            check_tp_uses(data, p[3], p[3] + p[6], lo, hi)
+
+    # glibc starts the block p_vaddr % p_align past an aligned address; make
+    # that 0. Without an init image p_vaddr means nothing else.
+    delta = p_vaddr % NEW_ALIGN
+    struct.pack_into("<QQQ", data, ph_off + 8, p_offset - delta, p_vaddr - delta, p_paddr - delta)
+    struct.pack_into("<Q", data, ph_off + 48, NEW_ALIGN)
+    return f"{patched} offsets +{shift}, TLS block now at tp+{NEW_ALIGN}"
+
+
+def check_tp_uses(data, start, end, lo, hi):
+    """Refuses code that reaches the TLS block from the thread pointer other than with a
+    register offset (the relaxed form patched above): such an offset would keep its old value
+    and point into bionic's slots."""
+    for pos in range(start, end - 4, 4):
+        mrs = struct.unpack_from("<I", data, pos)[0]
+        if mrs & 0xFFFFFFE0 != MRS_TP:
+            continue
+        tp = mrs & 0x1F
+        for nxt in range(pos + 4, min(pos + 4 * (TP_WINDOW + 1), end - 3), 4):
+            insn = struct.unpack_from("<I", data, nxt)[0]
+            rn = (insn >> 5) & 0x1F
+            if insn & 0xFFE0FC00 == 0x8B000000 and tp in (rn, (insn >> 16) & 0x1F):
+                break   # add Xd, Xn, Xm: the relaxed form
+            if insn & 0x3B200C00 == 0x38200800 and rn == tp:
+                break   # load/store [tp, Xm]: the relaxed form
+            if insn & 0x7F800000 == 0x11000000 and rn == tp:
+                # add Xd, tp, #imm (lsl #12): local-exec, the offset sits in the immediate
+                raise Refused(f"thread-pointer offset in an add immediate at {nxt:#x}")
+            if insn & 0x3B000000 == 0x39000000 and rn == tp:
+                size = insn >> 30
+                if insn & 0x04000000:   # SIMD&FP: the size includes opc's high bit
+                    size |= ((insn >> 23) & 1) << 2
+                offset = ((insn >> 10) & 0xFFF) << size
+                if lo <= offset < hi:
+                    raise Refused(f"thread-pointer offset in a load/store at {nxt:#x}")
+                break   # the TCB below the block (dtv), not the block
+
+
+def process(path, dry_run):
+    with open(path, "rb") as f:
+        data = bytearray(f.read())
+    try:
+        msg = relocate(data)
+    except Refused as e:
+        print(f"{path}: {e}, left unchanged", file=sys.stderr)
+        return False
+    if msg is None:
+        return True
+    print(f"{path}: {msg}")
+    if dry_run:
+        return True
+    # A running executable cannot be opened for writing (ETXTBSY): replace it
+    st = os.stat(path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tls-relocate.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.chmod(tmp, st.st_mode & 0o7777)
+        os.rename(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    return True
+
+
+def main(argv):
+    dry_run = "-n" in argv
+    if "--stdin" in argv:
+        # pacman hands over targets relative to the root
+        paths = ["/" + line.strip().lstrip("/") for line in sys.stdin if line.strip()]
+    else:
+        paths = [a for a in argv if a != "-n"]
+    if not paths:
+        sys.exit(__doc__.split("\n\n")[-1])
+    ok = all([process(p, dry_run) for p in paths])
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

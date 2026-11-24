@@ -1,0 +1,140 @@
+From 707d3912167eadb1bb4d267dac26476a0d1deb9c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 17:50:59 +0100
+Subject: [PATCH] session: find the user's display session on any VT
+
+biomd-session and its logind monitor only looked for a session on VT 7,
+where FuriOS' display manager puts Phosh. With greetd (vt = 1) or any
+other display manager they never found one and fingerprint unlock never
+started.
+
+Ask logind for the calling user's graphical session (User.Display on
+user/self) first and keep the VT 7 search only as the fallback.
+---
+ include/session/logind.h    | 11 ++++++++
+ src/session/biomd_session.c | 11 ++++++++
+ src/session/logind.c        | 50 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 72 insertions(+)
+
+diff --git a/include/session/logind.h b/include/session/logind.h
+index cb8a811..4038ff3 100644
+--- a/include/session/logind.h
++++ b/include/session/logind.h
+@@ -70,4 +70,15 @@ logind_monitor_free(LogindMonitor *m);
+ LogindScreenState
+ logind_monitor_get_screen_state(LogindMonitor *m);
+ 
++/**
++ * The calling user's graphical session as logind sees it (User.Display),
++ * whatever VT the display manager put it on.
++ *
++ * @param sid_out Session id, free with g_free()
++ * @param spath_out Session object path, free with g_free()
++ * @return TRUE if the user has a display session
++ */
++gboolean
++logind_get_display_session(char **sid_out, char **spath_out);
++
+ #endif /* LOGIND_H */
+diff --git a/src/session/biomd_session.c b/src/session/biomd_session.c
+index a871826..f8c2a6b 100644
+--- a/src/session/biomd_session.c
++++ b/src/session/biomd_session.c
+@@ -161,8 +161,19 @@ get_session_id(BiometricSession *session)
+     const gchar *tty = NULL;
+ 
+     while (TRUE) {
++        g_autofree gchar *display_path = NULL;
++
+         error = NULL;
+ 
++        /*
++         * The user's own graphical session first: display managers other than
++         * FuriOS' put it on another VT than 7 (greetd: vt = 1 in its config).
++         */
++        if (logind_get_display_session(&session_id, &display_path)) {
++            g_debug("Found display session: %s", session_id);
++            return session_id;
++        }
++
+         if (session->login1_manager_proxy == NULL) {
+             session->login1_manager_proxy = g_dbus_proxy_new_for_bus_sync(
+                 G_BUS_TYPE_SYSTEM,
+diff --git a/src/session/logind.c b/src/session/logind.c
+index 1a7e236..e78c18a 100644
+--- a/src/session/logind.c
++++ b/src/session/logind.c
+@@ -5,6 +5,8 @@
+ 
+ #include "logind.h"
+ 
++#include <unistd.h>
++
+ #define LOGIN1_BUS_NAME "org.freedesktop.login1"
+ #define LOGIN1_OBJ_PATH "/org/freedesktop/login1"
+ #define LOGIN1_MGR_IFACE "org.freedesktop.login1.Manager"
+@@ -205,6 +207,45 @@ logind_read_idle_hint(LogindMonitor *m, gboolean *idle_hint_out)
+                                         idle_hint_out);
+ }
+ 
++gboolean
++logind_get_display_session(char **sid_out, char **spath_out)
++{
++    g_autoptr(GDBusConnection) bus = NULL;
++    g_autoptr(GVariant) reply = NULL;
++    g_autoptr(GVariant) display = NULL;
++    g_autofree char *user_path = NULL;
++    const char *sid = NULL;
++    const char *spath = NULL;
++
++    bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
++    if (!bus)
++        return FALSE;
++
++    /*
++     * By uid rather than user/self: logind resolves "self" through the
++     * caller's session, which is someone else's when started from su or ssh.
++     * Display is (so), "" when there is none.
++     */
++    user_path = g_strdup_printf("/org/freedesktop/login1/user/_%u", (guint)getuid());
++    reply = g_dbus_connection_call_sync(bus, LOGIN1_BUS_NAME, user_path,
++                                        DBUS_PROPS_IFACE, "Get",
++                                        g_variant_new("(ss)", "org.freedesktop.login1.User", "Display"),
++                                        G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
++    if (!reply)
++        return FALSE;
++
++    g_variant_get(reply, "(v)", &display);
++    if (!g_variant_is_of_type(display, G_VARIANT_TYPE("(so)")))
++        return FALSE;
++    g_variant_get(display, "(&s&o)", &sid, &spath);
++    if (!sid || !*sid)
++        return FALSE;
++
++    *sid_out = g_strdup(sid);
++    *spath_out = g_strdup(spath);
++    return TRUE;
++}
++
+ static gboolean
+ logind_find_best_session(LogindMonitor *m,
+                          char **sid_out,
+@@ -221,6 +262,15 @@ logind_find_best_session(LogindMonitor *m,
+     if (spath_out)
+         *spath_out = NULL;
+ 
++    /*
++     * The user's own graphical session first: display managers other than
++     * FuriOS' put it on another VT (greetd: vt = 1 in its config).
++     */
++    if (sid_out && spath_out && logind_get_display_session(sid_out, spath_out)) {
++        g_debug("Using the display session %s", *sid_out);
++        return TRUE;
++    }
++
+     if (!m || !m->manager_proxy)
+         return FALSE;
+ 
+-- 
+2.56.0
+

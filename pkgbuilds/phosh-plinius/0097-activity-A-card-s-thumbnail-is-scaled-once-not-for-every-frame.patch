@@ -1,0 +1,149 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed Nov 18 20:45:00 2026 +0100
+Subject: [PATCH] activity: A card's thumbnail is scaled once, not for every frame
+
+Plinius: the card of a running app scaled the window's thumbnail to the
+card's size in every frame the overview drew, with cairo in software.
+perf on the phone: 309 of 392 pixman samples of Phosh's main thread
+while a folder opened came from that cairo_fill. Without running apps
+a folder opened noticeably smoother.
+
+The thumbnail is now scaled and rounded into a surface of the card's
+size once, and only copied for each frame (nearest filter, so the
+carousel moving by a fraction of a pixel does not resample it). The
+copy is made anew when the thumbnail, the card's size, its corner
+radius or the scale factor change.
+---
+  src/activity.c | 79 +++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+  1 file changed, 73 insertions(+), 6 deletions(-)
+
+diff --git a/src/activity.c b/src/activity.c
+index 4ea1f102..228b0901 100644
+--- a/src/activity.c
++++ b/src/activity.c
+@@ -79,6 +79,12 @@ typedef struct {
+ 
+   cairo_surface_t *surface;
+   PhoshThumbnail  *thumbnail;
++  /* Plinius: the thumbnail scaled to the card and rounded, drawn into this once */
++  cairo_surface_t *plinius_card;
++  int              plinius_card_width;
++  int              plinius_card_height;
++  int              plinius_card_radius;
++  int              plinius_card_scale;
+ 
+   gboolean         hovering;
+   guint            remove_timeout_id;
+@@ -319,13 +325,65 @@ draw_rounded_rect (cairo_t *ctx, double x, double y,  double width, double heigh
+ }
+ 
+ 
++/*
++ * Plinius: the card's thumbnail used to be scaled from the window's size to the card's for every
++ * frame the overview drew, in software: a quarter of Phosh's time when a folder opened or the app
++ * grid scrolled, measured on the phone. Now it is scaled into a surface of the card's size once
++ * and only copied afterwards, until the thumbnail, the card's size, its corners or the scale
++ * change.
++ */
++static cairo_surface_t *
++plinius_get_card (PhoshActivity *self, GtkWidget *area, int width, int height, int radius)
++{
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++  int scale_factor = gtk_widget_get_scale_factor (area);
++  cairo_t *cr;
++  float scale;
++
++  if (priv->plinius_card &&
++      priv->plinius_card_width == width && priv->plinius_card_height == height &&
++      priv->plinius_card_radius == radius && priv->plinius_card_scale == scale_factor)
++    return priv->plinius_card;
++
++  g_clear_pointer (&priv->plinius_card, cairo_surface_destroy);
++  if (width <= 0 || height <= 0 || !gtk_widget_get_window (area))
++    return NULL;
++
++  /* The size in device pixels, the surface's device scale makes it width x height logically */
++  priv->plinius_card = gdk_window_create_similar_image_surface (gtk_widget_get_window (area),
++                                                                CAIRO_FORMAT_ARGB32,
++                                                                width * scale_factor,
++                                                                height * scale_factor,
++                                                                scale_factor);
++  priv->plinius_card_width = width;
++  priv->plinius_card_height = height;
++  priv->plinius_card_radius = radius;
++  priv->plinius_card_scale = scale_factor;
++
++  /* What draw_cb () did for every frame, now once */
++  scale = get_scale (self);
++  cr = cairo_create (priv->plinius_card);
++  cairo_scale (cr, scale, scale);
++  draw_rounded_rect (cr, 0, 0, cairo_image_surface_get_width (priv->surface),
++                     cairo_image_surface_get_height (priv->surface), radius);
++  cairo_set_source_surface (cr, priv->surface, 0, 0);
++  cairo_fill (cr);
++  cairo_destroy (cr);
++
++  return priv->plinius_card;
++}
++
++
+ static gboolean
+ draw_cb (PhoshActivity *self, cairo_t *cairo, GtkDrawingArea *area)
+ {
+-  int width, height, image_width, image_height, border_radius, x, y = 0;
++  int width, height, image_width, image_height, border_radius;
++  int card_width, card_height;
++  double x;
+   float scale;
+   PhoshActivityPrivate *priv;
+   GtkStyleContext *context;
++  cairo_surface_t *card;
+ 
+   g_return_val_if_fail (PHOSH_IS_ACTIVITY (self), FALSE);
+   g_return_val_if_fail (GTK_IS_DRAWING_AREA (area), FALSE);
+@@ -345,16 +403,23 @@ draw_cb (PhoshActivity *self, cairo_t *cairo, GtkDrawingArea *area)
+   image_height = cairo_image_surface_get_height (priv->surface);
+ 
+   scale = get_scale (self);
+-  cairo_scale (cairo, scale, scale);
+-
+-  x = (width - image_width * scale) / 2.0 / scale;
++  card_width = ceil (image_width * scale);
++  card_height = ceil (image_height * scale);
++  x = (width - image_width * scale) / 2.0;
+ 
+   gtk_style_context_get (context,
+                          gtk_style_context_get_state (context),
+                          GTK_STYLE_PROPERTY_BORDER_RADIUS, &border_radius,
+                          NULL);
+-  draw_rounded_rect (cairo, x, y, image_width, image_height, border_radius);
+-  cairo_set_source_surface (cairo, priv->surface, x, y);
++
++  card = plinius_get_card (self, GTK_WIDGET (area), card_width, card_height, border_radius);
++  if (!card)
++    return FALSE;
++
++  /* A plain copy: no scaling, and a fraction of a pixel (the carousel moving) does not resample */
++  cairo_set_source_surface (cairo, card, x, 0);
++  cairo_pattern_set_filter (cairo_get_source (cairo), CAIRO_FILTER_FAST);
++  cairo_rectangle (cairo, x, 0, card_width, card_height);
+   cairo_fill (cairo);
+ 
+   return FALSE;
+@@ -415,6 +480,7 @@ phosh_activity_dispose (GObject *object)
+   PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
+ 
+   g_clear_pointer (&priv->surface, cairo_surface_destroy);
++  g_clear_pointer (&priv->plinius_card, cairo_surface_destroy);
+   g_clear_object (&priv->thumbnail);
+   g_clear_object (&priv->app_info);
+ 
+@@ -1049,6 +1115,7 @@ phosh_activity_set_thumbnail (PhoshActivity *self, PhoshThumbnail *thumbnail)
+   phosh_thumbnail_get_size (thumbnail, &width, &height, &stride);
+ 
+   g_clear_pointer (&priv->surface, cairo_surface_destroy);
++  g_clear_pointer (&priv->plinius_card, cairo_surface_destroy);
+   priv->surface = cairo_image_surface_create_for_data (data,
+                                                        CAIRO_FORMAT_ARGB32,
+                                                        width, height, stride);

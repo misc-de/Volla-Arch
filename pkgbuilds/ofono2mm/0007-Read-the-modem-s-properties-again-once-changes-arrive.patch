@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 12:06:54 +0100
+Subject: [PATCH] Read the modem's properties again once changes arrive
+
+The properties from GetModems or ModemAdded can be outdated by the time
+the PropertyChanged subscription is in place: at boot oFono powers the
+modems up and adds the SimManager right in between. Those changes were
+lost, a modem without a SIM stayed "disabled" instead of "failed" with
+"sim-missing", and GNOME Settings offered SIM options for an empty slot.
+Read them again after subscribing.
+---
+ main.py | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/main.py b/main.py
+index a640ddb..be8f872 100755
+--- a/main.py
++++ b/main.py
+@@ -132,7 +132,16 @@ class MMInterface(ServiceInterface):
+ 
+         mm_modem_interface = MMModemInterface(self.loop, index, self.bus, self.ofono_client, path)
+         mm_modem_interface.ofono_props = mprops
+-        self.ofono_client["ofono_modem"][path]['org.ofono.Modem'].on_property_changed(mm_modem_interface.ofono_changed)
++        ofono_modem = self.ofono_client["ofono_modem"][path]['org.ofono.Modem']
++        ofono_modem.on_property_changed(mm_modem_interface.ofono_changed)
++        # The properties from GetModems/ModemAdded may be outdated by now: at boot oFono powers
++        # the modems up and adds the SimManager right in between, and those PropertyChanged
++        # signals came before the subscription above. Read them again now that changes arrive,
++        # otherwise a modem without a SIM stayed "disabled" instead of "sim-missing".
++        try:
++            mm_modem_interface.ofono_props = await ofono_modem.call_get_properties()
++        except DBusError:
++            pass
+         await mm_modem_interface.init_ofono_interfaces()
+         self.bus.export(f'/org/freedesktop/ModemManager1/Modem/{index}', mm_modem_interface)
+         mm_modem_interface.set_props()

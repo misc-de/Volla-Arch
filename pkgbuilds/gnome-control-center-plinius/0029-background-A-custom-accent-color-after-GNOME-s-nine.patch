@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:14:21 +0100
+Subject: [PATCH 1/3] background: A custom accent color after GNOME's nine
+
+Plinius: a tenth button at the end of the accent colors opens a page with
+GTK's color editor; the color picked there is the accent color of the
+system. The code lives in cc-plinius-accent.c (copied to
+panels/background/ in prepare()); this patch only hooks it in: the button
+is added after GNOME's colors, and with a custom color it is the active
+one when the panel syncs the buttons. A narrower breakpoint keeps the ten
+buttons in one row on a 360 px wide screen.
+---
+ panels/background/cc-background-panel.blp | 11 +++++++++++
+ panels/background/cc-background-panel.c   |  7 +++++++
+ panels/background/meson.build             |  2 ++
+ 3 files changed, 20 insertions(+)
+
+diff --git a/panels/background/cc-background-panel.blp b/panels/background/cc-background-panel.blp
+index 663424331..0403cd080 100644
+--- a/panels/background/cc-background-panel.blp
++++ b/panels/background/cc-background-panel.blp
+@@ -16,6 +16,17 @@ template $CcBackgroundPanel: $CcPanel {
+       }
+     }
+ 
++    // Plinius: ten buttons with the custom accent color, still in one row at 360 px
++    Adw.Breakpoint {
++      condition ("max-width: 390px")
++
++      setters {
++        accent_box.spacing: 2;
++        accent_box.margin-top: 6;
++        accent_box.margin-bottom: 6;
++      }
++    }
++
+     child: Adw.ToolbarView {
+       [top]
+       Adw.HeaderBar {}
+diff --git a/panels/background/cc-background-panel.c b/panels/background/cc-background-panel.c
+index 3158a9cb3..09beb0d47 100644
+--- a/panels/background/cc-background-panel.c
++++ b/panels/background/cc-background-panel.c
+@@ -33,6 +33,7 @@
+ #include "cc-background-item.h"
+ #include "cc-background-preview.h"
+ #include "panels/common/cc-plinius-display.h"
++#include "cc-plinius-accent.h"
+ #include "cc-background-resources.h"
+ 
+ #define WP_PATH_ID "org.gnome.desktop.background"
+@@ -196,6 +197,10 @@ reload_accent_color_toggles (CcBackgroundPanel *self)
+     GDesktopAccentColor accent_color = g_settings_get_enum (self->interface_settings, INTERFACE_ACCENT_COLOR_KEY);
+     GtkWidget *child;
+ 
++    /* Plinius: with a custom accent color its own button is the active one */
++    if (cc_plinius_accent_sync (self->accent_box))
++        return;
++
+     for (child = gtk_widget_get_first_child (self->accent_box); child; child = gtk_widget_get_next_sibling (child)) {
+         GDesktopAccentColor child_color = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (child), "accent-color"));
+ 
+@@ -511,6 +516,8 @@ cc_background_panel_init (CcBackgroundPanel *self)
+     /* Interface settings */
+     reload_color_scheme (self);
+     setup_accent_color_toggles (self);
++    /* Plinius: a custom accent color after GNOME's nine */
++    cc_plinius_accent_setup (self->accent_box);
+ 
+     g_signal_connect_object (self->interface_settings, "changed::" INTERFACE_COLOR_SCHEME_KEY,
+                              G_CALLBACK (reload_color_scheme), self, G_CONNECT_SWAPPED);
+diff --git a/panels/background/meson.build b/panels/background/meson.build
+index 87c615bac..7dd4cad4c 100644
+--- a/panels/background/meson.build
++++ b/panels/background/meson.build
+@@ -68,10 +68,12 @@ sources = common_sources + files(
+   'cc-background-panel.c',
+   'cc-background-preview.c',
+   'cc-background-xml.c',
++  'cc-plinius-accent.c',
+ )
+ 
+ deps = common_deps + [
+   gdk_pixbuf_dep,
++  m_dep,
+   gnome_bg_dep,
+   libxml_dep,
+   dependency('cairo-gobject'),
+-- 
+2.55.0
+

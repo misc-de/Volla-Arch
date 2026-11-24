@@ -1,0 +1,18 @@
+[Unit]
+Description=Mali's minimum clock while it renders
+# GED OPP index, 0 = 1047 MHz .. 35 = 265 MHz. Without SurfaceFlinger's frame hints GED stays in
+# its fallback mode and only steps up above 70 % load, so it keeps 265 MHz and phoc takes twice
+# as long per frame. Dragging the app grid at scale 3 (measured 2026-11-19): 265 MHz 27 frames/s,
+# 620 MHz (19) 42, 820 MHz (10) 55. The GPU is powered off while idle.
+# /sys/kernel/ged appears only when the vendor modules are loaded, about 15 s after
+# systemd-tmpfiles-setup, so a tmpfiles.d entry was skipped at every boot: wait for it.
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+# exec, not oneshot: sysinit.target must not wait for it
+Type=exec
+ExecStart=/bin/sh -c 'f=/sys/kernel/ged/hal/custom_boost_gpu_freq; i=0; while [ ! -w "$$f" ]; do i=$$((i + 1)); if [ "$$i" -gt 240 ]; then echo "$$f did not appear" >&2; exit 1; fi; sleep 0.5; done; echo 10 > "$$f"'
+
+[Install]
+WantedBy=sysinit.target

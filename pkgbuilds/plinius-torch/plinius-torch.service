@@ -1,0 +1,52 @@
+[Unit]
+Description=Flash LEDs as torch for Phosh (LED class device white:torch)
+# uleds: from plinius-kmod on the Plinius; without it there is nothing to offer
+After=plinius-kmod.service
+# Phosh looks for the LED only when it starts: be there before any login. The flash driver itself
+# comes later with the Android container; the daemon finds it when the torch goes on.
+Before=systemd-user-sessions.service
+ConditionPathExists=/dev/uleds
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/plinius-torch
+# The flash driver keeps the LEDs on when the daemon is gone, also after a crash
+ExecStopPost=/usr/bin/plinius-torch --off
+Restart=on-failure
+DevicePolicy=closed
+DeviceAllow=/dev/uleds rw
+DeviceAllow=char-video4linux rw
+ProtectSystem=strict
+ProtectHome=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+# More sandbox (docs/DIENSTE-HAERTEN.md): no capabilities, the flash's V4L2 devices are rw for
+# the group aid_system
+CapabilityBoundingSet=
+SupplementaryGroups=aid_system
+PrivateTmp=yes
+ProtectKernelTunables=yes
+# The torch's own LED (uleds creates it below its misc device once the service runs): the
+# brightness for the switch-off after the timeout or at suspend, the uevent that tells Phosh.
+# ProtectKernelTunables= alone left /sys read-only ("Read-only file system").
+ReadWritePaths=/sys/devices/virtual/misc/uleds
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+PrivateIPC=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

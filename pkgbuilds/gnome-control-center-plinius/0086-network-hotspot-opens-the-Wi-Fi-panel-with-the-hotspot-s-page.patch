@@ -1,0 +1,129 @@
+From e9a835fadaa41d53929de374cf72afe9c08a78d5 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 19:03:29 +0100
+Subject: [PATCH] network: "hotspot" opens the Wi-Fi panel with the hotspot's
+ page
+
+Plinius: "gnome-control-center wifi hotspot" (a long press of Phosh's
+hotspot tile) shows the page "Turn On Wi-Fi Hotspot?", as the row of
+the Wi-Fi page does. While the hotspot runs, the panel shows its facts
+as before; with Wi-Fi off or without the permission the row cannot be
+used, and the panel opens without the page. A panel that is new gets
+its parameters before it is in the window, so the page then waits for
+the panel to be shown.
+---
+ panels/network/cc-wifi-panel.c   | 28 +++++++++++++++++++++++++++-
+ panels/network/net-device-wifi.c | 14 ++++++++++++++
+ panels/network/net-device-wifi.h |  2 ++
+ 3 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/panels/network/cc-wifi-panel.c b/panels/network/cc-wifi-panel.c
+index 17f9f4867..6464e8875 100644
+--- a/panels/network/cc-wifi-panel.c
++++ b/panels/network/cc-wifi-panel.c
+@@ -38,7 +38,8 @@ typedef enum {
+     OPERATION_SHOW_DEVICE,
+     OPERATION_CREATE_WIFI,
+     OPERATION_CONNECT_HIDDEN,
+-    OPERATION_CONNECT_8021X
++    OPERATION_CONNECT_8021X,
++    OPERATION_HOTSPOT
+ } CmdlineOperation;
+ 
+ struct _CcWifiPanel {
+@@ -71,6 +72,8 @@ struct _CcWifiPanel {
+     CmdlineOperation arg_operation;
+     gchar *arg_device;
+     gchar *arg_access_point;
++    /* Plinius: "hotspot" came before the panel was in the window */
++    gboolean hotspot_when_shown;
+ };
+ 
+ static void update_devices_names (CcWifiPanel *self);
+@@ -435,6 +438,14 @@ handle_argv_for_device (CcWifiPanel *self, NetDeviceWifi *net_device)
+     } else if (self->arg_operation == OPERATION_CONNECT_HIDDEN) {
+         cc_network_panel_connect_to_hidden_network (toplevel, self->client);
+         ret = TRUE;
++    } else if (self->arg_operation == OPERATION_HOTSPOT) {
++        /* Plinius: the hotspot's page goes on top of the panel, so it waits until the panel is
++         * in the window (a new panel gets its parameters while it is being made) */
++        if (gtk_widget_get_root (GTK_WIDGET (self)))
++            net_device_wifi_start_hotspot (net_device);
++        else
++            self->hotspot_when_shown = TRUE;
++        ret = TRUE;
+     } else if (g_str_equal (nm_object_get_path (NM_OBJECT (device)), self->arg_device)) {
+         if (self->arg_operation == OPERATION_CONNECT_8021X) {
+             cc_network_panel_connect_to_8021x_network (toplevel, self->client, device, self->arg_access_point);
+@@ -503,6 +514,18 @@ verify_argv (CcWifiPanel *self, const char **args)
+ 
+ /* Callbacks */
+ 
++/* Plinius: "hotspot" for a panel that was not in the window yet */
++static void
++on_panel_shown_cb (CcWifiPanel *self)
++{
++    if (!self->hotspot_when_shown)
++        return;
++
++    self->hotspot_when_shown = FALSE;
++    if (self->devices->len > 0)
++        net_device_wifi_start_hotspot (g_ptr_array_index (self->devices, 0));
++}
++
+ static void
+ device_state_changed_cb (CcWifiPanel *self, GParamSpec *pspec, NMDevice *device)
+ {
+@@ -697,6 +720,8 @@ cc_wifi_panel_set_property (GObject *object, guint prop_id, const GValue *value,
+                     self->arg_operation = OPERATION_CONNECT_8021X;
+                 else if (g_str_equal (args[0], "show-device"))
+                     self->arg_operation = OPERATION_SHOW_DEVICE;
++                else if (g_str_equal (args[0], "hotspot"))
++                    self->arg_operation = OPERATION_HOTSPOT;
+                 else
+                     self->arg_operation = OPERATION_NULL;
+             }
+@@ -797,6 +822,7 @@ cc_wifi_panel_init (CcWifiPanel *self)
+ 
+     /* Handle comment-line arguments after loading devices */
+     handle_argv (self);
++    g_signal_connect (self, "shown", G_CALLBACK (on_panel_shown_cb), NULL);
+ 
+     /* Customize some properties that would lose styling if done in UI */
+     hotspot_off_label = GTK_LABEL (gtk_button_get_child (self->hotspot_off_button));
+diff --git a/panels/network/net-device-wifi.c b/panels/network/net-device-wifi.c
+index 704a4664e..f8263c9b2 100644
+--- a/panels/network/net-device-wifi.c
++++ b/panels/network/net-device-wifi.c
+@@ -1110,3 +1110,17 @@ net_device_wifi_turn_off_hotspot (NetDeviceWifi *self)
+ 
+     stop_shared_connection (self);
+ }
++
++/* Plinius: what the row "Turn On Wi-Fi Hotspot…" does, for "gnome-control-center wifi hotspot"
++ * (a long press of Phosh's hotspot tile). Nothing while the hotspot runs, the page shows it then,
++ * and nothing while the row cannot be used (Wi-Fi off, no permission). */
++void
++net_device_wifi_start_hotspot (NetDeviceWifi *self)
++{
++    g_return_if_fail (NET_IS_DEVICE_WIFI (self));
++
++    if (device_is_hotspot (self) || !gtk_widget_get_sensitive (GTK_WIDGET (self->hotspot_row)))
++        return;
++
++    start_hotspot (self);
++}
+diff --git a/panels/network/net-device-wifi.h b/panels/network/net-device-wifi.h
+index 9bf7aa6f9..764516002 100644
+--- a/panels/network/net-device-wifi.h
++++ b/panels/network/net-device-wifi.h
+@@ -40,4 +40,6 @@ GtkWidget *net_device_wifi_get_title_widget (NetDeviceWifi *device);
+ 
+ void net_device_wifi_turn_off_hotspot (NetDeviceWifi *self);
+ 
++void net_device_wifi_start_hotspot (NetDeviceWifi *self);
++
+ G_END_DECLS
+-- 
+2.56.0
+

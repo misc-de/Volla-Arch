@@ -1,0 +1,4 @@
+u nfc - "NFC daemon"
+# Sailfish OS lets the group "privileged" switch NFC (nfcd's built-in access policy); the phone's
+# user is added to it when the image is made (image/mkimage.sh)
+g privileged - -

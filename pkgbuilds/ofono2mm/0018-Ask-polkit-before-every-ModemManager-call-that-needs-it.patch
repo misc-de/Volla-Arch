@@ -1,0 +1,410 @@
+From 7eb65528bb9295e080f656d64655c23bf8020f1e Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 06:52:55 +0100
+Subject: [PATCH] Ask polkit before every ModemManager call that needs it
+
+ofono2mm runs as root and owns org.freedesktop.ModemManager1. ModemManager's
+bus policy lets every local user call every method and leaves the decision to
+the daemon, which asks polkit. ofono2mm never did: any local user, "nobody"
+or a DynamicUser service included, could list and send SMS, dial, read the
+location or enter the SIM PUK.
+
+Every method call now passes ModemManagerBus._process_message before
+dbus-next dispatches it. The polkit action comes from the table in
+ofono2mm/authorization.py, which follows ModemManager's own assignment.
+Properties of SMS objects need Messaging as well. root is allowed without
+polkit; an allowed (sender, action) is remembered for 60 s, a refusal is not
+remembered. Calls of a sender queue behind one that waits for polkit, so
+replies keep their order. polkit gets 5 s, then the call is refused.
+
+An emergency call never waits for polkit: CreateCall with an emergency number
+(112, 911, oFono's and the SIM's list), the methods of a call to one, and
+Voice requests while one is running are dispatched at once.
+---
+ main.py                   | 157 ++++++++++++++++++++++++++++++++-
+ ofono2mm/authorization.py | 179 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 335 insertions(+), 1 deletion(-)
+ create mode 100644 ofono2mm/authorization.py
+
+diff --git a/main.py b/main.py
+index fbd5aaf..e1873be 100755
+--- a/main.py
++++ b/main.py
+@@ -4,12 +4,13 @@ from dbus_next.aio import MessageBus
+ from dbus_next.service import (ServiceInterface,
+                                method, dbus_property)
+ from dbus_next.constants import PropertyAccess
+-from dbus_next import DBusError, BusType, Message
++from dbus_next import DBusError, BusType, Message, MessageType, MessageFlag, Variant
+ 
+ import asyncio
+ from argparse import ArgumentParser
+ 
+ from ofono2mm import MMModemInterface, Ofono, DBus
++from ofono2mm import authorization
+ from ofono2mm.logger import Logger
+ from ofono2mm.utils import async_locked
+ 
+@@ -44,6 +45,23 @@ class ModemManagerBus(MessageBus):
+         self._ready_modems = set()
+         # Set once ModemManager1 is owned: from then on a new modem is announced by a signal
+         self.announce_modems = False
++        # Authorization state, see _process_message
++        self._allow_cache = authorization.AllowCache()
++        self._sender_uids = {}
++        self._auth_queues = {}
++        self._authorized_calls = set()
++
++    # Longest wait for the bus daemon or polkit before a call is refused
++    AUTHORIZATION_TIMEOUT = 5.0
++
++    async def watch_senders(self):
++        # Forget what was allowed for a client once it leaves the bus (unique names are never
++        # reused, this only keeps the tables small)
++        await self.call(Message(destination='org.freedesktop.DBus', path='/org/freedesktop/DBus',
++                                interface='org.freedesktop.DBus', member='AddMatch', signature='s',
++                                body=["type='signal',sender='org.freedesktop.DBus',"
++                                      "interface='org.freedesktop.DBus',member='NameOwnerChanged',"
++                                      "arg2=''"]))
+ 
+     # ModemManager's ObjectManager only lists modems; SIMs, bearers, calls and SMS are plain
+     # objects next to it. dbus-next lists every object below the path, and libmm-glib takes
+@@ -126,6 +144,142 @@ class ModemManagerBus(MessageBus):
+             self._ready_modems.discard(path)
+         self._send_object_manager_signal('InterfacesRemoved', 'oas', [path, removed_interfaces])
+ 
++    # Authorization (ofono2mm/authorization.py has the table and the reasons). Every method call
++    # passes here before dbus-next dispatches it. A call that needs an action the sender is not
++    # known to have waits for polkit; later calls of the same sender queue behind it, so a
++    # client sees its calls answered in the order it sent them. Requests for an emergency call
++    # skip polkit and the queue: they are dispatched at once.
++    def _process_message(self, msg):
++        if msg.message_type == MessageType.SIGNAL:
++            if (msg.sender == 'org.freedesktop.DBus' and msg.member == 'NameOwnerChanged'
++                    and len(msg.body) == 3 and msg.body[0].startswith(':') and not msg.body[2]):
++                self._allow_cache.forget(msg.body[0])
++                self._sender_uids.pop(msg.body[0], None)
++            return super()._process_message(msg)
++
++        if msg.message_type != MessageType.METHOD_CALL:
++            return super()._process_message(msg)
++
++        key = (msg.sender, msg.serial)
++        if key in self._authorized_calls:
++            self._authorized_calls.discard(key)
++            return super()._process_message(msg)
++
++        action = authorization.required_action(msg.interface, msg.member, msg.path)
++        if action is not None and self._is_emergency_request(msg):
++            Logger.info(f'{msg.interface}.{msg.member}: emergency call, not asking polkit')
++            return super()._process_message(msg)
++
++        queue = self._auth_queues.get(msg.sender)
++        if queue is not None:
++            queue.append(msg)
++            return
++        if action is None or self._allow_cache.allowed(msg.sender, action):
++            return super()._process_message(msg)
++
++        self._auth_queues[msg.sender] = [msg]
++        asyncio.ensure_future(self._authorize_queue(msg.sender))
++
++    async def _authorize_queue(self, sender):
++        queue = self._auth_queues[sender]
++        try:
++            while queue:
++                msg = queue[0]
++                action = authorization.required_action(msg.interface, msg.member, msg.path)
++                allowed = True
++                if action is not None and not self._allow_cache.allowed(sender, action):
++                    try:
++                        allowed = (self._is_emergency_request(msg)
++                                   or await self._check_authorization(sender, action))
++                    except Exception as e:
++                        Logger.error(f'Authorization of {msg.member} failed: {e}')
++                        allowed = False
++                    if allowed:
++                        self._allow_cache.allow(sender, action)
++                queue.pop(0)
++                if self._disconnected:
++                    return
++                if allowed:
++                    self._authorized_calls.add((msg.sender, msg.serial))
++                    self._process_message(msg)
++                else:
++                    Logger.info(f'{msg.interface}.{msg.member} from {sender} '
++                                f'(uid {self._sender_uids.get(sender)}): not authorized ({action})')
++                    if not msg.flags & MessageFlag.NO_REPLY_EXPECTED:
++                        self.send(Message.new_error(msg, authorization.UNAUTHORIZED,
++                                                    f'Not authorized to perform {action}'))
++        finally:
++            del self._auth_queues[sender]
++
++    async def _check_authorization(self, sender, action):
++        # root (NetworkManager, mmcli as root) is always allowed and must not depend on polkit
++        uid = self._sender_uids.get(sender)
++        if uid is None:
++            try:
++                reply = await asyncio.wait_for(self.call(Message(
++                    destination='org.freedesktop.DBus', path='/org/freedesktop/DBus',
++                    interface='org.freedesktop.DBus', member='GetConnectionUnixUser',
++                    signature='s', body=[sender])), self.AUTHORIZATION_TIMEOUT)
++            except Exception as e:
++                Logger.error(f'Could not look up the user of {sender}: {e!r}')
++                return False
++            if reply.message_type != MessageType.METHOD_RETURN:
++                return False
++            uid = reply.body[0]
++            self._sender_uids[sender] = uid
++        if uid == 0:
++            return True
++
++        try:
++            reply = await asyncio.wait_for(self.call(Message(
++                destination='org.freedesktop.PolicyKit1',
++                path='/org/freedesktop/PolicyKit1/Authority',
++                interface='org.freedesktop.PolicyKit1.Authority', member='CheckAuthorization',
++                signature='(sa{sv})sa{ss}us',
++                body=[['system-bus-name', {'name': Variant('s', sender)}], action, {}, 0, ''])),
++                self.AUTHORIZATION_TIMEOUT)
++        except Exception as e:
++            # polkit hangs or is gone: refuse (emergency calls never get here)
++            Logger.error(f'polkit did not answer for {action}: {e!r}')
++            return False
++        if reply.message_type != MessageType.METHOD_RETURN:
++            Logger.error(f'polkit refused to check {action}: {reply.error_name}')
++            return False
++        return bool(reply.body[0][0])
++
++    def _is_emergency_request(self, msg):
++        if msg.interface not in (authorization.PREFIX + 'Modem.Voice', authorization.PREFIX + 'Call'):
++            return False
++        try:
++            known_numbers = set()
++            call_numbers = []
++            for path, interfaces in self._path_exports.items():
++                for interface in interfaces:
++                    props = getattr(interface, 'props', None)
++                    if not isinstance(props, dict):
++                        continue
++                    if 'EmergencyNumbers' in props:
++                        known_numbers.update(props['EmergencyNumbers'].value)
++                    if interface.name == authorization.PREFIX + 'Call' and 'Number' in props:
++                        if props['State'].value != authorization.CALL_STATE_TERMINATED:
++                            call_numbers.append(props['Number'].value)
++            for interface in self._path_exports.get(msg.path, []):
++                if interface.name == authorization.PREFIX + 'Modem.Voice':
++                    manager = interface.ofono_interface_props.get('org.ofono.VoiceCallManager', {})
++                    if 'EmergencyNumbers' in manager:
++                        known_numbers.update(manager['EmergencyNumbers'].value)
++            this_call = None
++            if msg.interface == authorization.PREFIX + 'Call':
++                for interface in self._path_exports.get(msg.path, []):
++                    if interface.name == authorization.PREFIX + 'Call':
++                        this_call = interface.props['Number'].value
++            return authorization.is_emergency_request(msg.interface, msg.member, msg.body,
++                                                      this_call, call_numbers, known_numbers)
++        except Exception as e:
++            # Rather dial without asking than keep an emergency call from going out
++            Logger.error(f'Could not tell whether {msg.member} is an emergency call: {e}')
++            return msg.interface == authorization.PREFIX + 'Modem.Voice' and msg.member == 'CreateCall'
++
+ class MMInterface(ServiceInterface):
+     def __init__(self, loop, bus):
+         super().__init__('org.freedesktop.ModemManager1')
+@@ -316,6 +470,7 @@ async def main():
+     Logger.DEBUG = args.debug
+ 
+     bus = await ModemManagerBus(bus_type=BusType.SYSTEM).connect()
++    await bus.watch_senders()
+     loop = asyncio.get_running_loop()
+     mm_manager_interface = MMInterface(loop, bus)
+     bus.export('/org/freedesktop/ModemManager1', mm_manager_interface)
+diff --git a/ofono2mm/authorization.py b/ofono2mm/authorization.py
+new file mode 100644
+index 0000000..9aedd46
+--- /dev/null
++++ b/ofono2mm/authorization.py
+@@ -0,0 +1,179 @@
++# Authorization of ModemManager API calls through polkit, as ModemManager does it.
++#
++# ofono2mm runs as root and owns org.freedesktop.ModemManager1. ModemManager's bus policy lets
++# every local user call every method and leaves the decision to the daemon, which asks polkit
++# (mm-base-modem.c: mm_base_modem_authorize). Without this module anyone, even "nobody" or a
++# DynamicUser service, could read and send SMS, dial, read the location or enter the SIM PUK.
++#
++# Actions as ModemManager 1.24 assigns them (mm-base-manager.c, mm-iface-modem*.c, mm-base-sim.c,
++# mm-base-sms.c, mm-base-call.c, mm-base-bearer.c):
++#
++#   Control         Manager: ScanDevices, SetLogging, ReportKernelEvent, InhibitDevice
++#   Device.Control  Modem: Enable, ListBearers, CreateBearer, DeleteBearer, Reset, FactoryReset,
++#                   SetPowerState, SetCurrentCapabilities, SetCurrentModes, SetCurrentBands,
++#                   SetPrimarySimSlot, GetCellInfo, Command
++#                   Simple: Connect, Disconnect, GetStatus
++#                   Modem3gpp: all methods; ProfileManager: List, Set, Delete
++#                   ModemCdma, Oma, Signal, Sar: all methods
++#                   Location: Setup, SetSuplServer, InjectAssistanceData, SetGpsRefreshRate
++#                   Sim: all methods; Bearer: Connect, Disconnect
++#   Location        Location: GetLocation
++#   Messaging       Messaging: List, Delete, Create; Sms: Send, Store
++#                   (also every Properties call on an SMS object, see below)
++#   Voice           Voice: all methods; Call: all methods
++#   USSD            Ussd: Initiate, Respond, Cancel
++#   CellBroadcast   CellBroadcast: List, Delete, SetChannels
++#   Time            Time: GetNetworkTime
++#   Firmware        Firmware: List, Select
++#
++# Deviations from ModemManager:
++# - Properties of SMS objects (sender, text) need Messaging. ModemManager hands them to anyone
++#   who knows the object path; here the path comes from Messaging.List anyway, so a client
++#   allowed to list may read, and nobody else.
++# - No interactive authorization: a background service must not raise a password dialog. The
++#   actions a session needs are allowed without one (allow_active=yes), Control and Firmware
++#   (auth_admin) stay with root.
++# - An emergency call never waits for polkit (see is_emergency_request).
++
++import time
++
++PREFIX = 'org.freedesktop.ModemManager1.'
++MANAGER = 'org.freedesktop.ModemManager1'
++SMS_PATH_PREFIX = '/org/freedesktop/ModemManager1/SMS/'
++
++UNAUTHORIZED = 'org.freedesktop.ModemManager1.Error.Core.Unauthorized'
++
++CONTROL = PREFIX + 'Control'
++DEVICE_CONTROL = PREFIX + 'Device.Control'
++LOCATION = PREFIX + 'Location'
++MESSAGING = PREFIX + 'Messaging'
++VOICE = PREFIX + 'Voice'
++USSD = PREFIX + 'USSD'
++CELL_BROADCAST = PREFIX + 'CellBroadcast'
++TIME = PREFIX + 'Time'
++FIRMWARE = PREFIX + 'Firmware'
++
++# interface -> action for every method of it, or {member: action} for single methods.
++# A method that is not listed needs no authorization (none is left in ofono2mm today).
++ACTIONS = {
++    MANAGER: CONTROL,
++    PREFIX + 'Modem': DEVICE_CONTROL,
++    PREFIX + 'Modem.Simple': DEVICE_CONTROL,
++    PREFIX + 'Modem.Modem3gpp': DEVICE_CONTROL,
++    PREFIX + 'Modem.Modem3gpp.ProfileManager': DEVICE_CONTROL,
++    PREFIX + 'Modem.Modem3gpp.Ussd': USSD,
++    PREFIX + 'Modem.ModemCdma': DEVICE_CONTROL,
++    PREFIX + 'Modem.Oma': DEVICE_CONTROL,
++    PREFIX + 'Modem.Signal': DEVICE_CONTROL,
++    PREFIX + 'Modem.Sar': DEVICE_CONTROL,
++    PREFIX + 'Modem.Firmware': FIRMWARE,
++    PREFIX + 'Modem.Time': TIME,
++    PREFIX + 'Modem.Location': {
++        'Setup': DEVICE_CONTROL,
++        'SetSuplServer': DEVICE_CONTROL,
++        'InjectAssistanceData': DEVICE_CONTROL,
++        'SetGpsRefreshRate': DEVICE_CONTROL,
++        'GetLocation': LOCATION,
++    },
++    PREFIX + 'Modem.Messaging': MESSAGING,
++    PREFIX + 'Modem.Voice': VOICE,
++    PREFIX + 'Modem.CellBroadcast': CELL_BROADCAST,
++    PREFIX + 'Sim': DEVICE_CONTROL,
++    PREFIX + 'Sms': MESSAGING,
++    PREFIX + 'Call': VOICE,
++    PREFIX + 'Bearer': DEVICE_CONTROL,
++}
++
++# 3GPP TS 22.101: these two are emergency numbers on every network, with or without a SIM.
++# oFono's EmergencyNumbers adds the ones of the SIM and the network.
++ALWAYS_EMERGENCY = frozenset(('112', '911'))
++
++# MMCallState: TERMINATED
++CALL_STATE_TERMINATED = 7
++
++# How long an allowed (sender, action) is remembered. polkit answers within milliseconds, but
++# Calls and NetworkManager send bursts of calls; a short lifetime still notices a session that
++# became inactive. Only "allowed" is remembered, a refusal is asked again next time.
++ALLOW_LIFETIME = 60.0
++
++
++def required_action(interface, member, path):
++    """The polkit action a method call needs, or None."""
++    if interface == 'org.freedesktop.DBus.Properties':
++        # Sender and text of an SMS are as private as the list of them
++        if path and path.startswith(SMS_PATH_PREFIX):
++            return MESSAGING
++        return None
++
++    actions = ACTIONS.get(interface)
++    if actions is None or isinstance(actions, str):
++        return actions
++    return actions.get(member)
++
++
++def normalize_number(number):
++    # Calls passes the number as typed; spaces or dashes must not hide an emergency number
++    return ''.join(c for c in str(number) if c.isdigit() or c in '+*#')
++
++
++def is_emergency_number(number, known_numbers):
++    number = normalize_number(number)
++    if not number:
++        return False
++    return number in ALWAYS_EMERGENCY or number in {normalize_number(n) for n in known_numbers}
++
++
++def is_emergency_request(interface, member, body, call_numbers, active_call_numbers,
++                         known_numbers):
++    """Whether a Voice/Call request belongs to an emergency call and must not wait for polkit.
++
++    call_numbers: the number of the call object the request goes to (Call interface), or None.
++    active_call_numbers: numbers of all calls that are not over.
++    """
++    if interface == PREFIX + 'Modem.Voice':
++        if member == 'CreateCall':
++            try:
++                props = body[0]
++                number = props['number'].value
++            except (IndexError, KeyError, TypeError, AttributeError):
++                return False
++            return is_emergency_number(number, known_numbers)
++        # Hanging up, holding or listing while an emergency call runs: the user must be able to
++        # end it even if polkit hangs
++        return any(is_emergency_number(n, known_numbers) for n in active_call_numbers)
++
++    if interface == PREFIX + 'Call':
++        return call_numbers is not None and is_emergency_number(call_numbers, known_numbers)
++
++    return False
++
++
++class AllowCache:
++    """Remembers allowed (sender, action) pairs for ALLOW_LIFETIME seconds."""
++
++    def __init__(self, lifetime=ALLOW_LIFETIME, clock=time.monotonic):
++        self._lifetime = lifetime
++        self._clock = clock
++        self._until = {}
++
++    def allowed(self, sender, action):
++        until = self._until.get((sender, action))
++        if until is None:
++            return False
++        if until <= self._clock():
++            del self._until[(sender, action)]
++            return False
++        return True
++
++    def allow(self, sender, action):
++        now = self._clock()
++        # Drop what expired, so senders that left without a signal do not pile up
++        if len(self._until) > 256:
++            self._until = {k: v for k, v in self._until.items() if v > now}
++        self._until[(sender, action)] = now + self._lifetime
++
++    def forget(self, sender):
++        self._until = {k: v for k, v in self._until.items() if k[0] != sender}
++
++    def __len__(self):
++        return len(self._until)
+-- 
+2.56.0
+

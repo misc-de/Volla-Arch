@@ -1,0 +1,12 @@
+# Printing works right after CUPS is installed (recommended.list, Software): the script
+# enables the printing service and printer discovery.
+[Trigger]
+Type = Package
+Operation = Install
+Target = cups
+Target = cups-plinius
+
+[Action]
+Description = Enabling the printing service and printer discovery...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plinius-printing

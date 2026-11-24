@@ -1,0 +1,217 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] app-grid: Dissolve a folder from its long-press menu
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plinius: a long press (or right click) on a folder offers "Dissolve Folder".
+It takes the folder out of folder-children and resets its keys, so the app
+grid is rebuilt and the folder's apps show up on the main grid again.
+The German label of "Remove from Folder" is now "Aus Ordner lösen".
+---
+ po/POTFILES.in                   |  1 +
+ po/de.po                         |  6 ++++-
+ src/app-grid-folder-button.c     | 55 ++++++++++++++++++++++++++++++++++++++++
+ src/folder-info.c                | 31 ++++++++++++++++++++++
+ src/folder-info.h                |  1 +
+ src/ui/app-grid-folder-button.ui | 22 ++++++++++++++++
+ 6 files changed, 115 insertions(+), 1 deletion(-)
+
+diff --git a/po/POTFILES.in b/po/POTFILES.in
+index 3e5acf89..1bf9a9f1 100644
+--- a/po/POTFILES.in
++++ b/po/POTFILES.in
+@@ -86,6 +86,7 @@ src/torch-info.c
+ src/ui/activity.ui
+ src/ui/app-auth-prompt.ui
+ src/ui/app-grid-button.ui
++src/ui/app-grid-folder-button.ui
+ src/ui/app-grid.ui
+ src/ui/audio-settings.ui
+ src/ui/brightness-settings.ui
+diff --git a/po/de.po b/po/de.po
+index f8cca632..1d832e2f 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -616,7 +616,11 @@ msgstr "Deinstallieren"
+ 
+ #: src/ui/app-grid-button.ui:53
+ msgid "_Remove from Folder"
+-msgstr "Aus dem _Ordner entfernen"
++msgstr "Aus _Ordner lösen"
++
++#: src/ui/app-grid-folder-button.ui:40
++msgid "_Dissolve Folder"
++msgstr "Ordner _auflösen"
+ 
+ #: src/ui/app-grid.ui:26
+ msgid "Search apps…"
+diff --git a/src/app-grid-folder-button.c b/src/app-grid-folder-button.c
+index feed427a..0da1b063 100644
+--- a/src/app-grid-folder-button.c
++++ b/src/app-grid-folder-button.c
+@@ -35,6 +35,11 @@ struct _PhoshAppGridFolderButton {
+ 
+   PhoshFolderInfo       *folder_info;
+   GtkGrid               *grid;
++
++  GtkWidget             *popover;
++  GMenuModel            *menu;
++  GtkGesture            *long_gesture;
++  GtkGesture            *right_gesture;
+ };
+ 
+ G_DEFINE_TYPE (PhoshAppGridFolderButton, phosh_app_grid_folder_button, PHOSH_TYPE_APP_GRID_BASE_BUTTON);
+@@ -85,6 +90,44 @@ on_activated_cb (PhoshAppGridFolderButton *self)
+ }
+ 
+ 
++static void
++on_long_pressed (PhoshAppGridFolderButton *self, double x, double y, GtkGesture *gesture)
++{
++  gtk_popover_popup (GTK_POPOVER (self->popover));
++}
++
++
++static void
++on_right_pressed (PhoshAppGridFolderButton *self,
++                  int                       n_press,
++                  double                    x,
++                  double                    y,
++                  GtkGesture               *gesture)
++{
++  const GdkEvent *event = gtk_gesture_get_last_event (gesture, NULL);
++
++  if (gdk_event_triggers_context_menu (event))
++    gtk_popover_popup (GTK_POPOVER (self->popover));
++}
++
++
++static void
++dissolve_activated (GSimpleAction *action, GVariant *parameter, gpointer data)
++{
++  PhoshAppGridFolderButton *self = PHOSH_APP_GRID_FOLDER_BUTTON (data);
++  /* The grid gets rebuilt without this button, keep the folder until we are done */
++  g_autoptr (PhoshFolderInfo) folder_info = g_object_ref (self->folder_info);
++
++  gtk_popover_popdown (GTK_POPOVER (self->popover));
++  phosh_folder_info_dissolve (folder_info);
++}
++
++
++static const GActionEntry entries[] = {
++  { .name = "dissolve", .activate = dissolve_activated },
++};
++
++
+ static void
+ build_2x2_grid_icon (PhoshAppGridFolderButton *self)
+ {
+@@ -178,6 +221,12 @@ phosh_app_grid_folder_button_class_init (PhoshAppGridFolderButtonClass *klass)
+ 
+   gtk_widget_class_bind_template_callback (widget_class, on_activated_cb);
+   gtk_widget_class_bind_template_child (widget_class, PhoshAppGridFolderButton, grid);
++  gtk_widget_class_bind_template_child (widget_class, PhoshAppGridFolderButton, popover);
++  gtk_widget_class_bind_template_child (widget_class, PhoshAppGridFolderButton, menu);
++  gtk_widget_class_bind_template_child (widget_class, PhoshAppGridFolderButton, long_gesture);
++  gtk_widget_class_bind_template_child (widget_class, PhoshAppGridFolderButton, right_gesture);
++  gtk_widget_class_bind_template_callback (widget_class, on_long_pressed);
++  gtk_widget_class_bind_template_callback (widget_class, on_right_pressed);
+ 
+   gtk_widget_class_set_css_name (widget_class, "phosh-app-grid-folder-button");
+ }
+@@ -186,7 +235,13 @@ phosh_app_grid_folder_button_class_init (PhoshAppGridFolderButtonClass *klass)
+ static void
+ phosh_app_grid_folder_button_init (PhoshAppGridFolderButton *self)
+ {
++  g_autoptr (GSimpleActionGroup) group = g_simple_action_group_new ();
++
+   gtk_widget_init_template (GTK_WIDGET (self));
++
++  g_action_map_add_action_entries (G_ACTION_MAP (group), entries, G_N_ELEMENTS (entries), self);
++  gtk_widget_insert_action_group (GTK_WIDGET (self), "folder-btn", G_ACTION_GROUP (group));
++  gtk_popover_bind_model (GTK_POPOVER (self->popover), self->menu, NULL);
+ }
+ 
+ 
+diff --git a/src/folder-info.c b/src/folder-info.c
+index ce74b635..ba713d5f 100644
+--- a/src/folder-info.c
++++ b/src/folder-info.c
+@@ -487,3 +487,34 @@ phosh_folder_info_remove_app_info (PhoshFolderInfo *self, GAppInfo *app_info)
+   g_settings_set_strv (self->settings, "apps", (const char *const *) new_apps);
+   return new_apps[0] != NULL;
+ }
++
++
++/**
++ * phosh_folder_info_dissolve:
++ * @self: The folder info
++ *
++ * Removes the folder. Its apps go back to the app grid.
++ */
++void
++phosh_folder_info_dissolve (PhoshFolderInfo *self)
++{
++  g_autoptr (GSettings) folders = NULL;
++  g_auto (GStrv) children = NULL;
++  g_auto (GStrv) new_children = NULL;
++  g_autoptr (GSettingsSchema) schema = NULL;
++  g_auto (GStrv) keys = NULL;
++
++  g_return_if_fail (PHOSH_IS_FOLDER_INFO (self));
++
++  /* Leaving folder-children rebuilds the app grid without the folder, the apps show up again */
++  folders = g_settings_new (PHOSH_FOLDERS_SCHEMA_ID);
++  children = g_settings_get_strv (folders, "folder-children");
++  new_children = phosh_util_remove_from_strv (children, self->path);
++  g_settings_set_strv (folders, "folder-children", (const char *const *) new_children);
++
++  /* Drop the folder's own keys so nothing is left in dconf */
++  g_object_get (self->settings, "settings-schema", &schema, NULL);
++  keys = g_settings_schema_list_keys (schema);
++  for (int i = 0; keys[i] != NULL; i++)
++    g_settings_reset (self->settings, keys[i]);
++}
+diff --git a/src/folder-info.h b/src/folder-info.h
+index 3aa2e3e0..ad3fbaae 100644
+--- a/src/folder-info.h
++++ b/src/folder-info.h
+@@ -24,5 +24,6 @@ gboolean    phosh_folder_info_contains (PhoshFolderInfo *self, GAppInfo *app_inf
+ gboolean    phosh_folder_info_refilter (PhoshFolderInfo *self, const char *search);
+ void        phosh_folder_info_add_app_info (PhoshFolderInfo *self, GAppInfo *app_info);
+ gboolean    phosh_folder_info_remove_app_info (PhoshFolderInfo *self, GAppInfo *app_info);
++void        phosh_folder_info_dissolve (PhoshFolderInfo *self);
+ 
+ G_END_DECLS
+diff --git a/src/ui/app-grid-folder-button.ui b/src/ui/app-grid-folder-button.ui
+index d012cd9f..b9da3c44 100644
+--- a/src/ui/app-grid-folder-button.ui
++++ b/src/ui/app-grid-folder-button.ui
+@@ -20,4 +20,26 @@
+          element in grid (like during search) and it has only one icon. -->
+     <property name="height-request">64</property>
+   </object>
++  <object class="GtkGestureLongPress" id="long_gesture">
++    <property name="touch-only">1</property>
++    <property name="widget">PhoshAppGridFolderButton</property>
++    <property name="propagation-phase">capture</property>
++    <signal name="pressed" handler="on_long_pressed" swapped="true"/>
++  </object>
++  <object class="GtkGestureMultiPress" id="right_gesture">
++    <property name="button">3</property>
++    <property name="widget">PhoshAppGridFolderButton</property>
++    <signal name="pressed" handler="on_right_pressed" swapped="true"/>
++  </object>
++  <object class="GtkPopover" id="popover">
++    <property name="relative-to">PhoshAppGridFolderButton</property>
++  </object>
++  <menu id="menu">
++    <section>
++      <item>
++        <attribute name="label" translatable="yes">_Dissolve Folder</attribute>
++        <attribute name="action">folder-btn.dissolve</attribute>
++      </item>
++    </section>
++  </menu>
+ </interface>

@@ -1,0 +1,430 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 06:45:00 +0100
+Subject: [PATCH] wwan: Save in the header bar of an access point, back swipe to the list
+
+The list of access points and the settings of one were two children of a stack
+under a single header bar with a back button of its own. On the settings the
+back swipe did nothing (the dialog could not be closed there, so that a swipe
+would not drop the edit), and Save sat below the form.
+
+List and settings are now pages of a navigation of the dialog's own, each with
+its header bar: Add at the end of the list's, Save at the end of the access
+point's, whose title is the access point's name ("New Access Point" for Add).
+The back button and the back swipe lead from the settings to the list, from the
+list the back swipe closes the dialog's page (as for the eSIM dialog). Leaving
+the settings without Save drops the changes, as the back button did before.
+Delete stays below the form.
+---
+--- a/panels/wwan/cc-wwan-apn-dialog.blp
++++ b/panels/wwan/cc-wwan-apn-dialog.blp
+@@ -6,134 +6,135 @@
+   content-width: 400;
+   title: _("Access Points");
+ 
+-  child: Adw.ToolbarView {
+-    [top]
+-    Adw.HeaderBar {
+-      [start]
+-      Button back_button {
+-        use-underline: true;
+-        icon-name: "go-previous-symbolic";
+-        clicked => $cc_wwan_apn_back_clicked_cb(template);
+-
+-        accessibility {
+-          label: _("Back");
+-        }
+-      }
+-
+-      [end]
+-      Button add_button {
+-        use-underline: true;
+-        icon-name: "list-add-symbolic";
+-        clicked => $cc_wwan_apn_add_clicked_cb(template);
+-
+-        accessibility {
+-          label: _("Add");
+-        }
+-      }
+-    }
+-
+-    content: Stack apn_settings_stack {
+-      transition-type: slide_left_right;
+-
+-      Adw.PreferencesPage apn_list_view {
+-        Adw.PreferencesGroup {
+-          ListBox apn_list {
+-            valign: start;
+-            selection-mode: none;
+-            row-activated => $cc_wwan_apn_activated_cb(template);
+-
+-            styles [
+-              "boxed-list",
+-            ]
+-          }
+-        }
+-      }
+-
+-      // Plinius: the settings of an access point in the list style of the other pages, Save
+-      // below the form, where the thumb is
+-      Adw.PreferencesPage apn_edit_view {
+-        Adw.PreferencesGroup {
+-          Adw.EntryRow name_entry {
+-            title: _("Name");
+-            changed => $cc_wwan_apn_entry_changed_cb(template);
+-          }
+-
+-          Adw.EntryRow apn_entry {
+-            title: _("APN");
+-            input-hints: no_spellcheck | no_emoji;
+-            changed => $cc_wwan_apn_entry_changed_cb(template);
+-          }
+-        }
+-
+-        Adw.PreferencesGroup {
+-          Adw.EntryRow username_entry {
+-            title: _("Username");
+-            input-hints: no_spellcheck | no_emoji;
+-          }
++  // Plinius: the list and the settings of an access point as pages of a navigation of their
++  // own instead of a stack: the back swipe leads from an access point to the list (and from
++  // the list out of the dialog's page), Save sits in the access point's header bar
++  child: Adw.NavigationView navigation_view {
++    Adw.NavigationPage {
++      title: _("Access Points");
++      tag: "list";
++
++      child: Adw.ToolbarView {
++        [top]
++        Adw.HeaderBar {
++          [end]
++          Button add_button {
++            use-underline: true;
++            icon-name: "list-add-symbolic";
++            clicked => $cc_wwan_apn_add_clicked_cb(template);
+ 
+-          Adw.PasswordEntryRow password_entry {
+-            title: _("Password");
++            accessibility {
++              label: _("Add");
++            }
+           }
+         }
+ 
+-        Adw.PreferencesGroup {
+-          Adw.ComboRow lte_attach_combo {
+-            title: _("APN Type");
+-
+-            model: StringList {
+-              strings [
+-                _("Internet"),
+-                _("Attach"),
+-              ]
+-            };
+-          }
++        content: Adw.PreferencesPage apn_list_view {
++          Adw.PreferencesGroup {
++            ListBox apn_list {
++              valign: start;
++              selection-mode: none;
++              row-activated => $cc_wwan_apn_activated_cb(template);
+ 
+-          Adw.ComboRow lte_auth_combo {
+-            title: _("Auth Type");
+-            visible: bind lte_attach_combo.selected;
+-
+-            model: StringList {
+-              strings [
+-                _("None"),
+-                "PAP",
+-                "CHAP",
+-                "EAP",
+-                "MSCHAP",
+-                "MSCHAPV2",
++              styles [
++                "boxed-list",
+               ]
+-            };
++            }
+           }
+-        }
++        };
++      };
++    }
+ 
+-        Adw.PreferencesGroup {
++    // Plinius: the settings of an access point in the list style of the other pages; the
++    // title is the access point's name or "New Access Point" (set in the code)
++    Adw.NavigationPage apn_edit_page {
++      tag: "edit";
++
++      child: Adw.ToolbarView {
++        [top]
++        Adw.HeaderBar {
++          [end]
+           Button save_button {
+-            halign: center;
+             use-underline: true;
+             label: _("_Save");
+             clicked => $cc_wwan_apn_save_clicked_cb(template);
+ 
+             styles [
+-              "pill",
+               "suggested-action",
+             ]
+           }
+         }
+ 
+-        // Plinius: Delete below Save, only for an access point saved on the phone (as for a
+-        // known Wi-Fi network); the title comes from the code (plinius-control-center)
+-        Adw.PreferencesGroup delete_group {
+-          visible: false;
++        content: Adw.PreferencesPage apn_edit_view {
++          Adw.PreferencesGroup {
++            Adw.EntryRow name_entry {
++              title: _("Name");
++              changed => $cc_wwan_apn_entry_changed_cb(template);
++            }
++
++            Adw.EntryRow apn_entry {
++              title: _("APN");
++              input-hints: no_spellcheck | no_emoji;
++              changed => $cc_wwan_apn_entry_changed_cb(template);
++            }
++          }
++
++          Adw.PreferencesGroup {
++            Adw.EntryRow username_entry {
++              title: _("Username");
++              input-hints: no_spellcheck | no_emoji;
++            }
++
++            Adw.PasswordEntryRow password_entry {
++              title: _("Password");
++            }
++          }
++
++          Adw.PreferencesGroup {
++            Adw.ComboRow lte_attach_combo {
++              title: _("APN Type");
++
++              model: StringList {
++                strings [
++                  _("Internet"),
++                  _("Attach"),
++                ]
++              };
++            }
++
++            Adw.ComboRow lte_auth_combo {
++              title: _("Auth Type");
++              visible: bind lte_attach_combo.selected;
++
++              model: StringList {
++                strings [
++                  _("None"),
++                  "PAP",
++                  "CHAP",
++                  "EAP",
++                  "MSCHAP",
++                  "MSCHAPV2",
++                ]
++              };
++            }
++          }
++
++          // Plinius: Delete below the form, only for an access point saved on the phone (as
++          // for a known Wi-Fi network); the title comes from the code (plinius-control-center)
++          Adw.PreferencesGroup delete_group {
++            visible: false;
+ 
+-          Adw.ButtonRow delete_row {
+-            activated => $cc_wwan_apn_delete_activated_cb(template);
++            Adw.ButtonRow delete_row {
++              activated => $cc_wwan_apn_delete_activated_cb(template);
+ 
+-            styles [
+-              "destructive-action",
+-            ]
++              styles [
++                "destructive-action",
++              ]
++            }
+           }
+-        }
+-      }
+-    };
++        };
++      };
++    }
+   };
+ }
+ 
+--- a/panels/wwan/cc-wwan-apn-dialog.c
++++ b/panels/wwan/cc-wwan-apn-dialog.c
+@@ -44,17 +44,15 @@
+     AdwDialog parent_instance;
+ 
+     GtkButton *add_button;
+-    GtkButton *back_button;
+     GtkButton *save_button;
+     AdwEntryRow *apn_entry;
+     AdwEntryRow *name_entry;
+     AdwPasswordEntryRow *password_entry;
+     AdwEntryRow *username_entry;
+-    AdwPreferencesPage *apn_edit_view;
++    AdwNavigationView *navigation_view;
++    AdwNavigationPage *apn_edit_page;
+     GtkListBox *apn_list;
+     GtkCheckButton *apn_radio_button;
+-    GtkScrolledWindow *apn_list_view;
+-    GtkStack *apn_settings_stack;
+     AdwComboRow *lte_auth_combo;
+     AdwComboRow *lte_attach_combo;
+     AdwPreferencesGroup *delete_group;
+@@ -112,31 +110,20 @@
+ {
+ }
+ 
+-/* Plinius: as a page (cc-plinius-dialog-pages.c) the list closes with the back swipe too. The
+- * editor does not: there the back button returns to the list, a swipe would drop the edit. */
++/* Plinius: list and settings are pages of the dialog's own navigation. Its back button and
++ * back swipe lead from the settings to the list (unsaved changes are dropped, as with back
++ * before), on the list the back swipe closes the dialog's page (cc-plinius-dialog-pages.c). */
+ static void
+-cc_wwan_apn_view_changed_cb (CcWwanApnDialog *self)
++cc_wwan_apn_show_list (CcWwanApnDialog *self)
+ {
+-    GtkWidget *view = gtk_stack_get_visible_child (self->apn_settings_stack);
+-
+-    adw_dialog_set_can_close (ADW_DIALOG (self), view != GTK_WIDGET (self->apn_edit_view));
++    adw_navigation_view_pop_to_tag (self->navigation_view, "list");
+ }
+ 
+ static void
+-cc_wwan_apn_back_clicked_cb (CcWwanApnDialog *self)
++cc_wwan_apn_show_edit (CcWwanApnDialog *self, const char *title)
+ {
+-    GtkWidget *view;
+-
+-    view = gtk_stack_get_visible_child (self->apn_settings_stack);
+-
+-    if (view == GTK_WIDGET (self->apn_edit_view)) {
+-        gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
+-        gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+-        gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+-        gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
+-    } else {
+-        adw_dialog_close (ADW_DIALOG (self));
+-    }
++    adw_navigation_page_set_title (self->apn_edit_page, title);
++    adw_navigation_view_push_by_tag (self->navigation_view, "edit");
+ }
+ 
+ static void
+@@ -147,12 +134,10 @@
+     gtk_editable_set_text (GTK_EDITABLE (self->username_entry), "");
+     gtk_editable_set_text (GTK_EDITABLE (self->password_entry), "");
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (self->add_button), FALSE);
+-    gtk_widget_set_visible (GTK_WIDGET (self->save_button), TRUE);
+     gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+ 
+     self->apn_to_save = NULL;
+-    gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_edit_view));
++    cc_wwan_apn_show_edit (self, g_dgettext (PLINIUS_DOMAIN, "New Access Point"));
+ }
+ 
+ static void
+@@ -189,11 +174,7 @@
+ 
+     cc_wwan_data_save_apn (self->wwan_data, apn, NULL, NULL, NULL);
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
+-    gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+-    /* Plinius: back on the list, Add is offered again */
+-    gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+-    gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
++    cc_wwan_apn_show_list (self);
+ }
+ 
+ static void
+@@ -258,8 +239,6 @@
+     apn = row->apn;
+     self->apn_to_save = apn;
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (self->save_button), TRUE);
+-    gtk_widget_set_visible (GTK_WIDGET (self->add_button), FALSE);
+     gtk_widget_set_visible (GTK_WIDGET (self->delete_group), cc_wwan_data_apn_is_saved (apn));
+ 
+     gtk_editable_set_text (GTK_EDITABLE (self->name_entry), cc_wwan_data_apn_get_name (apn));
+@@ -283,7 +262,7 @@
+     gtk_editable_set_text (GTK_EDITABLE (self->username_entry), username ? username : "");
+     gtk_editable_set_text (GTK_EDITABLE (self->password_entry), password ? password : "");
+ 
+-    gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_edit_view));
++    cc_wwan_apn_show_edit (self, cc_wwan_data_apn_get_name (apn));
+ }
+ 
+ /* Plinius: the answer Delete removes the access point being edited from NetworkManager and
+@@ -314,10 +293,8 @@
+     }
+ 
+     self->apn_to_save = NULL;
+-    gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
+     gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+-    gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+-    gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
++    cc_wwan_apn_show_list (self);
+ }
+ 
+ /* Plinius: Delete asks first (as for a known Wi-Fi network). It says when mobile data uses the
+@@ -443,10 +420,8 @@
+     CcWwanApnDialog *self = (CcWwanApnDialog *) widget;
+ 
+     gtk_widget_set_sensitive (GTK_WIDGET (self->save_button), FALSE);
+-    gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+-    gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
+     gtk_widget_set_visible (GTK_WIDGET (self->delete_group), FALSE);
+-    gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
++    cc_wwan_apn_show_list (self);
+ 
+     GTK_WIDGET_CLASS (cc_wwan_apn_dialog_parent_class)->show (widget);
+ }
+@@ -471,23 +446,20 @@
+     gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/wwan/cc-wwan-apn-dialog.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, add_button);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_edit_view);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_edit_page);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_entry);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_list);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_list_view);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_radio_button);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, apn_settings_stack);
+-    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, back_button);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, delete_group);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, delete_row);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, lte_auth_combo);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, lte_attach_combo);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, name_entry);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, navigation_view);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, password_entry);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, save_button);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanApnDialog, username_entry);
+ 
+-    gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_back_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_add_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_save_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, cc_wwan_apn_entry_changed_cb);
+@@ -500,10 +472,6 @@
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->delete_row), g_dgettext (PLINIUS_DOMAIN, "Delete…"));
+-
+-    g_signal_connect_object (self->apn_settings_stack, "notify::visible-child",
+-                             G_CALLBACK (cc_wwan_apn_view_changed_cb), self, G_CONNECT_SWAPPED);
+-    cc_wwan_apn_view_changed_cb (self);
+ }
+ 
+ AdwDialog *

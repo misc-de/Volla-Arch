@@ -1,0 +1,49 @@
+// The bar of the desktop over VNC, on the virtual screen only (the session fills in its name and
+// the edge from org.plinius.desktop bar-position)
+{
+  "output": "@OUTPUT@",
+  "layer": "top",
+  "position": "@POSITION@",
+  "height": 42,
+  "spacing": 6,
+  "modules-left": ["custom/apps", "wlr/taskbar"],
+  "modules-right": ["custom/wifi", "custom/battery", "custom/fullscreen", "custom/settings", "clock"],
+  "custom/apps": {
+    "format": "▣",
+    "tooltip": false,
+    "on-click": "/usr/lib/plinius-desktop/desk-apps-toggle"
+  },
+  "wlr/taskbar": {
+    "all-outputs": true,
+    "format": "{icon} {title:.28}",
+    "icon-size": 22,
+    "tooltip": false,
+    "on-click": "minimize-raise",
+    "on-click-middle": "close"
+  },
+  "custom/fullscreen": {
+    "format": "⛶",
+    "tooltip": false,
+    "on-click": "/usr/lib/plinius-desktop/fullscreen.sh"
+  },
+  "custom/settings": {
+    "format": "⚙",
+    "tooltip": false,
+    "on-click": "/usr/lib/plinius-desktop/desk-settings.py"
+  },
+  "custom/wifi": {
+    "exec": "/usr/lib/plinius-desktop/wifi-status.sh",
+    "return-type": "json",
+    "interval": 5,
+    "tooltip": false,
+    "on-click": "/usr/lib/plinius-desktop/desk-network.py"
+  },
+  "custom/battery": {
+    "exec": "/usr/lib/plinius-desktop/battery-status.sh",
+    "return-type": "json",
+    "interval": 30,
+    "tooltip": false,
+    "on-click": "/usr/lib/plinius-desktop/desk-battery.py"
+  },
+  "clock": { "format": "{:%a %d %b  %H:%M}", "tooltip": false }
+}

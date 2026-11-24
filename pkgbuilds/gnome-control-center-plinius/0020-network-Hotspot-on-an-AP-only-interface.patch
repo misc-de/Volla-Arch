@@ -1,0 +1,294 @@
+From a2ff78f4f636f65559a3cb23f05222f925f75dea Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 10:46:27 +0100
+Subject: [PATCH] network: Hotspot on an AP-only interface
+
+Some WLAN drivers cannot switch the client interface to AP mode and run
+the hotspot on an interface of its own (MediaTek gen4m: ap0 next to
+wlan0, as Android's ro.vendor.wifi.sap.interface). The Wi-Fi panel
+started the hotspot on wlan0, where it never came up.
+
+Hide such an interface (ap followed by digits) from the device list:
+it finds no networks. Start, show and stop the hotspot of the shown
+device on it, and follow active connections, as the hotspot does not
+change the state of the shown device. Pick channel 1, 6 or 11 for it:
+these drivers manage their regulatory domain themselves and offer
+channels 12 and 13, on which many stations do not see the hotspot.
+---
+ panels/network/cc-wifi-hotspot-dialog.c | 13 ++++++++
+ panels/network/cc-wifi-panel.c          | 20 ++++++++---
+ panels/network/net-device-wifi.c        | 32 ++++++++++++------
+ panels/network/panel-common.c           | 44 +++++++++++++++++++++++++
+ panels/network/panel-common.h           |  4 +++
+ 5 files changed, 99 insertions(+), 14 deletions(-)
+
+diff --git a/panels/network/cc-wifi-hotspot-dialog.c b/panels/network/cc-wifi-hotspot-dialog.c
+index f27ef0805..deb261036 100644
+--- a/panels/network/cc-wifi-hotspot-dialog.c
++++ b/panels/network/cc-wifi-hotspot-dialog.c
+@@ -31,6 +31,7 @@
+ 
+ #include "cc-network-resources.h"
+ #include "cc-wifi-hotspot-dialog.h"
++#include "panel-common.h"
+ #include "ui-helpers.h"
+ 
+ struct _CcWifiHotspotDialog {
+@@ -285,6 +286,18 @@ hotspot_update_wireless_settings (CcWifiHotspotDialog *self)
+     ssid_text = gtk_editable_get_text (GTK_EDITABLE (self->name_entry));
+     ssid = g_bytes_new (ssid_text, strlen (ssid_text));
+     g_object_set (setting, "ssid", ssid, NULL);
++
++    /* A driver with an AP-only interface manages its regulatory domain itself and
++     * offers channels 12 and 13 that many stations do not see a hotspot on: pick
++     * one of the channels 1, 6 and 11, stable for the name. */
++    if (panel_wifi_device_is_ap_only (NM_DEVICE (self->device))) {
++        static const guint channels[] = { 1, 6, 11 };
++
++        g_object_set (setting,
++                      "band", "bg",
++                      "channel", channels[g_str_hash (ssid_text) % G_N_ELEMENTS (channels)],
++                      NULL);
++    }
+ }
+ 
+ static void
+diff --git a/panels/network/cc-wifi-panel.c b/panels/network/cc-wifi-panel.c
+index abf276ee3..b25de648b 100644
+--- a/panels/network/cc-wifi-panel.c
++++ b/panels/network/cc-wifi-panel.c
+@@ -177,7 +177,7 @@ wifi_panel_update_qr_image_cb (CcWifiPanel *self)
+ 
+     child = NET_DEVICE_WIFI (gtk_stack_get_visible_child (self->stack));
+     device = net_device_wifi_get_device (child);
+-    hotspot = wifi_device_get_hotspot (self, device);
++    hotspot = wifi_device_get_hotspot (self, panel_wifi_get_hotspot_device (self->client, device));
+ 
+     if (hotspot) {
+         g_autofree gchar *str = NULL;
+@@ -202,6 +202,14 @@ wifi_panel_update_qr_image_cb (CcWifiPanel *self)
+     gtk_widget_set_visible (GTK_WIDGET (self->spinner), hotspot == NULL);
+ }
+ 
++/* A hotspot on an interface of its own does not change the state of the shown device */
++static void
++active_connections_changed_cb (CcWifiPanel *self)
++{
++    if (gtk_stack_get_visible_child (self->stack))
++        wifi_panel_update_qr_image_cb (self);
++}
++
+ static void
+ add_wifi_device (CcWifiPanel *self, NMDevice *device)
+ {
+@@ -310,7 +318,8 @@ load_wifi_devices (CcWifiPanel *self)
+             NMDevice *device;
+ 
+             device = g_ptr_array_index (devices, i);
+-            if (!NM_IS_DEVICE_WIFI (device) || !nm_device_get_managed (device))
++            if (!NM_IS_DEVICE_WIFI (device) || !nm_device_get_managed (device)
++                || panel_wifi_device_is_ap_only (device))
+                 continue;
+             add_wifi_device (self, device);
+         }
+@@ -503,7 +512,7 @@ device_state_changed_cb (CcWifiPanel *self, GParamSpec *pspec, NMDevice *device)
+ 
+     id = nm_device_get_udi (device);
+     /* Don't add a device that has already been added */
+-    if (!NM_IS_DEVICE_WIFI (device) || !id)
++    if (!NM_IS_DEVICE_WIFI (device) || !id || panel_wifi_device_is_ap_only (device))
+         return;
+ 
+     if (nm_device_get_managed (device)) {
+@@ -522,7 +531,7 @@ device_state_changed_cb (CcWifiPanel *self, GParamSpec *pspec, NMDevice *device)
+ static void
+ device_added_cb (CcWifiPanel *self, NMDevice *device)
+ {
+-    if (!NM_IS_DEVICE_WIFI (device))
++    if (!NM_IS_DEVICE_WIFI (device) || panel_wifi_device_is_ap_only (device))
+         return;
+ 
+     if (nm_device_get_managed (device)) {
+@@ -793,6 +802,9 @@ cc_wifi_panel_init (CcWifiPanel *self)
+     g_signal_connect_object (self->client, "notify::wireless-enabled", G_CALLBACK (wireless_enabled_cb), self,
+                              G_CONNECT_SWAPPED);
+ 
++    g_signal_connect_object (self->client, "notify::active-connections", G_CALLBACK (active_connections_changed_cb),
++                             self, G_CONNECT_SWAPPED);
++
+     /* Load Wi-Fi devices */
+     load_wifi_devices (self);
+ 
+diff --git a/panels/network/net-device-wifi.c b/panels/network/net-device-wifi.c
+index 301f14fa4..121aa2645 100644
+--- a/panels/network/net-device-wifi.c
++++ b/panels/network/net-device-wifi.c
+@@ -135,6 +135,13 @@ find_connection_for_device (NetDeviceWifi *self, NMDevice *device)
+     return net_device_get_find_connection (self->client, device);
+ }
+ 
++/* The hotspot may run on an interface of its own (panel_wifi_get_hotspot_device ()) */
++static NMDevice *
++hotspot_device (NetDeviceWifi *self)
++{
++    return panel_wifi_get_hotspot_device (self->client, self->device);
++}
++
+ static gboolean
+ connection_is_shared (NMConnection *c)
+ {
+@@ -151,12 +158,13 @@ connection_is_shared (NMConnection *c)
+ static gboolean
+ device_is_hotspot (NetDeviceWifi *self)
+ {
++    NMDevice *device = hotspot_device (self);
+     NMConnection *c;
+ 
+-    if (nm_device_get_active_connection (self->device) == NULL)
++    if (nm_device_get_active_connection (device) == NULL)
+         return FALSE;
+ 
+-    c = find_connection_for_device (self, self->device);
++    c = find_connection_for_device (self, device);
+     if (c == NULL)
+         return FALSE;
+ 
+@@ -249,10 +257,10 @@ nm_device_wifi_refresh_hotspot (NetDeviceWifi *self)
+     g_autofree gchar *hotspot_ssid = NULL;
+ 
+     /* refresh hotspot ui */
+-    ssid = device_get_hotspot_ssid (self, self->device);
++    ssid = device_get_hotspot_ssid (self, hotspot_device (self));
+     if (ssid)
+         hotspot_ssid = nm_utils_ssid_to_utf8 (g_bytes_get_data (ssid, NULL), g_bytes_get_size (ssid));
+-    device_get_hotspot_security_details (self, self->device, &hotspot_secret, &hotspot_security);
++    device_get_hotspot_security_details (self, hotspot_device (self), &hotspot_secret, &hotspot_security);
+ 
+     g_debug ("Refreshing hotspot labels to name: '%s', security key: '%s', security: '%s'", hotspot_ssid,
+              hotspot_secret, hotspot_security);
+@@ -555,7 +563,7 @@ net_device_wifi_get_hotspot_connection (NetDeviceWifi *self)
+     GSList *connections, *l;
+     NMConnection *c = NULL;
+ 
+-    connections = net_device_get_valid_connections (self->client, self->device);
++    connections = net_device_get_valid_connections (self->client, hotspot_device (self));
+     for (l = connections; l; l = l->next) {
+         NMConnection *tmp = l->data;
+         if (is_hotspot_connection (tmp)) {
+@@ -588,7 +596,8 @@ overwrite_ssid_cb (GObject *source_object, GAsyncResult *res, gpointer user_data
+     c = net_device_wifi_get_hotspot_connection (self);
+ 
+     g_debug ("activate existing hotspot connection\n");
+-    nm_client_activate_connection_async (self->client, c, self->device, NULL, self->cancellable, activate_cb, self);
++    nm_client_activate_connection_async (self->client, c, hotspot_device (self), NULL, self->cancellable, activate_cb,
++                                         self);
+ }
+ 
+ static void
+@@ -601,8 +610,8 @@ on_wifi_hotspot_dialog_response_cb (AdwDialog *dialog, NetDeviceWifi *self)
+         nm_remote_connection_commit_changes_async (NM_REMOTE_CONNECTION (connection), TRUE, self->cancellable,
+                                                    overwrite_ssid_cb, self);
+     else
+-        nm_client_add_and_activate_connection_async (self->client, connection, self->device, NULL, self->cancellable,
+-                                                     activate_new_cb, self);
++        nm_client_add_and_activate_connection_async (self->client, connection, hotspot_device (self), NULL,
++                                                     self->cancellable, activate_new_cb, self);
+ }
+ 
+ static void
+@@ -614,7 +623,7 @@ start_hotspot (NetDeviceWifi *self)
+     g_autofree gchar *ssid = NULL;
+ 
+     hotspot_dialog = cc_wifi_hotspot_dialog_new ();
+-    cc_wifi_hotspot_dialog_set_device (hotspot_dialog, NM_DEVICE_WIFI (self->device));
++    cc_wifi_hotspot_dialog_set_device (hotspot_dialog, NM_DEVICE_WIFI (hotspot_device (self)));
+     hostname = cc_hostname_get_display_hostname (cc_hostname_get_default ());
+     ssid = pretty_hostname_to_ssid (hostname);
+     cc_wifi_hotspot_dialog_set_hostname (hotspot_dialog, ssid);
+@@ -641,7 +650,7 @@ stop_shared_connection (NetDeviceWifi *self)
+         c = (NMActiveConnection *) connections->pdata[i];
+ 
+         devices = nm_active_connection_get_devices (c);
+-        if (devices && devices->pdata[0] == self->device) {
++        if (devices && devices->pdata[0] == hotspot_device (self)) {
+             nm_client_deactivate_connection_async (self->client, c, NULL, NULL, NULL);
+             found = TRUE;
+             break;
+@@ -1054,6 +1063,9 @@ net_device_wifi_new (CcPanel *panel, NMClient *client, NMDevice *device)
+                              G_CONNECT_SWAPPED);
+ 
+     g_signal_connect_object (device, "state-changed", G_CALLBACK (nm_device_wifi_refresh_ui), self, G_CONNECT_SWAPPED);
++    /* A hotspot on an interface of its own does not change the state of this device */
++    g_signal_connect_object (client, "notify::active-connections", G_CALLBACK (nm_device_wifi_refresh_ui), self,
++                             G_CONNECT_SWAPPED);
+ 
+     /* Set up the main Visible Networks list */
+     list = cc_wifi_connection_list_new (client, NM_DEVICE_WIFI (device), TRUE, TRUE, FALSE, FALSE, TRUE);
+diff --git a/panels/network/panel-common.c b/panels/network/panel-common.c
+index 100c52ff7..ab586fc53 100644
+--- a/panels/network/panel-common.c
++++ b/panels/network/panel-common.c
+@@ -442,3 +442,47 @@ net_device_get_ip6_addresses (NMIPConfig *ipv6_config)
+     g_ptr_array_add (ipv6, NULL);
+     return g_strjoinv ("\n", (char **) ipv6->pdata);
+ }
++
++/*
++ * Some drivers cannot switch the client interface to AP mode and run the
++ * hotspot on an interface of its own instead (MediaTek: ap0 next to wlan0,
++ * as Android's ro.vendor.wifi.sap.interface). Such an interface finds no
++ * networks, so the Wi-Fi panel hides it and starts the hotspot on it.
++ */
++gboolean
++panel_wifi_device_is_ap_only (NMDevice *device)
++{
++    const gchar *iface;
++
++    if (!NM_IS_DEVICE_WIFI (device))
++        return FALSE;
++
++    iface = nm_device_get_iface (device);
++    if (!iface || !g_str_has_prefix (iface, "ap") || iface[2] == '\0')
++        return FALSE;
++
++    for (iface += 2; *iface; iface++) {
++        if (!g_ascii_isdigit (*iface))
++            return FALSE;
++    }
++
++    return TRUE;
++}
++
++/* The device a hotspot of @device runs on: an AP-only interface if there is one */
++NMDevice *
++panel_wifi_get_hotspot_device (NMClient *client, NMDevice *device)
++{
++    const GPtrArray *devices;
++    guint i;
++
++    devices = nm_client_get_devices (client);
++    for (i = 0; devices && i < devices->len; i++) {
++        NMDevice *candidate = g_ptr_array_index (devices, i);
++
++        if (panel_wifi_device_is_ap_only (candidate) && nm_device_get_managed (candidate))
++            return candidate;
++    }
++
++    return device;
++}
+diff --git a/panels/network/panel-common.h b/panels/network/panel-common.h
+index f8510d5ec..fee6a1fb8 100644
+--- a/panels/network/panel-common.h
++++ b/panels/network/panel-common.h
+@@ -33,4 +33,8 @@ GSList *net_device_get_valid_connections (NMClient *client, NMDevice *device);
+ 
+ gchar *net_device_get_ip6_addresses (NMIPConfig *ipv6_config);
+ 
++gboolean panel_wifi_device_is_ap_only (NMDevice *device);
++
++NMDevice *panel_wifi_get_hotspot_device (NMClient *client, NMDevice *device);
++
+ G_END_DECLS
+-- 
+2.55.0
+

@@ -1,0 +1,186 @@
+From 2d0d7c842e95940bc6f6550c4567bcf12ba6d272 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:07:08 +0100
+Subject: [PATCH] Phone options on the Display page, no Color, start at the
+ overview
+
+Plinius:
+- Display: the built-in panel gets the phone's option groups
+  (cc-plinius-display.*, added as separate files): rotation speed, wake
+  up by double tap or tilt, and the app overview's search, app names,
+  folder dock and mobile apps button. Each group shows only when the
+  service or schema behind it is there.
+- No "Color" panel: a phone panel has no color calibration.
+- Settings opens at the overview on a phone, not inside the panel used
+  last.
+- About: a memory card is shown next to the internal storage.
+---
+ panels/common/meson.build              |  1 +
+ panels/display/cc-display-settings.blp |  7 +++++++
+ panels/display/cc-display-settings.c   |  8 ++++++++
+ panels/system/about/cc-about-page.c    | 16 ++++++++++++++++
+ shell/cc-panel-loader.c                |  3 +--
+ shell/cc-window.c                      |  3 +++
+ 6 files changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/panels/common/meson.build b/panels/common/meson.build
+index b25191566..dac552f4b 100644
+--- a/panels/common/meson.build
++++ b/panels/common/meson.build
+@@ -83,6 +83,7 @@ sources = common_sources + files(
+   'cc-timelike-editor-layout.c',
+   'cc-permission-infobar.c',
+   'cc-plinius-device.c',
++  'cc-plinius-display.c',
+   'cc-split-row.c',
+   'cc-texture-utils.c',
+   'cc-content-row.c',
+diff --git a/panels/display/cc-display-settings.blp b/panels/display/cc-display-settings.blp
+index 02a9e029b..8a8af3e07 100644
+--- a/panels/display/cc-display-settings.blp
++++ b/panels/display/cc-display-settings.blp
+@@ -116,4 +116,11 @@ template $CcDisplaySettings: Box {
+       visible: false;
+     }
+   }
++
++  // Plinius: rotation speed, wake up, app overview; filled by cc_plinius_display_setup ()
++  Box plinius_box {
++    orientation: vertical;
++    spacing: 18;
++    visible: false;
++  }
+ }
+diff --git a/panels/display/cc-display-settings.c b/panels/display/cc-display-settings.c
+index 1acf7a008..6009196c5 100644
+--- a/panels/display/cc-display-settings.c
++++ b/panels/display/cc-display-settings.c
+@@ -24,6 +24,7 @@
+ #include "cc-display-config.h"
+ #include "cc-display-panel.h"
+ #include "cc-plinius-device.h"
++#include "cc-plinius-display.h"
+ #include <float.h>
+ #include <gio/gio.h>
+ #include <glib/gi18n.h>
+@@ -68,6 +69,8 @@ struct _CcDisplaySettings {
+     AdwSwitchRow *underscanning_row;
+     AdwComboRow *notch_row;
+     gboolean has_notch_setting;
++    GtkBox *plinius_box;
++    gboolean has_plinius_options;
+ };
+ 
+ typedef struct _CcDisplaySettings CcDisplaySettings;
+@@ -370,6 +373,7 @@ cc_display_settings_rebuild_ui (CcDisplaySettings *self)
+         gtk_widget_set_visible (GTK_WIDGET (self->hdr_row), FALSE);
+         gtk_widget_set_visible (GTK_WIDGET (self->underscanning_row), FALSE);
+         gtk_widget_set_visible (GTK_WIDGET (self->notch_row), FALSE);
++        gtk_widget_set_visible (GTK_WIDGET (self->plinius_box), FALSE);
+ 
+         return G_SOURCE_REMOVE;
+     }
+@@ -607,6 +611,8 @@ cc_display_settings_rebuild_ui (CcDisplaySettings *self)
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->notch_row),
+                             self->has_notch_setting && cc_display_monitor_is_builtin (self->selected_output));
++    gtk_widget_set_visible (GTK_WIDGET (self->plinius_box),
++                            self->has_plinius_options && cc_display_monitor_is_builtin (self->selected_output));
+ 
+     self->updating = TRUE;
+     g_object_thaw_notify ((GObject *) self->enabled_row);
+@@ -906,6 +912,7 @@ cc_display_settings_class_init (CcDisplaySettingsClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, scale_buttons_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, scale_combo_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, notch_row);
++    gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, plinius_box);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, hdr_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, underscanning_row);
+ 
+@@ -933,6 +940,7 @@ cc_display_settings_init (CcDisplaySettings *self)
+                      G_SETTINGS_BIND_DEFAULT | G_SETTINGS_BIND_INVERT_BOOLEAN);
+ 
+     self->has_notch_setting = cc_plinius_device_setup_notch_row (self->notch_row);
++    self->has_plinius_options = cc_plinius_display_setup (self->plinius_box);
+ 
+     self->orientation_list = G_LIST_MODEL (gtk_string_list_new (NULL));
+     self->refresh_rate_list = g_list_store_new (CC_TYPE_DISPLAY_MODE);
+diff --git a/panels/system/about/cc-about-page.c b/panels/system/about/cc-about-page.c
+index fb6fd304f..eccfc392f 100644
+--- a/panels/system/about/cc-about-page.c
++++ b/panels/system/about/cc-about-page.c
+@@ -445,6 +445,7 @@ get_primary_disk_info (void)
+     g_autolist(GDBusObject) objects = NULL;
+     GList *l;
+     guint64 total_size;
++    guint64 sd_size = 0;
+     g_autoptr(GError) error = NULL;
+ 
+     total_size = 0;
+@@ -462,6 +463,13 @@ get_primary_disk_info (void)
+         UDisksDrive *drive;
+         drive = udisks_object_peek_drive (UDISKS_OBJECT (l->data));
+ 
++        /* Plinius: a memory card is shown next to the internal storage */
++        if (drive != NULL && (g_strcmp0 (udisks_drive_get_media (drive), "flash_sd") == 0 ||
++                              g_strcmp0 (udisks_drive_get_connection_bus (drive), "sdio") == 0)) {
++            sd_size += udisks_drive_get_size (drive);
++            continue;
++        }
++
+         /* Skip removable devices */
+         if (drive == NULL || udisks_drive_get_removable (drive) || udisks_drive_get_ejectable (drive)) {
+             continue;
+@@ -470,6 +478,14 @@ get_primary_disk_info (void)
+         total_size += get_drive_size (objects, G_DBUS_OBJECT (l->data), drive);
+     }
+ 
++    if (total_size > 0 && sd_size > 0) {
++        g_autofree char *internal = g_format_size (total_size);
++        g_autofree char *sd = g_format_size (sd_size);
++
++        /* TRANSLATORS: internal storage + memory card, e.g. "256.0 GB + 255.9 GB SD" */
++        return g_strdup_printf (g_dgettext ("plinius-control-center", "%s + %s SD"), internal, sd);
++    }
++
+     if (total_size > 0)
+         return g_format_size (total_size);
+ 
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index b833ac9f4..d6466a6dc 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -36,7 +36,6 @@ extern GType cc_background_panel_get_type (void);
+ #ifdef BUILD_BLUETOOTH
+ extern GType cc_bluetooth_panel_get_type (void);
+ #endif /* BUILD_BLUETOOTH */
+-extern GType cc_color_panel_get_type (void);
+ extern GType cc_date_time_panel_get_type (void);
+ extern GType cc_display_panel_get_type (void);
+ extern GType cc_keyboard_panel_get_type (void);
+@@ -89,7 +88,7 @@ static CcPanelLoaderVtable default_panels[] = {
+ #ifdef BUILD_BLUETOOTH
+     PANEL_TYPE ("bluetooth", cc_bluetooth_panel_get_type, NULL),
+ #endif
+-    PANEL_TYPE ("color", cc_color_panel_get_type, NULL),
++    /* Plinius: no "Color", a phone panel has no color calibration */
+     PANEL_TYPE ("display", cc_display_panel_get_type, NULL),
+     PANEL_TYPE ("keyboard", cc_keyboard_panel_get_type, NULL),
+     PANEL_TYPE ("mouse", cc_mouse_panel_get_type, NULL),
+diff --git a/shell/cc-window.c b/shell/cc-window.c
+index 53a4c72ba..d66e37168 100644
+--- a/shell/cc-window.c
++++ b/shell/cc-window.c
+@@ -625,6 +625,9 @@ maybe_load_last_panel (CcWindow *self)
+     } else
+         cc_panel_list_activate (self->panel_list);
+ 
++    /* Plinius: on the phone (one column) start at the overview, not inside that panel */
++    adw_navigation_split_view_set_show_content (self->split_view, FALSE);
++
+     self->inhibit_panel_focus = FALSE;
+ }
+ 
+-- 
+2.55.0
+

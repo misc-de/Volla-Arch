@@ -1,0 +1,20 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-retro-games
+pkgver=0.1
+pkgrel=1
+pkgdesc="Plinius retro games: RetroArch with the common systems and the DOS Installer"
+arch=(any)
+license=(MIT)
+# Metapackage, the only way to the game emulators: plinius-software and Settings offer it under
+# "Recommended" (plinius-apps/recommended.list, below the line of apps the image does not
+# preinstall); the image leaves it out. plinius-games and plinius-dos-installer have no catalog
+# entry of their own (plinius-software/plinius.xml). Installed through this package they are
+# dependencies, so removing it in Software (pacman -Rs) takes them along.
+depends=(plinius-games plinius-dos-installer)
+source=(LICENSE)
+sha256sums=('1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

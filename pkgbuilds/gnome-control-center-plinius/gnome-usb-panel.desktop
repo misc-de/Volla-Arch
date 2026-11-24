@@ -1,0 +1,21 @@
+[Desktop Entry]
+Name=USB
+Comment=Choose what the phone offers a computer on the cable
+Comment[de]=Wählen, was das Telefon einem Rechner am Kabel anbietet
+Comment[fr]=Choisir ce que le téléphone propose à un ordinateur par le câble
+Comment[es]=Elegir qué ofrece el teléfono a un ordenador por el cable
+Comment[it]=Scegliere cosa offre il telefono a un computer via cavo
+Comment[pt]=Escolher o que o telefone oferece a um computador pelo cabo
+Comment[nl]=Kiezen wat de telefoon via de kabel aan een computer aanbiedt
+Comment[pl]=Wybierz, co telefon udostępnia komputerowi przez kabel
+Comment[ru]=Выбрать, что телефон предоставляет компьютеру по кабелю
+Exec=gnome-control-center usb
+Icon=plinius-usb-symbolic
+Terminal=false
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=GNOME;GTK;Settings;DesktopSettings;X-GNOME-Settings-Panel;X-GNOME-ConnectivitySettings;
+OnlyShowIn=GNOME;Unity;
+Keywords=USB;MTP;File Transfer;Tethering;NCM;Network;Computer;Cable;Webcam;
+Keywords[de]=USB;MTP;Dateiübertragung;Tethering;NCM;Netzwerk;Rechner;Computer;Kabel;Webcam;

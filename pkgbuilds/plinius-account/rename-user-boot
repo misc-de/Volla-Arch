@@ -1,0 +1,113 @@
+#!/bin/bash
+# Carries out a pending rename (plinius-account-rename.service, before any login).
+# Renames the user, group, home and all references to them. The dconf settings are updated
+# by plinius-account-dconf.service at the first login (dconf only writes on the session bus).
+set -euo pipefail
+
+request=/var/lib/plinius-account/rename
+read -r old new < "$request"
+rm -f "$request"
+# Same rules as plinius-rename-user: the request file is only checked there, check it again
+# before running usermod and sed with these names
+[[ $old =~ ^[a-z_][a-z0-9_-]{0,31}$ && $new =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || {
+	echo "Rename aborted: invalid request" >&2
+	exit 1
+}
+uid=$(id -u "$old" 2>/dev/null) || { echo "Rename aborted: user $old does not exist" >&2; exit 1; }
+((uid >= 1000)) || { echo "Rename aborted: $old is not a regular user" >&2; exit 1; }
+echo "Renaming user $old to $new"
+
+home_old=$(getent passwd "$old" | cut -d: -f6)
+home_new=/home/$new
+group_old=$(id -gn "$old")
+
+# Safety net: nobody logged in, name still free (since the request a package may have created
+# e.g. a group of that name via sysusers). Check everything before the first change.
+if pgrep -u "$old" >/dev/null || getent passwd "$new" >/dev/null || [[ -e $home_new ]] ||
+	{ [[ $group_old == "$old" ]] && getent group "$new" >/dev/null; }; then
+	echo "Rename aborted: $old has running processes or $new is taken" >&2
+	exit 1
+fi
+
+# User (also in the member lists of all groups), private group, home with its contents.
+# If a step fails, the previous ones are rolled back: no half-renamed account.
+usermod -l "$new" "$old"
+if [[ $group_old == "$old" ]] && ! groupmod -n "$new" "$old"; then
+	usermod -l "$old" "$new"
+	echo "Rename aborted: group $old could not be renamed" >&2
+	exit 1
+fi
+if ! usermod -d "$home_new" -m "$new"; then
+	[[ $group_old != "$old" ]] || groupmod -n "$old" "$new"
+	usermod -l "$old" "$new"
+	echo "Rename aborted: $home_old could not be moved to $home_new" >&2
+	exit 1
+fi
+
+# Subordinate IDs (Podman, Flatpak), mail, cron, linger
+sed -i "s/^$old:/$new:/" /etc/subuid /etc/subgid 2>/dev/null || true
+for d in /var/spool/mail /var/spool/cron /var/lib/systemd/linger; do
+	[[ ! -e $d/$old ]] || mv "$d/$old" "$d/$new"
+done
+
+# AccountsService: entry and avatar
+as=/var/lib/AccountsService
+if [[ -f $as/users/$old ]]; then
+	mv "$as/users/$old" "$as/users/$new"
+	if [[ -e $as/icons/$old ]]; then
+		mv "$as/icons/$old" "$as/icons/$new"
+		sed -i "s|^Icon=$as/icons/$old$|Icon=$as/icons/$new|" "$as/users/$new"
+	fi
+fi
+
+# Automatic login
+if [[ -f /etc/greetd/config.toml ]]; then
+	sed -i "s/^\(\s*user\s*=\s*\)\"$old\"/\1\"$new\"/" /etc/greetd/config.toml
+fi
+# The account the greeter offers first (plinius-greeter)
+if [[ -f /var/lib/plinius-greeter/last-user ]] && [[ $(cat /var/lib/plinius-greeter/last-user) == "$old" ]]; then
+	printf '%s\n' "$new" > /var/lib/plinius-greeter/last-user
+fi
+
+# Everything below works inside the home, whose content belongs to the user: done with the
+# user's rights (setpriv, no PAM, so no user session starts), never as root. Otherwise a
+# symlink placed in the home would make root write or chown files outside of it.
+gid=$(id -g "$new")
+setpriv --reuid="$uid" --regid="$gid" --init-groups --reset-env -- \
+	/bin/bash -euo pipefail -c '
+	home_old=$1 home_new=$2
+	# home_old comes from passwd: escape it for the sed pattern (home_new is /home/NAME)
+	pat=$(printf "%s" "$home_old" | sed "s/[][\\.*^$|]/\\\\&/g")
+
+	# References to the old home in text files and symlinks (bookmarks, recently used,
+	# Firefox settings, …). Only in settings: hidden files and folders directly in the home,
+	# excluding .cache and Git working copies. Documents, notes and source code stay as they
+	# are; so do binary files (databases, images).
+	settings=()
+	for e in "$home_new"/.[!.]*; do
+		[[ -e $e && ${e##*/} != .cache ]] && settings+=("$e")
+	done
+	if ((${#settings[@]})); then
+		find "${settings[@]}" -xdev -name .git -prune -o -type f -size -8M -print0 |
+			xargs -0r grep -lIZF -- "$home_old/" |
+			xargs -0r sed -i "s|$pat/|$home_new/|g; s|$pat\$|$home_new|g" || true
+	fi
+	# Symlinks in the whole home: otherwise they dangle. Only exactly the old home or below it,
+	# not /home/annabel when /home/anna is renamed.
+	find "$home_new" -xdev -type l -print0 | while IFS= read -r -d "" l; do
+		t=$(readlink "$l")
+		if [[ $t == "$home_old" || $t == "$home_old"/* ]]; then
+			ln -sfn "$home_new${t#"$home_old"}" "$l"
+		fi
+	done
+
+	# dconf only at the first login (plinius-account-dconf.service)
+	if [[ -f $home_new/.config/dconf/user ]]; then
+		mkdir -p "$home_new/.config/plinius-account"
+		printf "%s\n" "$home_old" > "$home_new/.config/plinius-account/dconf-rename"
+	fi
+	# The localsearch index only knows the old paths; it rebuilds itself
+	rm -rf "$home_new/.cache/tracker3"
+' rename-user-boot "$home_old" "$home_new"
+
+echo "User $old is now $new ($home_new)"

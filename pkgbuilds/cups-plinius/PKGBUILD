@@ -1,0 +1,168 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on Arch's cups 2:2.4.20-1 (Andreas Radke): the daemon package of its split PKGBUILD;
+# cups.logrotate, cups.pam, cups.sysusers and the patches cups-2.4.0-statedir, cups-freebind and
+# guid are taken from there. libcups stays Arch's.
+
+pkgname=cups-plinius
+pkgver=2.4.20
+pkgrel=5
+epoch=2
+pkgdesc="OpenPrinting CUPS - daemon package, printing to printers found on the network"
+arch=(aarch64)
+url="https://openprinting.github.io/cups/"
+license=('Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND Zlib AND BSD-2-Clause')
+# libcups exactly of this version: cupsd uses its private functions (_httpResolveURI and others)
+# nss-mdns: cupsd reaches a printer found on the network by its .local name (printer.local);
+# the install script puts it into /etc/nsswitch.conf
+depends=(acl pam "libcups=$epoch:$pkgver" cups-filters dbus systemd systemd-libs libpaper
+	hicolor-icon-theme glibc libstdc++ libgcc avahi gnutls nss-mdns)
+makedepends=(acl pam gnutls cups-filters colord libusb avahi systemd libpaper git)
+optdepends=('cups-browsed: to browse the network for remote CUPS queues and IPP network printers'
+	'libusb: for usb printer backend'
+	'ipp-usb: allows to send HTTP requests via a USB connection on devices without Ethernet or WiFi connections'
+	'xdg-utils: xdg .desktop file support'
+	'colord: for ICC color profile support'
+	'logrotate: for logfile rotation support')
+# Why not cups from ALARM: CUPS 2.4.20 sets the device URI of a temporary queue (a printer found
+# on the network and not added, the first job or Settings' "Print Test Page" creates the queue)
+# to "://": every job to such a printer fails with "Bad device URI" (2026-11-13, a
+# network laser printer). Fixed on the 2.4.x branch after the release (patches 0001 and 0002, Issue #1751).
+# Drop this package for Arch's cups once a release has both.
+provides=("cups=$epoch:$pkgver")
+conflicts=(cups)
+# Updates switch from cups to this package
+replaces=(cups)
+install=cups-plinius.install
+backup=(etc/cups/cupsd.conf
+	etc/cups/snmp.conf
+	etc/cups/printers.conf
+	etc/cups/classes.conf
+	etc/cups/cups-files.conf
+	etc/cups/subscriptions.conf
+	etc/logrotate.d/cups
+	etc/pam.d/cups)
+# Commit of tag v2.4.20: a tag can be moved later, a commit hash cannot (Arch takes the release
+# tarball; the configure script is made again from the sources either way)
+_commit=ef80eeaea51430a055948240eea3f28ef5354edf
+source=("git+https://github.com/OpenPrinting/cups.git#commit=$_commit"
+	cups.logrotate
+	cups.pam
+	cups.sysusers
+	cups-2.4.0-statedir.patch
+	cups-freebind.patch
+	guid.patch
+	0001-scheduler-device-URI-of-a-temporary-queue-Issue-1751.patch
+	0002-scheduler-device-URI-of-a-temporary-queue-without-a-server-name-Issue-1751.patch)
+sha256sums=('SKIP'
+	'd87fa0f0b5ec677aae34668f260333db17ce303aa1a752cba5f8e72623d9acf9'
+	'57dfd072fd7ef0018c6b0a798367aac1abb5979060ff3f9df22d1048bb71c0d5'
+	'5324bd933385713e0dfd0b20cf5f861d1401bdeb693c5be7edc3ca4404e78e2b'
+	'7bdc78183d56497d17984bb7c66e98f3965b52ef9bc20fd6c52bd51ebe59f3b1'
+	'3385047b9ac8a7b13aeb8f0ca55d15f793ce7283516db0155fe28a67923c592d'
+	'8becc2ad17787ef755fb77f83a87cf52f1a38154c5dde0f4a0051e06a0583fb9'
+	'e94035e0c9eedcf5d93c7c7591512e5f4c0ff49237c0cac726256459a6fa78b1'
+	'e46330412c0d3db8d1c87e2c0bfc1d91c126885b117ea5f844077e6749351ca5')
+
+prepare() {
+	cd cups
+
+	# move /var/run -> /run for pid file
+	patch -Np1 -i "$srcdir/cups-2.4.0-statedir.patch"
+	# https://github.com/OpenPrinting/cups/issues/53
+	# use IP_FREEBIND, because cupsd cannot bind to not yet existing IP address
+	patch -Np1 -i "$srcdir/cups-freebind.patch"
+	# FS#56818 - https://github.com/apple/cups/issues/5236
+	patch -Np1 -i "$srcdir/guid.patch"
+	# Upstream 67dcee9 and e11ff1a (2.4.x branch, 2026-10-09): CUPS-Create-Local-Printer read the
+	# device URI from the end of the printer's name, an empty string
+	patch -Np1 -i "$srcdir/0001-scheduler-device-URI-of-a-temporary-queue-Issue-1751.patch"
+	patch -Np1 -i "$srcdir/0002-scheduler-device-URI-of-a-temporary-queue-without-a-server-name-Issue-1751.patch"
+
+	# Rebuild configure script
+	aclocal -I config-scripts
+	autoconf -I config-scripts
+}
+
+build() {
+	cd cups
+
+	# The build system uses only DSOFLAGS but not LDFLAGS to build some libraries.
+	export DSOFLAGS=${LDFLAGS}
+
+	# use fixed cups user (id 209) since systemd adds "lp" group without a fixed id
+	./configure --prefix=/usr \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--sbindir=/usr/bin \
+		--libdir=/usr/lib \
+		--with-logdir=/var/log/cups \
+		--with-docdir=/usr/share/cups/doc \
+		--with-exe-file-perm=0755 \
+		--with-cups-user=209 \
+		--with-cups-group=209 \
+		--with-max-log-size=0 \
+		--enable-pam=yes \
+		--enable-raw-printing \
+		--enable-dbus=yes \
+		--with-tls=gnutls \
+		--with-dbusdir=/usr/share/dbus-1 \
+		--enable-relro \
+		--enable-libpaper \
+		--with-optim="$CFLAGS"
+	make
+}
+
+package() {
+	cd cups
+	make BUILDROOT="$pkgdir" install-data install-exec
+
+	# Arch ships this one in libcups
+	rm -f "$pkgdir"/usr/bin/cups-config
+
+	# kill the sysv stuff
+	rm -rf "$pkgdir"/etc/rc*.d
+	rm -rf "$pkgdir"/etc/init.d
+	install -D -m644 ../cups.logrotate "$pkgdir"/etc/logrotate.d/cups
+	install -D -m644 ../cups.pam "$pkgdir"/etc/pam.d/cups
+
+	# fix perms on /var/spool and /etc
+	chmod 755 "$pkgdir"/var/spool
+	chmod 755 "$pkgdir"/etc
+
+	# use cups group FS#36769 (the file keeps Arch's name: same user and group as before)
+	install -Dm644 "$srcdir"/cups.sysusers "$pkgdir"/usr/lib/sysusers.d/cups.conf
+	sed -i "s:#User 209:User 209:" "$pkgdir"/etc/cups/cups-files.conf{,.default}
+	sed -i "s:#Group 209:Group 209:" "$pkgdir"/etc/cups/cups-files.conf{,.default}
+
+	# install ssl directory where to store the certs, solves some samba issues
+	install -dm700 -g 209 "$pkgdir"/etc/cups/ssl
+	# remove directory from package, it will be recreated at each server start
+	rm -rf "$pkgdir"/run
+
+	# install some more configuration files that will get filled by cupsd
+	touch "$pkgdir"/etc/cups/printers.conf
+	touch "$pkgdir"/etc/cups/classes.conf
+	touch "$pkgdir"/etc/cups/subscriptions.conf
+	chgrp -R 209 "$pkgdir"/etc/cups
+
+	# fix .desktop file
+	sed -i 's|^Exec=htmlview http://localhost:631/|Exec=xdg-open http://localhost:631/|g' "$pkgdir"/usr/share/applications/cups.desktop
+
+	# compress some driver files, adopted from Fedora
+	find "$pkgdir"/usr/share/cups/model -name "*.ppd" | xargs gzip -n9f
+
+	# remove client.conf man page
+	rm -f "$pkgdir"/usr/share/man/man5/client.conf.5
+
+	# comment out removed filters that are now part of cups-filters
+	perl -p -i -e 's:^(.*\s+bannertops\s*)$:#\1:' "$pkgdir"/usr/share/cups/mime/mime.convs
+
+	# comment out unnecessary PageLogFormat entry
+	sed -i -e 's:PageLogFormat:#PageLogFormat:' "$pkgdir"/etc/cups/cupsd.conf*
+
+	# no more xinetd support
+	rm -rf "$pkgdir"/etc/xinetd.d
+
+	# add license + exception
+	install -m644 -Dt "$pkgdir/usr/share/licenses/$pkgname" {LICENSE,NOTICE}
+}

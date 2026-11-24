@@ -1,0 +1,207 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 19:41:09 +0100
+Subject: [PATCH] carousel-box: Draw a page away from its place when its owner
+ asks
+
+A page can follow a finger that moves it to another place, or slide into a new
+place, without moving the input window or the other pages: the owner sets
+"hdy-plinius-offset" (pixels along the orientation) and "hdy-plinius-raised"
+(drawn above the other pages) as object data on the page and queues an
+allocation of the box. Unset, everything stays as it was.
+---
+ src/hdy-carousel-box.c | 144 ++++++++++++++++++++++++++---------------
+ 1 file changed, 93 insertions(+), 51 deletions(-)
+
+diff --git a/src/hdy-carousel-box.c b/src/hdy-carousel-box.c
+index a31f204..2f2ce65 100644
+--- a/src/hdy-carousel-box.c
++++ b/src/hdy-carousel-box.c
+@@ -264,6 +264,33 @@ invalidate_drawing_cache (HdyCarouselBox *self)
+   }
+ }
+ 
++/*
++ * Plinius: a page can be drawn away from its place, e.g. to follow a finger that moves it to
++ * another place, or to slide into a new place. The owner of the page sets these on the page's
++ * widget and queues an allocation of the box:
++ * "hdy-plinius-offset": GINT_TO_POINTER (pixels along the orientation), 0 for its place
++ * "hdy-plinius-raised": GINT_TO_POINTER (TRUE) to draw the page above the others
++ * Only the drawing moves; the page's window, and so its input, stays at its place.
++ * A page being removed has no widget any more while it animates out: drawn at its place.
++ */
++static gint
++get_draw_offset (HdyCarouselBoxChildInfo *info)
++{
++  if (!info->widget)
++    return 0;
++
++  return GPOINTER_TO_INT (g_object_get_data (G_OBJECT (info->widget), "hdy-plinius-offset"));
++}
++
++static gboolean
++get_draw_raised (HdyCarouselBoxChildInfo *info)
++{
++  if (!info->widget)
++    return FALSE;
++
++  return GPOINTER_TO_INT (g_object_get_data (G_OBJECT (info->widget), "hdy-plinius-raised"));
++}
++
+ static void
+ register_window (HdyCarouselBoxChildInfo *info,
+                  HdyCarouselBox          *self)
+@@ -552,70 +579,85 @@ animate_child (HdyCarouselBox          *self,
+       gtk_widget_add_tick_callback (GTK_WIDGET (self), animation_cb, self, NULL);
+ }
+ 
+-static gboolean
+-hdy_carousel_box_draw (GtkWidget *widget,
+-                       cairo_t   *cr)
++static void
++hdy_carousel_box_draw_child (HdyCarouselBox          *self,
++                             HdyCarouselBoxChildInfo *info,
++                             cairo_t                 *cr)
+ {
+-  HdyCarouselBox *self = HDY_CAROUSEL_BOX (widget);
+-  GList *l;
++  gint offset;
+ 
+-  for (l = self->children; l; l = l->next) {
+-    HdyCarouselBoxChildInfo *info = l->data;
++  if (info->adding || info->removing)
++    return;
+ 
+-    if (info->adding || info->removing)
+-      continue;
++  if (!info->visible)
++    return;
+ 
+-    if (!info->visible)
+-      continue;
++  if (info->dirty_region && !info->removing) {
++    g_autoptr (cairo_t) surface_cr = NULL;
++    GtkAllocation child_alloc;
+ 
+-    if (info->dirty_region && !info->removing) {
+-      g_autoptr (cairo_t) surface_cr = NULL;
+-      GtkAllocation child_alloc;
++    if (!info->surface) {
++      gint width, height;
+ 
+-      if (!info->surface) {
+-        gint width, height;
++      width = gdk_window_get_width (info->window);
++      height = gdk_window_get_height (info->window);
+ 
+-        width = gdk_window_get_width (info->window);
+-        height = gdk_window_get_height (info->window);
++      info->surface = gdk_window_create_similar_surface (info->window,
++                                                         CAIRO_CONTENT_COLOR_ALPHA,
++                                                         width, height);
++    }
+ 
+-        info->surface = gdk_window_create_similar_surface (info->window,
+-                                                           CAIRO_CONTENT_COLOR_ALPHA,
+-                                                           width, height);
+-      }
++    gtk_widget_get_allocation (info->widget, &child_alloc);
+ 
+-      gtk_widget_get_allocation (info->widget, &child_alloc);
++    surface_cr = cairo_create (info->surface);
+ 
+-      surface_cr = cairo_create (info->surface);
++    gdk_cairo_region (surface_cr, info->dirty_region);
++    cairo_clip (surface_cr);
+ 
+-      gdk_cairo_region (surface_cr, info->dirty_region);
+-      cairo_clip (surface_cr);
++    if (self->orientation == GTK_ORIENTATION_VERTICAL)
++      cairo_translate (surface_cr, 0, -info->position);
++    else
++      cairo_translate (surface_cr, -info->position, 0);
+ 
+-      if (self->orientation == GTK_ORIENTATION_VERTICAL)
+-        cairo_translate (surface_cr, 0, -info->position);
+-      else
+-        cairo_translate (surface_cr, -info->position, 0);
++    cairo_save (surface_cr);
++    cairo_set_source_rgba (surface_cr, 0, 0, 0, 0);
++    cairo_set_operator (surface_cr, CAIRO_OPERATOR_SOURCE);
++    cairo_paint (surface_cr);
++    cairo_restore (surface_cr);
+ 
+-      cairo_save (surface_cr);
+-      cairo_set_source_rgba (surface_cr, 0, 0, 0, 0);
+-      cairo_set_operator (surface_cr, CAIRO_OPERATOR_SOURCE);
+-      cairo_paint (surface_cr);
+-      cairo_restore (surface_cr);
++    gtk_container_propagate_draw (GTK_CONTAINER (self), info->widget, surface_cr);
+ 
+-      gtk_container_propagate_draw (GTK_CONTAINER (self), info->widget, surface_cr);
++    cairo_region_destroy (info->dirty_region);
++    info->dirty_region = NULL;
++  }
+ 
+-      cairo_region_destroy (info->dirty_region);
+-      info->dirty_region = NULL;
+-    }
++  if (!info->surface)
++    return;
+ 
+-    if (!info->surface)
+-      continue;
++  /* Plinius: drawn away from its place when asked to */
++  offset = get_draw_offset (info);
++  if (self->orientation == GTK_ORIENTATION_VERTICAL)
++    cairo_set_source_surface (cr, info->surface, 0, info->position + offset);
++  else
++    cairo_set_source_surface (cr, info->surface, info->position + offset, 0);
++  cairo_paint (cr);
++}
+ 
+-    if (self->orientation == GTK_ORIENTATION_VERTICAL)
+-      cairo_set_source_surface (cr, info->surface, 0, info->position);
+-    else
+-      cairo_set_source_surface (cr, info->surface, info->position, 0);
+-    cairo_paint (cr);
+-  }
++static gboolean
++hdy_carousel_box_draw (GtkWidget *widget,
++                       cairo_t   *cr)
++{
++  HdyCarouselBox *self = HDY_CAROUSEL_BOX (widget);
++  GList *l;
++
++  /* Plinius: raised pages last, above the others */
++  for (l = self->children; l; l = l->next)
++    if (!get_draw_raised (l->data))
++      hdy_carousel_box_draw_child (self, l->data, cr);
++
++  for (l = self->children; l; l = l->next)
++    if (get_draw_raised (l->data))
++      hdy_carousel_box_draw_child (self, l->data, cr);
+ 
+   return GDK_EVENT_PROPAGATE;
+ }
+@@ -760,13 +802,13 @@ update_windows (HdyCarouselBox *self)
+ 
+       if (self->orientation == GTK_ORIENTATION_VERTICAL) {
+         child_info->position = y;
+-        child_info->visible = child_info->position < alloc.height &&
+-                              child_info->position + self->child_height > 0;
++        child_info->visible = child_info->position + get_draw_offset (child_info) < alloc.height &&
++                              child_info->position + get_draw_offset (child_info) + self->child_height > 0;
+         gdk_window_move (child_info->window, alloc.x, alloc.y + child_info->position);
+       } else {
+         child_info->position = x;
+-        child_info->visible = child_info->position < alloc.width &&
+-                              child_info->position + self->child_width > 0;
++        child_info->visible = child_info->position + get_draw_offset (child_info) < alloc.width &&
++                              child_info->position + get_draw_offset (child_info) + self->child_width > 0;
+         gdk_window_move (child_info->window, alloc.x + child_info->position, alloc.y);
+       }
+ 
+-- 
+2.56.0
+

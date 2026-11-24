@@ -1,0 +1,44 @@
+From 4724e876c36fe6ae3fc3ee7dbe97a2f252a4ba80 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 22:07:50 +0100
+Subject: [PATCH] aod: The notification icons in a row of their own
+
+The icons of the apps with notifications sat next to the battery, right
+below the date. They now get a row of their own, about two and a half
+lines lower. The battery stays where it was, and without notifications
+nothing changes.
+---
+ src/aod.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/aod.c b/src/aod.c
+index 217956be..fa9fa55b 100644
+--- a/src/aod.c
++++ b/src/aod.c
+@@ -262,7 +262,7 @@ phosh_aod_constructed (GObject *object)
+   gtk_style_context_add_class (gtk_widget_get_style_context (self->lbl_date), "phosh-aod-date");
+   gtk_container_add (GTK_CONTAINER (self->box), self->lbl_date);
+ 
+-  /* Battery and the apps with notifications in one row under the date */
++  /* The battery in a row under the date */
+   info = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 14);
+   gtk_widget_set_halign (info, GTK_ALIGN_CENTER);
+   gtk_widget_set_margin_top (info, 18);
+@@ -270,10 +270,15 @@ phosh_aod_constructed (GObject *object)
+   battery = phosh_battery_info_new ();
+   g_object_set (battery, "show-detail", TRUE, NULL);
+   gtk_container_add (GTK_CONTAINER (info), battery);
++  gtk_container_add (GTK_CONTAINER (self->box), info);
++
++  /* A row of their own, about two and a half lines below the battery */
+   self->box_icons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
++  gtk_widget_set_halign (self->box_icons, GTK_ALIGN_CENTER);
++  gtk_widget_set_margin_top (self->box_icons, 48);
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->box_icons), "phosh-aod-info");
+   gtk_widget_set_no_show_all (self->box_icons, TRUE);
+-  gtk_container_add (GTK_CONTAINER (info), self->box_icons);
+-  gtk_container_add (GTK_CONTAINER (self->box), info);
++  gtk_container_add (GTK_CONTAINER (self->box), self->box_icons);
+ 
+   gtk_widget_show_all (self->box);
+   gtk_container_add (GTK_CONTAINER (self), self->box);

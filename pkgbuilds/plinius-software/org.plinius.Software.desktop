@@ -1,0 +1,40 @@
+# Launcher for plinius-software, the app store and system updater of the Plinius.
+# X-Purism-FormFactor=Mobile lists it in Phosh's mobile app filter.
+# Not in the app grid any more (NoDisplay): the same pages are in Settings, Apps (Explore,
+# Installed) and Updates. "plinius-software" still opens the app.
+[Desktop Entry]
+Type=Application
+Name=Software
+Name[de]=Software
+Name[fr]=Logiciels
+Name[es]=Software
+Name[it]=Software
+Name[pt]=Software
+Name[nl]=Software
+Name[pl]=Oprogramowanie
+Name[ru]=Программы
+Comment=Install apps and update the system
+Comment[de]=Apps installieren und das System aktualisieren
+Comment[fr]=Installer des applications et mettre à jour le système
+Comment[es]=Instalar aplicaciones y actualizar el sistema
+Comment[it]=Installa app e aggiorna il sistema
+Comment[pt]=Instalar aplicativos e atualizar o sistema
+Comment[nl]=Apps installeren en het systeem bijwerken
+Comment[pl]=Instaluj aplikacje i aktualizuj system
+Comment[ru]=Установка приложений и обновление системы
+Exec=plinius-software
+Icon=org.plinius.Software
+Terminal=false
+Categories=GTK;System;PackageManager;
+Keywords=Apps;Software;Install;Update;Upgrade;Store;
+Keywords[de]=Apps;Programme;Installieren;Update;Aktualisierung;Systemupdate;Store;
+Keywords[fr]=Applications;Logiciels;Installer;Mise à jour;Boutique;
+Keywords[es]=Aplicaciones;Software;Instalar;Actualizar;Tienda;
+Keywords[it]=App;Software;Installa;Aggiorna;Negozio;
+Keywords[pt]=Aplicativos;Software;Instalar;Atualizar;Loja;
+Keywords[nl]=Apps;Software;Installeren;Bijwerken;Winkel;
+Keywords[pl]=Aplikacje;Oprogramowanie;Instaluj;Aktualizuj;Sklep;
+Keywords[ru]=Приложения;Программы;Установить;Обновить;Магазин;
+X-Purism-FormFactor=Workstation;Mobile;
+StartupNotify=true
+NoDisplay=true

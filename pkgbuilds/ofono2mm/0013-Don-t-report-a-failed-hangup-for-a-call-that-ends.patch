@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 11:45:15 +0100
+Subject: [PATCH] Don't report a failed hangup for a call that ends
+
+oFono's HangupAll fails on the MediaTek RIL (hangupAll answers with an
+error) while the modem ends the call anyway. Call.Hangup passed the
+error on: GNOME Calls logged "Error hanging up" for every call, and a
+car hanging up through PipeWire's hands-free gateway got its answer only
+by luck. On an error, wait up to 2 s for the call to be terminated and
+report success then; a call that stays is still an error.
+---
+ ofono2mm/mm_call.py | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/ofono2mm/mm_call.py b/ofono2mm/mm_call.py
+index aab25a8..ac66378 100644
+--- a/ofono2mm/mm_call.py
++++ b/ofono2mm/mm_call.py
+@@ -1,6 +1,8 @@
+ from dbus_next.service import ServiceInterface, method, dbus_property, signal
+ from dbus_next.constants import PropertyAccess
+-from dbus_next import Variant
++from dbus_next import Variant, DBusError
++
++import asyncio
+ 
+ class MMCallInterface(ServiceInterface):
+     def __init__(self, index, bus, ofono_client, modem_name, ofono_modem, ofono_props, ofono_interfaces, ofono_interface_props):
+@@ -89,7 +91,17 @@ class MMCallInterface(ServiceInterface):
+ 
+     @method()
+     async def Hangup(self):
+-        await self.ofono_interfaces['org.ofono.VoiceCallManager'].call_hangup_all()
++        try:
++            await self.ofono_interfaces['org.ofono.VoiceCallManager'].call_hangup_all()
++        except DBusError:
++            # The MediaTek RIL answers hangupAll with an error while it ends the call: the
++            # caller (GNOME Calls, a car through PipeWire) got "Operation failed" for a call
++            # that was gone a moment later. Wait for it; only a call that stays is an error.
++            for _ in range(20):
++                if self.props['State'].value == 7: # MM_CALL_STATE_TERMINATED
++                    return
++                await asyncio.sleep(0.1)
++            raise
+ 
+     @method()
+     async def SendDtmf(self, dtmf: 's'):

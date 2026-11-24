@@ -1,0 +1,219 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu Nov 19 07:20:00 2026 +0100
+Subject: [PATCH] app-grid-button: An icon from a file is loaded once
+
+Plinius: GTK 3 has no cache for an icon from a file (Icon= with a
+path): GtkIconTheme makes a new icon info for every lookup, so GtkImage
+decoded and scaled the file again whenever it rendered the icon anew,
+and the folder icons preloaded by the app grid only help themed icons.
+perf with paint uprobes on the phone: opening a folder of six games of
+plinius-dos-installer (512 px PNGs) took 120-240 ms in each of two
+frames, mostly gdk_pixbuf_new_from_stream and gdk_pixbuf_scale_simple:
+the folder button's 2x2 preview rendered its icons anew when pressed
+and when released (its state changes the icons' CSS).
+
+Such icons are now loaded once per pixel size, scale and modification
+time and kept as a surface, for the app buttons and the folder button's
+preview (phosh_app_grid_button_plinius_set_icon ()); a new scale loads
+the icon for it.
+---
+diff --git a/src/app-grid-button.c b/src/app-grid-button.c
+index c1a06345..f9358f92 100644
+--- a/src/app-grid-button.c
++++ b/src/app-grid-button.c
+@@ -735,13 +735,139 @@ favorites_changed (GListModel         *list,
+ }
+ 
+ 
++/*
++ * Plinius: an app icon from a file (Icon= with a path, like the 512 px PNGs of
++ * plinius-dos-installer) has no cache in GTK 3: GtkIconTheme makes a new icon info for every
++ * lookup, so GtkImage decoded and scaled the file again whenever it rendered the icon anew.
++ * Opening a folder of six such games took 120-240 ms in each of its first two frames, most of
++ * it in gdk_pixbuf_new_from_stream and gdk_pixbuf_scale_simple. Such icons are loaded once at
++ * the button's size and scale and kept for all buttons; a changed file is loaded again.
++ */
++static cairo_surface_t *
++plinius_get_file_icon (GIcon *icon, int size, int scale)
++{
++  static GHashTable *cache;
++  g_autoptr (GFileInfo) file_info = NULL;
++  g_autoptr (GdkPixbuf) pixbuf = NULL;
++  g_autofree char *path = NULL;
++  g_autofree char *key = NULL;
++  cairo_surface_t *surface;
++  GFile *file;
++
++  if (!G_IS_FILE_ICON (icon))
++    return NULL;
++
++  file = g_file_icon_get_file (G_FILE_ICON (icon));
++  path = g_file_get_path (file);
++  if (path == NULL)
++    return NULL;
++
++  file_info = g_file_query_info (file, G_FILE_ATTRIBUTE_TIME_MODIFIED, G_FILE_QUERY_INFO_NONE,
++                                 NULL, NULL);
++  if (file_info == NULL)
++    return NULL;
++
++  key = g_strdup_printf ("%s\n%d\n%d\n%" G_GUINT64_FORMAT, path, size, scale,
++                         g_file_info_get_attribute_uint64 (file_info,
++                                                           G_FILE_ATTRIBUTE_TIME_MODIFIED));
++  if (cache == NULL) {
++    cache = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
++                                   (GDestroyNotify) cairo_surface_destroy);
++  }
++
++  surface = g_hash_table_lookup (cache, key);
++  if (surface)
++    return cairo_surface_reference (surface);
++
++  pixbuf = gdk_pixbuf_new_from_file_at_scale (path, size * scale, size * scale, TRUE, NULL);
++  if (pixbuf == NULL)
++    return NULL;
++
++  surface = gdk_cairo_surface_create_from_pixbuf (pixbuf, scale, NULL);
++  g_hash_table_insert (cache, g_steal_pointer (&key), cairo_surface_reference (surface));
++
++  return surface;
++}
++
++
++/* Plinius: an icon loaded from a file has the scale it was loaded for */
++static void
++on_plinius_image_scale_factor_changed (GtkImage *image)
++{
++  GIcon *icon = g_object_get_data (G_OBJECT (image), "plinius-file-icon");
++  int size = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (image), "plinius-file-icon-size"));
++  cairo_surface_t *surface;
++
++  if (icon == NULL || gtk_image_get_storage_type (image) != GTK_IMAGE_SURFACE)
++    return;
++
++  surface = plinius_get_file_icon (icon, size, gtk_widget_get_scale_factor (GTK_WIDGET (image)));
++  if (surface) {
++    gtk_image_set_from_surface (image, surface);
++    cairo_surface_destroy (surface);
++  }
++}
++
++/**
++ * phosh_app_grid_button_plinius_set_icon:
++ * @image: The image to show the icon
++ * @icon: The app's icon
++ * @size: The image's pixel size
++ *
++ * Plinius: shows an app's icon in @image, an icon from a file loaded once (see
++ * plinius_get_file_icon ()), any other icon as a #GIcon.
++ */
++void
++phosh_app_grid_button_plinius_set_icon (GtkImage *image, GIcon *icon, int size)
++{
++  cairo_surface_t *surface;
++
++  g_return_if_fail (GTK_IS_IMAGE (image));
++  g_return_if_fail (G_IS_ICON (icon));
++
++  surface = plinius_get_file_icon (icon, size, gtk_widget_get_scale_factor (GTK_WIDGET (image)));
++  if (surface == NULL) {
++    g_object_set_data (G_OBJECT (image), "plinius-file-icon", NULL);
++    gtk_image_set_from_gicon (image, icon, -1);
++    return;
++  }
++
++  g_object_set_data_full (G_OBJECT (image), "plinius-file-icon", g_object_ref (icon),
++                          g_object_unref);
++  g_object_set_data (G_OBJECT (image), "plinius-file-icon-size", GINT_TO_POINTER (size));
++  if (!g_object_get_data (G_OBJECT (image), "plinius-file-icon-watch")) {
++    g_signal_connect (image, "notify::scale-factor",
++                      G_CALLBACK (on_plinius_image_scale_factor_changed), NULL);
++    g_object_set_data (G_OBJECT (image), "plinius-file-icon-watch", GINT_TO_POINTER (TRUE));
++  }
++  gtk_image_set_from_surface (image, surface);
++  cairo_surface_destroy (surface);
++}
++
++
++static void
++plinius_set_icon (PhoshAppGridButton *self)
++{
++  PhoshAppGridButtonPrivate *priv = phosh_app_grid_button_get_instance_private (self);
++  g_autoptr (GIcon) icon = NULL;
++
++  icon = phosh_app_grid_button_get_app_icon (priv->info);
++  if (G_UNLIKELY (icon == NULL)) {
++    gtk_image_set_from_icon_name (GTK_IMAGE (priv->icon), PHOSH_APP_UNKNOWN_ICON, -1);
++    return;
++  }
++
++  phosh_app_grid_button_plinius_set_icon (GTK_IMAGE (priv->icon), icon,
++                                          gtk_image_get_pixel_size (GTK_IMAGE (priv->icon)));
++}
++
++
+ void
+ phosh_app_grid_button_set_app_info (PhoshAppGridButton *self,
+                                     GAppInfo           *info)
+ {
+   PhoshFavoriteListModel *list = NULL;
+   PhoshAppGridButtonPrivate *priv;
+-  g_autoptr (GIcon) icon = NULL;
+   const char *name;
+ 
+   g_return_if_fail (PHOSH_IS_APP_GRID_BUTTON (self));
+@@ -772,11 +898,7 @@ phosh_app_grid_button_set_app_info (PhoshAppGridButton *self,
+     name = g_app_info_get_name (G_APP_INFO (priv->info));
+     phosh_app_grid_base_button_set_label (PHOSH_APP_GRID_BASE_BUTTON (self), name);
+ 
+-    icon = phosh_app_grid_button_get_app_icon (priv->info);
+-    if (G_UNLIKELY (icon == NULL))
+-      gtk_image_set_from_icon_name (GTK_IMAGE (priv->icon), PHOSH_APP_UNKNOWN_ICON, -1);
+-    else
+-      gtk_image_set_from_gicon (GTK_IMAGE (priv->icon), icon, -1);
++    plinius_set_icon (self);
+ 
+     gtk_widget_set_sensitive (GTK_WIDGET (self), TRUE);
+ 
+diff --git a/src/app-grid-button.h b/src/app-grid-button.h
+index 023d647b..45758dc8 100644
+--- a/src/app-grid-button.h
++++ b/src/app-grid-button.h
+@@ -49,6 +49,9 @@ GtkWidget             *phosh_app_grid_button_new_favorite  (GAppInfo
+ void                   phosh_app_grid_button_set_app_info  (PhoshAppGridButton     *self,
+                                                             GAppInfo               *info);
+ GIcon                 *phosh_app_grid_button_get_app_icon  (GAppInfo               *info);
++void                   phosh_app_grid_button_plinius_set_icon (GtkImage           *image,
++                                                               GIcon              *icon,
++                                                               int                 size);
+ GAppInfo              *phosh_app_grid_button_get_app_info  (PhoshAppGridButton     *self);
+ gboolean               phosh_app_grid_button_is_favorite   (PhoshAppGridButton     *self);
+ void                   phosh_app_grid_button_set_mode      (PhoshAppGridButton     *self,
+diff --git a/src/app-grid-folder-button.c b/src/app-grid-folder-button.c
+index 0da1b063..0700514c 100644
+--- a/src/app-grid-folder-button.c
++++ b/src/app-grid-folder-button.c
+@@ -143,15 +143,17 @@ build_2x2_grid_icon (PhoshAppGridFolderButton *self)
+     g_autoptr (GIcon) icon = phosh_app_grid_button_get_app_icon (app_info);
+     GtkWidget *image = NULL;
+ 
+-    if (icon == NULL)
+-      image = gtk_image_new_from_icon_name (PHOSH_APP_UNKNOWN_ICON, -1);
+-    else
+-      image = gtk_image_new_from_gicon (icon, -1);
+-
+     /* app-grid-button uses 64px for its icon.
+      * Our grid has two rows and two columns, with 8px for spacing.
+      * So 2x + 8 = 64.
+      * It means x = 28. But we use 24 as icons usually have a 2px padding. */
++    if (icon == NULL) {
++      image = gtk_image_new_from_icon_name (PHOSH_APP_UNKNOWN_ICON, -1);
++    } else {
++      /* Plinius: an icon from a file is loaded once, not at every press of the folder */
++      image = gtk_image_new ();
++      phosh_app_grid_button_plinius_set_icon (GTK_IMAGE (image), icon, 24);
++    }
+     gtk_image_set_pixel_size (GTK_IMAGE (image), 24);
+     gtk_widget_set_visible (image, TRUE);
+     gtk_grid_attach (self->grid, image, i % 2, i >= 2, 1, 1);

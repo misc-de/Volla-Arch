@@ -1,0 +1,8 @@
+# Plinius: NFC in the quick settings and, while it is on, in the top bar, casting to a TV
+# through Schwupp, the contact card and the USB functions for an attached computer (plugins of
+# phosh-plinius).
+# This replaces the quick settings list of device-volla-ansuz (90-plinius.gschema.override) and
+# Phosh's own, so their entries are kept. The camera icon is Phosh's default since 0.59.
+[mobi.phosh.shell.plugins:Phosh]
+quick-settings=['wifi-hotspot-quick-setting', 'mobile-data-quick-setting', 'location-quick-setting', 'nfc-quick-setting', 'cardshare-quick-setting', 'cast-quick-setting', 'usb-quick-setting', 'desktop-vnc-quick-setting']
+status-icons=['camera-status-icon', 'nfc-status-icon']

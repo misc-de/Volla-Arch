@@ -1,0 +1,16 @@
+# USB network to the PC (plinius-usb, functions "ncm" and "gateway"): device at 10.15.19.82 (as
+# on UT), the PC gets an address via DHCP. Router and DNS only with the gateway, from a drop-in
+# of plinius-usb in /run (USB_SUBNET in plinius-usb.c must match the address here).
+[Match]
+Name=usb0
+
+[Network]
+Address=10.15.19.82/24
+DHCPServer=yes
+ConfigureWithoutCarrier=yes
+
+[DHCPServer]
+PoolOffset=100
+PoolSize=20
+EmitDNS=no
+EmitRouter=no

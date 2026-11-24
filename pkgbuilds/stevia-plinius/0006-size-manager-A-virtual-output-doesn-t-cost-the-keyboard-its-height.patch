@@ -1,0 +1,199 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:41:41 +0100
+Subject: [PATCH] size-manager: A virtual output doesn't cost the keyboard its
+ height
+
+With more than one output the keyboard fell back to its default height
+of 200 logical pixels. A headless output for remote access is enough for
+that, so on a phone the keys got about 60 % of their calculated height,
+on a screen that hadn't changed.
+
+Outputs without a physical size no longer count when there's more than
+one. The physical size is only known once an output is configured, so
+each one now triggers the choice instead of only the chosen one.
+---
+ src/pos-size-manager.c    | 81 ++++++++++++++++++++++++++++++-----------------
+ tests/test-size-manager.c | 37 ++++++++++++++++++++++
+ 2 files changed, 89 insertions(+), 29 deletions(-)
+
+diff --git a/src/pos-size-manager.c b/src/pos-size-manager.c
+index 488cdef..5c23ae6 100644
+--- a/src/pos-size-manager.c
++++ b/src/pos-size-manager.c
+@@ -157,61 +157,84 @@ recalc_surface_size (PosSizeManager *self)
+ 
+ 
+ static void
+-on_output_configured (PosSizeManager *self, PosOutput *output)
++on_scaling_key_changed (PosSizeManager *self)
+ {
+   g_assert (POS_IS_SIZE_MANAGER (self));
+-  g_assert (POS_IS_OUTPUT (output));
+ 
+   recalc_surface_size (self);
+ }
+ 
+ 
+-static void
+-on_scaling_key_changed (PosSizeManager *self)
++/**
++ * pick_output:
++ * @outputs:(element-type PosOutput): The known outputs
++ *
++ * Find the output the keyboard's size is based on. A single output is always the one. Of several
++ * only those with a physical size count: a virtual output (e.g. a headless one for remote access)
++ * has none and must not cost a phone its calculated keyboard height.
++ *
++ * Returns:(transfer none)(nullable): The output or %NULL if there's no unambiguous one
++ */
++static PosOutput *
++pick_output (GPtrArray *outputs)
+ {
+-  g_assert (POS_IS_SIZE_MANAGER (self));
++  PosOutput *picked = NULL;
+ 
+-  recalc_surface_size (self);
++  if (outputs->len == 1)
++    return g_ptr_array_index (outputs, 0);
++
++  for (guint i = 0; i < outputs->len; i++) {
++    PosOutput *output = g_ptr_array_index (outputs, i);
++
++    if (G_APPROX_VALUE (pos_output_get_transformed_phys_height (output), 0.0, DBL_EPSILON))
++      continue;
++
++    /* TODO: we can do better: if we didn't get a "surface enter" we can assume we're on
++       the same output */
++    if (picked)
++      return NULL;
++
++    picked = output;
++  }
++
++  return picked;
+ }
+ 
+ 
+ static void
+-set_output (PosSizeManager *self, PosOutput *output)
++update_output (PosSizeManager *self)
+ {
+-  if (self->output)
+-    g_signal_handlers_disconnect_by_data (self->output, self);
++  PosOutput *output = pick_output (pos_wayland_get_outputs (pos_wayland_get_default ()));
+ 
+   g_set_object (&self->output, output);
+ 
+-  if (!self->output)
++  if (!self->output) {
++    set_height (self, POS_INPUT_SURFACE_DEFAULT_HEIGHT);
+     return;
++  }
+ 
+-  g_signal_connect_swapped (self->output,
+-                            "configured",
+-                            G_CALLBACK (on_output_configured),
+-                            self);
++  recalc_surface_size (self);
+ }
+ 
+ 
+ static void
+ on_outputs_changed (PosSizeManager *self, GParamSpec *pspec, PosWayland *wayland)
+ {
+-  PosOutput *output;
+-  GPtrArray *outputs;
+-
+-  if (pos_wayland_get_n_outputs (wayland) != 1) {
+-    /* TODO: we can do better: if we didn't get a "surface enter" we can assume we're on
+-       the same output */
+-    set_output (self, NULL);
+-    set_height (self, POS_INPUT_SURFACE_DEFAULT_HEIGHT);
+-    return;
++  GPtrArray *outputs = pos_wayland_get_outputs (wayland);
++
++  /* An output's physical size is only known once it's configured, and that can change the pick */
++  for (guint i = 0; i < outputs->len; i++) {
++    PosOutput *output = g_ptr_array_index (outputs, i);
++
++    g_signal_handlers_disconnect_by_data (output, self);
++    g_signal_connect_object (output,
++                             "configured",
++                             G_CALLBACK (update_output),
++                             self,
++                             G_CONNECT_SWAPPED);
+   }
+ 
+-  /* Pick our output */
+-  outputs = pos_wayland_get_outputs (wayland);
+-  output = g_ptr_array_index (outputs, 0);
+-  set_output (self, output);
+-  on_output_configured (self, self->output);
++  update_output (self);
+ }
+ 
+ 
+@@ -242,7 +265,7 @@ pos_size_manager_dispose (GObject *object)
+ {
+   PosSizeManager *self = POS_SIZE_MANAGER (object);
+ 
+-  set_output (self, NULL);
++  g_clear_object (&self->output);
+   g_clear_object (&self->settings);
+ 
+   G_OBJECT_CLASS (pos_size_manager_parent_class)->dispose (object);
+diff --git a/tests/test-size-manager.c b/tests/test-size-manager.c
+index 772405f..b340879 100644
+--- a/tests/test-size-manager.c
++++ b/tests/test-size-manager.c
+@@ -203,6 +203,40 @@ test_size_manager_portrait_osk_scale_up_l5_at_200 (void)
+ }
+ 
+ 
++/* A virtual output has no physical size and doesn't count, whatever the order */
++static void
++test_size_manager_pick_output_ignores_virtual (void)
++{
++  g_autoptr (GPtrArray) outputs = g_ptr_array_new_with_free_func (g_object_unref);
++  PosOutput *virtual = g_object_new (POS_TYPE_OUTPUT, NULL);
++  PosOutput *panel = g_object_new (POS_TYPE_OUTPUT, NULL);
++  PosOutput *external = g_object_new (POS_TYPE_OUTPUT, NULL);
++
++  pos_output_set_physical_height (panel, 129);
++  pos_output_set_physical_width (panel, 64);
++  pos_output_set_physical_height (external, 300);
++  pos_output_set_physical_width (external, 500);
++
++  /* A single output is picked even without a physical size */
++  g_ptr_array_add (outputs, virtual);
++  g_assert_true (pick_output (outputs) == virtual);
++
++  g_ptr_array_add (outputs, panel);
++  g_assert_true (pick_output (outputs) == panel);
++
++  /* Two real outputs are ambiguous */
++  g_ptr_array_add (outputs, external);
++  g_assert_null (pick_output (outputs));
++
++  /* The panel first */
++  g_ptr_array_remove (outputs, external);
++  g_object_ref (virtual);
++  g_ptr_array_remove (outputs, virtual);
++  g_ptr_array_add (outputs, virtual);
++  g_assert_true (pick_output (outputs) == panel);
++}
++
++
+ int
+ main (int argc, char *argv[])
+ {
+@@ -232,5 +266,8 @@ main (int argc, char *argv[])
+   g_test_add_func ("/pos/size-manager/portrait/osk/scale_up/l5@200",
+                    test_size_manager_portrait_osk_scale_up_l5_at_200);
+ 
++  g_test_add_func ("/pos/size-manager/pick_output/ignores_virtual",
++                   test_size_manager_pick_output_ignores_virtual);
++
+   return g_test_run ();
+ }

@@ -1,0 +1,31 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=libncicore
+pkgver=1.2.0
+pkgrel=2
+pkgdesc="NCI state machine for nfcd"
+arch=(aarch64 x86_64)
+url="https://github.com/mer-hybris/libncicore"
+license=(BSD-3-Clause)
+depends=(glib2 libglibutil)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz"
+	0001-Poll-passively-for-reading-tags.patch)
+sha256sums=('ace164ffbc23dd6c02af6357a6073298357b12b079a919f3094e8bc12ece0593'
+            '7dbeaa87dee1897328659f09a70cd7c5b6dd0ee034d8b7701c73197fb3660386')
+
+prepare() {
+	cd "$pkgname-$pkgver"
+	# The Plinius' ST21NFC (NCI 2.0) rejects discovery with active polling: no tags otherwise
+	patch -Np1 -i ../0001-Poll-passively-for-reading-tags.patch
+}
+
+build() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib KEEP_SYMBOLS=1 release pkgconfig
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib DESTDIR="$pkgdir" install-dev
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

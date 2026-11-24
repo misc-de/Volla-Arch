@@ -1,0 +1,33 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-energy
+pkgver=0.1
+pkgrel=5
+pkgdesc="Estimated battery use per app from processor time and the energy model, for Settings > Battery"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview (no energy model there, the service stays off)
+license=(MIT)
+# Display state from plinius-mce (com.nokia.mce); without it everything counts as screen on
+depends=(glib2)
+optdepends=('plinius-mce: splits the use into screen on and screen off')
+source=(plinius-energy.c
+	plinius-energy.service
+	LICENSE)
+sha256sums=('7c10dd33c2b8ba4bc2117cb920c8c9bb5b0610ce96146b630f7f835ab1502e84'
+	'0f6fbe6c4b08013e2392a50f64459ed4c96288bbcd178b3975c19e692bd6e653'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-energy plinius-energy.c \
+		$(pkg-config --cflags --libs gio-unix-2.0) $LDFLAGS
+}
+
+package() {
+	install -Dm755 plinius-energy -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-energy.service -t "$pkgdir/usr/lib/systemd/system"
+	# Enabled by the package: the record must run from every boot on
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-energy.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

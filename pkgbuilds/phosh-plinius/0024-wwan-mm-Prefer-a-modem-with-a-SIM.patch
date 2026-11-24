@@ -1,0 +1,192 @@
+From a61794c1bf6532b5903dcc41d67fd90a048b17fd Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 20:42:59 +0100
+Subject: [PATCH] wwan-mm: Prefer a modem with a SIM
+
+Plinius: with two SIM slots ModemManager lists two modems and Phosh
+tracked whichever came first. When that was the empty eSIM slot
+(failed, "sim-missing") the status icon said "no SIM" although the
+other slot was registered and had mobile data. Phosh now picks a modem
+with a SIM, keeps it as long as it has one and switches when a SIM
+appears on another modem or the tracked one goes away.
+---
+ src/wwan/phosh-wwan-mm.c | 138 +++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 115 insertions(+), 23 deletions(-)
+
+diff --git a/src/wwan/phosh-wwan-mm.c b/src/wwan/phosh-wwan-mm.c
+index ac9b5ab9..ef6ba80a 100644
+--- a/src/wwan/phosh-wwan-mm.c
++++ b/src/wwan/phosh-wwan-mm.c
+@@ -522,28 +522,91 @@ on_mm_object_interface_added (PhoshWWanMM *self, GDBusInterface* interface, MMOb
+ 
+ 
+ static void
+-on_mm_object_added (PhoshWWanMM *self, GDBusObject *object, MMManager *manager)
++phosh_wwan_mm_track_modem (PhoshWWanMM *self, MMObject *object)
+ {
+-  g_debug ("Modem added at path: %s", g_dbus_object_get_object_path (object));
++  g_debug ("Tracking modem at: %s", g_dbus_object_get_object_path (G_DBUS_OBJECT (object)));
++
++  self->object = g_object_ref (object);
++  /* Modem interface is always present */
++  modem_init_modem (self, object);
++
++  g_signal_connect_swapped (object,
++                            "interface-added",
++                            G_CALLBACK (on_mm_object_interface_added),
++                            self);
++
++  /* Coldplug interfaces */
++  if (mm_object_peek_modem_3gpp (object))
++    modem_init_3gpp (self, object);
++  if (mm_object_peek_modem_cell_broadcast (object))
++    modem_init_cellbroadcast (self, object);
++}
++
++
++/* Whether the modem has a usable SIM. A slot without a card (or an
++ * eSIM without an enabled profile) still shows up as a modem that
++ * failed with "sim-missing". */
++static gboolean
++modem_has_sim (MMObject *object)
++{
++  MMModem *modem = mm_object_peek_modem (object);
++  const char *sim;
++
++  if (!modem)
++    return FALSE;
+ 
+-  if (!self->object) {
+-    g_debug ("Tracking modem at: %s", g_dbus_object_get_object_path (object));
++  if (mm_modem_get_state (modem) == MM_MODEM_STATE_FAILED &&
++      mm_modem_get_state_failed_reason (modem) == MM_MODEM_STATE_FAILED_REASON_SIM_MISSING)
++    return FALSE;
+ 
+-    self->object = g_object_ref (MM_OBJECT (object));
+-    /* Modem interface is always present */
+-    modem_init_modem (self, MM_OBJECT (object));
++  sim = mm_modem_get_sim_path (modem);
++  return sim && g_strcmp0 (sim, "/");
++}
++
++
++/* Phosh shows a single modem. With several (dual SIM) prefer one with a
++ * SIM and keep it as long as it has one, so the status icon doesn't
++ * show "no SIM" because an empty slot happened to be listed first. */
++static void
++phosh_wwan_mm_select_modem (PhoshWWanMM *self, GDBusObject *removed)
++{
++  g_autolist (GDBusObject) modems = NULL;
++  MMObject *best = NULL;
+ 
+-    g_signal_connect_swapped (object,
+-                              "interface-added",
+-                              G_CALLBACK (on_mm_object_interface_added),
+-                              self);
++  if (self->object && modem_has_sim (self->object))
++    return;
+ 
+-    /* Coldplug interfaces */
+-    if (mm_object_peek_modem_3gpp (MM_OBJECT (object)))
+-      modem_init_3gpp (self, MM_OBJECT (object));
+-    if (mm_object_peek_modem_cell_broadcast (MM_OBJECT (object)))
+-      modem_init_cellbroadcast (self, MM_OBJECT (object));
++  modems = g_dbus_object_manager_get_objects (G_DBUS_OBJECT_MANAGER (self->manager));
++  for (GList *l = modems; l; l = l->next) {
++    if (l->data == removed)
++      continue;
++
++    if (modem_has_sim (MM_OBJECT (l->data))) {
++      best = MM_OBJECT (l->data);
++      break;
++    }
++    if (!best && !self->object)
++      best = MM_OBJECT (l->data);
++  }
++
++  if (!best || best == self->object)
++    return;
++
++  if (self->object) {
++    g_debug ("Switching from modem at %s",
++             g_dbus_object_get_object_path (G_DBUS_OBJECT (self->object)));
++    phosh_wwan_mm_destroy_modem (self);
+   }
++  phosh_wwan_mm_track_modem (self, best);
++}
++
++
++static void
++on_mm_object_added (PhoshWWanMM *self, GDBusObject *object, MMManager *manager)
++{
++  g_debug ("Modem added at path: %s", g_dbus_object_get_object_path (object));
++
++  phosh_wwan_mm_select_modem (self, NULL);
+ }
+ 
+ 
+@@ -556,6 +619,34 @@ on_mm_object_removed (PhoshWWanMM *self, GDBusObject *object, MMManager *manager
+     g_debug ("Dropping modem at: %s", g_dbus_object_get_object_path (object));
+     phosh_wwan_mm_destroy_modem (self);
+   }
++
++  /* Fall back to another modem, if any */
++  phosh_wwan_mm_select_modem (self, object);
++}
++
++
++/* A SIM can appear or go away on any modem, not only the tracked one */
++static void
++on_mm_interface_props_changed (PhoshWWanMM        *self,
++                               GDBusObjectProxy   *object_proxy,
++                               GDBusProxy         *interface_proxy,
++                               GVariant           *changed_properties,
++                               GStrv               invalidated,
++                               GDBusObjectManager *manager)
++{
++  char *property;
++  GVariantIter i;
++
++  if (!MM_IS_MODEM (interface_proxy))
++    return;
++
++  g_variant_iter_init (&i, changed_properties);
++  while (g_variant_iter_next (&i, "{&sv}", &property, NULL)) {
++    if (g_strcmp0 (property, "State") == 0 || g_strcmp0 (property, "Sim") == 0) {
++      phosh_wwan_mm_select_modem (self, NULL);
++      return;
++    }
++  }
+ }
+ 
+ 
+@@ -564,7 +655,6 @@ on_mm_manager_ready (GObject *source_object, GAsyncResult *res, gpointer user_da
+ {
+   PhoshWWanMM *self = PHOSH_WWAN_MM (user_data);
+   g_autoptr (GError) err = NULL;
+-  g_autolist (GDBusObject) modems = NULL;
+   MMManager *manager;
+ 
+   manager = mm_manager_new_finish (res, &err);
+@@ -585,13 +675,15 @@ on_mm_manager_ready (GObject *source_object, GAsyncResult *res, gpointer user_da
+                             G_CALLBACK (on_mm_object_removed),
+                             self);
+ 
+-  modems = g_dbus_object_manager_get_objects (G_DBUS_OBJECT_MANAGER (self->manager));
+-  if (modems) {
+-    /* Cold plug first modem */
+-    on_mm_object_added (self, modems->data, self->manager);
+-  } else {
++  g_signal_connect_swapped (self->manager,
++                            "interface-proxy-properties-changed",
++                            G_CALLBACK (on_mm_interface_props_changed),
++                            self);
++
++  /* Cold plug the modem with a SIM, else the first one */
++  phosh_wwan_mm_select_modem (self, NULL);
++  if (!self->object)
+     g_debug ("No modem found");
+-  }
+ }
+ 
+ 

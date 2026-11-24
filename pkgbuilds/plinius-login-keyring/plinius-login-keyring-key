@@ -1,0 +1,35 @@
+#!/bin/bash
+# Creates the device key that opens a user's login keyring (see plinius-login-keyring-unlock).
+# Run as root by plinius-login-keyring-key@<uid>.service before that user's systemd instance starts.
+# The key is 32 random bytes (base64), readable only by the user, and never changed: a lost key
+# means a keyring nobody can open, so an existing file is left exactly as it is.
+set -u
+
+uid=${1:-}
+[[ $uid =~ ^[0-9]+$ ]] || { echo "usage: plinius-login-keyring-key <uid>" >&2; exit 2; }
+
+# System accounts (root, the greetd greeter) get no keyring key
+uid_min=$(awk '$1 == "UID_MIN" { print $2 }' /etc/login.defs 2>/dev/null)
+(( uid >= ${uid_min:-1000} )) || exit 0
+getent passwd "$uid" >/dev/null || { echo "no account with uid $uid" >&2; exit 1; }
+
+dir=/var/lib/plinius-login-keyring
+key=$dir/$uid
+if [[ -e $key ]]; then
+	owner=$(stat -c %u "$key")
+	[[ $owner == "$uid" ]] || echo "warning: $key belongs to uid $owner, left unchanged" >&2
+	exit 0
+fi
+
+umask 077
+tmp=$(mktemp "$dir/.new-$uid.XXXXXX") || exit 1
+trap 'rm -f "$tmp"' EXIT
+head -c 32 /dev/urandom | base64 -w0 > "$tmp" || exit 1
+# On disk before it is used: the keyring made with it must never outlive the key. Synced while
+# still root's, as the sandbox lacks CAP_DAC_OVERRIDE for a file already handed to the user.
+sync "$tmp" || exit 1
+chmod 0400 "$tmp" && chown "$uid" "$tmp" || exit 1
+mv -T "$tmp" "$key" || exit 1
+trap - EXIT
+sync "$dir"
+echo "created device key for uid $uid"

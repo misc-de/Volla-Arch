@@ -1,0 +1,37 @@
+#!/bin/sh
+# plinius-widevine-set: switches Protected Content (DRM) on or off; GNOME Settings > Privacy
+# runs it through pkexec.
+#
+#   on   writes the marker and fetches the CDM from Google now (waits for the download). Exit 3:
+#        the download failed (offline?); the marker stays, the service tries again in an hour
+#        and the daily timer keeps it current.
+#   off  removes the marker and the CDM; Google is not asked any more.
+#
+# polkit (org.plinius.widevine.policy): "on" asks for the administrator password, it brings
+# closed-source code from Google onto the phone; "off" needs no password.
+#
+# SPDX-License-Identifier: MIT
+set -eu
+
+marker=/etc/plinius-widevine/enabled
+state=/var/lib/plinius-widevine
+service=plinius-widevine-update.service
+
+case "${1:-}" in
+on)
+	mkdir -p "${marker%/*}"
+	: >"$marker"
+	systemctl start "$service" || exit 3
+	;;
+off)
+	rm -f "$marker"
+	# Also a retry waiting after a failed download
+	systemctl stop "$service" 2>/dev/null || true
+	systemctl reset-failed "$service" 2>/dev/null || true
+	rm -rf -- "$state/versions" "$state/current" "$state/gmp-widevinecdm" "$state/.work"
+	;;
+*)
+	echo "Usage: plinius-widevine-set on|off" >&2
+	exit 2
+	;;
+esac

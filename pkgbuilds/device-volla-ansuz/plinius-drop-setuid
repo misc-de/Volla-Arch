@@ -1,0 +1,15 @@
+#!/bin/sh
+# Removes the setuid/setgid bit from programs Arch installs with it that nothing on the phone
+# uses, so a bug in one of them cannot lift a local process to root:
+#   ksu           Kerberos su (krb5 comes in as a library dependency)
+#   mount.cifs    user mounts of SMB shares; file managers use gvfs instead
+#   lxc-user-nic  network for unprivileged containers; the Android container is privileged
+#   chfn, chsh    change the name and shell in /etc/passwd; GNOME Settings does neither
+# pacman -Qkk reports these files with "Permissions mismatch" afterwards, which is expected.
+# SPDX-License-Identifier: MIT
+for f in /usr/bin/ksu /usr/bin/mount.cifs /usr/lib/lxc/lxc-user-nic /usr/bin/chfn /usr/bin/chsh; do
+	if [ -f "$f" ] && [ ! -L "$f" ]; then
+		chmod u-s,g-s "$f" || echo "plinius-drop-setuid: could not change $f" >&2
+	fi
+done
+exit 0

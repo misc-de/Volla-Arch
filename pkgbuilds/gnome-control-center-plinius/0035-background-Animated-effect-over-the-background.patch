@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:40:00 +0100
+Subject: [PATCH] background: Animated effect over the background
+
+Plinius: an Animation group at the top of the page, above Style, chooses
+the effect plinius-ambient draws over the background (snow, dust in the
+light, fireflies, rain, silver and black balls rolling with the tilt)
+and its amount. It is inserted before the app overview group, which then
+goes on top of it. The code lives in cc-plinius-ambient.c (copied to
+panels/background/ in prepare()); this patch only hooks it in. Without
+plinius-ambient's schema the group does not show.
+---
+
+--- a/panels/background/cc-background-panel.c
++++ b/panels/background/cc-background-panel.c
+@@ -34,6 +34,7 @@
+ #include "cc-background-preview.h"
+ #include "panels/common/cc-plinius-display.h"
+ #include "cc-plinius-accent.h"
++#include "cc-plinius-ambient.h"
+ #include "cc-background-resources.h"
+ 
+ #define WP_PATH_ID "org.gnome.desktop.background"
+@@ -493,6 +494,10 @@
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
++    /* Plinius: the animated effect over the background above Style; added first, so that the
++     * app overview options below still go on top */
++    cc_plinius_ambient_setup (self->appearance_page);
++
+     /* Plinius: the phone's app overview options first */
+     cc_plinius_display_setup_app_overview (self->appearance_page);
+ 
+--- a/panels/background/meson.build
++++ b/panels/background/meson.build
+@@ -69,6 +69,7 @@
+   'cc-background-preview.c',
+   'cc-background-xml.c',
+   'cc-plinius-accent.c',
++  'cc-plinius-ambient.c',
+ )
+ 
+ deps = common_deps + [
+-- 
+2.55.0
+

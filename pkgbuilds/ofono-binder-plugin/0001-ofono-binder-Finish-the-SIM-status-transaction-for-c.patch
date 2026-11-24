@@ -1,0 +1,42 @@
+From 973fb7c2039922fecef095c4413cf36c5771038b Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 10:56:07 +0100
+Subject: [PATCH] [ofono-binder] Finish the SIM status transaction for cards
+ without apps
+
+The status transaction blocks all SIM requests of the slot until the card
+is present and has a GSM/UMTS application. An eUICC without an enabled
+profile is present but has no application at all, so the block stayed
+forever and every SIM request for that slot (e.g. opening a logical
+channel to the ISD-R to enable a profile) waited endlessly.
+---
+ src/binder_sim_card.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/binder_sim_card.c b/src/binder_sim_card.c
+index 7f0883a..047a9b7 100644
+--- a/src/binder_sim_card.c
++++ b/src/binder_sim_card.c
+@@ -227,11 +227,16 @@ binder_sim_card_tx_check(
+             /*
+              * Transaction (if there is any) is finished when
+              * both GET_SIM_STATUS and SET_UICC_SUBSCRIPTION
+-             * complete or get dropped.
++             * complete or get dropped. A card without any
++             * application (e.g. an eUICC without an enabled
++             * profile) gets no subscription, so it's finished
++             * too. Otherwise the block would stay forever and
++             * hold back all SIM requests for this slot.
+              */
+             if (!self->status_req && !self->sub_req &&
+-                status->gsm_umts_index >= 0 &&
+-                status->gsm_umts_index < status->num_apps) {
++                (!status->num_apps ||
++                (status->gsm_umts_index >= 0 &&
++                status->gsm_umts_index < status->num_apps))) {
+                 DBG("status tx for slot %u finished", card->slot);
+                 radio_request_group_unblock(self->g);
+             }
+-- 
+2.55.0
+

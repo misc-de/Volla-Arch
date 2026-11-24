@@ -1,0 +1,270 @@
+From 0fc0012531717713fa129908b3f432c1869d888f Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 15:24:21 +0100
+Subject: [PATCH] network-auth-manager: Auth dialogs with their own window
+
+Plinius: Phosh only ran VPN auth dialogs in the external UI mode and
+gave up on the others ("does not support external ui mode"), so an
+OpenConnect connection (Cisco AnyConnect, GlobalProtect, Pulse,
+Fortinet) could never connect. Its dialog may need a web login and
+shows its own window.
+
+Such dialogs now run the way GNOME Shell runs them: the connection's
+data and secrets go to stdin ending in "DONE", the dialog answers with
+key and value lines ending in an empty line, Phosh hands the secrets to
+NetworkManager and sends "QUIT". Exit status 0 confirms, anything else
+counts as cancelled. When NetworkManager withdraws the request, the
+window closes.
+---
+ src/network-auth-manager.c | 218 +++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 212 insertions(+), 6 deletions(-)
+
+diff --git a/src/network-auth-manager.c b/src/network-auth-manager.c
+index 6b568e26..c34f1854 100644
+--- a/src/network-auth-manager.c
++++ b/src/network-auth-manager.c
+@@ -22,6 +22,8 @@
+ #include <gio/gunixoutputstream.h>
+ #include <gio/gunixinputstream.h>
+ 
++#include <signal.h>
++
+ /**
+  * PhoshNetworkAuthManager:
+  *
+@@ -424,6 +426,210 @@ add_secret_to_string (const char *key, const char *value, gpointer user_data)
+ }
+ 
+ 
++/*
++ * Auth dialogs without the external UI mode (e.g. OpenConnect's, which may need a web login)
++ * show their own window, the way GNOME Shell runs them: the connection's data and secrets go
++ * to the dialog's stdin, ending in "DONE". The dialog answers on stdout with alternating key
++ * and value lines, ends with an empty line and waits for "QUIT" before it exits.
++ */
++typedef struct {
++  VPNRequest       *request;
++  GPid              pid;
++  guint             child_watch_id;
++  gulong            cancel_request_id;
++  GCancellable     *cancel;
++  GOutputStream    *stdin_stream;
++  GDataInputStream *stdout_stream;
++  char             *key;        /* key line still waiting for its value line */
++  gboolean          quit_sent;
++  gboolean          cancelled;  /* NetworkManager withdrew the request, nothing to respond */
++} AuthWindowData;
++
++
++static void
++auth_window_data_free (AuthWindowData *data)
++{
++  g_clear_signal_handler (&data->cancel_request_id, data->request->self->network_agent);
++  g_clear_handle_id (&data->child_watch_id, g_source_remove);
++  g_cancellable_cancel (data->cancel);
++  g_clear_object (&data->cancel);
++  g_spawn_close_pid (data->pid);
++  g_clear_object (&data->stdin_stream);
++  g_clear_object (&data->stdout_stream);
++  g_free (data->key);
++  vpn_request_free (data->request);
++  g_free (data->request);
++  g_free (data);
++}
++
++
++static void
++on_auth_window_written (GObject *source_object, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++
++  g_free (user_data);
++  /* A dialog that went away early shows in its exit status */
++  if (!g_output_stream_write_all_finish (G_OUTPUT_STREAM (source_object), res, NULL, &err))
++    g_debug ("Failed to write to VPN auth dialog: %s", err->message);
++}
++
++
++static void
++auth_window_write (AuthWindowData *data, char *str)
++{
++  g_output_stream_write_all_async (data->stdin_stream, str, strlen (str), G_PRIORITY_DEFAULT,
++                                   data->cancel, on_auth_window_written, str);
++}
++
++
++static void auth_window_read_line (AuthWindowData *data);
++
++static void
++on_auth_window_line (GObject *source_object, GAsyncResult *res, gpointer user_data)
++{
++  AuthWindowData *data;
++  g_autofree char *line = NULL;
++  g_autoptr (GError) err = NULL;
++
++  line = g_data_input_stream_read_line_finish_utf8 (G_DATA_INPUT_STREAM (source_object), res,
++                                                    NULL, &err);
++  /* Cancelled means @data is gone */
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  data = user_data;
++  if (!line) {
++    /* End of the output, the exit status decides */
++    if (err)
++      g_warning ("Failed to read from VPN auth dialog: %s", err->message);
++    return;
++  }
++
++  if (data->key) {
++    shell_network_agent_add_vpn_secret (data->request->self->network_agent,
++                                        data->request->request_id, data->key, line);
++    g_clear_pointer (&data->key, g_free);
++  } else if (*line == '\0') {
++    /* An empty line where a key would be ends the answer */
++    if (!data->quit_sent) {
++      data->quit_sent = TRUE;
++      auth_window_write (data, g_strdup ("QUIT\n\n"));
++    }
++  } else {
++    data->key = g_steal_pointer (&line);
++  }
++
++  auth_window_read_line (data);
++}
++
++
++static void
++auth_window_read_line (AuthWindowData *data)
++{
++  g_data_input_stream_read_line_async (data->stdout_stream, G_PRIORITY_DEFAULT, data->cancel,
++                                       on_auth_window_line, data);
++}
++
++
++static void
++on_auth_window_exited (GPid pid, int status, gpointer user_data)
++{
++  AuthWindowData *data = user_data;
++  g_autoptr (GError) err = NULL;
++
++  data->child_watch_id = 0;
++  if (!data->cancelled) {
++    gboolean ok = g_spawn_check_wait_status (status, &err);
++
++    g_debug ("VPN auth dialog for %s exited: %s", data->request->request_id,
++             ok ? "ok" : err->message);
++    shell_network_agent_respond (data->request->self->network_agent,
++                                 data->request->request_id,
++                                 ok ? SHELL_NETWORK_AGENT_CONFIRMED :
++                                 SHELL_NETWORK_AGENT_USER_CANCELED);
++  }
++  auth_window_data_free (data);
++}
++
++
++static void
++on_auth_window_cancel_request (AuthWindowData *data, const char *request_id)
++{
++  if (g_strcmp0 (request_id, data->request->request_id))
++    return;
++
++  /* The window closes, its exit then frees @data */
++  data->cancelled = TRUE;
++  kill (data->pid, SIGTERM);
++}
++
++
++static void
++auth_window_spawn (VPNRequest *request, NMVpnPluginInfo *plugin, const char *auth_dialog)
++{
++  NMSettingVpn *vpn_setting = nm_connection_get_setting_vpn (request->connection);
++  g_autoptr (GPtrArray) argv = g_ptr_array_new ();
++  g_autoptr (GInputStream) stdout_stream = NULL;
++  g_autoptr (GError) err = NULL;
++  int stdin_fd, stdout_fd;
++  AuthWindowData *data;
++  GString *input;
++  GPid pid;
++
++  g_ptr_array_add (argv, (gpointer) auth_dialog);
++  g_ptr_array_add (argv, "-u");
++  g_ptr_array_add (argv, (gpointer) nm_connection_get_uuid (request->connection));
++  g_ptr_array_add (argv, "-n");
++  g_ptr_array_add (argv, (gpointer) nm_connection_get_id (request->connection));
++  g_ptr_array_add (argv, "-s");
++  g_ptr_array_add (argv, (gpointer) nm_setting_vpn_get_service_type (vpn_setting));
++  if (request->flags & NM_SECRET_AGENT_GET_SECRETS_FLAG_ALLOW_INTERACTION)
++    g_ptr_array_add (argv, "-i");
++  if (request->flags & NM_SECRET_AGENT_GET_SECRETS_FLAG_REQUEST_NEW)
++    g_ptr_array_add (argv, "-r");
++  if (str_to_bool (nm_vpn_plugin_info_lookup_property (plugin, "GNOME", "supports-hints"))) {
++    for (int i = 0; request->hints && request->hints[i]; i++) {
++      g_ptr_array_add (argv, "-t");
++      g_ptr_array_add (argv, request->hints[i]);
++    }
++  }
++  g_ptr_array_add (argv, NULL);
++
++  if (!g_spawn_async_with_pipes (NULL, (char **) argv->pdata, NULL, G_SPAWN_DO_NOT_REAP_CHILD,
++                                 NULL, NULL, &pid, &stdin_fd, &stdout_fd, NULL, &err)) {
++    g_warning ("Failed to spawn auth dialog %s: %s", auth_dialog, err->message);
++    shell_network_agent_respond (request->self->network_agent, request->request_id,
++                                 SHELL_NETWORK_AGENT_INTERNAL_ERROR);
++    vpn_request_free (request);
++    g_free (request);
++    return;
++  }
++
++  stdout_stream = g_unix_input_stream_new (stdout_fd, TRUE);
++  data = g_new0 (AuthWindowData, 1);
++  *data = (AuthWindowData) {
++    .request       = request,
++    .pid           = pid,
++    .cancel        = g_cancellable_new (),
++    .stdin_stream  = g_unix_output_stream_new (stdin_fd, TRUE),
++    .stdout_stream = g_data_input_stream_new (stdout_stream),
++  };
++  data->child_watch_id = g_child_watch_add (pid, on_auth_window_exited, data);
++  data->cancel_request_id = g_signal_connect_swapped (request->self->network_agent,
++                                                      "cancel-request",
++                                                      G_CALLBACK (on_auth_window_cancel_request),
++                                                      data);
++
++  input = g_string_new (NULL);
++  nm_setting_vpn_foreach_data_item (vpn_setting, add_data_item_to_string, input);
++  nm_setting_vpn_foreach_secret (vpn_setting, add_secret_to_string, input);
++  g_string_append (input, "DONE\n\n");
++  auth_window_write (data, g_string_free (input, FALSE));
++  auth_window_read_line (data);
++}
++
++
+ static void
+ on_search_vpn_plugin_ready (GObject      *source_object,
+                             GAsyncResult *res,
+@@ -458,18 +664,18 @@ on_search_vpn_plugin_ready (GObject      *source_object,
+     goto err;
+   }
+ 
+-  str = nm_vpn_plugin_info_lookup_property (plugin, "GNOME", "supports-external-ui-mode");
+-  if (!str_to_bool (str)) {
+-    g_warning ("VPN auth plugin for %s does not support external ui mode", service_type);
+-    goto err;
+-  }
+-
+   str = nm_vpn_plugin_info_get_auth_dialog (plugin);
+   if (!g_file_test (str, G_FILE_TEST_IS_EXECUTABLE)) {
+     g_warning ("VPN auto plugin for %s (%s) not executable", service_type, str);
+     goto err;
+   }
+ 
++  if (!str_to_bool (nm_vpn_plugin_info_lookup_property (plugin, "GNOME", "supports-external-ui-mode"))) {
++    g_debug ("VPN auth plugin for %s brings its own window", service_type);
++    auth_window_spawn (request, plugin, str);
++    return;
++  }
++
+   auth_helper_argv = g_ptr_array_new ();
+   g_ptr_array_add (auth_helper_argv, (gpointer) str);
+   g_ptr_array_add (auth_helper_argv, "-u");

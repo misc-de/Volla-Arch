@@ -1,0 +1,728 @@
+From 6d5e8788983556c411b87a1ddec5fcd4abab28bd Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 15:50:54 +0100
+Subject: [PATCH] plugins: NFC quick setting and status icon
+
+Plinius: two plugins for NFC through nfcd (org.sailfishos.nfc.Settings,
+GetEnabled/SetEnabled/EnabledChanged):
+- nfc-quick-setting switches NFC on and off; insensitive while nfcd
+  does not run.
+- nfc-status-icon shows an NFC symbol in the top bar while NFC is on.
+nfcd lets only the group "privileged" switch NFC.
+---
+ plugins/meson.build                                |   2 +
+ .../icons/nfc-disabled-symbolic.svg                |   3 +
+ .../icons/nfc-quick-setting-symbolic.svg           |   3 +
+ plugins/nfc-quick-setting/icons/nfc-symbolic.svg   |   3 +
+ plugins/nfc-quick-setting/meson.build              |  48 ++++++
+ plugins/nfc-quick-setting/nfc-quick-setting.c      | 175 +++++++++++++++++++++
+ .../nfc-quick-setting.desktop.in.in                |   8 +
+ plugins/nfc-quick-setting/nfc-quick-setting.h      |  17 ++
+ .../phosh-plugin-nfc-quick-setting.c               |  39 +++++
+ .../phosh-plugin-nfc-quick-setting.gresources.xml  |   8 +
+ plugins/nfc-quick-setting/qs.ui                    |  12 ++
+ .../icons/nfc-status-icon-symbolic.svg             |   3 +
+ plugins/nfc-status-icon/icons/nfc-symbolic.svg     |   3 +
+ plugins/nfc-status-icon/meson.build                |  48 ++++++
+ plugins/nfc-status-icon/nfc-status-icon.c          | 128 +++++++++++++++
+ .../nfc-status-icon/nfc-status-icon.desktop.in.in  |   8 +
+ plugins/nfc-status-icon/nfc-status-icon.h          |  16 ++
+ .../nfc-status-icon/phosh-plugin-nfc-status-icon.c |  39 +++++
+ .../phosh-plugin-nfc-status-icon.gresources.xml    |   6 +
+ 19 files changed, 569 insertions(+)
+
+diff --git a/plugins/meson.build b/plugins/meson.build
+index 546ba898..c1909e56 100644
+--- a/plugins/meson.build
++++ b/plugins/meson.build
+@@ -72,6 +72,7 @@ quick_setting_plugins = [
+   'dark-mode-quick-setting',
+   'location-quick-setting',
+   'mobile-data-quick-setting',
++  'nfc-quick-setting',
+   'night-light-quick-setting',
+   'pomodoro-quick-setting',
+   'scaling-quick-setting',
+@@ -85,6 +86,7 @@ quick_setting_plugins = [
+ status_icon_plugins = [
+   'camera-status-icon',
+   'load-meter-status-icon',
++  'nfc-status-icon',
+   'simple-custom-status-icon',
+ ]
+ 
+diff --git a/plugins/nfc-quick-setting/icons/nfc-disabled-symbolic.svg b/plugins/nfc-quick-setting/icons/nfc-disabled-symbolic.svg
+new file mode 100644
+index 00000000..3268f8fe
+--- /dev/null
++++ b/plugins/nfc-quick-setting/icons/nfc-disabled-symbolic.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill="#222" fill-rule="evenodd" d="M4.5 3h7A1.5 1.5 0 0 1 13 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 11.5v-7A1.5 1.5 0 0 1 4.5 3zm0 1.5v7h7v-7zM6 6v4h1.1V7.9L8.9 10H10V6H8.9v2.1L7.1 6z"/><path fill="#222" d="M2.7 1.6L1.6 2.7l11.7 11.7 1.1-1.1z"/>
++</svg>
+diff --git a/plugins/nfc-quick-setting/icons/nfc-quick-setting-symbolic.svg b/plugins/nfc-quick-setting/icons/nfc-quick-setting-symbolic.svg
+new file mode 100644
+index 00000000..3c44a4a0
+--- /dev/null
++++ b/plugins/nfc-quick-setting/icons/nfc-quick-setting-symbolic.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill="#222" fill-rule="evenodd" d="M4.5 3h7A1.5 1.5 0 0 1 13 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 11.5v-7A1.5 1.5 0 0 1 4.5 3zm0 1.5v7h7v-7zM6 6v4h1.1V7.9L8.9 10H10V6H8.9v2.1L7.1 6z"/>
++</svg>
+diff --git a/plugins/nfc-quick-setting/icons/nfc-symbolic.svg b/plugins/nfc-quick-setting/icons/nfc-symbolic.svg
+new file mode 100644
+index 00000000..3c44a4a0
+--- /dev/null
++++ b/plugins/nfc-quick-setting/icons/nfc-symbolic.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill="#222" fill-rule="evenodd" d="M4.5 3h7A1.5 1.5 0 0 1 13 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 11.5v-7A1.5 1.5 0 0 1 4.5 3zm0 1.5v7h7v-7zM6 6v4h1.1V7.9L8.9 10H10V6H8.9v2.1L7.1 6z"/>
++</svg>
+diff --git a/plugins/nfc-quick-setting/meson.build b/plugins/nfc-quick-setting/meson.build
+new file mode 100644
+index 00000000..d85aa8cf
+--- /dev/null
++++ b/plugins/nfc-quick-setting/meson.build
+@@ -0,0 +1,48 @@
++# Plinius: NFC through nfcd (org.sailfishos.nfc.Settings)
++name = 'nfc-quick-setting'
++
++nfc_quick_setting_resources = gnome.compile_resources(
++  'phosh-plugin-nfc-quick-setting-resources',
++  'phosh-plugin-nfc-quick-setting.gresources.xml',
++  c_name: 'phosh_plugin_nfc_quick_setting',
++)
++
++nfc_quick_setting_plugin_sources = files(
++  'nfc-quick-setting.c',
++  'phosh-plugin-nfc-quick-setting.c',
++)
++
++phosh_nfc_quick_setting_plugin = shared_module(
++  'phosh-plugin-nfc-quick-setting',
++  nfc_quick_setting_plugin_sources,
++  nfc_quick_setting_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: plugin_dep,
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: meson.project_source_root() / 'po',
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/nfc-quick-setting-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+diff --git a/plugins/nfc-quick-setting/nfc-quick-setting.c b/plugins/nfc-quick-setting/nfc-quick-setting.c
+new file mode 100644
+index 00000000..0951fc3c
+--- /dev/null
++++ b/plugins/nfc-quick-setting/nfc-quick-setting.c
+@@ -0,0 +1,175 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "nfc-quick-setting.h"
++#include "quick-setting.h"
++#include "status-icon.h"
++
++#include <glib/gi18n.h>
++
++#define NFC_SETTINGS_NAME "org.sailfishos.nfc.settings"
++#define NFC_SETTINGS_PATH "/"
++#define NFC_SETTINGS_INTERFACE "org.sailfishos.nfc.Settings"
++
++/**
++ * PhoshNfcQuickSetting:
++ *
++ * A quick setting to switch NFC on/off through nfcd (org.sailfishos.nfc.Settings).
++ * Insensitive while nfcd is not running.
++ */
++struct _PhoshNfcQuickSetting {
++  PhoshQuickSetting  parent;
++
++  PhoshStatusIcon   *info;
++  GDBusProxy        *proxy;
++  GCancellable      *cancel;
++};
++G_DEFINE_TYPE (PhoshNfcQuickSetting, phosh_nfc_quick_setting, PHOSH_TYPE_QUICK_SETTING);
++
++
++static void
++update (PhoshNfcQuickSetting *self, gboolean enabled)
++{
++  phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), enabled);
++  phosh_status_icon_set_icon_name (self->info, enabled ? "nfc-symbolic" : "nfc-disabled-symbolic");
++  phosh_status_icon_set_info (self->info, enabled ? _("NFC On") : _("NFC Off"));
++}
++
++
++static void
++on_get_enabled (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  PhoshNfcQuickSetting *self;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = NULL;
++  gboolean enabled;
++
++  reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), res, &err);
++  if (!reply) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_debug ("Failed to get NFC state: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_NFC_QUICK_SETTING (user_data);
++  g_variant_get (reply, "(b)", &enabled);
++  update (self, enabled);
++}
++
++
++static void
++on_name_owner_changed (PhoshNfcQuickSetting *self)
++{
++  g_autofree char *owner = g_dbus_proxy_get_name_owner (self->proxy);
++
++  gtk_widget_set_sensitive (GTK_WIDGET (self), owner != NULL);
++  if (owner)
++    g_dbus_proxy_call (self->proxy, "GetEnabled", NULL, G_DBUS_CALL_FLAGS_NONE, -1,
++                       self->cancel, on_get_enabled, self);
++}
++
++
++static void
++on_signal (PhoshNfcQuickSetting *self, const char *sender, const char *signal, GVariant *params)
++{
++  gboolean enabled;
++
++  if (g_strcmp0 (signal, "EnabledChanged") != 0)
++    return;
++  g_variant_get (params, "(b)", &enabled);
++  update (self, enabled);
++}
++
++
++static void
++on_set_enabled (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), res, &err);
++
++  /* nfcd only allows the group "privileged" */
++  if (!reply && !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    g_warning ("Failed to switch NFC: %s", err->message);
++}
++
++
++static void
++on_clicked (PhoshNfcQuickSetting *self)
++{
++  gboolean active = phosh_quick_setting_get_active (PHOSH_QUICK_SETTING (self));
++
++  if (!self->proxy)
++    return;
++  /* The tile follows EnabledChanged */
++  g_dbus_proxy_call (self->proxy, "SetEnabled", g_variant_new ("(b)", !active),
++                     G_DBUS_CALL_FLAGS_NONE, -1, self->cancel, on_set_enabled, self);
++}
++
++
++static void
++on_proxy_ready (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  PhoshNfcQuickSetting *self;
++  g_autoptr (GError) err = NULL;
++  GDBusProxy *proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
++
++  if (!proxy) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("Failed to reach nfcd: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_NFC_QUICK_SETTING (user_data);
++  self->proxy = proxy;
++  g_signal_connect_object (proxy, "g-signal", G_CALLBACK (on_signal), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "notify::g-name-owner", G_CALLBACK (on_name_owner_changed), self,
++                           G_CONNECT_SWAPPED);
++  on_name_owner_changed (self);
++}
++
++
++static void
++phosh_nfc_quick_setting_dispose (GObject *object)
++{
++  PhoshNfcQuickSetting *self = PHOSH_NFC_QUICK_SETTING (object);
++
++  g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++  g_clear_object (&self->proxy);
++
++  G_OBJECT_CLASS (phosh_nfc_quick_setting_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_nfc_quick_setting_class_init (PhoshNfcQuickSettingClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_nfc_quick_setting_dispose;
++
++  gtk_widget_class_set_template_from_resource (widget_class,
++                                               "/mobi/phosh/plugins/nfc-quick-setting/qs.ui");
++  gtk_widget_class_bind_template_child (widget_class, PhoshNfcQuickSetting, info);
++  gtk_widget_class_bind_template_callback (widget_class, on_clicked);
++}
++
++
++static void
++phosh_nfc_quick_setting_init (PhoshNfcQuickSetting *self)
++{
++  gtk_widget_init_template (GTK_WIDGET (self));
++  gtk_icon_theme_add_resource_path (gtk_icon_theme_get_default (),
++                                    "/mobi/phosh/plugins/nfc-quick-setting/icons");
++
++  self->cancel = g_cancellable_new ();
++  update (self, FALSE);
++  gtk_widget_set_sensitive (GTK_WIDGET (self), FALSE);
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM, G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
++                            NULL, NFC_SETTINGS_NAME, NFC_SETTINGS_PATH, NFC_SETTINGS_INTERFACE,
++                            self->cancel, on_proxy_ready, self);
++}
+diff --git a/plugins/nfc-quick-setting/nfc-quick-setting.desktop.in.in b/plugins/nfc-quick-setting/nfc-quick-setting.desktop.in.in
+new file mode 100644
+index 00000000..e91f6870
+--- /dev/null
++++ b/plugins/nfc-quick-setting/nfc-quick-setting.desktop.in.in
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=NFC Quick Setting
++Types=quick-setting;
++Comment=Switch NFC on/off
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=nfc-quick-setting
+diff --git a/plugins/nfc-quick-setting/nfc-quick-setting.h b/plugins/nfc-quick-setting/nfc-quick-setting.h
+new file mode 100644
+index 00000000..8a8452e6
+--- /dev/null
++++ b/plugins/nfc-quick-setting/nfc-quick-setting.h
+@@ -0,0 +1,17 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "quick-setting.h"
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_NFC_QUICK_SETTING phosh_nfc_quick_setting_get_type ()
++G_DECLARE_FINAL_TYPE (PhoshNfcQuickSetting, phosh_nfc_quick_setting,
++                      PHOSH, NFC_QUICK_SETTING, PhoshQuickSetting)
++
++G_END_DECLS
+diff --git a/plugins/nfc-quick-setting/phosh-plugin-nfc-quick-setting.c b/plugins/nfc-quick-setting/phosh-plugin-nfc-quick-setting.c
+new file mode 100644
+index 00000000..2ccf68ba
+--- /dev/null
++++ b/plugins/nfc-quick-setting/phosh-plugin-nfc-quick-setting.c
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Based on the location quick setting plugin
++ */
++
++#include "nfc-quick-setting.h"
++#include "phosh-plugin.h"
++
++#include <gio/gio.h>
++#include <gtk/gtk.h>
++
++char **g_io_phosh_plugin_nfc_quick_setting_query (void);
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET,
++                                  PHOSH_TYPE_NFC_QUICK_SETTING,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++char **
++g_io_phosh_plugin_nfc_quick_setting_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+diff --git a/plugins/nfc-quick-setting/phosh-plugin-nfc-quick-setting.gresources.xml b/plugins/nfc-quick-setting/phosh-plugin-nfc-quick-setting.gresources.xml
+new file mode 100644
+index 00000000..5f1acd04
+--- /dev/null
++++ b/plugins/nfc-quick-setting/phosh-plugin-nfc-quick-setting.gresources.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/nfc-quick-setting/">
++    <file preprocess="xml-stripblanks">qs.ui</file>
++    <file compressed="true">icons/nfc-symbolic.svg</file>
++    <file compressed="true">icons/nfc-disabled-symbolic.svg</file>
++  </gresource>
++</gresources>
+diff --git a/plugins/nfc-quick-setting/qs.ui b/plugins/nfc-quick-setting/qs.ui
+new file mode 100644
+index 00000000..9d1625a3
+--- /dev/null
++++ b/plugins/nfc-quick-setting/qs.ui
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <requires lib="gtk+" version="3.24"/>
++  <template class="PhoshNfcQuickSetting" parent="PhoshQuickSetting">
++    <property name="status-icon">info</property>
++    <signal name="clicked" handler="on_clicked" object="PhoshNfcQuickSetting" swapped="yes"/>
++  </template>
++  <object class="PhoshStatusIcon" id="info">
++    <property name="visible">1</property>
++    <property name="pixel-size">16</property>
++  </object>
++</interface>
+diff --git a/plugins/nfc-status-icon/icons/nfc-status-icon-symbolic.svg b/plugins/nfc-status-icon/icons/nfc-status-icon-symbolic.svg
+new file mode 100644
+index 00000000..3c44a4a0
+--- /dev/null
++++ b/plugins/nfc-status-icon/icons/nfc-status-icon-symbolic.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill="#222" fill-rule="evenodd" d="M4.5 3h7A1.5 1.5 0 0 1 13 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 11.5v-7A1.5 1.5 0 0 1 4.5 3zm0 1.5v7h7v-7zM6 6v4h1.1V7.9L8.9 10H10V6H8.9v2.1L7.1 6z"/>
++</svg>
+diff --git a/plugins/nfc-status-icon/icons/nfc-symbolic.svg b/plugins/nfc-status-icon/icons/nfc-symbolic.svg
+new file mode 100644
+index 00000000..3c44a4a0
+--- /dev/null
++++ b/plugins/nfc-status-icon/icons/nfc-symbolic.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill="#222" fill-rule="evenodd" d="M4.5 3h7A1.5 1.5 0 0 1 13 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 11.5v-7A1.5 1.5 0 0 1 4.5 3zm0 1.5v7h7v-7zM6 6v4h1.1V7.9L8.9 10H10V6H8.9v2.1L7.1 6z"/>
++</svg>
+diff --git a/plugins/nfc-status-icon/meson.build b/plugins/nfc-status-icon/meson.build
+new file mode 100644
+index 00000000..024db7db
+--- /dev/null
++++ b/plugins/nfc-status-icon/meson.build
+@@ -0,0 +1,48 @@
++# Plinius: NFC through nfcd (org.sailfishos.nfc.Settings)
++name = 'nfc-status-icon'
++
++nfc_status_icon_resources = gnome.compile_resources(
++  'phosh-plugin-nfc-status-icon-resources',
++  'phosh-plugin-nfc-status-icon.gresources.xml',
++  c_name: 'phosh_plugin_nfc_status_icon',
++)
++
++nfc_status_icon_plugin_sources = files(
++  'nfc-status-icon.c',
++  'phosh-plugin-nfc-status-icon.c',
++)
++
++phosh_nfc_status_icon_plugin = shared_module(
++  'phosh-plugin-nfc-status-icon',
++  nfc_status_icon_plugin_sources,
++  nfc_status_icon_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: plugin_dep,
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: meson.project_source_root() / 'po',
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/nfc-status-icon-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+diff --git a/plugins/nfc-status-icon/nfc-status-icon.c b/plugins/nfc-status-icon/nfc-status-icon.c
+new file mode 100644
+index 00000000..b8c9d26e
+--- /dev/null
++++ b/plugins/nfc-status-icon/nfc-status-icon.c
+@@ -0,0 +1,128 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "nfc-status-icon.h"
++
++#define NFC_SETTINGS_NAME "org.sailfishos.nfc.settings"
++#define NFC_SETTINGS_PATH "/"
++#define NFC_SETTINGS_INTERFACE "org.sailfishos.nfc.Settings"
++
++/**
++ * PhoshNfcStatusIcon:
++ *
++ * An NFC symbol in the top bar while NFC is switched on (nfcd, org.sailfishos.nfc.Settings).
++ */
++struct _PhoshNfcStatusIcon {
++  PhoshStatusIcon parent;
++
++  GDBusProxy     *proxy;
++  GCancellable   *cancel;
++};
++G_DEFINE_TYPE (PhoshNfcStatusIcon, phosh_nfc_status_icon, PHOSH_TYPE_STATUS_ICON);
++
++
++static void
++on_get_enabled (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = NULL;
++  gboolean enabled;
++
++  reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), res, &err);
++  if (!reply) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_debug ("Failed to get NFC state: %s", err->message);
++    return;
++  }
++
++  g_variant_get (reply, "(b)", &enabled);
++  gtk_widget_set_visible (GTK_WIDGET (user_data), enabled);
++}
++
++
++static void
++on_name_owner_changed (PhoshNfcStatusIcon *self)
++{
++  g_autofree char *owner = g_dbus_proxy_get_name_owner (self->proxy);
++
++  if (!owner) {
++    gtk_widget_set_visible (GTK_WIDGET (self), FALSE);
++    return;
++  }
++  g_dbus_proxy_call (self->proxy, "GetEnabled", NULL, G_DBUS_CALL_FLAGS_NONE, -1,
++                     self->cancel, on_get_enabled, self);
++}
++
++
++static void
++on_signal (PhoshNfcStatusIcon *self, const char *sender, const char *signal, GVariant *params)
++{
++  gboolean enabled;
++
++  if (g_strcmp0 (signal, "EnabledChanged") != 0)
++    return;
++  g_variant_get (params, "(b)", &enabled);
++  gtk_widget_set_visible (GTK_WIDGET (self), enabled);
++}
++
++
++static void
++on_proxy_ready (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  PhoshNfcStatusIcon *self;
++  g_autoptr (GError) err = NULL;
++  GDBusProxy *proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
++
++  if (!proxy) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("Failed to reach nfcd: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_NFC_STATUS_ICON (user_data);
++  self->proxy = proxy;
++  g_signal_connect_object (proxy, "g-signal", G_CALLBACK (on_signal), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "notify::g-name-owner", G_CALLBACK (on_name_owner_changed), self,
++                           G_CONNECT_SWAPPED);
++  on_name_owner_changed (self);
++}
++
++
++static void
++phosh_nfc_status_icon_dispose (GObject *object)
++{
++  PhoshNfcStatusIcon *self = PHOSH_NFC_STATUS_ICON (object);
++
++  g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++  g_clear_object (&self->proxy);
++
++  G_OBJECT_CLASS (phosh_nfc_status_icon_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_nfc_status_icon_class_init (PhoshNfcStatusIconClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++
++  object_class->dispose = phosh_nfc_status_icon_dispose;
++}
++
++
++static void
++phosh_nfc_status_icon_init (PhoshNfcStatusIcon *self)
++{
++  gtk_icon_theme_add_resource_path (gtk_icon_theme_get_default (),
++                                    "/mobi/phosh/plugins/nfc-status-icon/icons");
++  phosh_status_icon_set_icon_name (PHOSH_STATUS_ICON (self), "nfc-symbolic");
++  gtk_widget_set_visible (GTK_WIDGET (self), FALSE);
++
++  self->cancel = g_cancellable_new ();
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM, G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
++                            NULL, NFC_SETTINGS_NAME, NFC_SETTINGS_PATH, NFC_SETTINGS_INTERFACE,
++                            self->cancel, on_proxy_ready, self);
++}
+diff --git a/plugins/nfc-status-icon/nfc-status-icon.desktop.in.in b/plugins/nfc-status-icon/nfc-status-icon.desktop.in.in
+new file mode 100644
+index 00000000..4696e346
+--- /dev/null
++++ b/plugins/nfc-status-icon/nfc-status-icon.desktop.in.in
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=NFC Status Icon
++Types=status-icon;
++Comment=Shows when NFC is on
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=nfc-status-icon
+diff --git a/plugins/nfc-status-icon/nfc-status-icon.h b/plugins/nfc-status-icon/nfc-status-icon.h
+new file mode 100644
+index 00000000..ddeb7d70
+--- /dev/null
++++ b/plugins/nfc-status-icon/nfc-status-icon.h
+@@ -0,0 +1,16 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "status-icon.h"
++
++#pragma once
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_NFC_STATUS_ICON phosh_nfc_status_icon_get_type ()
++G_DECLARE_FINAL_TYPE (PhoshNfcStatusIcon, phosh_nfc_status_icon, PHOSH, NFC_STATUS_ICON, PhoshStatusIcon)
++
++G_END_DECLS
+diff --git a/plugins/nfc-status-icon/phosh-plugin-nfc-status-icon.c b/plugins/nfc-status-icon/phosh-plugin-nfc-status-icon.c
+new file mode 100644
+index 00000000..a53341a3
+--- /dev/null
++++ b/plugins/nfc-status-icon/phosh-plugin-nfc-status-icon.c
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Based on the load meter status icon plugin
++ */
++
++#include "phosh-plugin.h"
++#include "nfc-status-icon.h"
++
++char **g_io_phosh_plugin_nfc_status_icon_query (void);
++
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_STATUS_ICON_WIDGET,
++                                  PHOSH_TYPE_NFC_STATUS_ICON,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++
++char **
++g_io_phosh_plugin_nfc_status_icon_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_STATUS_ICON_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+diff --git a/plugins/nfc-status-icon/phosh-plugin-nfc-status-icon.gresources.xml b/plugins/nfc-status-icon/phosh-plugin-nfc-status-icon.gresources.xml
+new file mode 100644
+index 00000000..c52e422a
+--- /dev/null
++++ b/plugins/nfc-status-icon/phosh-plugin-nfc-status-icon.gresources.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/nfc-status-icon/">
++    <file compressed="true">icons/nfc-symbolic.svg</file>
++  </gresource>
++</gresources>

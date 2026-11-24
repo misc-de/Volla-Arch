@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 17:29:11 +0100
+Subject: [PATCH] docked-manager: The OSK stays on when docked
+
+Plinius: the desktop over VNC adds a second screen and a pointer, so
+Phosh docks. Docking turned org.gnome.desktop.a11y.applications
+screen-keyboard-enabled off, and the phone had no OSK any more, not even
+for a PIN prompt on its own panel, until the desktop ended.
+
+The docked mode leaves that setting alone now. phoc keeps the OSK on the
+built-in panel and only unfolds it for fields shown there, so the
+desktop's windows are still typed into with the PC's keyboard.
+---
+ src/docked-manager.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/docked-manager.c b/src/docked-manager.c
+index 35d97dfc..da649a1f 100644
+--- a/src/docked-manager.c
++++ b/src/docked-manager.c
+@@ -304,7 +304,9 @@ phosh_docked_manager_set_enabled (PhoshDockedManager *self, gboolean enable)
+   /* we could bind one boolean property via g_settings_bind but that would spread
+    * mode setup over several places */
+   g_settings_set_boolean (self->phoc_settings, PHOC_KEY_MAXIMIZE, !enable);
+-  g_settings_set_boolean (self->a11y_settings, A11Y_KEY_OSK, !enable);
++  /* Plinius: the OSK stays on when docked. The second screen is the desktop over VNC, the phone
++   * keeps its own panel and needs the OSK there (PIN prompts, apps on the phone); phoc only
++   * unfolds it for fields on the built-in panel and keeps it there */
+   if (self->gtk_settings)
+     g_settings_set_boolean (self->gtk_settings, GTK_KEY_IS_PHONE, !enable);
+   if (self->gtk4_settings)
+-- 
+2.56.0
+

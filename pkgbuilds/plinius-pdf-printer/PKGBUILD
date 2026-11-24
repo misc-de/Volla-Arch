@@ -1,0 +1,24 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-pdf-printer
+pkgver=0.1
+pkgrel=2
+pkgdesc="A printer that saves PDF files, never the default while a real printer exists"
+arch=(any)
+license=(MIT)
+depends=(cups cups-pdf systemd)
+install=plinius-pdf-printer.install
+source=(plinius-pdf-printer
+	plinius-pdf-printer.service
+	plinius-pdf-printer.path
+	LICENSE)
+sha256sums=('7763cf154efccea7d087885d3eb14cf80b82ffe6ff41fac13ba1a5c038ca438b'
+	'1bab10f543578c2294efeb74d2e845824d790e6277b07938acaa790af797d0b0'
+	'7ba67d7275d6df65130a123c4dada8176d00cc3bd53cbff7e2badfb2e1b387ee'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-pdf-printer -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 plinius-pdf-printer.service plinius-pdf-printer.path -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

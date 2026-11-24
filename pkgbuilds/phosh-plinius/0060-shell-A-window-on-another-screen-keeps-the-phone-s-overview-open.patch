@@ -1,0 +1,25 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] shell: A window on another screen keeps the phone's overview
+
+Plinius: the first window folded the overview on every screen count. With a second screen (the
+desktop over VNC) a window started there left the phone with only its wallpaper: no app, no app
+grid. A start from the app grid still folds it, that goes through activity-launched.
+---
+ src/shell.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/shell.c b/src/shell.c
+index 4cae9ff2..35d252ff 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -853,7 +853,9 @@ on_toplevel_added (PhoshShell *self, PhoshToplevel *unused, PhoshToplevelManager
+   g_return_if_fail (PHOSH_IS_TOPLEVEL_MANAGER (toplevel_manager));
+ 
+   priv = phosh_shell_get_instance_private (self);
+-  if (phosh_toplevel_manager_get_num_toplevels (toplevel_manager) == 1)
++  /* With a second screen the window may be on the other one: the phone keeps its overview */
++  if (phosh_toplevel_manager_get_num_toplevels (toplevel_manager) == 1 &&
++      phosh_monitor_manager_get_num_monitors (priv->monitor_manager) <= 1)
+     phosh_home_set_state (PHOSH_HOME (priv->home), PHOSH_HOME_STATE_FOLDED);
+ }
+ 

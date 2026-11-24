@@ -1,0 +1,29 @@
+# Pulled in by user@<uid>.service (drop-in plinius-login-keyring.conf): makes the device key for the
+# user's login keyring before the user's systemd instance and with it the session start.
+[Unit]
+Description=Device key for the login keyring of uid %i
+DefaultDependencies=no
+After=local-fs.target systemd-user-sessions.service
+Before=user@%i.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius-login-keyring/plinius-login-keyring-key %i
+StateDirectory=plinius-login-keyring
+StateDirectoryMode=0755
+# Sandbox: only the state directory is writable, no network, nothing beyond chown
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_CHOWN
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native

@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.plinius.NetLog1
+Exec=/bin/false
+User=root
+SystemdService=plinius-netlogd.service

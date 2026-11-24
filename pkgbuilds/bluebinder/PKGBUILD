@@ -1,0 +1,52 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=bluebinder
+pkgver=1.0.21
+pkgrel=8
+pkgdesc="Proxy from the Android Bluetooth HAL (binder) to BlueZ via vhci"
+arch=(aarch64 x86_64)
+url="https://github.com/mer-hybris/bluebinder"
+license=(GPL-2.0-or-later)
+depends=(bluez libgbinder systemd-libs gawk)
+# getprop for the wait scripts comes from libhybris (device only)
+depends_aarch64=(libhybris)
+makedepends=(bluez-libs)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz"
+        0001-Poll-the-device-state-with-a-timer-and-retry-the-power-on.patch
+        0002-Initialize-the-HAL-before-creating-the-vhci-device.patch
+        0003-Drop-the-stray-Command-Status-after-a-Command-Complete.patch)
+sha256sums=('6579200d325b5da905423ef4960d986f3cb9b54cf53e5218a41917d2f4a4a494'
+            'd74f2182063c17df465524f74915d81961aee195ebc541eef6609ab714009989'
+            '376a41c34a2869ab369b6f043ba9d2fc43e7dd1fb453432201c6012aa0e0faf2'
+            'a92f24e89bf8844f26116ffd4e94e8d2eb0597c6ad5535f94960ad4096aae0c8')
+
+prepare() {
+	cd "$pkgname-$pkgver"
+	patch -Np1 -i ../0001-Poll-the-device-state-with-a-timer-and-retry-the-power-on.patch
+	# At boot the HAL needs up to 10 s: without this the controller never reaches bluetoothd
+	patch -Np1 -i ../0002-Initialize-the-HAL-before-creating-the-vhci-device.patch
+	# The controller answers failing commands twice; the stray event can abort the kernel's setup
+	patch -Np1 -i ../0003-Drop-the-stray-Command-Status-after-a-Command-Complete.patch
+}
+
+build() {
+	cd "$pkgname-$pkgver"
+	make
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make DESTDIR="$pkgdir" install
+	# Arch: /usr/sbin is a symlink to /usr/bin
+	mv "$pkgdir/usr/sbin" "$pkgdir/usr/bin"
+	# Paths as upstream; the unit refers to them
+	install -Dm644 bluebinder.service -t "$pkgdir/usr/lib/systemd/system"
+	# The sandbox allows only AF_BLUETOOTH, but sd_notify() needs a unix socket: without it
+	# systemd never sees READY=1 and restarts bluebinder after TimeoutStartSec
+	sed -i 's/^RestrictAddressFamilies=AF_BLUETOOTH$/RestrictAddressFamilies=AF_BLUETOOTH AF_UNIX/' \
+		"$pkgdir/usr/lib/systemd/system/bluebinder.service"
+	# The power-on retry of patch 0001 (HCIDEVUP) needs CAP_NET_ADMIN
+	sed -i 's/^CapabilityBoundingSet=CAP_DAC_READ_SEARCH$/& CAP_NET_ADMIN/' \
+		"$pkgdir/usr/lib/systemd/system/bluebinder.service"
+	install -Dm755 bluebinder_post.sh bluebinder_wait.sh -t "$pkgdir/usr/bin/droid"
+}

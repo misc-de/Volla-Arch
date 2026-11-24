@@ -1,0 +1,83 @@
+From e314bda205967edb1ed6f63c97bad2fc3518054c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 20:05:43 +0100
+Subject: [PATCH] shared: haptic feedback with FF_CONSTANT where FF_RUMBLE is
+ refused
+
+The Awinic "aw-haptic-hv" driver of the Volla phones lists FF_RUMBLE but refuses it on
+upload (ERANGE), so unl0kr did not vibrate. Fall back to a 20 ms FF_CONSTANT tap at full
+gain, which the driver plays.
+---
+ shared/force_feedback.c | 37 ++++++++++++++++++++++++++++++-------
+ 1 file changed, 30 insertions(+), 7 deletions(-)
+
+diff --git a/shared/force_feedback.c b/shared/force_feedback.c
+index 612e46d..6f86aa8 100644
+--- a/shared/force_feedback.c
++++ b/shared/force_feedback.c
+@@ -10,11 +10,15 @@
+ #include <sys/ioctl.h>
+ #include <fcntl.h>
+ #include <libudev.h>
++#include <stdbool.h>
+ #include <stdint.h>
+ #include <unistd.h>
+ 
+ #define bit_is_set(array, bit)  ((array[bit / 8] >> bit % 8) & 0x01)
+ 
++/* Length in ms of a key press with the FF_CONSTANT fallback */
++#define CONSTANT_TAP_MS 20
++
+ /**
+  * Static variables
+  */
+@@ -57,12 +61,9 @@ void bbx_force_feedback_connect(struct udev_device* device) {
+         return;
+     }
+ 
+-    if (!bit_is_set(features, FF_RUMBLE)) {
+-        bbx_log(BBX_LOG_LEVEL_VERBOSE, "%s does not support FF_RUMBLE", node);
+-        close(fd_event);
+-        return;
+-    }
+-
++    /* Some vendor drivers list FF_RUMBLE but refuse it on upload, among them the Awinic
++       "aw-haptic-hv" of the Volla phones (ERANGE): they only play FF_CONSTANT. So rumble is
++       tried first and the constant effect is the fallback. */
+     struct ff_effect effect = {
+         .type = FF_RUMBLE,
+ 	.id = -1,
+@@ -75,7 +76,29 @@ void bbx_force_feedback_connect(struct udev_device* device) {
+ 	.u.rumble.weak_magnitude = 0xC000
+     };
+ 
+-    if (ioctl(fd_event, EVIOCSFF, &effect) == -1) {
++    bool uploaded = false;
++    if (bit_is_set(features, FF_RUMBLE)) {
++        uploaded = ioctl(fd_event, EVIOCSFF, &effect) != -1;
++        if (!uploaded)
++            bbx_log(BBX_LOG_LEVEL_VERBOSE, "%s refuses FF_RUMBLE", node);
++    }
++
++    if (!uploaded && bit_is_set(features, FF_CONSTANT)) {
++        /* A short tap at full strength: the linear motors of phones need a few cycles at full
++           drive to be felt at all. Drivers like the Awinic one ignore the level and take the
++           strength from FF_GAIN, which is set to the maximum below. */
++        effect = (struct ff_effect) {
++            .type = FF_CONSTANT,
++            .id = -1,
++            .replay.length = CONSTANT_TAP_MS,
++            .u.constant.level = 0x7FFF
++        };
++        uploaded = ioctl(fd_event, EVIOCSFF, &effect) != -1;
++        if (uploaded)
++            bbx_log(BBX_LOG_LEVEL_VERBOSE, "%s: using FF_CONSTANT", node);
++    }
++
++    if (!uploaded) {
+         bbx_log(BBX_LOG_LEVEL_ERROR, "Can't upload the effect");
+         close(fd_event);
+         return;
+-- 
+2.56.0
+

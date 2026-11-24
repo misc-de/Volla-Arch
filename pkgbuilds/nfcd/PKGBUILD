@@ -1,0 +1,37 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=nfcd
+pkgver=1.2.8
+pkgrel=2
+pkgdesc="NFC daemon from Sailfish OS; hardware access via plugins (nfcd-binder-plugin on Halium)"
+arch=(aarch64 x86_64)
+url="https://github.com/sailfishos/nfcd"
+license=(BSD-3-Clause)
+depends=(glib2 libglibutil libnfcdef libdbusaccess file)
+makedepends=(glib2-devel)
+# As upstream, not enabled automatically; the device package enables the service
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz"
+	nfcd.sysusers
+	nfcd.tmpfiles)
+sha256sums=('6f442206f327d1e443cae9df03d7960a4eac434443970219eab6ffcb3cf86162'
+	'5909971e94323a6220f74d7d4abb55c2d384f07b01fe076ece1b52dfe20d75a2'
+	'c288fd0094b6294c1656deaf3247f4af68626acb350c305469d84d637c00e485')
+
+build() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib KEEP_SYMBOLS=1 release pkgconfig
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib UNITDIR=/usr/lib/systemd/system DESTDIR="$pkgdir" install
+	# Arch: /usr/sbin is a symlink to /usr/bin, D-Bus policies belong in /usr/share
+	mv "$pkgdir/usr/sbin/nfcd" "$pkgdir/usr/bin/"
+	rmdir "$pkgdir/usr/sbin"
+	install -d "$pkgdir/usr/share/dbus-1"
+	mv "$pkgdir/etc/dbus-1/system.d" "$pkgdir/usr/share/dbus-1/"
+	rm -r "$pkgdir/etc"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm644 ../nfcd.sysusers "$pkgdir/usr/lib/sysusers.d/nfcd.conf"
+	install -Dm644 ../nfcd.tmpfiles "$pkgdir/usr/lib/tmpfiles.d/nfcd.conf"
+}

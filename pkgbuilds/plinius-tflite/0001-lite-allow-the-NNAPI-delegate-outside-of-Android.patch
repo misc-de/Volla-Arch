@@ -1,0 +1,22 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] lite: allow the NNAPI delegate outside of Android
+
+On Linux the delegate can still run on an NNAPI support library that the
+caller loads itself (here: the vendor library of an Android phone, through
+libhybris). nnapi_implementation.cc already has a non-Android branch.
+---
+--- a/tensorflow/lite/CMakeLists.txt
++++ b/tensorflow/lite/CMakeLists.txt
+@@ -122,10 +122,9 @@
+ if("${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
+   set(_TFLITE_ENABLE_RUY ON)
+ endif()
++# The NNAPI delegate also works outside of Android when the caller hands it an NNAPI support
++# library (StatefulNnApiDelegate with NnApiSLDriverImplFL5), or a libneuralnetworks.so exists.
+ set(_TFLITE_ENABLE_NNAPI "${TFLITE_ENABLE_NNAPI}")
+-if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
+-  set(_TFLITE_ENABLE_NNAPI OFF)
+-endif()
+ set(_TFLITE_ENABLE_MMAP "${TFLITE_ENABLE_MMAP}")
+ if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+   # See https://github.com/tensorflow/tensorflow/blob/\

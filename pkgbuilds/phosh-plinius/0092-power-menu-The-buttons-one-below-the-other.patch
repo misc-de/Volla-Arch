@@ -1,0 +1,156 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 12:00:00 +0100
+Subject: [PATCH] power-menu: The buttons one below the other
+
+Plinius: the power menu (long press on the power button) lists its
+buttons in one column instead of two: Power Off (Suspend on the lock
+screen), Restart, Restart Phosh, Lock, Screenshot, Emergency and, with a
+second account, Log Out. Icon and label start at the left edge, as in a
+list.
+---
+ src/stylesheet/common.css |  2 +-
+ src/ui/power-menu.ui      | 33 ++++++++++++++++-----------------
+ 2 files changed, 17 insertions(+), 18 deletions(-)
+
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index e0d831bf..62e7035a 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -1333,7 +1333,7 @@ phosh-power-menu .phosh-system-modal-dialog {
+   margin: 24px;
+ }
+ 
+-/* Plinius: icon and label side by side, rows instead of squares (room for Log Out) */
++/* Plinius: icon and label side by side, one button below the other */
+ phosh-power-menu grid button {
+   min-height: 52px;
+   min-width: 64px;
+diff --git a/src/ui/power-menu.ui b/src/ui/power-menu.ui
+index c993f361..101cca62 100644
+--- a/src/ui/power-menu.ui
++++ b/src/ui/power-menu.ui
+@@ -56,7 +56,7 @@
+                         <property name="margin-end">12</property>
+                         <property name="margin-bottom">8</property>
+                         <property name="spacing">10</property>
+-                        <property name="halign">center</property>
++                        <property name="halign">start</property>
+                         <property name="hexpand">1</property>
+                         <property name="orientation">horizontal</property>
+                         <child>
+@@ -96,7 +96,7 @@
+                         <property name="margin-end">12</property>
+                         <property name="margin-bottom">8</property>
+                         <property name="spacing">10</property>
+-                        <property name="halign">center</property>
++                        <property name="halign">start</property>
+                         <property name="hexpand">1</property>
+                         <property name="orientation">horizontal</property>
+                         <child>
+@@ -142,7 +142,7 @@
+                     <property name="margin-end">12</property>
+                     <property name="margin-bottom">8</property>
+                     <property name="spacing">10</property>
+-                    <property name="halign">center</property>
++                    <property name="halign">start</property>
+                     <property name="hexpand">1</property>
+                     <property name="orientation">horizontal</property>
+                     <child>
+@@ -183,7 +183,7 @@
+                     <property name="margin-end">12</property>
+                     <property name="margin-bottom">8</property>
+                     <property name="spacing">10</property>
+-                    <property name="halign">center</property>
++                    <property name="halign">start</property>
+                     <property name="hexpand">1</property>
+                     <property name="orientation">horizontal</property>
+                     <child>
+@@ -206,8 +206,8 @@
+                 </style>
+               </object>
+               <packing>
+-                <property name="left-attach">1</property>
+-                <property name="top-attach">1</property>
++                <property name="left-attach">0</property>
++                <property name="top-attach">3</property>
+               </packing>
+             </child>
+             <child>
+@@ -224,7 +224,7 @@
+                     <property name="margin-end">12</property>
+                     <property name="margin-bottom">8</property>
+                     <property name="spacing">10</property>
+-                    <property name="halign">center</property>
++                    <property name="halign">start</property>
+                     <property name="hexpand">1</property>
+                     <property name="orientation">horizontal</property>
+                     <child>
+@@ -248,7 +248,7 @@
+               </object>
+               <packing>
+                 <property name="left-attach">0</property>
+-                <property name="top-attach">2</property>
++                <property name="top-attach">4</property>
+               </packing>
+             </child>
+             <child>
+@@ -265,7 +265,7 @@
+                     <property name="margin-end">12</property>
+                     <property name="margin-bottom">8</property>
+                     <property name="spacing">10</property>
+-                    <property name="halign">center</property>
++                    <property name="halign">start</property>
+                     <property name="hexpand">1</property>
+                     <property name="orientation">horizontal</property>
+                     <child>
+@@ -288,8 +288,8 @@
+                 </style>
+               </object>
+               <packing>
+-                <property name="left-attach">1</property>
+-                <property name="top-attach">0</property>
++                <property name="left-attach">0</property>
++                <property name="top-attach">2</property>
+               </packing>
+             </child>
+             <child>
+@@ -306,7 +306,7 @@
+                     <property name="margin-end">12</property>
+                     <property name="margin-bottom">8</property>
+                     <property name="spacing">10</property>
+-                    <property name="halign">center</property>
++                    <property name="halign">start</property>
+                     <property name="hexpand">1</property>
+                     <property name="orientation">horizontal</property>
+                     <child>
+@@ -330,8 +330,8 @@
+                 </style>
+               </object>
+               <packing>
+-                <property name="left-attach">1</property>
+-                <property name="top-attach">2</property>
++                <property name="left-attach">0</property>
++                <property name="top-attach">5</property>
+               </packing>
+             </child>
+             <child>
+@@ -348,7 +348,7 @@
+                     <property name="margin-end">12</property>
+                     <property name="margin-bottom">8</property>
+                     <property name="spacing">10</property>
+-                    <property name="halign">center</property>
++                    <property name="halign">start</property>
+                     <property name="hexpand">1</property>
+                     <property name="orientation">horizontal</property>
+                     <child>
+@@ -372,8 +372,7 @@
+               </object>
+               <packing>
+                 <property name="left-attach">0</property>
+-                <property name="top-attach">3</property>
+-                <property name="width">2</property>
++                <property name="top-attach">6</property>
+               </packing>
+             </child>
+           </object>

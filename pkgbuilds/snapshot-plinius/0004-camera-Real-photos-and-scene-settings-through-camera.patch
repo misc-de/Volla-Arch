@@ -1,0 +1,1064 @@
+From be7daf1a1531db3a061ed8d4453cbced0452b1b3 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:31:50 +0100
+Subject: [PATCH] camera: Real photos and scene settings through
+ camera-hal-bridge
+
+On phones whose cameras come from an Android camera HAL, camera-hal-bridge
+offers them as PipeWire nodes (hal_camera_<id>) whose stream carries
+preview frames of 1280x720, while the sensors give up to 16 megapixels.
+For these cameras the shutter asks the bridge for a real photo
+(org.plinius.CameraBridge.TakePicture): the HAL shoots it through its
+capture pipeline and the bridge writes the JPEG to the picture's path.
+Without the bridge, or when it fails, the preview frame is stored as
+before.
+
+A scene button next to the flash button picks the HAL's scene mode (Auto,
+HDR, Night, Action, Sunset, Party) and white balance, kept in the settings
+and sent to the bridge with each camera picked. It shows for the bridge's
+cameras only.
+---
+ data/org.gnome.Snapshot.gschema.xml.in        |  25 ++++
+ data/resources/icons/camera-hdr-symbolic.svg  |   6 +
+ .../resources/icons/camera-scene-symbolic.svg |   5 +
+ data/resources/resources.gresource.xml.in     |   2 +
+ data/resources/ui/camera.ui                   |  97 ++++++++++++++
+ po/de.po                                      |  52 ++++++++
+ po/es.po                                      |  52 ++++++++
+ po/fr.po                                      |  52 ++++++++
+ po/it.po                                      |  52 ++++++++
+ po/nl.po                                      |  52 ++++++++
+ po/pl.po                                      |  51 ++++++++
+ po/pt.po                                      |  52 ++++++++
+ po/ru.po                                      |  52 ++++++++
+ src/camera_bridge.rs                          |  88 +++++++++++++
+ src/main.rs                                   |   1 +
+ src/widgets/camera.rs                         | 123 ++++++++++++++++--
+ 16 files changed, 751 insertions(+), 11 deletions(-)
+ create mode 100644 data/resources/icons/camera-hdr-symbolic.svg
+ create mode 100644 data/resources/icons/camera-scene-symbolic.svg
+ create mode 100644 src/camera_bridge.rs
+
+diff --git a/data/org.gnome.Snapshot.gschema.xml.in b/data/org.gnome.Snapshot.gschema.xml.in
+index 92b739b..75969b0 100644
+--- a/data/org.gnome.Snapshot.gschema.xml.in
++++ b/data/org.gnome.Snapshot.gschema.xml.in
+@@ -13,6 +13,21 @@
+     <value nick="light" value="1" />
+     <value nick="flash" value="2" />
+   </enum>
++  <enum id="org.gnome.Snapshot.SceneMode">
++    <value nick="auto" value="0" />
++    <value nick="action" value="1" />
++    <value nick="night" value="2" />
++    <value nick="party" value="3" />
++    <value nick="sunset" value="4" />
++    <value nick="hdr" value="5" />
++  </enum>
++  <enum id="org.gnome.Snapshot.WhiteBalance">
++    <value nick="auto" value="0" />
++    <value nick="daylight" value="1" />
++    <value nick="cloudy-daylight" value="2" />
++    <value nick="fluorescent" value="3" />
++    <value nick="incandescent" value="4" />
++  </enum>
+   <schema path="/org/gnome/Snapshot/" id="@app-id@" gettext-domain="@gettext-package@">
+     <key name="window-width" type="i">
+       <default>800</default>
+@@ -74,6 +89,16 @@
+       <summary>Lamp brightness</summary>
+       <description>The brightness of the flash LED as a lamp, in the LED's levels; 0 for the brightest</description>
+     </key>
++    <key name="scene-mode" enum="org.gnome.Snapshot.SceneMode">
++      <default>"auto"</default>
++      <summary>Scene mode</summary>
++      <description>The camera HAL's scene mode for pictures, for cameras of camera-hal-bridge</description>
++    </key>
++    <key name="white-balance" enum="org.gnome.Snapshot.WhiteBalance">
++      <default>"auto"</default>
++      <summary>White balance</summary>
++      <description>The camera HAL's white balance, for cameras of camera-hal-bridge</description>
++    </key>
+     <key name="last-camera-id" type="s">
+       <default>""</default>
+       <summary>Last Camera Used ID</summary>
+diff --git a/data/resources/icons/camera-hdr-symbolic.svg b/data/resources/icons/camera-hdr-symbolic.svg
+new file mode 100644
+index 0000000..582ed11
+--- /dev/null
++++ b/data/resources/icons/camera-hdr-symbolic.svg
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path d="M 0.5 4.5 L 2 4.5 L 2 7.25 L 3.5 7.25 L 3.5 4.5 L 5 4.5 L 5 11.5 L 3.5 11.5 L 3.5 8.75 L 2 8.75 L 2 11.5 L 0.5 11.5 Z"/>
++  <path fill-rule="evenodd" d="M 6 4.5 L 7.5 4.5 A 3.5 3.5 0 0 1 7.5 11.5 L 6 11.5 Z M 7.5 6 L 7.5 10 A 2 2 0 0 0 7.5 6 Z"/>
++  <path fill-rule="evenodd" d="M 11.5 4.5 L 13.75 4.5 A 1.9 1.9 0 0 1 13.75 8.3 L 13 8.3 L 13 11.5 L 11.5 11.5 Z M 13 5.9 L 13 6.9 L 13.75 6.9 A 0.5 0.5 0 0 0 13.75 5.9 Z M 13.3 8.3 L 14.9 8.3 L 15.8 11.5 L 14.2 11.5 Z"/>
++</svg>
+diff --git a/data/resources/icons/camera-scene-symbolic.svg b/data/resources/icons/camera-scene-symbolic.svg
+new file mode 100644
+index 0000000..91dbff1
+--- /dev/null
++++ b/data/resources/icons/camera-scene-symbolic.svg
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path d="M 0.5 14 L 5.5 6 L 8.6 10.6 L 10.6 8 L 15.5 14 Z"/>
++  <circle cx="11.5" cy="3.5" r="2"/>
++</svg>
+diff --git a/data/resources/resources.gresource.xml.in b/data/resources/resources.gresource.xml.in
+index a81c9b4..556393e 100644
+--- a/data/resources/resources.gresource.xml.in
++++ b/data/resources/resources.gresource.xml.in
+@@ -19,6 +19,8 @@
+     <file preprocess="xml-stripblanks" alias="camera-flash-symbolic.svg">icons/camera-flash-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias="camera-flash-off-symbolic.svg">icons/camera-flash-off-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias="camera-light-symbolic.svg">icons/camera-light-symbolic.svg</file>
++    <file preprocess="xml-stripblanks" alias="camera-scene-symbolic.svg">icons/camera-scene-symbolic.svg</file>
++    <file preprocess="xml-stripblanks" alias="camera-hdr-symbolic.svg">icons/camera-hdr-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias ="external-link-symbolic.svg">icons/external-link-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias ="pick-camera-alt2-symbolic.svg">icons/pick-camera-alt2-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias ="qr-code-symbolic.svg">icons/qr-code-symbolic.svg</file>
+diff --git a/data/resources/ui/camera.ui b/data/resources/ui/camera.ui
+index 0e6db2d..bdb637a 100644
+--- a/data/resources/ui/camera.ui
++++ b/data/resources/ui/camera.ui
+@@ -214,6 +214,20 @@
+                                 </style>
+                               </object>
+                             </child>
++                            <child type="scene-button">
++                              <object class="GtkMenuButton" id="scene_button">
++                                <property name="icon-name">camera-scene-symbolic</property>
++                                <property name="valign">center</property>
++                                <property name="halign">center</property>
++                                <property name="visible">False</property>
++                                <property name="tooltip-text" translatable="yes">Scene</property>
++                                <property name="menu-model">scene_menu</property>
++                                <style>
++                                  <class name="circular" />
++                                  <class name="flat" />
++                                </style>
++                              </object>
++                            </child>
+                             <child type="primary-menu">
+                               <object class="GtkMenuButton">
+                                 <property name="icon-name">open-menu-symbolic</property>
+@@ -343,6 +357,11 @@
+                                                 <property name="id">flash-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">scene-button</property>
++                                              </object>
++                                            </child>
+                                             <child>
+                                               <object class="AdwLayoutSlot">
+                                                 <property name="id">countdown-button</property>
+@@ -413,6 +432,11 @@
+                                                 <property name="id">flash-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">scene-button</property>
++                                              </object>
++                                            </child>
+                                             <child>
+                                               <object class="AdwLayoutSlot">
+                                                 <property name="id">countdown-button</property>
+@@ -524,6 +548,11 @@
+                                                 <property name="id">flash-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">scene-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                         <child type="center">
+@@ -577,6 +606,11 @@
+                                                 <property name="id">flash-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">scene-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                         <child type="center">
+@@ -689,6 +723,69 @@
+       </object>
+     </child>
+   </template>
++  <menu id="scene_menu">
++    <section>
++      <attribute name="label" translatable="yes">Scene</attribute>
++      <item>
++        <attribute name="action">camera.scene-mode</attribute>
++        <attribute name="label" translatable="yes" comments="TRANSLATORS the camera picks exposure and colors itself">Auto</attribute>
++        <attribute name="target">auto</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.scene-mode</attribute>
++        <attribute name="label" translatable="yes" comments="TRANSLATORS high dynamic range">HDR</attribute>
++        <attribute name="target">hdr</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.scene-mode</attribute>
++        <attribute name="label" translatable="yes">Night</attribute>
++        <attribute name="target">night</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.scene-mode</attribute>
++        <attribute name="label" translatable="yes" comments="TRANSLATORS short exposure for moving subjects">Action</attribute>
++        <attribute name="target">action</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.scene-mode</attribute>
++        <attribute name="label" translatable="yes">Sunset</attribute>
++        <attribute name="target">sunset</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.scene-mode</attribute>
++        <attribute name="label" translatable="yes">Party</attribute>
++        <attribute name="target">party</attribute>
++      </item>
++    </section>
++    <section>
++      <attribute name="label" translatable="yes">White Balance</attribute>
++      <item>
++        <attribute name="action">camera.white-balance</attribute>
++        <attribute name="label" translatable="yes" comments="TRANSLATORS the camera picks exposure and colors itself">Auto</attribute>
++        <attribute name="target">auto</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.white-balance</attribute>
++        <attribute name="label" translatable="yes">Daylight</attribute>
++        <attribute name="target">daylight</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.white-balance</attribute>
++        <attribute name="label" translatable="yes">Cloudy</attribute>
++        <attribute name="target">cloudy-daylight</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.white-balance</attribute>
++        <attribute name="label" translatable="yes">Fluorescent</attribute>
++        <attribute name="target">fluorescent</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.white-balance</attribute>
++        <attribute name="label" translatable="yes" comments="TRANSLATORS light bulbs">Incandescent</attribute>
++        <attribute name="target">incandescent</attribute>
++      </item>
++    </section>
++  </menu>
+   <menu id="countdown_menu">
+     <section>
+       <attribute name="label" translatable="yes">Countdown</attribute>
+diff --git a/po/de.po b/po/de.po
+index f459dea..c4d1f4b 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -477,6 +477,58 @@ msgstr "Licht"
+ msgid "Brightness"
+ msgstr "Helligkeit"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Szene"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Automatisch"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Nacht"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Action"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Sonnenuntergang"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Party"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Weißabgleich"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Tageslicht"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Bewölkt"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Leuchtstoff"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Glühlampe"
++
+ #~ msgid "Video format"
+ #~ msgstr "Videoformat"
+ 
+diff --git a/po/es.po b/po/es.po
+index 8f65443..5aca75c 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -477,6 +477,58 @@ msgstr "Luz"
+ msgid "Brightness"
+ msgstr "Brillo"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Escena"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Automático"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Noche"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Acción"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Atardecer"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Fiesta"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Balance de blancos"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Luz de día"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Nublado"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Fluorescente"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Incandescente"
++
+ #~ msgid "Video format"
+ #~ msgstr "Formato de vídeo"
+ 
+diff --git a/po/fr.po b/po/fr.po
+index 82c0824..1024530 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -486,6 +486,58 @@ msgstr "Lampe"
+ msgid "Brightness"
+ msgstr "Luminosité"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Scène"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Automatique"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Nuit"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Action"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Coucher de soleil"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Fête"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Balance des blancs"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Lumière du jour"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Nuageux"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Fluorescent"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Incandescent"
++
+ #~ msgid "Video format"
+ #~ msgstr "Format vidéo"
+ 
+diff --git a/po/it.po b/po/it.po
+index 59ed2b4..1cd5174 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -479,6 +479,58 @@ msgstr "Luce"
+ msgid "Brightness"
+ msgstr "Luminosità"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Scena"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Automatico"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Notte"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Azione"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Tramonto"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Festa"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Bilanciamento del bianco"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Luce diurna"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Nuvoloso"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Fluorescente"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Incandescenza"
++
+ #~ msgid "Video format"
+ #~ msgstr "Formato video"
+ 
+diff --git a/po/nl.po b/po/nl.po
+index eb60425..2fac131 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -481,6 +481,58 @@ msgstr "Lamp"
+ msgid "Brightness"
+ msgstr "Helderheid"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Scène"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Automatisch"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Nacht"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Actie"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Zonsondergang"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Feest"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Witbalans"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Daglicht"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Bewolkt"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Tl-licht"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Gloeilamp"
++
+ #~ msgid "Video format"
+ #~ msgstr "Videoformaat"
+ 
+diff --git a/po/pl.po b/po/pl.po
+index 2499d93..29b3a3a 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -483,3 +483,54 @@ msgstr "Latarka"
+ msgid "Brightness"
+ msgstr "Jasność"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Scena"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Automatycznie"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Noc"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Ruch"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Zachód słońca"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Impreza"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Balans bieli"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Światło dzienne"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Pochmurno"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Świetlówka"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Żarówka"
+diff --git a/po/pt.po b/po/pt.po
+index 12eb19b..24f0344 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -478,6 +478,58 @@ msgstr "Luz"
+ msgid "Brightness"
+ msgstr "Brilho"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Cena"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Automático"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Noite"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Ação"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Pôr do sol"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Festa"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Balanço de brancos"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Luz do dia"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Nublado"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Fluorescente"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Incandescente"
++
+ #~ msgid "Video format"
+ #~ msgstr "Formato do vídeo"
+ 
+diff --git a/po/ru.po b/po/ru.po
+index 196d5ed..cb3acb8 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -475,6 +475,58 @@ msgstr "Фонарик"
+ msgid "Brightness"
+ msgstr "Яркость"
+ 
++#: data/resources/ui/camera.ui
++msgid "Scene"
++msgstr "Сцена"
++
++#. TRANSLATORS the camera picks exposure and colors itself
++#: data/resources/ui/camera.ui
++msgid "Auto"
++msgstr "Авто"
++
++#. TRANSLATORS high dynamic range
++#: data/resources/ui/camera.ui
++msgid "HDR"
++msgstr "HDR"
++
++#: data/resources/ui/camera.ui
++msgid "Night"
++msgstr "Ночь"
++
++#. TRANSLATORS short exposure for moving subjects
++#: data/resources/ui/camera.ui
++msgid "Action"
++msgstr "Движение"
++
++#: data/resources/ui/camera.ui
++msgid "Sunset"
++msgstr "Закат"
++
++#: data/resources/ui/camera.ui
++msgid "Party"
++msgstr "Вечеринка"
++
++#: data/resources/ui/camera.ui
++msgid "White Balance"
++msgstr "Баланс белого"
++
++#: data/resources/ui/camera.ui
++msgid "Daylight"
++msgstr "Дневной свет"
++
++#: data/resources/ui/camera.ui
++msgid "Cloudy"
++msgstr "Облачно"
++
++#: data/resources/ui/camera.ui
++msgid "Fluorescent"
++msgstr "Лампа дневного света"
++
++#. TRANSLATORS light bulbs
++#: data/resources/ui/camera.ui
++msgid "Incandescent"
++msgstr "Лампа накаливания"
++
+ #~ msgid "Video format"
+ #~ msgstr "Формат видео"
+ 
+diff --git a/src/camera_bridge.rs b/src/camera_bridge.rs
+new file mode 100644
+index 0000000..c7c3239
+--- /dev/null
++++ b/src/camera_bridge.rs
+@@ -0,0 +1,88 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Real photos and scene settings for cameras of camera-hal-bridge.
++//!
++//! On phones whose cameras come from an Android camera HAL, camera-hal-bridge
++//! offers them as PipeWire nodes named `hal_camera_<id>`. Their stream carries
++//! preview frames, far smaller than what the sensor gives. The bridge takes a
++//! real photo through the HAL on `org.plinius.CameraBridge.TakePicture` and
++//! writes it where asked; it also sets the HAL's scene mode and white balance
++//! for all its cameras.
++use gtk::{gio, glib, prelude::*};
++
++const BRIDGE: &str = "org.plinius.CameraBridge";
++const BRIDGE_PATH: &str = "/org/plinius/CameraBridge";
++const NODE_PREFIX: &str = "hal_camera_";
++/// The HAL needs about 1.4 s for the largest photos
++const PICTURE_TIMEOUT_MS: i32 = 15000;
++const CALL_TIMEOUT_MS: i32 = 2000;
++
++#[derive(Debug)]
++pub struct CameraBridge {
++    bus: gio::DBusConnection,
++}
++
++impl CameraBridge {
++    /// Connects to the session bus; `None` without one. Whether the bridge
++    /// runs shows only once it is called.
++    pub fn new() -> Option<Self> {
++        let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
++            .inspect_err(|err| log::warn!("No session bus for the camera bridge: {err}"))
++            .ok()?;
++        Some(Self { bus })
++    }
++
++    /// The bridge's node name of `camera`, if it is one of its cameras
++    pub fn node(camera: &aperture::Camera) -> Option<String> {
++        camera
++            .properties()
++            .get("node.name")
++            .and_then(|value| value.get::<String>().ok())
++            .filter(|name| name.starts_with(NODE_PREFIX))
++    }
++
++    /// Takes a photo with the streaming camera `node` as a JPEG at `path`;
++    /// returns once the file is written
++    pub async fn take_picture(
++        &self,
++        node: &str,
++        path: &std::path::Path,
++    ) -> Result<(), glib::Error> {
++        let path = path.to_str().ok_or_else(|| {
++            glib::Error::new(gio::IOErrorEnum::InvalidFilename, "path is not UTF-8")
++        })?;
++        self.bus
++            .call_future(
++                Some(BRIDGE),
++                BRIDGE_PATH,
++                BRIDGE,
++                "TakePicture",
++                Some(&(node, path).to_variant()),
++                None,
++                gio::DBusCallFlags::NONE,
++                PICTURE_TIMEOUT_MS,
++            )
++            .await
++            .map(|_| ())
++    }
++
++    /// Sets a bridge setting (`SceneMode`, `WhiteBalance`) without waiting
++    pub fn set(&self, property: &'static str, value: &str) {
++        let value = value.to_owned();
++        self.bus.call(
++            Some(BRIDGE),
++            BRIDGE_PATH,
++            "org.freedesktop.DBus.Properties",
++            "Set",
++            Some(&(BRIDGE, property, value.to_variant()).to_variant()),
++            None,
++            gio::DBusCallFlags::NO_AUTO_START,
++            CALL_TIMEOUT_MS,
++            gio::Cancellable::NONE,
++            move |res| {
++                if let Err(err) = res {
++                    log::warn!("Could not set the camera bridge's {property} to {value}: {err}");
++                }
++            },
++        );
++    }
++}
+diff --git a/src/main.rs b/src/main.rs
+index 56e97c4..81e1d01 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -2,6 +2,7 @@
+ #[rustfmt::skip]
+ mod config;
+ mod application;
++mod camera_bridge;
+ mod enums;
+ mod torch;
+ mod utils;
+diff --git a/src/widgets/camera.rs b/src/widgets/camera.rs
+index 5fd9e6f..dd9e250 100644
+--- a/src/widgets/camera.rs
++++ b/src/widgets/camera.rs
+@@ -10,13 +10,14 @@ use gtk::CompositeTemplate;
+ use gtk::{gio, glib};
+ 
+ use super::CameraControls;
++use crate::camera_bridge::CameraBridge;
+ use crate::enums::ControlsLayout;
+ use crate::torch::Torch;
+ use crate::{config, utils};
+ 
+ /// How long the flash lights the scene before the picture is taken: the
+-/// picture comes from the running preview, whose exposure needs a moment to
+-/// follow the light.
++/// camera's exposure needs a moment to follow the light, whether the picture
++/// comes from the running preview or from camera-hal-bridge.
+ const FLASH_LEAD: std::time::Duration = std::time::Duration::from_millis(800);
+ 
+ mod imp {
+@@ -55,6 +56,10 @@ mod imp {
+         pub torch: OnceCell<Torch>,
+         /// The flash is lit for a picture being taken
+         pub flashing: Cell<bool>,
++        /// camera-hal-bridge, for real photos and scene settings
++        pub bridge: OnceCell<CameraBridge>,
++        /// Where stored pictures show up
++        pub gallery: glib::WeakRef<crate::Gallery>,
+ 
+         #[template_child]
+         pub single_landscape_bp: TemplateChild<adw::Breakpoint>,
+@@ -91,6 +96,8 @@ mod imp {
+         pub light_level_box: TemplateChild<gtk::Box>,
+         #[template_child]
+         pub light_level_scale: TemplateChild<gtk::Scale>,
++        #[template_child]
++        pub scene_button: TemplateChild<gtk::MenuButton>,
+ 
+         #[template_child]
+         pub bottom_sheet: TemplateChild<adw::BottomSheet>,
+@@ -348,6 +355,7 @@ mod imp {
+             ));
+ 
+             obj.setup_flash();
++            obj.setup_bridge();
+         }
+     }
+ 
+@@ -476,6 +484,31 @@ impl Camera {
+             glib::timeout_future(FLASH_LEAD).await;
+         }
+ 
++        // A camera of camera-hal-bridge takes a real photo through the HAL;
++        // its stream only has the small preview frames
++        let node = imp.viewfinder.camera().as_ref().and_then(CameraBridge::node);
++        if let (Some(bridge), Some(node)) = (imp.bridge.get(), node) {
++            imp.flash_bin.flash();
++            if imp.settings().boolean("play-shutter-sound") {
++                self.play_shutter_sound();
++            }
++            match bridge.take_picture(&node, &path).await {
++                Ok(()) => {
++                    self.picture_stored(Some(&gio::File::for_path(&path)));
++                    return Ok(());
++                }
++                Err(err) => {
++                    log::warn!("No photo from the camera bridge, storing a preview frame: {err}");
++                }
++            }
++            // The preview frame below is the fallback, without a second shutter
++            if let Err(err) = imp.viewfinder.take_picture(path) {
++                self.end_flash();
++                return Err(err.into());
++            }
++            return Ok(());
++        }
++
+         // The flash goes out once the picture is stored, or now if there is none
+         if let Err(err) = imp.viewfinder.take_picture(path) {
+             self.end_flash();
+@@ -570,19 +603,12 @@ impl Camera {
+     pub fn set_gallery(&self, gallery: crate::Gallery) {
+         let imp = self.imp();
+ 
++        imp.gallery.set(Some(&gallery));
+         imp.viewfinder.connect_picture_done(glib::clone!(
+-            #[weak]
+-            gallery,
+             #[weak(rename_to = obj)]
+             self,
+             move |_, file| {
+-                obj.end_flash();
+-                let window = obj.root().and_downcast::<crate::Window>().unwrap();
+-                window.set_shutter_enabled(true);
+-                // TODO Maybe report error via toast on None
+-                if let Some(file) = file {
+-                    gallery.add_image(file);
+-                }
++                obj.picture_stored(file);
+             }
+         ));
+         imp.viewfinder.connect_recording_done(glib::clone!(
+@@ -599,6 +625,18 @@ impl Camera {
+         imp.camera_controls.set_gallery(&gallery);
+     }
+ 
++    /// A picture is stored (or failed, `None`): the flash goes out, the
++    /// shutter works again and the gallery shows the picture
++    fn picture_stored(&self, file: Option<&gio::File>) {
++        self.end_flash();
++        let window = self.root().and_downcast::<crate::Window>().unwrap();
++        window.set_shutter_enabled(true);
++        // TODO Maybe report error via toast on None
++        if let (Some(file), Some(gallery)) = (file, self.imp().gallery.upgrade()) {
++            gallery.add_image(file);
++        }
++    }
++
+     pub fn stop_stream(&self) {
+         self.imp().viewfinder.stop_stream();
+     }
+@@ -667,6 +705,69 @@ impl Camera {
+         self.update_flash_button();
+     }
+ 
++    /// Scene mode and white balance of camera-hal-bridge, offered for its
++    /// cameras only and kept in the settings; the bridge forgets them when it
++    /// restarts, so they go out again with each camera picked
++    fn setup_bridge(&self) {
++        let imp = self.imp();
++        let Some(bridge) = CameraBridge::new() else {
++            return;
++        };
++        imp.bridge.set(bridge).unwrap();
++
++        let settings = imp.settings();
++        let actions = gio::SimpleActionGroup::new();
++        actions.add_action(&settings.create_action("scene-mode"));
++        actions.add_action(&settings.create_action("white-balance"));
++        self.insert_action_group("camera", Some(&actions));
++
++        settings.connect_changed(
++            None,
++            glib::clone!(
++                #[weak(rename_to = obj)]
++                self,
++                move |_, key| {
++                    if key == "scene-mode" || key == "white-balance" {
++                        obj.send_bridge_settings();
++                    }
++                }
++            ),
++        );
++        imp.viewfinder.connect_camera_notify(glib::clone!(
++            #[weak(rename_to = obj)]
++            self,
++            move |_| {
++                obj.send_bridge_settings();
++            }
++        ));
++        self.send_bridge_settings();
++    }
++
++    fn send_bridge_settings(&self) {
++        let imp = self.imp();
++        let Some(bridge) = imp.bridge.get() else {
++            return;
++        };
++        let settings = imp.settings();
++        let scene = settings.string("scene-mode");
++        let is_bridge_camera = imp
++            .viewfinder
++            .camera()
++            .as_ref()
++            .and_then(CameraBridge::node)
++            .is_some();
++        imp.scene_button.set_visible(is_bridge_camera);
++        imp.scene_button.set_icon_name(match scene.as_str() {
++            "hdr" => "camera-hdr-symbolic",
++            "night" => "weather-clear-night-symbolic",
++            _ => "camera-scene-symbolic",
++        });
++        if is_bridge_camera {
++            bridge.set("SceneMode", &scene);
++            bridge.set("WhiteBalance", &settings.string("white-balance"));
++        }
++    }
++
+     fn flash_mode(&self) -> Option<glib::GString> {
+         self.imp().flash_mode_toggles.active_name()
+     }
+-- 
+2.55.0
+

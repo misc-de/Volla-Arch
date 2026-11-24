@@ -1,0 +1,43 @@
+#!/bin/bash
+# plinius-epo-set on|off: the switch "Faster GPS Fix" in GNOME Settings > Privacy > Location,
+# run through pkexec (org.plinius.epo.policy). Writes enabled= in /etc/plinius-epo.conf and
+# starts plinius-epo.service, which downloads the files (on) or removes them (off) and sets
+# mnld's mnl.prop to match.
+#
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+
+CONF=/etc/plinius-epo.conf
+
+case ${1:-} in
+	on) value=yes ;;
+	off) value=no ;;
+	*)
+		echo "usage: plinius-epo-set on|off" >&2
+		exit 2
+		;;
+esac
+
+# Written anew next to it and renamed over it: never half a file, never through a link at the
+# path, and every line ends in a newline (a last line without one is no longer glued to
+# "enabled=" as printf >> did). The first enabled= line takes the value, more of them go.
+tmp=$(mktemp "$CONF.XXXXXX")
+trap 'rm -f -- "$tmp"' EXIT
+found=0
+if [[ -f $CONF ]]; then
+	while IFS= read -r line || [[ -n $line ]]; do
+		if [[ $line == enabled=* ]]; then
+			((found)) && continue
+			line=enabled=$value
+			found=1
+		fi
+		printf '%s\n' "$line"
+	done <"$CONF" >"$tmp"
+fi
+((found)) || printf 'enabled=%s\n' "$value" >>"$tmp"
+chmod 644 "$tmp"
+mv -f -- "$tmp" "$CONF"
+trap - EXIT
+# Switched on: download now, not at the next timer run (a run within the last 6 hours
+# left a stamp only if files were fetched, and "off" removes it)
+systemctl start --no-block plinius-epo.service

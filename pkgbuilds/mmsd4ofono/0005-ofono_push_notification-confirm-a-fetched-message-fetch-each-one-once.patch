@@ -1,0 +1,347 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 14:43:15 +0100
+Subject: [PATCH] ofono_push_notification: confirm a fetched message, fetch
+ each one once
+
+- After a message is fetched, m-notifyresp.ind with X-Mms-Status
+  Retrieved goes to the MMSC (OMA-MMS-ENC 1.2, 6.2). Without it the
+  MMSC takes the message as undelivered, sends the notification again
+  and never reports delivery to the sender.
+- A notification for a Content-Location that is being fetched, waits
+  for a retry or is already stored (location= in the .status file) is
+  ignored; each repeat used to store the message once more.
+- An m-retrieve-conf with an X-Mms-Retrieve-Status error is neither
+  stored nor confirmed; a transient error is tried again, a permanent
+  one is not.
+- A notification is an SMS anyone can send. Its Content-Location is only
+  fetched over http or https and not from an address of this device or
+  its link (loopback, link-local, multicast, unspecified), and a message
+  is read up to 5 MiB. MMSD_ALLOW_LOOPBACK_MMSC=1 lets a test run its
+  MMSC on 127.0.0.1.
+- Only m-notification-ind is fetched; an error while fetching (oFono
+  restarting, say) leads to a retry instead of an unhandled exception.
+
+- A notification that is skipped (a repeat, too large, not an
+  m-notification-ind) is not announced as downloading; one that is
+  refused later is marked download_failed instead of staying in
+  downloading.
+---
+ mmsd/ofono_push_notification.py | 198 +++++++++++++++++++++++++++++---
+ 1 file changed, 183 insertions(+), 15 deletions(-)
+
+diff --git a/mmsd/ofono_push_notification.py b/mmsd/ofono_push_notification.py
+index 8d9f31a..16a1f9e 100644
+--- a/mmsd/ofono_push_notification.py
++++ b/mmsd/ofono_push_notification.py
+@@ -6,10 +6,11 @@ from aiohttp import ClientSession, ClientTimeout
+ from array import array
+ from uuid import uuid4
+ from re import sub, compile
+-from os import listdir
++from os import environ, listdir
+ from typing import Optional
+ from urllib.parse import urlparse
+ import asyncio
++import ipaddress
+ 
+ from dbus_fast.service import ServiceInterface, method
+ from dbus_fast import Variant
+@@ -32,6 +33,35 @@ FETCH_TIMEOUT = 120
+ # download_failed. Each try brings the MMS context up, so it must not go on
+ # for ever; retrying for ever also left the message invisible.
+ FETCH_RETRY_DELAYS = (30, 60, 120, 300, 600, 1800)
++# Carriers cap MMS at about 300 kB to 1 MB; anything far beyond that is not a
++# message and would only be held in memory.
++MAX_MESSAGE_SIZE = 5 * 1024 * 1024
++# A notification is an SMS anyone can send, and its Content-Location is
++# fetched over a route set up for it. Addresses of this device or its link
++# are never an MMSC. tools/mms-standin.py runs its MMSC on 127.0.0.1.
++ALLOW_LOOPBACK = environ.get('MMSD_ALLOW_LOOPBACK_MMSC', '') == '1'
++
++class FetchRefused(Exception):
++    """A message that is not fetched, now or later."""
++
++def unsafe_address(ip):
++    try:
++        address = ipaddress.ip_address(ip.split('%')[0])
++    except ValueError:
++        return True
++    if address.is_loopback:
++        return not ALLOW_LOOPBACK
++    return address.is_unspecified or address.is_link_local or address.is_multicast
++
++def notify_response(transaction_id):
++    """m-notifyresp.ind with X-Mms-Status Retrieved (OMA-MMS-ENC 1.2, 6.2).
++    Without it the MMSC takes the message as not delivered: it sends the
++    notification again and tells the sender nothing."""
++    pdu = bytearray([0x8C, 0x83])                # X-Mms-Message-Type: m-notifyresp-ind
++    pdu += b'\x98' + transaction_id.encode('ascii', 'ignore') + b'\x00'  # X-Mms-Transaction-ID
++    pdu += bytes([0x8D, 0x92])                   # X-Mms-MMS-Version: 1.2
++    pdu += bytes([0x95, 0x81])                   # X-Mms-Status: Retrieved
++    return bytes(pdu)
+ 
+ class OfonoPushNotification(ServiceInterface):
+     def __init__(self, bus, ofono_interfaces, ofono_interface_props, mms_dir, export_mms_message, update_mms_message, mms_context, path, verbose=False):
+@@ -50,10 +80,13 @@ class OfonoPushNotification(ServiceInterface):
+         self.registered = False
+         self.retry_tasks = set()
+         self.announced = set()
++        # Content-Locations being fetched or waiting for a retry
++        self.pending = set()
+ 
+     def schedule_retry(self, transaction_id, content_location, sender, info, uuid, attempt=0):
+         if attempt >= len(FETCH_RETRY_DELAYS):
+             mmsd_print(f"Giving up on downloading message {uuid} after {attempt} retries", self.verbose)
++            self.pending.discard(content_location)
+             self.settle_incoming(uuid, 'download_failed')
+             return
+ 
+@@ -66,10 +99,21 @@ class OfonoPushNotification(ServiceInterface):
+ 
+     async def retry_fetch(self, transaction_id, content_location, sender, info, uuid, attempt, delay):
+         await asyncio.sleep(delay)
+-        proxy = await self.get_mms_context_info()
+-        response_content = await self.fetch_mms_content(content_location, proxy)
++        try:
++            response_content = await self.fetch_mms_content(content_location, transaction_id)
++        except FetchRefused as e:
++            mmsd_print(f"Not fetching {content_location}: {e}", self.verbose)
++            self.pending.discard(content_location)
++            self.settle_incoming(uuid, 'download_failed')
++            return
++        except Exception as e:
++            # e.g. oFono gone for a moment: try again, as for a failed fetch
++            mmsd_print(f"Failed to fetch {content_location}: {e}", self.verbose)
++            response_content = None
++
+         if response_content:
+-            self.process_mms_content(response_content, transaction_id, sender, info, uuid)
++            self.pending.discard(content_location)
++            self.process_mms_content(response_content, transaction_id, sender, info, uuid, content_location)
+         else:
+             self.schedule_retry(transaction_id, content_location, sender, info, uuid, attempt + 1)
+ 
+@@ -123,6 +167,18 @@ class OfonoPushNotification(ServiceInterface):
+ 
+         self.update_mms_message(uuid, {'Status': Variant('s', state)})
+ 
++    def already_fetched(self, content_location):
++        for filename in listdir(self.mms_dir):
++            if not filename.endswith('.status'):
++                continue
++            try:
++                status_data = self.read_status_file(join(self.mms_dir, filename))
++            except OSError:
++                continue
++            if status_data.get('location') == content_location:
++                return True
++        return False
++
+     def read_status_file(self, status_path):
+         status_data = {}
+         with open(status_path, 'r', encoding='utf-8') as status_file:
+@@ -306,14 +362,40 @@ class OfonoPushNotification(ServiceInterface):
+             mmsd_print("Content location is None, is this even MMS? skipping", self.verbose)
+             return
+ 
++        if message_type != 'm-notification-ind':
++            mmsd_print(f"Not a notification ({message_type}), skipping", self.verbose)
++            return
++
++        # An MMSC that missed our m-notifyresp.ind sends the notification again
++        if content_location in self.pending or self.already_fetched(content_location):
++            mmsd_print(f"{content_location} is already fetched or being fetched, skipping", self.verbose)
++            return
++
++        size = mms.headers.get('Message-Size')
++        if isinstance(size, int) and size > MAX_MESSAGE_SIZE:
++            mmsd_print(f"Not fetching {content_location}: {size} bytes is more than {MAX_MESSAGE_SIZE}", self.verbose)
++            return
++
+         uuid = str(uuid4()).replace('-', '1')
+         sent_time = info['SentTime'].value if 'SentTime' in info else ''
+         self.announce_incoming(uuid, sub(r'[^0-9+]', '', sender) if sender else '', sent_time)
+ 
+-        proxy = await self.get_mms_context_info()
+-        response_content = await self.fetch_mms_content(content_location, proxy)
++        self.pending.add(content_location)
++        try:
++            response_content = await self.fetch_mms_content(content_location, transaction_id)
++        except FetchRefused as e:
++            mmsd_print(f"Not fetching {content_location}: {e}", self.verbose)
++            self.pending.discard(content_location)
++            self.settle_incoming(uuid, 'download_failed')
++            return
++        except Exception as e:
++            # e.g. oFono gone for a moment: try again, as for a failed fetch
++            mmsd_print(f"Failed to fetch {content_location}: {e}", self.verbose)
++            response_content = None
++
+         if response_content:
+-            self.process_mms_content(response_content, transaction_id, sender, info, uuid)
++            self.pending.discard(content_location)
++            self.process_mms_content(response_content, transaction_id, sender, info, uuid, content_location)
+         else:
+             mmsd_print("Failed to get response content, trying again later", self.verbose)
+             self.schedule_retry(transaction_id, content_location, sender, info, uuid)
+@@ -398,10 +480,81 @@ class OfonoPushNotification(ServiceInterface):
+             mmsd_print(f"re-exporting old message {basename}", self.verbose)
+             self.export_mms_message(basename, entry['state'], entry['date'], entry['sender'], entry['delivery_report'], [], entry['smil_data'], entry['attachments'])
+ 
+-    async def fetch_mms_content(self, url: str, proxy: Optional[str]):
++    async def read_limited(self, response):
++        if response.content_length and response.content_length > MAX_MESSAGE_SIZE:
++            raise FetchRefused(f"the MMSC announces {response.content_length} bytes")
++
++        content = bytearray()
++        async for chunk in response.content.iter_chunked(65536):
++            content += chunk
++            if len(content) > MAX_MESSAGE_SIZE:
++                raise FetchRefused(f"more than {MAX_MESSAGE_SIZE} bytes")
++        return bytes(content)
++
++    def retrieved(self, content):
++        """An MMSC can answer 200 with an m-retrieve-conf that carries an error
++        instead of the message. That is neither stored nor confirmed; a
++        transient one is tried again later."""
++        try:
++            status = MMSMessage.from_data(content).headers.get('MMS-Retrieve-Status')
++        except Exception as e:
++            mmsd_print(f"Failed to decode the fetched message: {e}", self.verbose)
++            return False
++
++        if status in (None, 'Ok'):
++            return True
++        if status.startswith('Error-permanent'):
++            raise FetchRefused(f"the MMSC answers {status}")
++        mmsd_print(f"The MMSC answers {status}", self.verbose)
++        return False
++
++    async def mmsc_targets(self, mmsc, candidate_proxies):
++        """Where m-notifyresp.ind goes: (url, proxy) pairs and the addresses
++        that need a route."""
++        if not mmsc:
++            return [], []
++
++        if candidate_proxies != [None]:
++            return [(mmsc, f"http://{proxy}") for proxy in candidate_proxies], []
++
++        mmsc_parts = urlparse(mmsc)
++        mmsc_ips = await resolve_host(mmsc_parts.hostname, self.verbose) if mmsc_parts.hostname else []
++        targets = [
++            (mmsc_parts._replace(
++                netloc=(f"[{ip}]" if ":" in ip else ip)
++                + (f":{mmsc_parts.port}" if mmsc_parts.port else "")
++            ).geturl(), None)
++            for ip in mmsc_ips
++        ]
++        return targets, mmsc_ips
++
++    async def send_notify_response(self, session, mmsc, targets, transaction_id):
++        if not targets or not transaction_id:
++            mmsd_print("No MMSC or transaction ID, not confirming the message", self.verbose)
++            return
++
++        headers = {
++            'Host': urlparse(mmsc).netloc,
++            'Content-Type': 'application/vnd.wap.mms-message',
++        }
++        pdu = notify_response(transaction_id)
++        for url, proxy in targets:
++            try:
++                async with session.post(url, data=pdu, headers=headers, proxy=proxy) as response:
++                    mmsd_print(f"m-notifyresp.ind to {url}: HTTP {response.status}", self.verbose)
++                    if 200 <= response.status < 300:
++                        return
++            except Exception as e:
++                mmsd_print(f"Failed to send m-notifyresp.ind to {url}: {e}", self.verbose)
++
++    async def fetch_mms_content(self, url: str, transaction_id: Optional[str] = None):
++        proxy, mmsc = await self.get_mms_context_info()
+         needed_ips = []
+         resolved_proxy = None
+ 
++        if urlparse(url).scheme not in ('http', 'https'):
++            raise FetchRefused("only http and https are fetched")
++
+         if proxy:
+             proxy_host = proxy if not ':' in proxy else proxy.split(':')[0]
+             proxy_ips = await resolve_host(proxy_host, self.verbose)
+@@ -424,6 +577,8 @@ class OfonoPushNotification(ServiceInterface):
+             if not url_ips:
+                 mmsd_print(f"Failed to resolve URL host: {url_parts.hostname}", self.verbose)
+                 return None
++            if any(unsafe_address(ip) for ip in url_ips):
++                raise FetchRefused(f"{url_parts.hostname} is an address of this device or its link")
+             needed_ips.extend(url_ips)
+ 
+             # Every resolved address is a candidate. resolve_host() returns IPv6 ahead of
+@@ -442,6 +597,9 @@ class OfonoPushNotification(ServiceInterface):
+             url_parts = urlparse(url)
+             candidate_urls = [url]
+ 
++        mmsc_targets, mmsc_ips = await self.mmsc_targets(mmsc, candidate_proxies)
++        needed_ips.extend(ip for ip in mmsc_ips if ip not in needed_ips)
++
+         if not await self.mms_context.acquire():
+             mmsd_print("MMS context is not available, cannot fetch", self.verbose)
+             return None
+@@ -480,10 +638,18 @@ class OfonoPushNotification(ServiceInterface):
+                                 async with request as response:
+                                     mmsd_print(f"Response status: {response.status}", self.verbose)
+                                     if response.status == 200:
+-                                        content = await response.read()
++                                        content = await self.read_limited(response)
+                                         mmsd_print(f"Content length: {len(content)}", self.verbose)
+-                                        return content
+-                                    mmsd_print(f"Failed to fetch content. HTTP status: {response.status}", self.verbose)
++                                        if not self.retrieved(content):
++                                            return None
++                                    else:
++                                        content = None
++                                        mmsd_print(f"Failed to fetch content. HTTP status: {response.status}", self.verbose)
++                                if content is not None:
++                                    await self.send_notify_response(session, mmsc, mmsc_targets, transaction_id)
++                                    return content
++                            except FetchRefused:
++                                raise
+                             except Exception as e:
+                                 mmsd_print(f"Failed to download MMS content: {e}", self.verbose)
+                             if attempt < 2:
+@@ -494,7 +660,7 @@ class OfonoPushNotification(ServiceInterface):
+             await cleanup_mms_routes()
+             await self.mms_context.release()
+ 
+-    def process_mms_content(self, content, transaction_id, sender, info, uuid=None):
++    def process_mms_content(self, content, transaction_id, sender, info, uuid=None, content_location=''):
+         uuid = uuid or str(uuid4()).replace('-', '1')
+         smil_path = join(self.mms_dir, uuid)
+         status_path = join(self.mms_dir, f"{uuid}.status")
+@@ -518,6 +684,7 @@ class OfonoPushNotification(ServiceInterface):
+ read=false
+ state=received
+ id={message_id}
++location={content_location}
+ date={sent_time}"""
+ 
+         with open(status_path, 'w', encoding='utf-8') as status_file:
+@@ -561,14 +728,15 @@ date={sent_time}"""
+                               smil_data or "", attachments)
+ 
+     async def get_mms_context_info(self):
+-        proxy = ''
++        proxy, mmsc = '', ''
+         if 'org.ofono.ConnectionManager' in self.ofono_interfaces:
+             contexts = await self.ofono_interfaces['org.ofono.ConnectionManager'].call_get_contexts()
+             for ctx in contexts:
+                 name = ctx[1].get('Type', Variant('s', '')).value
+                 if name.lower() == "mms":
+-                    proxy = ctx[1]['MessageProxy'].value
+-        return proxy
++                    proxy = ctx[1].get('MessageProxy', Variant('s', '')).value
++                    mmsc = ctx[1].get('MessageCenter', Variant('s', '')).value
++        return proxy, mmsc
+ 
+     def extract_smil_src(self, xml_string):
+         src_pattern = compile(r'<(\w+)\s+[^>]*src="([^"]*)"[^>]*>')

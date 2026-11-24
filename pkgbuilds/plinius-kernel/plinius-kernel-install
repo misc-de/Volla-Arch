@@ -1,0 +1,559 @@
+#!/bin/bash
+# Puts a kernel of plinius-kernel in place, the way grub keeps a "previous kernel" entry on other
+# systems. Called by the pacman hooks and by plinius-kernel-boot.service.
+#
+# With the boot menu on the memory card (Android Boot Manager, db/entries/real.conf starts the Arch
+# on the phone's own storage), a new kernel goes through a trial start first:
+# 1. install: the new kernel becomes the entry "plinius-trial" on the card, with the ramdisks of the
+#    phone's vendor_boot/init_boot and their command line, and the menu's autostart points to it.
+#    The boot partition is not touched.
+# 2. The next start runs the new kernel from the card. Once the system is up (boot), its kernel is
+#    written to boot<slot>, the kernel that was there becomes the entry "plinius-previous", the
+#    trial entry goes away and the autostart points to "Arch Linux" (real.conf) again.
+# 3. If the new kernel does not come up, choosing "Arch Linux" in the menu starts the old one (the
+#    menu remembers the choice as autostart); boot then drops the trial entry.
+# Without the card, install writes boot<slot> at once; "restore" writes the fallback back.
+#
+# The fallback is always the kernel that last started for sure: the one in boot<slot> when the new
+# one is confirmed, or, when the system runs on the fallback because the installed kernel does not
+# work, the fallback stays and only the installed one is replaced.
+#
+# Each kernel has its own GKI modules (system_dlkm.img, mounted for the Android container by
+# "dlkm") and out-of-tree modules (/usr/lib/plinius/modules/<release>, loaded by plinius-kmod).
+# Before pacman removes a release that is still installed or the fallback, "keep" copies it to
+# /var/lib/plinius-kernel/kept/<release>. The kernel of the original installation (UT's 6.1.145)
+# needs nothing kept: its modules are the original system_dlkm.img and plinius-kmod's.
+#
+# The slot never changes: lk would then start the other system (Volla OS of the delivery).
+#
+# Usage: plinius-kernel-install hook       (pacman, after install/upgrade; boot.img paths on stdin)
+#        plinius-kernel-install keep       (pacman, before upgrade/removal)
+#        plinius-kernel-install install RELEASE
+#        plinius-kernel-install boot       (plinius-kernel-boot.service: confirm or drop a trial)
+#        plinius-kernel-install dlkm       (mount-android-partitions: this kernel's GKI modules)
+#        plinius-kernel-install restore    (fallback back into boot<slot>)
+#        plinius-kernel-install status
+# PLINIUS_KERNEL_OPTIONS (with install) adds kernel options to the trial entry, e.g. for a
+# diagnostic start ("initcall_debug").
+set -euo pipefail
+
+lib=/usr/lib/plinius/kernel
+kmods=/usr/lib/plinius/modules
+state=/var/lib/plinius-kernel
+kept=$state/kept
+dlkm=/var/lib/lxc/android/system_dlkm.img
+card=/dev/mmcblk0p1
+mnt=/run/plinius-kernel/card
+trial=plinius-trial
+previous=plinius-previous
+
+die() { echo "plinius-kernel: $*" >&2; exit 1; }
+say() { echo "plinius-kernel: $*"; }
+
+# --- state: one release name per file (installed = in boot<slot>, previous = fallback, trial) ---
+get() { cat "$state/$1" 2>/dev/null || true; }
+put() { install -d -m 700 "$state"; echo "$2" > "$state/$1.new"; mv "$state/$1.new" "$state/$1"; }
+unset_state() { rm -f "$state/$1"; }
+
+# The active slot as the bootloader reports it ("_a" or "_b"). A start from a card entry may come
+# without bootconfig, so the slot of the last normal start is remembered.
+slot() {
+	local s
+	s=$(sed -n 's/^androidboot.slot_suffix = "\(_[ab]\)"$/\1/p' /proc/bootconfig 2>/dev/null || true)
+	if [[ $s == _a || $s == _b ]]; then
+		put slot "$s"
+	else
+		s=$(get slot)
+	fi
+	[[ $s == _a || $s == _b ]] || die "active slot unknown (androidboot.slot_suffix in /proc/bootconfig)"
+	echo "$s"
+}
+
+# Role of the running start: trial or previous (entries on the card), or empty (boot partition)
+role() { sed -n 's/.*\bplinius\.kernel=\([a-z]*\).*/\1/p' /proc/cmdline; }
+
+# An Arch on a memory card partition (systempart=) has its kernel in its own card entry
+on_card_system() { grep -qw 'systempart=[^ ]*' /proc/cmdline; }
+
+# Release of the kernel inside a boot image (gzip-compressed Image after the 4 KiB header)
+image_release() {
+	python3 - "$1" <<-'EOF'
+	import gzip, re, struct, sys
+	d = open(sys.argv[1], 'rb').read()
+	size, = struct.unpack_from('<I', d, 8)
+	k = d[4096:4096 + size]
+	if k[:2] == b'\x1f\x8b':
+	    k = gzip.decompress(k)
+	m = re.search(rb'Linux version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*) \(', k)
+	print(m.group(1).decode() if m else 'unknown')
+	EOF
+}
+
+# --- partitions ---
+boot_part() { echo "/dev/disk/by-partlabel/boot$(slot)"; }
+
+# Writes an image to a partition and reads it back; the rest of the partition stays as it was
+write_part() {
+	local img=$1 part=$2 size
+	size=$(stat -c %s "$img")
+	(( size <= $(blockdev --getsize64 "$part") )) || die "$img does not fit into $part"
+	dd if="$img" of="$part" bs=1M conv=fsync,notrunc status=none
+	cmp -n "$size" "$img" "$part" >/dev/null || die "$part does not hold $img after writing"
+}
+
+# Writes a boot image to boot<slot> with the partition's AVB data kept valid. lk reads the vbmeta
+# block named by the AVB footer (last 64 bytes of the partition) on every start, card entries
+# included, and loads nothing if it is gone: on 09.11.2026 6.1.192-5's boot.img (15,151,104 bytes)
+# reached over the block at 15,147,008, every start ended in "ASSERT g_boot_info.hdr_loaded".
+# So the block moves behind the image (4 KiB aligned), its hash descriptor gets the image's size
+# and digest, the footer points to it. A valid block is kept in $state/boot-vbmeta.bin; without
+# one, nothing is written. A partition without a footer gets the image alone, as before.
+write_boot() {
+	local img=$1 part=$2 out=$state/boot-new.img
+	mkdir -p "$state"
+	python3 - "$img" "$part" "$out" "$state/boot-vbmeta.bin" <<-'EOF' || die "$img: the AVB data of $part could not be kept, nothing written"
+	import hashlib, os, struct, sys
+	img_path, part_path, out_path, keep_path = sys.argv[1:5]
+	img = open(img_path, 'rb').read()
+	with open(part_path, 'rb') as f:
+	    f.seek(0, os.SEEK_END)
+	    size = f.tell()
+	    f.seek(size - 64)
+	    footer = f.read(64)
+	    if footer[:4] != b'AVBf':
+	        open(out_path, 'wb').write(img)
+	        print(f'{part_path}: no AVB footer, the image goes in alone', file=sys.stderr)
+	        sys.exit(0)
+	    major, minor, _, voff, vsize = struct.unpack_from('>IIQQQ', footer, 4)
+	    f.seek(voff)
+	    vbmeta = bytearray(f.read(vsize))
+	if vbmeta[:4] == b'AVB0':
+	    open(keep_path + '.new', 'wb').write(vbmeta)
+	    os.replace(keep_path + '.new', keep_path)
+	elif os.path.exists(keep_path):
+	    vbmeta = bytearray(open(keep_path, 'rb').read())
+	    vsize = len(vbmeta)
+	    print(f'{part_path}: vbmeta at {voff} is broken, the kept copy is used', file=sys.stderr)
+	else:
+	    sys.exit(f'{part_path}: no valid vbmeta at {voff} and no kept copy')
+	# vbmeta header (big endian, avb_vbmeta_image.h): auth block, aux block with the descriptors
+	auth_size, aux_size = struct.unpack_from('>QQ', vbmeta, 12)
+	desc_off, desc_size = struct.unpack_from('>QQ', vbmeta, 96)
+	p = 256 + auth_size + desc_off
+	end = p + desc_size
+	hashes = 0
+	while p < end:
+	    tag, following = struct.unpack_from('>QQ', vbmeta, p)
+	    if tag == 2:  # hash descriptor
+	        algorithm = vbmeta[p + 24:p + 56].split(b'\0')[0].decode()
+	        name_len, salt_len, digest_len = struct.unpack_from('>III', vbmeta, p + 56)
+	        q = p + 132 + name_len
+	        salt = bytes(vbmeta[q:q + salt_len])
+	        digest = hashlib.new(algorithm, salt + img).digest()
+	        if len(digest) != digest_len:
+	            sys.exit(f'{part_path}: hash descriptor has an unexpected digest length')
+	        struct.pack_into('>Q', vbmeta, p + 16, len(img))
+	        vbmeta[q + salt_len:q + salt_len + digest_len] = digest
+	        hashes += 1
+	    p += 16 + following
+	if hashes != 1:
+	    sys.exit(f'{part_path}: vbmeta has {hashes} hash descriptors instead of one')
+	new_off = (len(img) + 4095) // 4096 * 4096
+	if new_off + vsize > size - 64:
+	    sys.exit(f'{img_path}: image and vbmeta do not fit into {part_path}')
+	out = bytearray(size)
+	out[:len(img)] = img
+	out[new_off:new_off + vsize] = vbmeta
+	out[-64:] = footer
+	struct.pack_into('>QQQ', out, size - 64 + 12, len(img), new_off, vsize)
+	open(out_path, 'wb').write(out)
+	EOF
+	write_part "$out" "$part"
+	rm -f "$out"
+}
+
+# Copies the whole partition into a file, through a rename
+dump_part() {
+	local part=$1 out=$2
+	dd if="$part" of="$out.new" bs=1M status=none
+	mv "$out.new" "$out"
+}
+
+# --- releases: where a kernel's files are ---
+release_dir() {
+	if [[ -d $lib/$1 ]]; then echo "$lib/$1"
+	elif [[ -d $kept/$1 ]]; then echo "$kept/$1"
+	fi
+}
+
+# --- card: Android Boot Manager ---
+have_card() {
+	# debugfs ends with 0 also for a missing file or a card it cannot read: only its "Inode:"
+	# line says the boot menu is there. grep reads all of it (-q could end debugfs with
+	# SIGPIPE, which pipefail takes as a failure).
+	[[ -b $card ]] && debugfs -c -R 'stat /db/entries/real.conf' "$card" 2>/dev/null |
+		grep '^Inode:' >/dev/null
+}
+
+card_mount() {
+	local at
+	at=$(findmnt -rno TARGET -S "$card" | head -1 || true)
+	if [[ -n $at ]]; then
+		echo "$at"
+		return
+	fi
+	install -d "$mnt"
+	mount -t ext4 "$card" "$mnt"
+	echo "$mnt"
+}
+
+card_umount() {
+	sync
+	if findmnt -rno TARGET "$mnt" >/dev/null 2>&1; then umount "$mnt"; fi
+}
+
+# The menu numbers its entries in the order they lie in db/entries (lwext4 reads the directory
+# blocks as they are); debugfs lists them the same way. Prints the index of an entry.
+card_index() {
+	local name=$1 i=0 e
+	sync
+	while read -r e; do
+		[[ $e == *.conf ]] || continue
+		if [[ $e == "$name.conf" ]]; then echo "$i"; return; fi
+		i=$(( i + 1 ))
+	done < <(debugfs -c -R 'ls -p /db/entries' "$card" 2>/dev/null | cut -d/ -f6)
+	die "no entry $name on the card"
+}
+
+# The autostart: the index the menu writes when an entry is chosen, as text in 128 bytes.
+# The index is read with the card unmounted (debugfs reads the device), then written.
+card_autostart() {
+	local name=$1 index root
+	card_umount
+	index=$(card_index "$name")
+	root=$(card_mount)
+	{ printf '%s' "$index"; head -c $(( 128 - ${#index} )) /dev/zero; } > "$root/db/last_index.new"
+	mv "$root/db/last_index.new" "$root/db/last_index"
+	card_umount
+}
+
+# Writes the entry NAME: kernel (gzip Image or boot image), the ramdisks and command line of
+# the phone's vendor_boot and init_boot of the active slot, and the logo of "Arch Linux"
+card_entry() {
+	local root=$1 name=$2 title=$3 kernel=$4 role=$5 s dir
+	s=$(slot)
+	dir=$root/$name
+	rm -rf "$dir.new"
+	install -d -m 700 "$dir.new"
+	python3 - "$kernel" "/dev/disk/by-partlabel/vendor_boot$s" "/dev/disk/by-partlabel/init_boot$s" \
+		"$dir.new" <<-'EOF'
+	import struct, sys
+	kernel, vendor_boot, init_boot, out = sys.argv[1:5]
+	align = lambda x, page: (x + page - 1) // page * page
+	k = open(kernel, 'rb').read()
+	if k[:8] == b'ANDROID!':
+	    size, = struct.unpack_from('<I', k, 8)
+	    k = k[4096:4096 + size]
+	open(out + '/zImage', 'wb').write(k)
+	v = open(vendor_boot, 'rb').read(64 << 20)
+	if v[:8] != b'VNDRBOOT':
+	    sys.exit('vendor_boot without a VNDRBOOT header')
+	page, = struct.unpack_from('<I', v, 12)
+	ramdisks, = struct.unpack_from('<I', v, 24)
+	cmdline = v[28:28 + 2048].split(b'\0')[0].decode()
+	header, dtb = struct.unpack_from('<II', v, 28 + 2048 + 4 + 16)
+	start = align(header, page)
+	b = open(init_boot, 'rb').read(64 << 20)
+	if b[:8] != b'ANDROID!':
+	    sys.exit('init_boot without an ANDROID! header')
+	ksize, rsize = struct.unpack_from('<II', b, 8)
+	# vendor ramdisk(s) followed by the generic ramdisk, as the bootloader concatenates them
+	with open(out + '/initrd.cpio.gz', 'wb') as f:
+	    f.write(v[start:start + ramdisks])
+	    f.write(b[4096 + align(ksize, 4096):][:rsize])
+	o = start + align(ramdisks, page)
+	open(out + '/dtb.dtb', 'wb').write(v[o:o + dtb])
+	open(out + '/cmdline', 'w').write(cmdline)
+	EOF
+	cat > "$dir.new/entry.conf" <<-EOF
+	title $title
+	linux $name/zImage
+	initrd $name/initrd.cpio.gz
+	dtb $name/dtb.dtb
+	options $(cat "$dir.new/cmdline") plinius.kernel=$role${PLINIUS_KERNEL_OPTIONS:+ $PLINIUS_KERNEL_OPTIONS}
+	logo real/logo.bin
+	xtype UT
+	xpart real
+	EOF
+	rm -rf "$dir"
+	mv "$dir.new" "$dir"
+	# A new entry file goes in through a rename from outside db/entries, in one step
+	cp "$dir/entry.conf" "$root/db/$name.conf.new"
+	mv "$root/db/$name.conf.new" "$root/db/entries/$name.conf"
+	card_order "$root"
+}
+
+# The menu lists db/entries in the order of the directory itself, and a new file takes whatever
+# slot is free. Rebuilt in a fresh directory, the entries are in the order they are copied in:
+# "Arch Linux", right below it the previous kernel, then the trial, then everything else. The
+# autostart (db/last_index, a position) is moved along so it keeps naming the same entry, also one
+# that another tool set (plinius-crypt's trial entry, for one).
+card_order() {
+	local root=$1 d=$1/db/entries new=$1/db/.entries.new f auto="" index i=0
+	local -a order=()
+	# The entry the autostart names now, from the on-disk order the menu reads
+	sync
+	index=$(tr -d '\0' < "$root/db/last_index" 2>/dev/null || true)
+	if [[ $index =~ ^[0-9]+$ ]]; then
+		while read -r f; do
+			[[ $f == *.conf ]] || continue
+			if (( i == index )); then auto=$f; break; fi
+			i=$(( i + 1 ))
+		done < <(debugfs -c -R 'ls -p /db/entries' "$card" 2>/dev/null | cut -d/ -f6)
+	fi
+	rm -rf "$new"
+	install -d -m "$(stat -c %a "$d")" -o "$(stat -c %u "$d")" -g "$(stat -c %g "$d")" "$new"
+	for f in real.conf "$previous.conf" "$trial.conf"; do
+		if [[ -e $d/$f ]]; then cp -p "$d/$f" "$new/"; order+=("$f"); fi
+	done
+	for f in "$d"/*; do
+		if [[ -e $f && ! -e $new/${f##*/} ]]; then cp -pr "$f" "$new/"; order+=("${f##*/}"); fi
+	done
+	sync
+	# One atomic swap (renameat2 RENAME_EXCHANGE): the menu never sees the directory missing
+	mv --exchange -T "$new" "$d"
+	rm -rf "$new"
+	[[ -n $auto ]] || return 0
+	i=0
+	for f in "${order[@]}"; do
+		[[ $f == *.conf ]] || continue
+		if [[ $f == "$auto" ]]; then
+			{ printf '%s' "$i"; head -c $(( 128 - ${#i} )) /dev/zero; } > "$root/db/last_index.new"
+			mv "$root/db/last_index.new" "$root/db/last_index"
+			return 0
+		fi
+		i=$(( i + 1 ))
+	done
+}
+
+# bootcheck_accept PATH...: what this script wrote is the new reference of plinius-bootcheck
+# (a boot partition, or abm-entry:NAME for a card entry with its files), so that the check at the
+# next start does not report it. --written: a path this start already reported as changed stays
+# for the user to confirm. Card entries are read from the device: call it with the card unmounted.
+bootcheck_accept() {
+	command -v plinius-bootcheck > /dev/null || return 0
+	plinius-bootcheck accept --written "$@" >&2 || say "plinius-bootcheck did not take $*"
+}
+
+card_drop() {
+	local root=$1 name=$2
+	rm -f "$root/db/entries/$name.conf"
+	rm -rf "${root:?}/$name"
+	card_order "$root"
+}
+
+# --- fallback bookkeeping ---
+# Keeps the content of boot<slot> as the fallback image, with its release
+save_fallback() {
+	local part=$1 rel=$2
+	install -d -m 700 "$state"
+	[[ -e $state/boot-orig.img ]] || dump_part "$part" "$state/boot-orig.img"
+	dump_part "$part" "$state/boot-previous.img"
+	put previous "$rel"
+}
+
+# Release in boot<slot>: what we wrote there, or the original kernel read from the partition
+installed_release() {
+	local rel
+	rel=$(get installed)
+	if [[ -z $rel ]]; then
+		rel=$(image_release "$(boot_part)")
+		put installed "$rel"
+	fi
+	echo "$rel"
+}
+
+# --- commands ---
+cmd_install() {
+	local rel=$1 dir part running installed root
+	dir=$lib/$rel
+	[[ -f $dir/boot.img && -f $dir/Image.gz ]] || die "no kernel $rel in $lib"
+	if on_card_system; then
+		say "this Arch runs from a memory card partition; its kernel is in its boot menu entry."
+		say "Nothing written. The new kernel is $dir/Image.gz."
+		return
+	fi
+	part=$(boot_part)
+	[[ -b $part ]] || die "$part missing"
+	running=$(uname -r)
+	installed=$(installed_release)
+
+	if have_card; then
+		root=$(card_mount)
+		card_entry "$root" "$trial" "Arch Linux (new kernel $rel, trial)" "$dir/Image.gz" trial
+		card_autostart "$trial"
+		bootcheck_accept "abm-entry:$trial"
+		put trial "$rel"
+		say "the next start runs kernel $rel from the memory card as a trial; once the system is up,"
+		say "it goes into $part. If it does not start, choose \"Arch Linux\" in the boot menu."
+		return
+	fi
+
+	# Without the card: straight into the partition. The fallback is the kernel that started for
+	# sure: the one in the partition while it runs, else the existing fallback stays.
+	if cmp -s -n "$(stat -c %s "$dir/boot.img")" "$dir/boot.img" "$part"; then
+		say "kernel $rel is already in $part"
+	else
+		if [[ $running == "$installed" || -z $(get previous) ]]; then
+			save_fallback "$part" "$installed"
+		fi
+		write_boot "$dir/boot.img" "$part"
+		bootcheck_accept "$part"
+		put installed "$rel"
+		say "kernel $rel written to $part; it starts with the next restart."
+		say "Fallback: $(get previous) ('plinius-kernel-install restore' writes it back)"
+	fi
+}
+
+# The rest of a confirmation once boot<slot> holds kernel REL: the card entry of the fallback PREV,
+# no trial entry, the autostart on "Arch Linux", the new reference of plinius-bootcheck, and only
+# then the trial state goes. Each step can run again, so a confirmation cut off (the phone was
+# restarted while it wrote, 13.11.2026) is finished by the next start.
+finish_confirm() {
+	local rel=$1 prev=$2 part root
+	part=$(boot_part)
+	if have_card; then
+		root=$(card_mount)
+		card_entry "$root" "$previous" "Arch Linux (previous kernel $prev)" \
+			"$state/boot-previous.img" previous
+		card_drop "$root" "$trial"
+		card_autostart real
+		bootcheck_accept "$part" "abm-entry:$previous"
+	else
+		bootcheck_accept "$part"
+	fi
+	unset_state trial
+	say "kernel $rel confirmed and written to $part; fallback: $prev"
+}
+
+cmd_boot() {
+	local rel role part installed root
+	rel=$(get trial)
+	[[ -n $rel ]] || return 0
+	on_card_system && return 0
+	role=$(role)
+	# A confirmation that was cut off: boot<slot> holds the trial kernel already
+	if [[ $(get installed) == "$rel" ]]; then
+		trap '' TERM HUP INT
+		finish_confirm "$rel" "$(get previous)"
+		trap - TERM HUP INT
+		return 0
+	fi
+	if [[ $role == trial && $(uname -r) == "$rel" ]]; then
+		# Wait for the end of the start. A single job that hangs keeps the state at "starting" for
+		# long (seen on the phone), so the graphical session being up counts as well; a kernel
+		# that gets neither is not confirmed.
+		timeout 300 systemctl is-system-running --wait >/dev/null 2>&1 || true
+		case $(systemctl is-system-running 2>/dev/null || true) in
+		running|degraded) ;;
+		*)
+			if ! systemctl -q is-active graphical.target; then
+				say "system not up, kernel $rel stays a trial"
+				return 0
+			fi
+			;;
+		esac
+		# From here on a restart must not cut the writing off: SIGTERM is ignored, also by dd, cp
+		# and debugfs (an ignored signal stays ignored across exec), and the unit gives the stop
+		# time (TimeoutStopSec). A half-written card made the bootloader crash on every restart.
+		trap '' TERM HUP INT
+		part=$(boot_part)
+		installed=$(installed_release)
+		save_fallback "$part" "$installed"
+		write_boot "$lib/$rel/boot.img" "$part"
+		put installed "$rel"
+		finish_confirm "$rel" "$installed"
+		trap - TERM HUP INT
+	else
+		# The trial was not started, or did not come up: back to the installed kernel. The console
+		# of the start before this one (pstore) is the trial's if it ran; the next restart would
+		# overwrite it, so it is kept for the diagnosis.
+		if [[ -r /sys/fs/pstore/console-ramoops-0 ]]; then
+			cp /sys/fs/pstore/console-ramoops-0 "$state/console-$rel.log" || true
+		fi
+		unset_state trial
+		if have_card; then
+			root=$(card_mount)
+			card_drop "$root" "$trial"
+			card_autostart real
+		fi
+		put failed "$rel"
+		say "kernel $rel was not confirmed (running $(uname -r)); trial entry removed"
+	fi
+}
+
+cmd_dlkm() {
+	local dir
+	dir=$(release_dir "$(uname -r)")
+	[[ -n $dir && -f $dir/system_dlkm.img ]] || return 0
+	mountpoint -q "$dlkm" && return 0
+	mount --bind -o ro "$dir/system_dlkm.img" "$dlkm"
+}
+
+cmd_keep() {
+	# Releases of plinius-kernel that must outlive the package files: installed, fallback, trial
+	local rel keepers=" $(get installed) $(get previous) $(get trial) $(uname -r) "
+	install -d -m 700 "$kept"
+	for rel in $keepers; do
+		[[ -d $lib/$rel ]] || continue
+		rm -rf "$kept/$rel.new"
+		install -d "$kept/$rel.new"
+		cp -a "$lib/$rel/." "$kept/$rel.new/"
+		[[ ! -d $kmods/$rel ]] || cp -a "$kmods/$rel" "$kept/$rel.new/modules"
+		rm -rf "${kept:?}/$rel"
+		mv "$kept/$rel.new" "$kept/$rel"
+	done
+	# Nothing else needs to stay
+	for rel in "$kept"/*; do
+		[[ -d $rel ]] || continue
+		[[ $keepers == *" ${rel##*/} "* ]] || rm -rf "$rel"
+	done
+}
+
+cmd_restore() {
+	local part prev
+	on_card_system && die "this Arch runs from a memory card partition; nothing to restore here"
+	[[ -f $state/boot-previous.img ]] || die "no fallback kept in $state"
+	part=$(boot_part)
+	prev=$(get previous)
+	write_part "$state/boot-previous.img" "$part"
+	bootcheck_accept "$part"
+	put installed "$prev"
+	say "fallback $prev written to $part; it starts with the next restart"
+}
+
+cmd_status() {
+	echo "running:   $(uname -r) $(role)"
+	echo "installed: $(get installed)"
+	echo "fallback:  $(get previous)"
+	echo "trial:     $(get trial)"
+	echo "failed:    $(get failed)"
+	if have_card; then echo "card:      boot menu found"; else echo "card:      no boot menu"; fi
+}
+
+case ${1:-} in
+hook)
+	# The package holds one release; the last path wins should there ever be more
+	release=
+	while read -r path; do release=$(basename "$(dirname "$path")"); done
+	[[ -n $release ]] || die "the hook passed no kernel"
+	cmd_install "$release"
+	;;
+keep) cmd_keep ;;
+install) cmd_install "${2:?usage: plinius-kernel-install install RELEASE}" ;;
+boot) cmd_boot ;;
+dlkm) cmd_dlkm ;;
+restore) cmd_restore ;;
+status) cmd_status ;;
+*) die "usage: plinius-kernel-install hook | keep | install RELEASE | boot | dlkm | restore | status" ;;
+esac

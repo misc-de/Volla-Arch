@@ -1,0 +1,69 @@
+From 6d48b62764cf9693b2d688026aadbebca300ccbb Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 15:34:55 +0100
+Subject: [PATCH] background: App overview options on top of Appearance
+
+Plinius: the app overview group (search, app names, folder dock, mobile
+apps button) moves from the Display page to the top of the Appearance
+page, where the look of the shell is set.
+---
+ panels/background/cc-background-panel.blp | 3 ++-
+ panels/background/cc-background-panel.c   | 7 +++++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/panels/background/cc-background-panel.blp b/panels/background/cc-background-panel.blp
+index ff2b3fb6f..663424331 100644
+--- a/panels/background/cc-background-panel.blp
++++ b/panels/background/cc-background-panel.blp
+@@ -21,7 +21,8 @@ template $CcBackgroundPanel: $CcPanel {
+       Adw.HeaderBar {}
+ 
+       content: Adw.ToastOverlay toast_overlay {
+-        child: Adw.PreferencesPage {
++        // Plinius: the app overview group goes on top (cc_plinius_display_setup_app_overview)
++        child: Adw.PreferencesPage appearance_page {
+           Adw.PreferencesGroup {
+             title: _("Style");
+ 
+diff --git a/panels/background/cc-background-panel.c b/panels/background/cc-background-panel.c
+index 85abe062b..3158a9cb3 100644
+--- a/panels/background/cc-background-panel.c
++++ b/panels/background/cc-background-panel.c
+@@ -32,6 +32,7 @@
+ #include "cc-background-chooser.h"
+ #include "cc-background-item.h"
+ #include "cc-background-preview.h"
++#include "panels/common/cc-plinius-display.h"
+ #include "cc-background-resources.h"
+ 
+ #define WP_PATH_ID "org.gnome.desktop.background"
+@@ -50,6 +51,8 @@
+ struct _CcBackgroundPanel {
+     CcPanel parent_instance;
+ 
++    AdwPreferencesPage *appearance_page;
++
+     GDBusConnection *connection;
+ 
+     GSettings *settings;
+@@ -459,6 +462,7 @@ cc_background_panel_class_init (CcBackgroundPanelClass *klass)
+                                                  "/org/gnome/control-center/background/cc-background-panel.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, accent_box);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, appearance_page);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, background_chooser);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, default_preview);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_preview);
+@@ -484,6 +488,9 @@ cc_background_panel_init (CcBackgroundPanel *self)
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
++    /* Plinius: the phone's app overview options first */
++    cc_plinius_display_setup_app_overview (self->appearance_page);
++
+     self->connection = g_application_get_dbus_connection (g_application_get_default ());
+ 
+     self->settings = g_settings_new (WP_PATH_ID);
+-- 
+2.55.0
+

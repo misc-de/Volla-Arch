@@ -1,0 +1,68 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=gnome-online-accounts-plinius
+pkgver=3.58.1
+pkgrel=5
+pkgdesc="GNOME Online Accounts with a Refresh button, and apps that get the account's data after a start without network"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://gitlab.gnome.org/GNOME/gnome-online-accounts"
+license=(LGPL-2.0-or-later)
+# As Arch's gnome-online-accounts, whose client library libgoa stays Arch's package.
+# plinius-goa-refresh: python-gobject, evolution-data-server.
+# gvfs-goa, gvfs-dnssd: without them the Files switch of an account does nothing, as the volume
+# (gvfs-goa) and the WebDAV backend (gvfs-dnssd) are split off in Arch and only optional.
+depends=(
+	dbus dconf evolution-data-server gcr-4 glib2 glibc gtk4 gvfs-dnssd gvfs-goa hicolor-icon-theme
+	json-glib keyutils krb5 libadwaita libgcc "libgoa=$pkgver" librest libsecret libsoup3 libxml2
+	python-gobject
+)
+makedepends=(git glib2-devel gobject-introspection meson vala)
+optdepends=(
+	'epiphany: (or another modern browser): OAuth authentication'
+	'gvfs-onedrive: Microsoft OneDrive'
+)
+provides=("gnome-online-accounts=$pkgver" libgoa-backend-1.0.so)
+conflicts=(gnome-online-accounts)
+# Commit of tag $pkgver: a tag can be moved later, a commit hash cannot
+_commit=968cd4b24bea0733584f9cc6dc13791a736358c2
+source=(
+	"git+https://gitlab.gnome.org/GNOME/gnome-online-accounts.git#commit=$_commit"
+	0001-provider-dialog-Add-a-Refresh-button-above-Remove.patch
+	plinius-goa-refresh
+	plinius-goa-refresh.service
+	90-plinius-goa-refresh
+)
+sha256sums=('SKIP'
+            '84fe45c7e6f021b38a7e815feb96d912c58fb823b78cc0c34964361472f8c300'
+            'fc55ef762bcde34795ec72ac0d4e4b6cde791b3feeb86d4d315821f1092531df'
+            'f316d0333575a50646df33b2f4d267094eb687ce789c9ea78ca4c606fff2af17'
+            '631730c43178775b685d8b6b26d645f64704760a0dcc26509e8854f14637973c')
+
+prepare() {
+	# A Refresh row above Remove in the account dialog: it checks the credentials and runs
+	# plinius-goa-refresh, with its translations (also pt_BR, which Arch's catalog carries)
+	patch -d gnome-online-accounts -Np1 -i "$srcdir/0001-provider-dialog-Add-a-Refresh-button-above-Remove.patch"
+}
+
+build() {
+	arch-meson gnome-online-accounts build -D documentation=false -D man=false
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+
+	# The client library comes from Arch's libgoa
+	cd "$pkgdir"
+	rm -r usr/include/goa-1.0/goa
+	rm usr/lib/libgoa-1.0.so*
+	rm usr/lib/girepository-1.0/Goa-1.0.typelib
+	rm -r usr/lib/goa-1.0/include
+	rm usr/lib/pkgconfig/goa-1.0.pc
+	rm usr/share/gir-1.0/Goa-1.0.gir
+	rm usr/share/vala/vapi/goa-1.0.*
+
+	install -Dm755 "$srcdir/plinius-goa-refresh" usr/lib/plinius/plinius-goa-refresh
+	install -Dm644 "$srcdir/plinius-goa-refresh.service" usr/lib/systemd/user/plinius-goa-refresh.service
+	install -Dm755 "$srcdir/90-plinius-goa-refresh" usr/lib/NetworkManager/dispatcher.d/90-plinius-goa-refresh
+}

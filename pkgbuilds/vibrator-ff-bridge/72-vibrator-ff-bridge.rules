@@ -1,0 +1,2 @@
+# Virtual force-feedback device of vibrator-ff-bridge: let feedbackd use it as vibration motor
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="vibrator-ff-bridge", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"

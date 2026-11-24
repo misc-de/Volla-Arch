@@ -1,0 +1,44 @@
+From 666acc1d83a8536792da471e89fe4b7914443fc5 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 14:17:32 +0100
+Subject: [PATCH 2/3] screencast: Find the shm format of a format offered
+ without alpha
+
+Every shm format is also offered without alpha. When a consumer picked
+that variant (RGBx for the compositor's RGBA, as GStreamer did), no shm
+format matched it, the buffer could not be created and the portal
+crashed. Both have the same layout: use the compositor's format for the
+buffer.
+---
+ src/screencast/screencast_common.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/screencast/screencast_common.c b/src/screencast/screencast_common.c
+index 1d86e61..1ba0a1c 100644
+--- a/src/screencast/screencast_common.c
++++ b/src/screencast/screencast_common.c
+@@ -127,7 +127,12 @@ struct xdpw_buffer *xdpw_buffer_create(struct xdpw_screencast_instance *cast,
+ 		struct xdpw_shm_format *fmt;
+ 		bool found = false;
+ 		wl_array_for_each(fmt, &cast->current_constraints.shm_formats) {
+-			if (fmt->fourcc == format) {
++			// Each shm format is also offered without alpha (build_format); a
++			// consumer may pick that one, the compositor only knows the other.
++			// Both have the same layout, the buffer takes the compositor's.
++			enum spa_video_format pw_format = xdpw_format_pw_from_drm_fourcc(fmt->fourcc);
++			if (fmt->fourcc == format ||
++					xdpw_format_pw_strip_alpha(pw_format) == cast->pwr_format.format) {
+ 				found = true;
+ 				break;
+ 			}
+@@ -138,6 +143,7 @@ struct xdpw_buffer *xdpw_buffer_create(struct xdpw_screencast_instance *cast,
+ 			return NULL;
+ 
+ 		}
++		buffer->format = format = fmt->fourcc;
+ 
+ 		buffer->plane_count = 1;
+ 		buffer->size[0] = fmt->stride * buffer->height;
+-- 
+2.56.0
+

@@ -1,0 +1,16 @@
+# The desktop on a TV: the virtual screen with the bar, without a VNC server. Schwupp starts this
+# when the desktop button of a TV is tapped in the cast quick setting, waits for the start job
+# (the session reports ready once the screen is there) and stops it when the TV is done.
+[Unit]
+Description=Plinius Desktop: the desktop on a TV
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/lib/plinius-desktop/plinius-desktop-session --cast
+TimeoutStartSec=20
+TimeoutStopSec=10
+# As plinius-desktop.service: one process killed for memory does not end the desktop
+OOMPolicy=continue

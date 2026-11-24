@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 07:00:00 +0100
+Subject: [PATCH] system: Self-Test, what the check after the start found
+
+plinius-health checks a few minutes after the start whether the parts an update
+can break still work, and says so in a notification. Tapping it did nothing:
+there was no page to open. A row below Hardware now opens "Self-Test" (tag
+plinius-self-test, the notification's target): each check with its state in
+words of its own, Check Again, Copy, and after a failed check what the last
+update changed with "Take Back Update" (plinius-rollback, asks for the PIN).
+The page (cc-plinius-selftest.*) lives as a separate file in the package
+directory and is copied to panels/system/ in prepare(); without plinius-health
+the row stays hidden.
+---
+--- a/panels/system/cc-system-panel.blp
++++ b/panels/system/cc-system-panel.blp
+@@ -57,6 +57,14 @@
+           visible: false;
+         }
+ 
++        // Plinius: title, subtitle and target in cc_plinius_selftest_row_setup ()
++        $CcListRow selftest_row {
++          icon-name: "checkbox-checked-symbolic";
++          show-arrow: true;
++          action-name: "navigation.push";
++          visible: false;
++        }
++
+         $CcListRow about_row {
+           title: _("_About");
+           subtitle: _("Hardware details and software versions");
+--- a/panels/system/cc-system-panel.c
++++ b/panels/system/cc-system-panel.c
+@@ -25,6 +25,7 @@
+ 
+ #include "cc-list-row.h"
+ #include "cc-plinius-hardware.h"
++#include "cc-plinius-selftest.h"
+ #include "cc-plinius-swap.h"
+ #include "cc-system-panel.h"
+ #include "cc-system-resources.h"
+@@ -45,6 +46,7 @@
+     AdwActionRow *hardware_row;
+     AdwActionRow *region_row;
+     AdwActionRow *remote_desktop_row;
++    AdwActionRow *selftest_row;
+     AdwActionRow *swap_row;
+ 
+     AdwPreferencesGroup *software_updates_group;
+@@ -127,6 +129,7 @@
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, hardware_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, region_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, remote_desktop_row);
++    gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, selftest_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, swap_row);
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, software_updates_group);
+ 
+@@ -163,6 +166,10 @@
+     if (cc_plinius_hardware_add_page (CC_PANEL (self)))
+         cc_plinius_hardware_row_setup (self->hardware_row);
+ 
++    /* Plinius: what plinius-health found after the start, Check Again, Take Back Update */
++    if (cc_plinius_selftest_add_page (CC_PANEL (self)))
++        cc_plinius_selftest_row_setup (self->selftest_row);
++
+     /* Plinius: swap file, threshold and what RAM and swap hold (plinius-swap) */
+     if (cc_plinius_swap_add_page (CC_PANEL (self)))
+         cc_plinius_swap_row_setup (self->swap_row);
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -46,6 +46,7 @@
+ sources = files(
+   'cc-password-utils.c',
+   'cc-plinius-hardware.c',
++  'cc-plinius-selftest.c',
+   'cc-plinius-swap.c',
+   'cc-system-panel.c',
+   'cc-systemd-service.c',

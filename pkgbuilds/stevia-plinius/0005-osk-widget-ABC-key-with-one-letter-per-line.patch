@@ -1,0 +1,59 @@
+From a9c828515c158338d0fa25f14704ab684796e0f5 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:27:14 +0100
+Subject: [PATCH] osk-widget: ABC key with one letter per line
+
+The key that leads back to the letters is one unit wide in a layer of
+eleven in the symbol views, so ABC side by side touches its edges. The
+letters now go below each other. Labels of several lines sit closer
+together and shrink until they fit the key's height.
+---
+ src/pos-osk-widget.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/src/pos-osk-widget.c b/src/pos-osk-widget.c
+index b1c8c1d..fc407a5 100644
+--- a/src/pos-osk-widget.c
++++ b/src/pos-osk-widget.c
+@@ -499,7 +499,8 @@ add_common_keys_pre (PosOskWidget      *self,
+     switch (layer) {
+     case POS_OSK_WIDGET_LAYER_SYMBOLS:
+     case POS_OSK_WIDGET_LAYER_SYMBOLS2:
+-      label = "ABC";
++      /* The key is one unit wide: one letter per line, side by side they touch its edges */
++      label = "A\nB\nC";
+       break;
+     case POS_OSK_WIDGET_LAYER_CAPS:
+       label = "={<";
+@@ -1452,6 +1453,10 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (PangoFontDescription, pango_font_description_free
+ #endif
+ 
+ 
++/* Labels of several lines: distance of the lines and the part of the key's height they may use */
++#define LABEL_LINES_SPACING 0.8
++#define LABEL_LINES_MAX_HEIGHT 0.8
++
+ static void
+ render_label (cairo_t *cr, GtkStyleContext *context, const char *label, const GdkRectangle *box)
+ {
+@@ -1471,6 +1476,20 @@ render_label (cairo_t *cr, GtkStyleContext *context, const char *label, const Gd
+   pango_layout_set_alignment (layout, PANGO_ALIGN_CENTER);
+ 
+   pango_layout_set_width (layout, PANGO_SCALE * box->width);
++
++  /* Labels of several lines sit closer together and shrink until they fit the key's height */
++  if (strchr (label, '\n')) {
++    double max_height = LABEL_LINES_MAX_HEIGHT * box->height * PANGO_SCALE;
++
++    pango_layout_set_line_spacing (layout, LABEL_LINES_SPACING);
++    pango_layout_get_extents (layout, NULL, &extents);
++    if (extents.height > max_height) {
++      pango_font_description_set_size (font,
++                                       pango_font_description_get_size (font) *
++                                       max_height / extents.height);
++      pango_layout_set_font_description (layout, font);
++    }
++  }
+   pango_layout_get_extents (layout, NULL, &extents);
+ 
+   cairo_move_to (cr,

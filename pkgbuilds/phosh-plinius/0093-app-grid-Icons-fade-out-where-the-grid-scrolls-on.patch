@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 15:30:00 +0100
+Subject: [PATCH] app-grid: Icons fade out where the grid scrolls on
+
+Plinius: scrolled up, the app grid ended at a hard edge below the cards
+of the running apps, icons were cut in half. Now they fade out over 72
+px at an edge where the grid scrolls on, top or bottom, so they slide
+softly under the running apps (also when those sit below the grid,
+0072). The fade grows with the distance scrolled: at the start and at
+the end of the list that edge stays sharp.
+
+GTK 3 has no blur; blurring each frame in software while scrolling
+would stutter, so the icons fade instead. Only the two strips are drawn
+through a cairo group, the rest of the grid is drawn as before.
+---
+ src/app-grid.c | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/src/app-grid.c b/src/app-grid.c
+index 2eb1e53f..e06f8747 100644
+--- a/src/app-grid.c
++++ b/src/app-grid.c
+@@ -660,6 +660,68 @@ on_plinius_settings_changed (PhoshAppGrid *self, const char *key, GSettings *set
+ }
+ 
+ 
++/*
++ * Plinius: icons don't end at a hard edge where the grid scrolls on (under the cards of the running
++ * apps, at the bottom of the screen) but fade out over PLINIUS_FADE_HEIGHT. The fade grows with
++ * the distance scrolled, so at the start and the end of the list nothing fades. Only the two
++ * strips are drawn through a group, the rest of the grid is drawn as usual.
++ */
++#define PLINIUS_FADE_HEIGHT 72
++
++static void
++plinius_draw_faded_strip (GtkWidget *widget, cairo_t *cr, int width, double y, double fade,
++                          gboolean at_top)
++{
++  cairo_pattern_t *mask;
++
++  cairo_save (cr);
++  cairo_rectangle (cr, 0, y, width, PLINIUS_FADE_HEIGHT);
++  cairo_clip (cr);
++  cairo_push_group (cr);
++  GTK_WIDGET_GET_CLASS (widget)->draw (widget, cr);
++  cairo_pop_group_to_source (cr);
++
++  /* From transparent at the edge to opaque PLINIUS_FADE_HEIGHT further in */
++  mask = cairo_pattern_create_linear (0, y, 0, y + PLINIUS_FADE_HEIGHT);
++  cairo_pattern_add_color_stop_rgba (mask, 0, 0, 0, 0, at_top ? 1 - fade : 1);
++  cairo_pattern_add_color_stop_rgba (mask, 1, 0, 0, 0, at_top ? 1 : 1 - fade);
++  cairo_mask (cr, mask);
++  cairo_pattern_destroy (mask);
++  cairo_restore (cr);
++}
++
++
++static gboolean
++on_scrolled_window_draw (GtkWidget *widget, cairo_t *cr, gpointer unused)
++{
++  GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (widget));
++  int width = gtk_widget_get_allocated_width (widget);
++  int height = gtk_widget_get_allocated_height (widget);
++  double value = gtk_adjustment_get_value (adj);
++  double rest = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj) - value;
++  double fade_top = CLAMP (value / PLINIUS_FADE_HEIGHT, 0, 1);
++  double fade_bottom = CLAMP (rest / PLINIUS_FADE_HEIGHT, 0, 1);
++  int top = fade_top > 0 ? PLINIUS_FADE_HEIGHT : 0;
++  int bottom = fade_bottom > 0 ? PLINIUS_FADE_HEIGHT : 0;
++
++  if ((!top && !bottom) || height < 3 * PLINIUS_FADE_HEIGHT)
++    return GDK_EVENT_PROPAGATE;
++
++  cairo_save (cr);
++  cairo_rectangle (cr, 0, top, width, height - top - bottom);
++  cairo_clip (cr);
++  GTK_WIDGET_GET_CLASS (widget)->draw (widget, cr);
++  cairo_restore (cr);
++
++  if (top)
++    plinius_draw_faded_strip (widget, cr, width, 0, fade_top, TRUE);
++  if (bottom)
++    plinius_draw_faded_strip (widget, cr, width, height - PLINIUS_FADE_HEIGHT, fade_bottom, FALSE);
++
++  return GDK_EVENT_STOP;
++}
++
++
+ static void
+ phosh_app_grid_init (PhoshAppGrid *self)
+ {
+@@ -669,6 +731,8 @@ phosh_app_grid_init (PhoshAppGrid *self)
+   g_autoptr (GAction) action = NULL;
+ 
+   gtk_widget_init_template (GTK_WIDGET (self));
++  /* Plinius: fade the icons out at the edges where the grid scrolls on */
++  g_signal_connect (priv->scrolled_window, "draw", G_CALLBACK (on_scrolled_window_draw), NULL);
+ 
+   favorites = phosh_favorite_list_model_get_default ();
+ 

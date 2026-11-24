@@ -1,0 +1,134 @@
+From e3ca659ffb7bd1e7e6d44bbcced83e1e470793e9 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 10:46:33 +0100
+Subject: [PATCH] shared: touches in any slot of the touchscreen
+
+The two pointers of a touchscreen were bound to slots 0 and 1; a touch in
+any other slot was dropped. Touchscreens number their slots freely: the
+FocalTech firmware in the Volla puts some single taps into slot 9, so a
+key of the on-screen keyboard did not react to them.
+
+A touch now takes the first free pointer when it goes down and keeps it
+until it is lifted, whatever its slot.
+---
+ shared/indev.c | 62 +++++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 44 insertions(+), 18 deletions(-)
+
+diff --git a/shared/indev.c b/shared/indev.c
+index ebf3c5f..c876bb6 100644
+--- a/shared/indev.c
++++ b/shared/indev.c
+@@ -49,6 +49,9 @@ struct input_device_ext {
+        This makes typing with thumbs convenient */
+     lv_indev_t* pointer1;
+     lv_indev_t* pointer2;
++    /* The touch slots the two pointers follow (NO_TOUCH_SLOT = free). The touchscreen numbers its
++       slots freely: the Volla's FocalTech firmware puts some single taps into slot 9 */
++    int32_t touch_slot[2];
+ #ifndef BBX_APP_BUFFYBOARD
+     lv_indev_t* keypad;
+     struct xkb_state* xkb_state;
+@@ -56,6 +59,9 @@ struct input_device_ext {
+     enum input_device_type type;
+ };
+ 
++/* A free pointer; libinput gives -1 as slot of single-touch devices, so -1 cannot mean free */
++#define NO_TOUCH_SLOT INT32_MIN
++
+ /* The analog of lv_indev_data_t, but without unused fields */
+ struct indev_ext {
+     union {
+@@ -129,6 +135,35 @@ static void read_pointer(lv_indev_t * indev, lv_indev_data_t * data) {
+     data->state = ext->state;
+ }
+ 
++/**
++ * The pointer that follows touch slot slot: the one it already has, or else on a touch down the
++ * first free one. NULL while both pointers follow other fingers.
++ */
++static lv_indev_t *pointer_for_touch_slot(struct input_device_ext *ext, int32_t slot, bool down) {
++    lv_indev_t *pointers[2] = { ext->pointer1, ext->pointer2 };
++
++    for (int i = 0; i < 2; i++)
++        if (pointers[i] && ext->touch_slot[i] == slot)
++            return pointers[i];
++    if (!down)
++        return NULL;
++    for (int i = 0; i < 2; i++)
++        if (pointers[i] && ext->touch_slot[i] == NO_TOUCH_SLOT) {
++            ext->touch_slot[i] = slot;
++            return pointers[i];
++        }
++    return NULL;
++}
++
++/**
++ * Let go of touch slot slot after its finger was lifted.
++ */
++static void release_touch_slot(struct input_device_ext *ext, int32_t slot) {
++    for (int i = 0; i < 2; i++)
++        if (ext->touch_slot[i] == slot)
++            ext->touch_slot[i] = NO_TOUCH_SLOT;
++}
++
+ static enum input_device_type identify_input_device(struct udev_device* device) {
+     bool is_input = false;
+     enum input_device_type ret = BBX_INDEV_OTHER;
+@@ -186,6 +221,8 @@ static void add_device_extension(struct libinput_device* device) {
+ 
+     ext->pointer1 = NULL;
+     ext->pointer2 = NULL;
++    ext->touch_slot[0] = NO_TOUCH_SLOT;
++    ext->touch_slot[1] = NO_TOUCH_SLOT;
+ #ifndef BBX_APP_BUFFYBOARD
+     ext->keypad = NULL;
+     ext->xkb_state = NULL;
+@@ -526,12 +563,8 @@ static void on_input_event() {
+             struct libinput_event_touch *touch_event = libinput_event_get_touch_event(event);
+             int32_t slot = libinput_event_touch_get_slot(touch_event);
+ 
+-            lv_indev_t *pointer;
+-            if (slot <= 0)
+-                pointer = ext->pointer1;
+-            else if (slot == 1)
+-                pointer = ext->pointer2;
+-            else
++            lv_indev_t *pointer = pointer_for_touch_slot(ext, slot, false);
++            if (!pointer)
+                 break;
+ 
+             struct indev_ext *data = lv_indev_get_user_data(pointer);
+@@ -554,12 +587,8 @@ static void on_input_event() {
+             struct libinput_event_touch *touch_event = libinput_event_get_touch_event(event);
+             int32_t slot = libinput_event_touch_get_slot(touch_event);
+ 
+-            lv_indev_t *pointer;
+-            if (slot <= 0)
+-                pointer = ext->pointer1;
+-            else if (slot == 1)
+-                pointer = ext->pointer2;
+-            else
++            lv_indev_t *pointer = pointer_for_touch_slot(ext, slot, true);
++            if (!pointer)
+                 break;
+ 
+             struct indev_ext *data = lv_indev_get_user_data(pointer);
+@@ -584,12 +613,9 @@ static void on_input_event() {
+             struct libinput_event_touch *touch_event = libinput_event_get_touch_event(event);
+             int32_t slot = libinput_event_touch_get_slot(touch_event);
+ 
+-            lv_indev_t *pointer;
+-            if (slot <= 0)
+-                pointer = ext->pointer1;
+-            else if (slot == 1)
+-                pointer = ext->pointer2;
+-            else
++            lv_indev_t *pointer = pointer_for_touch_slot(ext, slot, false);
++            release_touch_slot(ext, slot);
++            if (!pointer)
+                 break;
+ 
+             struct indev_ext *data = lv_indev_get_user_data(pointer);
+-- 
+2.56.0
+

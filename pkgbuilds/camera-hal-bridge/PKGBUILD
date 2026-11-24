@@ -1,0 +1,41 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=camera-hal-bridge
+pkgver=0.8
+pkgrel=10
+pkgdesc="Android cameras (Camera2 NDK through libhybris) as PipeWire camera nodes, real photos with multi-frame noise reduction and camera settings over the session bus, and whether the front camera is on"
+arch=(aarch64)  # needs the Android camera stack through libhybris
+license=(MIT)
+depends=(libhybris pipewire systemd-libs "wireplumber>=0.5.19")
+source=(camera-hal-bridge.c
+	camera-ndk.h
+	camera-hal-bridge.service
+	73-camera-hal-bridge.rules
+	LICENSE
+	find-plinius-camera-access.lua
+	70-plinius-camera-access.conf)
+sha256sums=('dd572845cd59eb061c8ecfa92205c58bf291e9c19037688f6dd9248ca8938823'
+	'6b9cf4985f2ce24ce4d7e4f752581e163bc04cc2d3fc258601e81f93881db95c'
+	'11101f6a10c37acc78873aaf98f9168a89106689130dcca1492b5f2cfd5324d3'
+	'da74d95b0d328d78566024e35a891bcce41520448d27fbfd2176480abd9fef05'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
+	'f0fef91891781c15fc5f99f333c77acfb8fc22751a8ee337ff059378bf4b866b'
+	'55a59b37092e65f6b26aa33f2c9cffcbbefd73dd34eba7fcd37ca3f87728147c')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o camera-hal-bridge camera-hal-bridge.c \
+		$(pkg-config --cflags --libs libpipewire-0.3 libsystemd) -lhybris-common -lpthread $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 camera-hal-bridge -t "$pkgdir/usr/bin"
+	install -Dm644 camera-hal-bridge.service -t "$pkgdir/usr/lib/systemd/user"
+	install -Dm644 73-camera-hal-bridge.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	# WirePlumber: native clients see the camera nodes only if they are the phone's own parts;
+	# apps get the camera through the camera portal (GNOME Settings > Privacy > Camera)
+	install -Dm644 find-plinius-camera-access.lua -t "$pkgdir/usr/share/wireplumber/scripts/plinius"
+	install -Dm644 70-plinius-camera-access.conf -t "$pkgdir/usr/share/wireplumber/wireplumber.conf.d"
+}

@@ -1,0 +1,11 @@
+# First start on an empty data partition: the home of the user has to exist before /home is mounted.
+[Unit]
+Description=Create the home directory on the data partition
+DefaultDependencies=no
+ConditionPathIsMountPoint=/userdata
+ConditionPathExists=!/userdata/home/plinius
+Before=home.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius-home/init

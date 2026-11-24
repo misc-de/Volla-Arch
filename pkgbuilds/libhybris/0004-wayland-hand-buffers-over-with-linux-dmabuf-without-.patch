@@ -1,0 +1,370 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 22:11:50 +0100
+Subject: [PATCH 4/4] wayland: hand buffers over with linux-dmabuf without
+ android_wlegl
+
+wlroots based compositors have no android_wlegl, only zwp_linux_dmabuf_v1.
+If the server lacks android_wlegl, send the client-allocated gralloc buffers
+as linear dma-bufs (LINEAR modifier) instead of aborting. Needs client side
+buffers (--disable-wayland_serverside_buffers).
+---
+ hybris/configure.ac                           |  2 +
+ hybris/egl/platforms/wayland/Makefile.am      | 14 ++++
+ .../platforms/wayland/eglplatform_wayland.cpp | 29 +++++--
+ hybris/egl/platforms/wayland/wayland_window.h |  4 +-
+ .../wayland/wayland_window_common.cpp         | 75 ++++++++++++++++++-
+ .../platforms/wayland/wayland_window_common.h |  9 +++
+ 6 files changed, 125 insertions(+), 8 deletions(-)
+
+diff --git a/hybris/configure.ac b/hybris/configure.ac
+index 1f7a09e..8bf7918 100644
+--- a/hybris/configure.ac
++++ b/hybris/configure.ac
+@@ -88,6 +88,8 @@ AC_ARG_ENABLE(wayland,
+ 	WAYLAND_PREFIX=`$PKG_CONFIG --variable=prefix wayland-client`
+ 
+ 	AC_PATH_PROG([WAYLAND_SCANNER], [wayland-scanner],, [${WAYLAND_PREFIX}/bin$PATH_SEPARATOR$PATH])
++	PKG_CHECK_VAR([WAYLAND_PROTOCOLS_DATADIR], [wayland-protocols], [pkgdatadir],,
++		[AC_MSG_ERROR([wayland-protocols not found])])
+ 	AC_DEFINE(WANT_WAYLAND, [], [We want Wayland support])
+ ],
+   [wayland="no"])
+diff --git a/hybris/egl/platforms/wayland/Makefile.am b/hybris/egl/platforms/wayland/Makefile.am
+index 44ffe2b..868964e 100644
+--- a/hybris/egl/platforms/wayland/Makefile.am
++++ b/hybris/egl/platforms/wayland/Makefile.am
+@@ -1,7 +1,21 @@
+ pkglib_LTLIBRARIES = eglplatform_wayland.la
+ 
+ eglplatform_wayland_la_SOURCES = eglplatform_wayland.cpp wayland_window.cpp $(top_srcdir)/platforms/wayland/wayland_window_common.cpp
++# Buffers for compositors without android_wlegl (e.g. wlroots) go through linux-dmabuf
++nodist_eglplatform_wayland_la_SOURCES = linux-dmabuf-unstable-v1-protocol.c
++BUILT_SOURCES = linux-dmabuf-unstable-v1-protocol.c linux-dmabuf-unstable-v1-client-protocol.h
++CLEANFILES = $(BUILT_SOURCES)
++LINUX_DMABUF_XML = $(WAYLAND_PROTOCOLS_DATADIR)/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml
++
++linux-dmabuf-unstable-v1-protocol.c: $(LINUX_DMABUF_XML)
++	$(AM_V_GEN)$(WAYLAND_SCANNER) private-code < $< > $@
++
++linux-dmabuf-unstable-v1-client-protocol.h: $(LINUX_DMABUF_XML)
++	$(AM_V_GEN)$(WAYLAND_SCANNER) client-header < $< > $@
++
++eglplatform_wayland_la_CFLAGS = $(WAYLAND_CLIENT_CFLAGS)
+ eglplatform_wayland_la_CXXFLAGS = \
++	-I$(top_builddir)/egl/platforms/wayland \
+ 	-I$(top_srcdir)/common \
+ 	-I$(top_srcdir)/platforms/common \
+ 	-I$(top_srcdir)/platforms/wayland \
+diff --git a/hybris/egl/platforms/wayland/eglplatform_wayland.cpp b/hybris/egl/platforms/wayland/eglplatform_wayland.cpp
+index 873451e..0f44111 100644
+--- a/hybris/egl/platforms/wayland/eglplatform_wayland.cpp
++++ b/hybris/egl/platforms/wayland/eglplatform_wayland.cpp
+@@ -52,6 +52,7 @@ extern "C" {
+ #include "wayland_window.h"
+ #include "logging.h"
+ #include "wayland-android-client-protocol.h"
++#include "linux-dmabuf-unstable-v1-client-protocol.h"
+ 
+ static const char *  (*_eglQueryString)(EGLDisplay dpy, EGLint name) = NULL;
+ static __eglMustCastToProperFunctionPointerType (*_eglGetProcAddress)(const char *procname) = NULL;
+@@ -65,6 +66,10 @@ struct WaylandDisplay {
+ 	wl_event_queue *queue;
+ 	wl_registry *registry;
+ 	android_wlegl *wlegl;
++	// Used when the compositor has no android_wlegl (e.g. wlroots)
++	zwp_linux_dmabuf_v1 *linux_dmabuf;
++	// The registry's globals have arrived
++	bool synced;
+ 	wl_display *wl_dpy_wrapper;
+ 	bool owns_connection;
+ };
+@@ -81,6 +86,9 @@ static void registry_handle_global(void *data, wl_registry *registry, uint32_t n
+ 
+ 	if (strcmp(interface, "android_wlegl") == 0) {
+ 		dpy->wlegl = static_cast<struct android_wlegl *>(wl_registry_bind(registry, name, &android_wlegl_interface, std::min(2u, version)));
++	} else if (strcmp(interface, "zwp_linux_dmabuf_v1") == 0 && version >= 2) {
++		// Version 2 for create_immed; the format events of version 3 are not needed
++		dpy->linux_dmabuf = static_cast<struct zwp_linux_dmabuf_v1 *>(wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, std::min(3u, version)));
+ 	}
+ }
+ 
+@@ -93,8 +101,9 @@ static void callback_done(void *data, wl_callback *cb, uint32_t d)
+     WaylandDisplay *dpy = (WaylandDisplay *)data;
+ 
+     wl_callback_destroy(cb);
+-    if (!dpy->wlegl) {
+-        fprintf(stderr, "Fatal: the server doesn't advertise the android_wlegl global!");
++    dpy->synced = true;
++    if (!dpy->wlegl && !dpy->linux_dmabuf) {
++        fprintf(stderr, "Fatal: the server advertises neither android_wlegl nor zwp_linux_dmabuf_v1!");
+         abort();
+     }
+ }
+@@ -107,6 +116,8 @@ extern "C" _EGLDisplay *waylandws_GetDisplay(EGLNativeDisplayType display)
+ {
+ 	WaylandDisplay *wdpy = new WaylandDisplay;
+ 	wdpy->wlegl = NULL;
++	wdpy->linux_dmabuf = NULL;
++	wdpy->synced = false;
+ 	wdpy->registry = NULL;
+ 	wdpy->queue = NULL;
+ 	wdpy->wl_dpy_wrapper = NULL;
+@@ -159,15 +170,20 @@ extern "C" void waylandws_Terminate(_EGLDisplay *dpy)
+ 		if (wdpy->init_count == 0) {
+ 			int ret = 0;
+ 			// We still have the sync callback on flight, wait for it to arrive
+-			while (ret == 0 && !wdpy->wlegl) {
++			while (ret == 0 && !wdpy->synced) {
+ 				ret = wl_display_dispatch_queue(wdpy->wl_dpy, wdpy->queue);
+ 			}
+ 			assert(ret >= 0);
+-			android_wlegl_destroy(wdpy->wlegl);
++			if (wdpy->wlegl)
++				android_wlegl_destroy(wdpy->wlegl);
++			if (wdpy->linux_dmabuf)
++				zwp_linux_dmabuf_v1_destroy(wdpy->linux_dmabuf);
+ 			wl_registry_destroy(wdpy->registry);
+ 			wl_proxy_wrapper_destroy(wdpy->wl_dpy_wrapper);
+ 			wl_event_queue_destroy(wdpy->queue);
+ 			wdpy->wlegl = NULL;
++			wdpy->linux_dmabuf = NULL;
++			wdpy->synced = false;
+ 			wdpy->registry = NULL;
+ 			wdpy->wl_dpy_wrapper = NULL;
+ 			wdpy->queue = NULL;
+@@ -191,12 +207,12 @@ extern "C" EGLNativeWindowType waylandws_CreateWindow(EGLNativeWindowType win, _
+ 	WaylandDisplay *wdpy = (WaylandDisplay *)display;
+ 
+ 	int ret = 0;
+-	while (ret == 0 && !wdpy->wlegl) {
++	while (ret == 0 && !wdpy->synced) {
+ 		ret = wl_display_dispatch_queue(wdpy->wl_dpy, wdpy->queue);
+ 	}
+ 	assert(ret >= 0);
+ 
+-	WaylandNativeWindow *window = new WaylandNativeWindow((struct wl_egl_window *) win, wdpy->wl_dpy, wdpy->wlegl);
++	WaylandNativeWindow *window = new WaylandNativeWindow((struct wl_egl_window *) win, wdpy->wl_dpy, wdpy->wlegl, wdpy->linux_dmabuf);
+ 	window->common.incRef(&window->common);
+ 	return (EGLNativeWindowType) static_cast<struct ANativeWindow *>(window);
+ }
+@@ -219,6 +235,7 @@ extern "C" wl_buffer *waylandws_createWlBuffer(EGLDisplay dpy, EGLImageKHR image
+ 		WaylandDisplay *wdpy = (WaylandDisplay *)img->ws_dpy;
+ 		ANativeWindowBuffer *buf = (ANativeWindowBuffer *)img->ws_buffer;
+ 		WaylandNativeWindowBuffer wnb(buf);
++		wnb.linux_dmabuf = wdpy->linux_dmabuf;
+ 		// The buffer will be managed by the app, so pass NULL as the queue so that
+ 		// it will be assigned to the default queue
+ 		wnb.wlbuffer_from_native_handle(wdpy->wlegl, wdpy->wl_dpy, NULL);
+diff --git a/hybris/egl/platforms/wayland/wayland_window.h b/hybris/egl/platforms/wayland/wayland_window.h
+index 3407884..52bacd7 100644
+--- a/hybris/egl/platforms/wayland/wayland_window.h
++++ b/hybris/egl/platforms/wayland/wayland_window.h
+@@ -44,7 +44,8 @@ extern "C" {
+ 
+ class WaylandNativeWindow : public EGLBaseNativeWindow {
+ public:
+-    WaylandNativeWindow(struct wl_egl_window *win, struct wl_display *display, android_wlegl *wlegl);
++    WaylandNativeWindow(struct wl_egl_window *win, struct wl_display *display, android_wlegl *wlegl,
++                        struct zwp_linux_dmabuf_v1 *linux_dmabuf = NULL);
+     ~WaylandNativeWindow();
+ 
+     void lock();
+@@ -103,6 +104,7 @@ private:
+     unsigned int m_defaultHeight;
+     uint64_t m_usage;
+     struct android_wlegl *m_android_wlegl;
++    struct zwp_linux_dmabuf_v1 *m_linux_dmabuf;
+     pthread_mutex_t mutex;
+     pthread_cond_t cond;
+     int m_queueReads;
+diff --git a/hybris/platforms/wayland/wayland_window_common.cpp b/hybris/platforms/wayland/wayland_window_common.cpp
+index 91f7843..69ac2be 100644
+--- a/hybris/platforms/wayland/wayland_window_common.cpp
++++ b/hybris/platforms/wayland/wayland_window_common.cpp
+@@ -34,8 +34,11 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <errno.h>
++#include <unistd.h>
++#include <drm/drm_fourcc.h>
+ 
+ #include "logging.h"
++#include "linux-dmabuf-unstable-v1-client-protocol.h"
+ 
+ #if ANDROID_VERSION_MAJOR>=4 && ANDROID_VERSION_MINOR>=2 || ANDROID_VERSION_MAJOR>=5
+ extern "C" {
+@@ -56,10 +59,66 @@ static const struct wl_callback_listener buffer_create_sync_listener = {
+    buffer_create_sync_callback
+ };
+ 
++// DRM format of a gralloc format, and its bytes per pixel
++static uint32_t drm_format_of(int hal_format, int *bpp)
++{
++    *bpp = 4;
++    switch (hal_format) {
++    case HAL_PIXEL_FORMAT_RGBA_8888: return DRM_FORMAT_ABGR8888;
++    case HAL_PIXEL_FORMAT_RGBX_8888: return DRM_FORMAT_XBGR8888;
++    case HAL_PIXEL_FORMAT_BGRA_8888: return DRM_FORMAT_ARGB8888;
++    case HAL_PIXEL_FORMAT_RGB_565: *bpp = 2; return DRM_FORMAT_RGB565;
++    }
++    return DRM_FORMAT_INVALID;
++}
++
++// The dma-buf with the pixels: the first fd large enough for the image.
++// Handles may carry further fds (MediaTek: metadata).
++static int handle_dmabuf_fd(const native_handle_t *handle, off_t min_size)
++{
++    for (int i = 0; i < handle->numFds; i++) {
++        off_t size = lseek(handle->data[i], 0, SEEK_END);
++        lseek(handle->data[i], 0, SEEK_SET);
++        if (size >= min_size)
++            return handle->data[i];
++    }
++    return -1;
++}
++
++// A wl_buffer for compositors with linux-dmabuf only. The buffers are linear
++// (see WaylandNativeWindow::setUsage()), hence the LINEAR modifier.
++void WaylandNativeWindowBuffer::wlbuffer_from_dmabuf(struct wl_event_queue *queue)
++{
++    int bpp;
++    uint32_t drm_format = drm_format_of(format, &bpp);
++    int fd = drm_format != DRM_FORMAT_INVALID ? handle_dmabuf_fd(handle, (off_t) stride * height * bpp) : -1;
++    if (fd < 0) {
++        fprintf(stderr, "Fatal: no dma-buf for a %dx%d buffer of format %d\n", width, height, format);
++        abort();
++    }
++
++    struct zwp_linux_dmabuf_v1 *dmabuf_wrapper = (struct zwp_linux_dmabuf_v1 *) wl_proxy_create_wrapper(linux_dmabuf);
++    wl_proxy_set_queue((struct wl_proxy *) dmabuf_wrapper, queue);
++
++    struct zwp_linux_buffer_params_v1 *params = zwp_linux_dmabuf_v1_create_params(dmabuf_wrapper);
++    zwp_linux_buffer_params_v1_add(params, fd, 0, 0, stride * bpp,
++                                   DRM_FORMAT_MOD_LINEAR >> 32, DRM_FORMAT_MOD_LINEAR & 0xffffffff);
++    wlbuffer = zwp_linux_buffer_params_v1_create_immed(params, width, height, drm_format, 0);
++    zwp_linux_buffer_params_v1_destroy(params);
++
++    wl_proxy_wrapper_destroy(dmabuf_wrapper);
++}
++
+ void WaylandNativeWindowBuffer::wlbuffer_from_native_handle(struct android_wlegl *android_wlegl,
+                                                             struct wl_display *display,
+                                                             struct wl_event_queue *queue)
+ {
++    if (!android_wlegl && linux_dmabuf) {
++        wlbuffer_from_dmabuf(queue);
++        sync_creation(display, queue);
++        return;
++    }
++
+     struct wl_array ints;
+     int *ints_data;
+     struct android_wlegl_handle *wlegl_handle;
+@@ -87,6 +146,12 @@ void WaylandNativeWindowBuffer::wlbuffer_from_native_handle(struct android_wlegl
+ 
+     wl_proxy_wrapper_destroy(android_wlegl_wrapper);
+ 
++    sync_creation(display, queue);
++}
++
++// creation_callback is cleared once the compositor has seen the new buffer
++void WaylandNativeWindowBuffer::sync_creation(struct wl_display *display, struct wl_event_queue *queue)
++{
+     struct wl_display *display_wrapper = (struct wl_display *) wl_proxy_create_wrapper(display);
+     wl_proxy_set_queue((struct wl_proxy *) display_wrapper, queue);
+ 
+@@ -160,8 +225,10 @@ static void check_fatal_error(struct wl_display *display)
+ 
+ WaylandNativeWindow::WaylandNativeWindow(struct wl_egl_window *window,
+                                          struct wl_display *display,
+-                                         android_wlegl *wlegl)
++                                         android_wlegl *wlegl,
++                                         struct zwp_linux_dmabuf_v1 *linux_dmabuf)
+     : m_android_wlegl(wlegl)
++    , m_linux_dmabuf(wlegl ? NULL : linux_dmabuf)
+ {
+     HYBRIS_TRACE_BEGIN("wayland-platform", "create_window", "");
+     this->m_window = window;
+@@ -187,6 +254,9 @@ WaylandNativeWindow::WaylandNativeWindow(struct wl_egl_window *window,
+     this->m_swap_interval = 1;
+ 
+     m_usage = GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
++    // A dma-buf says nothing about compression: keep the buffers linear (read by the CPU now and then)
++    if (m_linux_dmabuf)
++        m_usage |= GRALLOC_USAGE_SW_READ_RARELY;
+     pthread_mutex_init(&mutex, NULL);
+     pthread_cond_init(&cond, NULL);
+     m_queueReads = 0;
+@@ -472,6 +542,7 @@ WaylandNativeWindowBuffer *WaylandNativeWindow::addBuffer() {
+     wl_display_roundtrip_queue(m_display, wl_queue);
+ #else
+     wnb = new ClientWaylandBuffer(m_width, m_height, m_format, m_usage);
++    wnb->linux_dmabuf = m_linux_dmabuf;
+ #endif
+     m_bufList.push_back(wnb);
+     ++m_freeBufs;
+@@ -533,6 +604,8 @@ int WaylandNativeWindow::setBuffersDimensions(int width, int height) {
+ 
+ int WaylandNativeWindow::setUsage(uint64_t usage) {
+     usage |= GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
++    if (m_linux_dmabuf)
++        usage |= GRALLOC_USAGE_SW_READ_RARELY;
+ 
+     lock();
+     if (usage != m_usage)
+diff --git a/hybris/platforms/wayland/wayland_window_common.h b/hybris/platforms/wayland/wayland_window_common.h
+index 6083dfb..fab46fe 100644
+--- a/hybris/platforms/wayland/wayland_window_common.h
++++ b/hybris/platforms/wayland/wayland_window_common.h
+@@ -37,6 +37,8 @@ extern "C" {
+ #include "wayland-android-client-protocol.h"
+ }
+ 
++struct zwp_linux_dmabuf_v1;
++
+ class WaylandNativeWindowBuffer : public BaseNativeWindowBuffer
+ {
+ public:
+@@ -46,6 +48,7 @@ public:
+         , youngest(0)
+         , other(0)
+         , creation_callback(0)
++        , linux_dmabuf(0)
+     {}
+     WaylandNativeWindowBuffer(ANativeWindowBuffer *other)
+     {
+@@ -60,6 +63,7 @@ public:
+         this->busy = 0;
+         this->other = other;
+         this->youngest = 0;
++        this->linux_dmabuf = NULL;
+     }
+ 
+     struct wl_buffer *wlbuffer;
+@@ -67,10 +71,14 @@ public:
+     int youngest;
+     ANativeWindowBuffer *other;
+     struct wl_callback *creation_callback;
++    // Set when the compositor has no android_wlegl: the buffer goes as dma-buf
++    struct zwp_linux_dmabuf_v1 *linux_dmabuf;
+ 
+     void wlbuffer_from_native_handle(struct android_wlegl *android_wlegl,
+                                      struct wl_display *display,
+                                      struct wl_event_queue *queue);
++    void wlbuffer_from_dmabuf(struct wl_event_queue *queue);
++    void sync_creation(struct wl_display *display, struct wl_event_queue *queue);
+ 
+     virtual void init(struct android_wlegl *android_wlegl,
+                       struct wl_display *display,
+@@ -100,6 +108,7 @@ protected:
+         this->creation_callback = NULL;
+         this->busy = 0;
+         this->other = NULL;
++        this->linux_dmabuf = NULL;
+         int alloc_ok = hybris_gralloc_allocate(this->width ? this->width : 1,
+                 this->height ? this->height : 1,
+                 this->format, (uint32_t)this->usage,
+-- 
+2.55.0
+

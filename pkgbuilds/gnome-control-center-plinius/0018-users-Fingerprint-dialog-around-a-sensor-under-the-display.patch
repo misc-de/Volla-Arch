@@ -1,0 +1,173 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 07:45:35 +0100
+Subject: [PATCH] users: Fingerprint dialog around a sensor under the display
+
+Plinius: with a sensor under the display (biomd reports type 2 or 3 and
+its location), the touch target that plinius-udfps draws over the sensor
+sat below the floating dialog, outside of it, and the list page showed it
+all the time because GNOME tries fingers there (identification).
+
+- The dialog is always a bottom sheet, 85 % of the screen high so that
+  the finger list rarely needs scrolling. While a finger is enrolled it
+  keeps room at its bottom from the sensor's top edge down (from biomd's
+  location and the monitor's scale), so the touch target appears inside
+  the dialog; the other pages use that room for their content.
+- No identification on the list page: the target only shows while a
+  finger is enrolled.
+
+Without biomd, or with another kind of sensor, nothing changes.
+---
+ panels/system/users/cc-fingerprint-dialog.c | 108 ++++++++++++++++++++
+ 1 file changed, 108 insertions(+)
+
+diff --git a/panels/system/users/cc-fingerprint-dialog.c b/panels/system/users/cc-fingerprint-dialog.c
+index 76841c213..9a892d1d2 100644
+--- a/panels/system/users/cc-fingerprint-dialog.c
++++ b/panels/system/users/cc-fingerprint-dialog.c
+@@ -23,6 +23,7 @@
+ #include <adwaita.h>
+ #include <cairo/cairo.h>
+ #include <glib/gi18n.h>
++#include <math.h>
+ 
+ #include "cc-fingerprint-dialog.h"
+ 
+@@ -109,6 +110,12 @@ struct _CcFingerprintDialog {
+ 
+     GDBusProxy *screensaver_proxy;
+     gulong screensaver_lock_signal_id;
++
++    /* Plinius: top edge of a fingerprint sensor under the display (biomd, panel pixels), 0 for
++     * any other sensor; the space at the bottom of the dialog that the sensor's touch target
++     * (plinius-udfps) is drawn into */
++    int udfps_top;
++    GtkWidget *udfps_space;
+ };
+ 
+ /* TODO - fprintd and API changes required:
+@@ -576,9 +583,105 @@ reset_verify_state_cb (gpointer user_data)
+     update_identified_rows (GTK_WIDGET (self->prints_group), NULL);
+ }
+ 
++/* Plinius: a property of biomd's fingerprint object, NULL without biomd */
++static GVariant *
++biomd_get_property (GDBusConnection *bus, const char *property)
++{
++    g_autoptr(GVariant) reply = NULL;
++    GVariant *value = NULL;
++
++    reply = g_dbus_connection_call_sync (bus, "io.FuriOS.Biomd", "/io/FuriOS/Biomd/Fingerprint",
++                                         "org.freedesktop.DBus.Properties", "Get",
++                                         g_variant_new ("(ss)", "io.FuriOS.Biomd.Fingerprint", property),
++                                         G_VARIANT_TYPE ("(v)"), G_DBUS_CALL_FLAGS_NO_AUTO_START, 500, NULL,
++                                         NULL);
++    if (reply)
++        g_variant_get (reply, "(v)", &value);
++    return value;
++}
++
++/* Plinius: the top edge of a sensor under the display (types 2 ultrasonic, 3 optical), else 0 */
++static int
++get_udfps_top (void)
++{
++    g_autoptr(GDBusConnection) bus = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, NULL);
++    g_autoptr(GVariant) type = NULL;
++    g_autoptr(GVariant) location = NULL;
++    gint32 sensor_type, x, y, radius;
++
++    if (bus == NULL)
++        return 0;
++
++    type = biomd_get_property (bus, "SensorType");
++    location = biomd_get_property (bus, "SensorLocation");
++    if (!type || !location || !g_variant_is_of_type (type, G_VARIANT_TYPE_INT32) ||
++        !g_variant_is_of_type (location, G_VARIANT_TYPE ("(iii)")))
++        return 0;
++
++    sensor_type = g_variant_get_int32 (type);
++    g_variant_get (location, "(iii)", &x, &y, &radius);
++    if ((sensor_type != 2 && sensor_type != 3) || radius <= 0 || y - radius <= 0)
++        return 0;
++    return y - radius;
++}
++
++/*
++ * Plinius: the dialog is a sheet at the bottom of the screen, most of the screen high so that the
++ * finger list rarely needs scrolling. While a finger is enrolled it leaves room at its bottom
++ * from the sensor's top edge down, so the touch target appears inside the dialog; the other
++ * pages use that room for their content. The sensor location is for the unrotated (portrait)
++ * panel.
++ */
++#define UDFPS_GAP 24
++/* Share of the screen height the sheet asks for */
++#define UDFPS_SHEET_HEIGHT 0.85
++
++static void
++update_udfps_space (CcFingerprintDialog *self)
++{
++    GtkNative *native = gtk_widget_get_native (GTK_WIDGET (self));
++    GdkSurface *surface = native ? gtk_native_get_surface (native) : NULL;
++    GdkMonitor *monitor = NULL;
++    GdkRectangle geometry;
++    double scale;
++    int height = 0;
++
++    if (surface)
++        monitor = gdk_display_get_monitor_at_surface (gdk_surface_get_display (surface), surface);
++    if (monitor) {
++        gdk_monitor_get_geometry (monitor, &geometry);
++        scale = gdk_monitor_get_scale (monitor);
++        if (scale > 0 && geometry.height > geometry.width) {
++            height = MAX (0, geometry.height - (int) floor (self->udfps_top / scale)) + UDFPS_GAP;
++            adw_dialog_set_content_height (ADW_DIALOG (self),
++                                           (int) (geometry.height * UDFPS_SHEET_HEIGHT));
++        }
++    }
++    gtk_widget_set_size_request (self->udfps_space, -1, height);
++}
++
++static void
++setup_udfps (CcFingerprintDialog *self)
++{
++    self->udfps_top = get_udfps_top ();
++    if (self->udfps_top == 0)
++        return;
++
++    adw_dialog_set_presentation_mode (ADW_DIALOG (self), ADW_DIALOG_BOTTOM_SHEET);
++    self->udfps_space = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++    adw_toolbar_view_add_bottom_bar (ADW_TOOLBAR_VIEW (adw_dialog_get_child (ADW_DIALOG (self))),
++                                     self->udfps_space);
++    g_signal_connect_swapped (self, "map", G_CALLBACK (update_udfps_space), self);
++}
++
+ static gboolean
+ supports_identification (CcFingerprintDialog *self)
+ {
++    /* Plinius: trying fingers on the list page would put the sensor's touch target on screen with
++     * no scan asked for; with a sensor under the display it only shows while enrolling */
++    if (self->udfps_top > 0)
++        return FALSE;
++
+     if (self->dialog_state & DIALOG_STATE_DEVICE_VERIFYING)
+         return FALSE;
+ 
+@@ -1253,6 +1356,10 @@ on_stack_child_changed (CcFingerprintDialog *self)
+     gtk_widget_set_visible (GTK_WIDGET (self->back_button), FALSE);
+     gtk_widget_set_visible (GTK_WIDGET (self->done_button), FALSE);
+ 
++    /* Plinius: room for the sensor's touch target only while a finger is enrolled */
++    if (self->udfps_space)
++        gtk_widget_set_visible (self->udfps_space, visible_child == self->enrollment_view);
++
+     if (visible_child == self->prints_manager || visible_child == self->no_fingerprints_enrolled_page) {
+         gtk_widget_set_visible (GTK_WIDGET (self->back_button), have_multiple_devices (self));
+ 
+@@ -1276,6 +1383,7 @@ cc_fingerprint_dialog_init (CcFingerprintDialog *self)
+     self->cancellable = g_cancellable_new ();
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
++    setup_udfps (self);
+ 
+     self->fingerprints_store = g_list_store_new (GTK_TYPE_STRING_OBJECT);
+     adw_preferences_group_bind_model (self->prints_group, G_LIST_MODEL (self->fingerprints_store),

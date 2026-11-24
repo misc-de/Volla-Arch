@@ -1,0 +1,659 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-software\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-28 00:15+0100\n"
+"PO-Revision-Date: 2026-10-27 14:00+0100\n"
+"Last-Translator: plinius-software\n"
+"Language-Team: none\n"
+"Language: pl\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 "
+"|| n%100>=20) ? 1 : 2);\n"
+
+#: plinius-software:55
+msgid "For phones"
+msgstr "Na telefony"
+
+#: plinius-software:56
+msgid "With limitations"
+msgstr "Z ograniczeniami"
+
+#: plinius-software:57
+msgid "For large screens"
+msgstr "Na duże ekrany"
+
+#: plinius-software:58
+msgid "Not specified"
+msgstr "Brak informacji"
+
+#: plinius-software:61
+msgid "The app fits the screen."
+msgstr "Aplikacja mieści się na ekranie."
+
+#: plinius-software:62
+msgid "Some windows are wider than the screen and are scaled down."
+msgstr "Niektóre okna są szersze niż ekran i zostają pomniejszone."
+
+#: plinius-software:63
+msgid "According to the app, it needs more space than the screen offers."
+msgstr "Według aplikacji potrzebuje ona więcej miejsca, niż oferuje ekran."
+
+#: plinius-software:64
+msgid "The app does not state a screen size. It may or may not fit the phone."
+msgstr ""
+"Aplikacja nie podaje rozmiaru ekranu. Nie wiadomo, czy zmieści się na "
+"telefonie."
+
+#: plinius-software:68
+msgid "Apps not approved for mobile"
+msgstr "Aplikacje niezatwierdzone dla urządzeń mobilnych"
+
+#: plinius-software:69
+msgid "Apps for large screens"
+msgstr "Aplikacje na duże ekrany"
+
+#: plinius-software:74
+msgid "Recommended"
+msgstr "Polecane"
+
+#: plinius-software:75
+msgid "Communication & Internet"
+msgstr "Komunikacja i Internet"
+
+#: plinius-software:76
+msgid "Music & Video"
+msgstr "Muzyka i wideo"
+
+#: plinius-software:77
+msgid "Office & Documents"
+msgstr "Biuro i dokumenty"
+
+#: plinius-software:78
+msgid "Photos & Graphics"
+msgstr "Zdjęcia i grafika"
+
+#: plinius-software:79
+msgid "Learning & Science"
+msgstr "Nauka i wiedza"
+
+#: plinius-software:80
+msgid "Games"
+msgstr "Gry"
+
+#: plinius-software:81
+msgid "Utilities"
+msgstr "Narzędzia"
+
+#: plinius-software:82
+msgid "System"
+msgstr "System"
+
+#: plinius-software:83
+msgid "All Apps"
+msgstr "Wszystkie aplikacje"
+
+#: plinius-software:158
+#, python-brace-format
+msgid "today at {time}"
+msgstr "dzisiaj o {time}"
+
+#: plinius-software:160
+#, python-brace-format
+msgid "yesterday at {time}"
+msgstr "wczoraj o {time}"
+
+#: plinius-software:161
+#, python-brace-format
+msgid "on {date} at {time}"
+msgstr "{date} o {time}"
+
+#: plinius-software:207
+msgid "With the mobile tweaks from mobile-config-firefox"
+msgstr "Z mobilnymi ustawieniami z mobile-config-firefox"
+
+#: plinius-software:561
+msgid "System update available"
+msgstr "Dostępna aktualizacja systemu"
+
+#: plinius-software:562
+#, python-brace-format
+msgid "{n} package can be updated."
+msgid_plural "{n} packages can be updated."
+msgstr[0] "{n} pakiet można zaktualizować."
+msgstr[1] "{n} pakiety można zaktualizować."
+msgstr[2] "{n} pakietów można zaktualizować."
+
+#: plinius-software:652 plinius-software:848 plinius-software:1322
+msgid "Remove"
+msgstr "Usuń"
+
+#: plinius-software:668
+msgid "Part of the system"
+msgstr "Część systemu"
+
+#: plinius-software:675
+msgid "Fetching package lists"
+msgstr "Pobieranie list pakietów"
+
+#: plinius-software:676
+msgid "Downloading packages"
+msgstr "Pobieranie pakietów"
+
+#: plinius-software:677
+msgid "Checking packages"
+msgstr "Sprawdzanie pakietów"
+
+#: plinius-software:678
+msgid "Installing packages"
+msgstr "Instalowanie pakietów"
+
+#: plinius-software:679
+msgid "Removing packages"
+msgstr "Usuwanie pakietów"
+
+#: plinius-software:680
+msgid "Finishing up"
+msgstr "Kończenie"
+
+#: plinius-software:681
+msgid "Updating Flatpak apps"
+msgstr "Aktualizowanie aplikacji Flatpak"
+
+#: plinius-software:682
+msgid "Loading the Flathub catalog"
+msgstr "Wczytywanie katalogu Flathub"
+
+#: plinius-software:771
+msgid "Preparing…"
+msgstr "Przygotowywanie…"
+
+#: plinius-software:782 plinius-software:873
+msgid "Details"
+msgstr "Szczegóły"
+
+#: plinius-software:799
+#, python-brace-format
+msgid "Step {current} of {total}: {title}"
+msgstr "Krok {current} z {total}: {title}"
+
+#: plinius-software:802
+#, python-brace-format
+msgid "{done} of {total}"
+msgstr "{done} z {total}"
+
+#: plinius-software:843
+msgid "Install"
+msgstr "Zainstaluj"
+
+#: plinius-software:846 plinius-software:1305
+msgid "Open"
+msgstr "Otwórz"
+
+#: plinius-software:850
+msgid "Part of the system (Phosh, phone) and cannot be removed."
+msgstr "Należy do systemu (Phosh, telefon) i nie można jej usunąć."
+
+#: plinius-software:875
+msgid "Source"
+msgstr "Źródło"
+
+#: plinius-software:877
+msgid "Package"
+msgstr "Pakiet"
+
+#: plinius-software:882
+msgid "Website"
+msgstr "Strona internetowa"
+
+#: plinius-software:900
+msgid "Image not available"
+msgstr "Obraz niedostępny"
+
+#: plinius-software:933 plinius-software:957
+msgid "Software"
+msgstr "Oprogramowanie"
+
+#: plinius-software:940
+msgid "Explore"
+msgstr "Przeglądaj"
+
+#: plinius-software:942
+msgid "Installed"
+msgstr "Zainstalowane"
+
+#: plinius-software:944
+msgid "Updates"
+msgstr "Aktualizacje"
+
+#: plinius-software:947
+msgid "Search"
+msgstr "Szukaj"
+
+#: plinius-software:953
+msgid "Menu"
+msgstr "Menu"
+
+#: plinius-software:975
+msgid "Also show under “Explore”"
+msgstr "Pokazuj także w „Przeglądaj”"
+
+#: plinius-software:982
+msgid "Software Sources"
+msgstr "Źródła oprogramowania"
+
+#: plinius-software:989
+msgid "Turn On Flathub?"
+msgstr "Włączyć Flathub?"
+
+#: plinius-software:990
+msgid ""
+"Flathub is an app store for Flatpak apps, independent of system updates. The "
+"apps run in a sandbox and bring their own runtimes, so the first app "
+"downloads a few hundred MB.\n"
+"\n"
+"On the Plinius, Flatpak apps do not yet have graphics acceleration via "
+"libhybris; they render in software and run slower."
+msgstr ""
+"Flathub to sklep z aplikacjami Flatpak, niezależny od aktualizacji systemu. "
+"Aplikacje działają w piaskownicy i przynoszą własne środowiska "
+"uruchomieniowe, dlatego pierwsza aplikacja pobiera kilkaset MB.\n"
+"\n"
+"Na Pliniusie aplikacje Flatpak nie mają jeszcze akceleracji graficznej przez "
+"libhybris; są renderowane programowo i działają wolniej."
+
+#: plinius-software:994 plinius-software:1321
+msgid "Cancel"
+msgstr "Anuluj"
+
+#: plinius-software:995
+msgid "Turn On"
+msgstr "Włącz"
+
+#: plinius-software:1006
+msgid "Flathub is on"
+msgstr "Flathub jest włączony"
+
+#: plinius-software:1007
+msgid ""
+"Apps from Flathub appear under “Explore” marked “Flathub”. The app grid "
+"shows their launchers after you log in again."
+msgstr ""
+"Aplikacje z Flathub pojawiają się w „Przeglądaj” z oznaczeniem „Flathub”. "
+"Siatka aplikacji pokaże ich aktywatory po ponownym zalogowaniu."
+
+#: plinius-software:1010
+msgid "Could not turn on Flathub"
+msgstr "Nie udało się włączyć Flathub"
+
+#: plinius-software:1010 plinius-software:1025 plinius-software:1311
+#: plinius-software:1332 plinius-software:1360
+msgid "See “Details” for more information"
+msgstr "Więcej informacji w „Szczegóły”"
+
+#: plinius-software:1011
+msgid "Turning on Flathub"
+msgstr "Włączanie Flathub"
+
+#: plinius-software:1018
+msgid "Flathub is off"
+msgstr "Flathub jest wyłączony"
+
+#: plinius-software:1020
+msgid "Apps from Flathub are still installed"
+msgstr "Nadal są zainstalowane aplikacje z Flathub"
+
+#: plinius-software:1021
+msgid "Remove them under “Installed” first."
+msgstr "Najpierw usuń je w „Zainstalowane”."
+
+#: plinius-software:1025
+msgid "Could not turn off Flathub"
+msgstr "Nie udało się wyłączyć Flathub"
+
+#: plinius-software:1026
+msgid "Turning off Flathub"
+msgstr "Wyłączanie Flathub"
+
+#: plinius-software:1055
+msgid "Search apps"
+msgstr "Szukaj aplikacji"
+
+#: plinius-software:1067
+msgid "No Results"
+msgstr "Brak wyników"
+
+#: plinius-software:1069
+msgid "No App Catalog"
+msgstr "Brak katalogu aplikacji"
+
+#: plinius-software:1070
+msgid ""
+"The catalog could not be loaded. Is the package archlinux-appstream-data "
+"missing?"
+msgstr ""
+"Nie udało się wczytać katalogu. Czy brakuje pakietu archlinux-appstream-data?"
+
+#: plinius-software:1125
+#, python-brace-format
+msgid "{n} app"
+msgid_plural "{n} apps"
+msgstr[0] "{n} aplikacja"
+msgstr[1] "{n} aplikacje"
+msgstr[2] "{n} aplikacji"
+
+#: plinius-software:1138
+msgid "No Apps Installed"
+msgstr "Brak zainstalowanych aplikacji"
+
+#: plinius-software:1139
+msgid "Apps you install from “Explore” appear here."
+msgstr "Aplikacje zainstalowane z „Przeglądaj” pojawią się tutaj."
+
+#: plinius-software:1167 plinius-software:1183
+msgid "Checking for updates…"
+msgstr "Wyszukiwanie aktualizacji…"
+
+#: plinius-software:1170
+msgid "Update Now"
+msgstr "Aktualizuj teraz"
+
+#: plinius-software:1173
+msgid "Check Again"
+msgstr "Szukaj ponownie"
+
+#: plinius-software:1175
+msgid "Packages"
+msgstr "Pakiety"
+
+#: plinius-software:1198
+msgid "waiting for approval"
+msgstr "czeka na zatwierdzenie"
+
+#: plinius-software:1204 plinius-software:1352
+msgid "Update waiting for approval"
+msgstr "Aktualizacja czeka na zatwierdzenie"
+
+#: plinius-software:1206
+#, python-brace-format
+msgid "Waiting for approval: {packages}"
+msgstr "Czeka na zatwierdzenie: {packages}"
+
+#: plinius-software:1207 plinius-software:1353
+msgid ""
+"These packages are still being tested with the Plinius adaptations. All "
+"updates continue once they are approved."
+msgstr ""
+"Te pakiety są jeszcze testowane z dostosowaniami dla Pliniusa. Wszystkie "
+"aktualizacje będą kontynuowane po zatwierdzeniu."
+
+#: plinius-software:1209 plinius-software:1223
+#, python-brace-format
+msgid "Last checked: {when}"
+msgstr "Ostatnie wyszukiwanie: {when}"
+
+#: plinius-software:1211
+msgid "Check failed"
+msgstr "Wyszukiwanie nie powiodło się"
+
+#: plinius-software:1213
+msgid "No connection to the server? You can still update."
+msgstr "Brak połączenia z serwerem? Aktualizacja i tak jest możliwa."
+
+#: plinius-software:1214
+#, python-brace-format
+msgid "Last successful check: {when}"
+msgstr "Ostatnie udane wyszukiwanie: {when}"
+
+#: plinius-software:1216
+#, python-brace-format
+msgid "{n} update available"
+msgid_plural "{n} updates available"
+msgstr[0] "{n} aktualizacja dostępna"
+msgstr[1] "{n} aktualizacje dostępne"
+msgstr[2] "{n} aktualizacji dostępnych"
+
+#: plinius-software:1219
+msgid "The whole system is always updated at once."
+msgstr "Cały system jest zawsze aktualizowany naraz."
+
+#: plinius-software:1220
+#, python-brace-format
+msgid "Checked: {when}"
+msgstr "Wyszukano: {when}"
+
+#: plinius-software:1222
+msgid "The system is up to date"
+msgstr "System jest aktualny"
+
+#: plinius-software:1264 plinius-software:1273
+msgid "Done"
+msgstr "Gotowe"
+
+#: plinius-software:1272
+msgid "Could not start"
+msgstr "Nie udało się uruchomić"
+
+#: plinius-software:1280
+msgid "Update the system first"
+msgstr "Najpierw zaktualizuj system"
+
+#: plinius-software:1281
+msgid "The app belongs to a newer state than the installed system."
+msgstr "Aplikacja należy do nowszej wersji niż zainstalowany system."
+
+#: plinius-software:1282
+msgid "Go to Updates"
+msgstr "Przejdź do aktualizacji"
+
+#: plinius-software:1287
+msgid "Another operation is running"
+msgstr "Trwa inna operacja"
+
+#: plinius-software:1288
+msgid "Wait until it has finished and try again."
+msgstr "Poczekaj, aż się zakończy, i spróbuj ponownie."
+
+#: plinius-software:1303
+#, python-brace-format
+msgid "{name} is installed"
+msgstr "Zainstalowano {name}"
+
+#: plinius-software:1307
+msgid "Waiting for approval"
+msgstr "Czeka na zatwierdzenie"
+
+#: plinius-software:1308
+#, python-brace-format
+msgid ""
+"{name} needs packages that are still being tested with the Plinius "
+"adaptations. It can be installed once they are approved."
+msgstr ""
+"{name} wymaga pakietów, które są jeszcze testowane z dostosowaniami Plinius. "
+"Instalacja będzie możliwa po ich zatwierdzeniu."
+
+#: plinius-software:1311
+msgid "Installation failed"
+msgstr "Instalacja nie powiodła się"
+
+#: plinius-software:1314
+#, python-brace-format
+msgid "Installing {name}"
+msgstr "Instalowanie {name}"
+
+#: plinius-software:1318
+#, python-brace-format
+msgid "Remove {name}?"
+msgstr "Usunąć {name}?"
+
+#: plinius-software:1319
+msgid ""
+"The app and dependencies that are no longer needed will be removed. Your "
+"files and settings are kept."
+msgstr ""
+"Aplikacja i niepotrzebne już zależności zostaną usunięte. Twoje pliki i "
+"ustawienia pozostaną."
+
+#: plinius-software:1330
+#, python-brace-format
+msgid "{name} has been removed"
+msgstr "Usunięto {name}"
+
+#: plinius-software:1332
+msgid "Removal failed"
+msgstr "Usuwanie nie powiodło się"
+
+#: plinius-software:1335
+#, python-brace-format
+msgid "Removing {name}"
+msgstr "Usuwanie {name}"
+
+#: plinius-software:1343
+msgid "The system has been updated"
+msgstr "System został zaktualizowany"
+
+#: plinius-software:1344
+msgid "Restart the phone to run the new versions."
+msgstr "Uruchom ponownie telefon, aby używać nowych wersji."
+
+#: plinius-software:1345
+msgid "Restart Phone"
+msgstr "Uruchom ponownie telefon"
+
+#: plinius-software:1348
+msgid "The system is already up to date"
+msgstr "System jest już aktualny"
+
+#: plinius-software:1350
+msgid "The Flatpak apps have been updated"
+msgstr "Aplikacje Flatpak zostały zaktualizowane"
+
+#: plinius-software:1356
+msgid "Battery too low"
+msgstr "Bateria zbyt słaba"
+
+#: plinius-software:1357
+msgid ""
+"Connect the charger or charge the phone to at least 10 %, then update. An "
+"update interrupted by an empty battery can leave the system unable to start."
+msgstr ""
+"Podłącz ładowarkę lub naładuj telefon do co najmniej 10 %, a potem "
+"zaktualizuj. Aktualizacja przerwana przez rozładowaną baterię może "
+"uniemożliwić uruchomienie systemu."
+
+#: plinius-software:1360
+msgid "Update failed"
+msgstr "Aktualizacja nie powiodła się"
+
+#: plinius-software:1364
+msgid "Updating the system"
+msgstr "Aktualizowanie systemu"
+
+#: plinius-software:1369
+msgid "Please wait until the operation has finished"
+msgstr "Poczekaj, aż operacja się zakończy"
+
+#: plinius-software:687
+msgid "Everything that is running already uses the new versions."
+msgstr "Wszystko, co działa, korzysta już z nowych wersji."
+
+#: plinius-software:690
+msgid "Restart {apps} to use the new versions. Unsaved changes in them are lost."
+msgstr "Uruchom ponownie {apps}, aby używać nowych wersji. Niezapisane zmiany zostaną utracone."
+
+#: plinius-software:692
+msgid "Restart Apps"
+msgstr "Uruchom ponownie aplikacje"
+
+#: plinius-software:695
+msgid "Restart Phosh to use the new versions. The phone locks; open apps stay open."
+msgstr "Uruchom ponownie Phosh, aby używać nowych wersji. Telefon się zablokuje; otwarte aplikacje pozostaną otwarte."
+
+#: plinius-software:697
+msgid "{apps} also restart. Unsaved changes in them are lost."
+msgstr "{apps} również uruchomią się ponownie. Niezapisane zmiany zostaną utracone."
+
+#: plinius-software:699
+msgid "Restart Phosh"
+msgstr "Uruchom ponownie Phosh"
+
+#: plinius-software
+msgid "The update server gives no proof of how current its updates are."
+msgstr "Serwer aktualizacji nie potwierdza, jak aktualne są jego aktualizacje."
+
+#: plinius-software
+msgid "The package list could not be read to check it against the update server's signed state."
+msgstr "Nie udało się odczytać listy pakietów, aby porównać ją z podpisanym stanem serwera aktualizacji."
+
+#: plinius-software
+msgid "The update server's state is not signed by Plinius. Updates are not trustworthy."
+msgstr "Stan serwera aktualizacji nie jest podpisany przez Plinius. Aktualizacjom nie można ufać."
+
+#: plinius-software
+#, python-brace-format
+msgid "The update server offers the updates of another channel ({got} instead of {want})."
+msgstr "Serwer aktualizacji oferuje aktualizacje innego kanału ({got} zamiast {want})."
+
+#: plinius-software
+msgid "The update server offers an older state than before. Updates may be held back."
+msgstr "Serwer aktualizacji oferuje starszy stan niż wcześniej. Aktualizacje mogą być wstrzymywane."
+
+#: plinius-software
+#, python-brace-format
+msgid "The update server's state is {n} day old. Updates may be held back."
+msgid_plural "The update server's state is {n} days old. Updates may be held back."
+msgstr[0] "Stan serwera aktualizacji ma {n} dzień. Aktualizacje mogą być wstrzymywane."
+msgstr[1] "Stan serwera aktualizacji ma {n} dni. Aktualizacje mogą być wstrzymywane."
+msgstr[2] "Stan serwera aktualizacji ma {n} dni. Aktualizacje mogą być wstrzymywane."
+
+#: plinius-software
+msgid "Updates could not be verified"
+msgstr "Nie udało się zweryfikować aktualizacji"
+
+#: plinius-software
+#, python-brace-format
+msgid "{n} update waits for approval"
+msgid_plural "{n} updates wait for approval"
+msgstr[0] "{n} aktualizacja czeka na zatwierdzenie"
+msgstr[1] "{n} aktualizacje czekają na zatwierdzenie"
+msgstr[2] "{n} aktualizacji czeka na zatwierdzenie"
+
+#: plinius-software
+#, python-brace-format
+msgid "Plinius has not yet approved {packages}. Until then no system package is updated, security updates included."
+msgstr "Plinius nie zatwierdził jeszcze {packages}. Do tego czasu żaden pakiet systemowy nie jest aktualizowany, również aktualizacje zabezpieczeń."
+
+#: plinius-software
+#, python-brace-format
+msgid "Waiting since {when}"
+msgstr "Czeka od {when}"
+
+#: plinius-software
+msgid "The update server did not hand out its signed state. Updates may be held back."
+msgstr "Serwer aktualizacji nie przekazał swojego podpisanego stanu. Aktualizacje mogą być wstrzymywane."
+
+#: plinius-software
+msgid "The update server's signed state does not vouch for its package list. Updates may be held back."
+msgstr "Podpisany stan serwera aktualizacji nie poświadcza jego listy pakietów. Aktualizacje mogą być wstrzymywane."
+
+#: plinius-software
+msgid "The update server's package list does not match its signed state. Updates may be held back or come from another channel."
+msgstr "Lista pakietów serwera aktualizacji nie zgadza się z jego podpisanym stanem. Aktualizacje mogą być wstrzymywane lub pochodzić z innego kanału."
+
+#: plinius-software
+#, python-brace-format
+msgid "System updates have been on hold for {n} day. Security updates wait too."
+msgid_plural "System updates have been on hold for {n} days. Security updates wait too."
+msgstr[0] "Aktualizacje systemu są wstrzymane od {n} dnia. Aktualizacje zabezpieczeń też czekają."
+msgstr[1] "Aktualizacje systemu są wstrzymane od {n} dni. Aktualizacje zabezpieczeń też czekają."
+msgstr[2] "Aktualizacje systemu są wstrzymane od {n} dni. Aktualizacje zabezpieczeń też czekają."
+
+#: plinius-software
+msgid "System updates are on hold"
+msgstr "Aktualizacje systemu są wstrzymane"
+
+#: plinius-software
+msgid "The update server's package list does not match its signed state. Nothing was changed. Try again later."
+msgstr "Lista pakietów serwera aktualizacji nie zgadza się z jego podpisanym stanem. Nic nie zostało zmienione. Spróbuj ponownie później."

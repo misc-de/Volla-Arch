@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 23:27:47 +0100
+Subject: [PATCH] display: Night Light in the display's own list on a single
+ display
+
+On a phone the Displays page showed Night Light as a block of its own below the display
+settings. With a single display the row now goes at the end of the display's list (rotation,
+resolution, refresh rate, scale, notch); with several displays it goes back to its own block.
+---
+ panels/display/cc-display-panel.blp  |  2 +-
+ panels/display/cc-display-panel.c    | 28 ++++++++++++++++++++++++++++
+ panels/display/cc-display-settings.c | 25 +++++++++++++++++++++++++
+ panels/display/cc-display-settings.h |  1 +
+ 4 files changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/panels/display/cc-display-panel.blp b/panels/display/cc-display-panel.blp
+index 010df7b72..1ae7504f1 100644
+--- a/panels/display/cc-display-panel.blp
++++ b/panels/display/cc-display-panel.blp
+@@ -105,7 +105,7 @@ template $CcDisplayPanel: $CcPanel {
+         visible: false;
+       }
+ 
+-      Adw.PreferencesGroup {
++      Adw.PreferencesGroup night_light_group {
+         $CcListRow night_light_row {
+           /* Translators: This is the redshift functionality where we suppress blue light when the sun has gone down */
+           title: _("_Night Light");
+diff --git a/panels/display/cc-display-panel.c b/panels/display/cc-display-panel.c
+index eb2ddb321..a54198f5e 100644
+--- a/panels/display/cc-display-panel.c
++++ b/panels/display/cc-display-panel.c
+@@ -72,6 +72,7 @@ struct _CcDisplayPanel {
+ 
+     CcNightLightPage *night_light_page;
+     CcListRow *night_light_row;
++    AdwPreferencesGroup *night_light_group;
+ 
+     UpClient *up_client;
+     gboolean lid_is_closed;
+@@ -553,6 +554,7 @@ cc_display_panel_class_init (CcDisplayPanelClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcDisplayPanel, escape_shortcut);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplayPanel, night_light_page);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplayPanel, night_light_row);
++    gtk_widget_class_bind_template_child (widget_class, CcDisplayPanel, night_light_group);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplayPanel, primary_display_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplayPanel, single_display_settings_group);
+ 
+@@ -631,6 +633,30 @@ add_display_row (CcDisplayPanel *self, CcDisplayMonitor *monitor)
+     self->monitor_rows = g_list_prepend (self->monitor_rows, row);
+ }
+ 
++/* Plinius: with the settings on the main page (a single display), Night Light goes at the end
++ * of the display's own list instead of a block of its own at the bottom */
++static void
++place_night_light_row (CcDisplayPanel *self, gboolean in_settings)
++{
++    GtkWidget *row = GTK_WIDGET (self->night_light_row);
++    gboolean is_in_settings = gtk_widget_get_ancestor (row, CC_TYPE_DISPLAY_SETTINGS) != NULL;
++
++    if (in_settings == is_in_settings)
++        return;
++
++    g_object_ref (row);
++    if (in_settings) {
++        adw_preferences_group_remove (self->night_light_group, row);
++        cc_display_settings_set_end_row (self->settings, row);
++    } else {
++        cc_display_settings_set_end_row (self->settings, NULL);
++        adw_preferences_group_add (self->night_light_group, row);
++    }
++    g_object_unref (row);
++
++    gtk_widget_set_visible (GTK_WIDGET (self->night_light_group), !in_settings);
++}
++
+ static void
+ move_display_settings_to_main_page (CcDisplayPanel *self)
+ {
+@@ -645,6 +671,7 @@ move_display_settings_to_main_page (CcDisplayPanel *self)
+     g_object_unref (self->settings);
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->single_display_settings_group), TRUE);
++    place_night_light_row (self, TRUE);
+ }
+ 
+ static void
+@@ -655,6 +682,7 @@ move_display_settings_to_separate_page (CcDisplayPanel *self)
+     if (parent == GTK_WIDGET (self->display_settings_bin))
+         return;
+ 
++    place_night_light_row (self, FALSE);
+     g_object_ref (self->settings);
+     adw_preferences_group_remove (self->single_display_settings_group, GTK_WIDGET (self->settings));
+     adw_bin_set_child (self->display_settings_bin, GTK_WIDGET (self->settings));
+diff --git a/panels/display/cc-display-settings.c b/panels/display/cc-display-settings.c
+index 6009196c5..1de8486a0 100644
+--- a/panels/display/cc-display-settings.c
++++ b/panels/display/cc-display-settings.c
+@@ -71,6 +71,8 @@ struct _CcDisplaySettings {
+     gboolean has_notch_setting;
+     GtkBox *plinius_box;
+     gboolean has_plinius_options;
++    GtkWidget *listbox;
++    GtkWidget *end_row;
+ };
+ 
+ typedef struct _CcDisplaySettings CcDisplaySettings;
+@@ -900,6 +902,7 @@ cc_display_settings_class_init (CcDisplaySettingsClass *klass)
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, auto_orientation_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, enabled_listbox);
++    gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, listbox);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, enabled_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, orientation_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, refresh_rate_row);
+@@ -1086,3 +1089,25 @@ cc_display_settings_set_multimonitor (CcDisplaySettings *self, gboolean multimon
+     if (!multimonitor)
+         adw_switch_row_set_active (self->enabled_row, TRUE);
+ }
++
++/**
++ * cc_display_settings_set_end_row:
++ * @row: (nullable): a row of the panel, or %NULL
++ *
++ * Plinius: puts @row (Night Light) at the end of the display's own list, so a phone has one
++ * block instead of a second one for a single row. %NULL takes the previous row out again; the
++ * caller keeps a reference to move it back.
++ */
++void
++cc_display_settings_set_end_row (CcDisplaySettings *self, GtkWidget *row)
++{
++    g_return_if_fail (CC_IS_DISPLAY_SETTINGS (self));
++
++    if (self->end_row == row)
++        return;
++    if (self->end_row)
++        gtk_list_box_remove (GTK_LIST_BOX (self->listbox), self->end_row);
++    self->end_row = row;
++    if (row)
++        gtk_list_box_append (GTK_LIST_BOX (self->listbox), row);
++}
+diff --git a/panels/display/cc-display-settings.h b/panels/display/cc-display-settings.h
+index 13a524160..7a8abff39 100644
+--- a/panels/display/cc-display-settings.h
++++ b/panels/display/cc-display-settings.h
+@@ -40,5 +40,6 @@ CcDisplayMonitor *cc_display_settings_get_selected_output (CcDisplaySettings *se
+ void cc_display_settings_set_selected_output (CcDisplaySettings *settings, CcDisplayMonitor *output);
+ void cc_display_settings_refresh_layout (CcDisplaySettings *settings, gboolean collapsed);
+ void cc_display_settings_set_multimonitor (CcDisplaySettings *self, gboolean multimonitor);
++void cc_display_settings_set_end_row (CcDisplaySettings *self, GtkWidget *row);
+ 
+ G_END_DECLS

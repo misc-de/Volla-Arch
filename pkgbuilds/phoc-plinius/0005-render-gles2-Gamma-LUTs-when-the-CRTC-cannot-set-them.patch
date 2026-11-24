@@ -1,0 +1,296 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 00:39:01 +0100
+Subject: [PATCH] Gamma LUTs in the GLES2 renderer when the CRTC cannot set
+ them
+
+MediaTek's vendor DRM driver reports a legacy gamma size, but
+drmModeCrtcSetGamma() fails with ENOSYS: a commit with a gamma LUT fails
+as a whole and night light does not work. Write the current table back
+once at startup and report no gamma LUT if that is not implemented, so
+that compositors use the renderer (fallback_gamma_size).
+
+The GLES2 renderer takes a 3x1D LUT as the output color transform of a
+buffer pass and applies it as gain and offset per channel to every draw.
+For LUTs that are linear per channel, as night light ramps are, that
+equals the LUT on the composited frame (linear blending, premultiplied
+colors); other LUTs are approximated by their end points.
+---
+ backend/drm/drm.c                      | 29 +++++++++++++++++
+ include/render/gles2.h                 |  8 +++++
+ render/gles2/pass.c                    | 43 +++++++++++++++++++++++++-
+ render/gles2/renderer.c                | 10 +++++-
+ render/gles2/shaders/tex_external.frag |  6 +++-
+ render/gles2/shaders/tex_rgba.frag     |  6 +++-
+ render/gles2/shaders/tex_rgbx.frag     |  6 +++-
+ 7 files changed, 103 insertions(+), 5 deletions(-)
+
+diff --git a/backend/drm/drm.c b/backend/drm/drm.c
+index bd29872fb..c4728af49 100644
+--- a/backend/drm/drm.c
++++ b/backend/drm/drm.c
+@@ -1,6 +1,7 @@
+ #include <assert.h>
+ #include <drm_fourcc.h>
+ #include <drm_mode.h>
++#include <errno.h>
+ #include <fcntl.h>
+ #include <inttypes.h>
+ #include <stdint.h>
+@@ -302,6 +303,33 @@ error:
+ 	return false;
+ }
+ 
++/**
++ * Some drivers report a legacy gamma size but have no way to set it (drmModeCrtcSetGamma()
++ * fails with ENOSYS, e.g. MediaTek's vendor driver). A commit with a gamma LUT then fails as a
++ * whole. Write the current table back once and report no gamma LUT if that fails, so that
++ * compositors can fall back to the renderer.
++ */
++static void probe_legacy_gamma(struct wlr_drm_backend *drm, struct wlr_drm_crtc *crtc) {
++	if (crtc->legacy_gamma_size <= 0) {
++		return;
++	}
++
++	size_t size = (size_t)crtc->legacy_gamma_size;
++	uint16_t *lut = calloc(3 * size, sizeof(uint16_t));
++	if (lut == NULL) {
++		return;
++	}
++
++	// Only a missing implementation counts, not e.g. a missing DRM master
++	uint16_t *r = lut, *g = lut + size, *b = lut + 2 * size;
++	if (drmModeCrtcGetGamma(drm->fd, crtc->id, size, r, g, b) == 0 &&
++			drmModeCrtcSetGamma(drm->fd, crtc->id, size, r, g, b) != 0 && errno == ENOSYS) {
++		wlr_log(WLR_INFO, "CRTC %"PRIu32" cannot set its gamma LUT", crtc->id);
++		crtc->legacy_gamma_size = 0;
++	}
++	free(lut);
++}
++
+ bool init_drm_resources(struct wlr_drm_backend *drm) {
+ 	drmModeRes *res = drmModeGetResources(drm->fd);
+ 	if (!res) {
+@@ -334,6 +362,7 @@ bool init_drm_resources(struct wlr_drm_backend *drm) {
+ 		}
+ 		crtc->legacy_gamma_size = drm_crtc->gamma_size;
+ 		drmModeFreeCrtc(drm_crtc);
++		probe_legacy_gamma(drm, crtc);
+ 
+ 		if (!get_drm_crtc_props(drm->fd, crtc->id, &crtc->props)) {
+ 			goto error_crtcs;
+diff --git a/include/render/gles2.h b/include/render/gles2.h
+index 40343d822..26a7942f4 100644
+--- a/include/render/gles2.h
++++ b/include/render/gles2.h
+@@ -34,6 +34,8 @@ struct wlr_gles2_tex_shader {
+ 	GLint tex_proj;
+ 	GLint tex;
+ 	GLint alpha;
++	GLint color_gain;
++	GLint color_offset;
+ 	GLint pos_attrib;
+ };
+ 
+@@ -141,6 +143,9 @@ struct wlr_gles2_render_pass {
+ 	struct wlr_gles2_render_timer *timer;
+ 	struct wlr_drm_syncobj_timeline *signal_timeline;
+ 	uint64_t signal_point;
++	// Output color transform, approximated as gain and offset per channel
++	float color_gain[3];
++	float color_offset[3];
+ };
+ 
+ bool is_gles2_pixel_format_supported(const struct wlr_gles2_renderer *renderer,
+@@ -171,6 +176,9 @@ void push_gles2_debug_(struct wlr_gles2_renderer *renderer,
+ #define push_gles2_debug(renderer) push_gles2_debug_(renderer, _WLR_FILENAME, __func__)
+ void pop_gles2_debug(struct wlr_gles2_renderer *renderer);
+ 
++struct wlr_color_transform;
++void gles2_render_pass_set_color_transform(struct wlr_gles2_render_pass *pass,
++	struct wlr_color_transform *tr);
+ struct wlr_gles2_render_pass *begin_gles2_buffer_pass(struct wlr_gles2_buffer *buffer,
+ 	struct wlr_egl_context *prev_ctx, struct wlr_gles2_render_timer *timer,
+ 	struct wlr_drm_syncobj_timeline *signal_timeline, uint64_t signal_point);
+diff --git a/render/gles2/pass.c b/render/gles2/pass.c
+index 0c48cdd6d..d08033dbe 100644
+--- a/render/gles2/pass.c
++++ b/render/gles2/pass.c
+@@ -6,6 +6,7 @@
+ #include <wlr/render/drm_syncobj.h>
+ #include <wlr/util/transform.h>
+ #include "render/egl.h"
++#include "render/color.h"
+ #include "render/gles2.h"
+ #include "util/matrix.h"
+ 
+@@ -246,6 +247,8 @@ static void render_pass_add_texture(struct wlr_render_pass *wlr_pass,
+ 
+ 	glUniform1i(shader->tex, 0);
+ 	glUniform1f(shader->alpha, alpha);
++	glUniform3fv(shader->color_gain, 1, pass->color_gain);
++	glUniform3fv(shader->color_offset, 1, pass->color_offset);
+ 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
+ 	set_tex_matrix(shader->tex_proj, options->transform, &src_fbox);
+ 
+@@ -260,7 +263,12 @@ static void render_pass_add_rect(struct wlr_render_pass *wlr_pass,
+ 	struct wlr_gles2_render_pass *pass = get_render_pass(wlr_pass);
+ 	struct wlr_gles2_renderer *renderer = pass->buffer->renderer;
+ 
+-	const struct wlr_render_color *color = &options->color;
++	struct wlr_render_color transformed = options->color;
++	const struct wlr_render_color *color = &transformed;
++	float *channels[3] = { &transformed.r, &transformed.g, &transformed.b };
++	for (size_t i = 0; i < 3; i++) {
++		*channels[i] = *channels[i] * pass->color_gain[i] + pass->color_offset[i] * transformed.a;
++	}
+ 	struct wlr_box box;
+ 	struct wlr_buffer *wlr_buffer = pass->buffer->buffer;
+ 	wlr_render_rect_options_get_box(options, wlr_buffer, &box);
+@@ -286,6 +294,38 @@ static void render_pass_add_rect(struct wlr_render_pass *wlr_pass,
+ 	pop_gles2_debug(renderer);
+ }
+ 
++/**
++ * The output color transform as gain and offset per channel, applied to every draw. For a gamma
++ * LUT (3x1D) that is linear per channel, as night light ramps are, the result equals the LUT on
++ * the composited frame: blending is linear and the colors are premultiplied. Other LUTs are
++ * approximated by their end points; other transform types are not supported (identity).
++ */
++void gles2_render_pass_set_color_transform(struct wlr_gles2_render_pass *pass,
++		struct wlr_color_transform *tr) {
++	for (size_t i = 0; i < 3; i++) {
++		pass->color_gain[i] = 1.0f;
++		pass->color_offset[i] = 0.0f;
++	}
++	if (tr == NULL) {
++		return;
++	}
++	if (tr->type != COLOR_TRANSFORM_LUT_3X1D) {
++		wlr_log(WLR_DEBUG, "GLES2 renderer: only 3x1D LUT color transforms are supported");
++		return;
++	}
++
++	struct wlr_color_transform_lut_3x1d *lut = color_transform_lut_3x1d_from_base(tr);
++	if (lut->dim < 2) {
++		return;
++	}
++	for (size_t i = 0; i < 3; i++) {
++		float first = lut->lut_3x1d[i * lut->dim] / 65535.0f;
++		float last = lut->lut_3x1d[i * lut->dim + lut->dim - 1] / 65535.0f;
++		pass->color_offset[i] = first;
++		pass->color_gain[i] = last - first;
++	}
++}
++
+ static const struct wlr_render_pass_impl render_pass_impl = {
+ 	.submit = render_pass_submit,
+ 	.add_texture = render_pass_add_texture,
+@@ -334,6 +374,7 @@ struct wlr_gles2_render_pass *begin_gles2_buffer_pass(struct wlr_gles2_buffer *b
+ 	wlr_buffer_lock(wlr_buffer);
+ 	pass->buffer = buffer;
+ 	pass->timer = timer;
++	gles2_render_pass_set_color_transform(pass, NULL);
+ 	pass->prev_ctx = *prev_ctx;
+ 	if (signal_timeline != NULL) {
+ 		pass->signal_timeline = wlr_drm_syncobj_timeline_ref(signal_timeline);
+diff --git a/render/gles2/renderer.c b/render/gles2/renderer.c
+index 2a6698411..fa7820be6 100644
+--- a/render/gles2/renderer.c
++++ b/render/gles2/renderer.c
+@@ -264,6 +264,7 @@ static struct wlr_render_pass *gles2_begin_buffer_pass(struct wlr_renderer *wlr_
+ 	if (!pass) {
+ 		return NULL;
+ 	}
++	gles2_render_pass_set_color_transform(pass, options->color_transform);
+ 	return &pass->base;
+ }
+ 
+@@ -527,7 +528,8 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
+ 		return NULL;
+ 	}
+ 	wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl, WLR_BUFFER_CAP_DMABUF);
+-	renderer->wlr_renderer.features.output_color_transform = false;
++	// Only gamma LUTs (3x1D), applied as gain and offset per channel; see the render pass
++	renderer->wlr_renderer.features.output_color_transform = true;
+ 
+ 	wl_list_init(&renderer->buffers);
+ 	wl_list_init(&renderer->textures);
+@@ -662,6 +664,8 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
+ 	renderer->shaders.tex_rgba.tex_proj = glGetUniformLocation(prog, "tex_proj");
+ 	renderer->shaders.tex_rgba.tex = glGetUniformLocation(prog, "tex");
+ 	renderer->shaders.tex_rgba.alpha = glGetUniformLocation(prog, "alpha");
++	renderer->shaders.tex_rgba.color_gain = glGetUniformLocation(prog, "color_gain");
++	renderer->shaders.tex_rgba.color_offset = glGetUniformLocation(prog, "color_offset");
+ 	renderer->shaders.tex_rgba.pos_attrib = glGetAttribLocation(prog, "pos");
+ 
+ 	renderer->shaders.tex_rgbx.program = prog =
+@@ -673,6 +677,8 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
+ 	renderer->shaders.tex_rgbx.tex_proj = glGetUniformLocation(prog, "tex_proj");
+ 	renderer->shaders.tex_rgbx.tex = glGetUniformLocation(prog, "tex");
+ 	renderer->shaders.tex_rgbx.alpha = glGetUniformLocation(prog, "alpha");
++	renderer->shaders.tex_rgbx.color_gain = glGetUniformLocation(prog, "color_gain");
++	renderer->shaders.tex_rgbx.color_offset = glGetUniformLocation(prog, "color_offset");
+ 	renderer->shaders.tex_rgbx.pos_attrib = glGetAttribLocation(prog, "pos");
+ 
+ 	if (renderer->exts.OES_egl_image_external) {
+@@ -685,6 +691,8 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
+ 		renderer->shaders.tex_ext.tex_proj = glGetUniformLocation(prog, "tex_proj");
+ 		renderer->shaders.tex_ext.tex = glGetUniformLocation(prog, "tex");
+ 		renderer->shaders.tex_ext.alpha = glGetUniformLocation(prog, "alpha");
++		renderer->shaders.tex_ext.color_gain = glGetUniformLocation(prog, "color_gain");
++		renderer->shaders.tex_ext.color_offset = glGetUniformLocation(prog, "color_offset");
+ 		renderer->shaders.tex_ext.pos_attrib = glGetAttribLocation(prog, "pos");
+ 	}
+ 
+diff --git a/render/gles2/shaders/tex_external.frag b/render/gles2/shaders/tex_external.frag
+index 73909fe03..06c48f763 100644
+--- a/render/gles2/shaders/tex_external.frag
++++ b/render/gles2/shaders/tex_external.frag
+@@ -9,7 +9,11 @@ precision mediump float;
+ varying vec2 v_texcoord;
+ uniform samplerExternalOES texture0;
+ uniform float alpha;
++// Output color transform as gain and offset per channel (premultiplied alpha)
++uniform vec3 color_gain;
++uniform vec3 color_offset;
+ 
+ void main() {
+-	gl_FragColor = texture2D(texture0, v_texcoord) * alpha;
++	vec4 c = texture2D(texture0, v_texcoord) * alpha;
++	gl_FragColor = vec4(c.rgb * color_gain + color_offset * c.a, c.a);
+ }
+diff --git a/render/gles2/shaders/tex_rgba.frag b/render/gles2/shaders/tex_rgba.frag
+index c0a0dea61..7c725b0f6 100644
+--- a/render/gles2/shaders/tex_rgba.frag
++++ b/render/gles2/shaders/tex_rgba.frag
+@@ -7,7 +7,11 @@ precision mediump float;
+ varying vec2 v_texcoord;
+ uniform sampler2D tex;
+ uniform float alpha;
++// Output color transform as gain and offset per channel (premultiplied alpha)
++uniform vec3 color_gain;
++uniform vec3 color_offset;
+ 
+ void main() {
+-	gl_FragColor = texture2D(tex, v_texcoord) * alpha;
++	vec4 c = texture2D(tex, v_texcoord) * alpha;
++	gl_FragColor = vec4(c.rgb * color_gain + color_offset * c.a, c.a);
+ }
+diff --git a/render/gles2/shaders/tex_rgbx.frag b/render/gles2/shaders/tex_rgbx.frag
+index ae40ad53e..51337b643 100644
+--- a/render/gles2/shaders/tex_rgbx.frag
++++ b/render/gles2/shaders/tex_rgbx.frag
+@@ -7,7 +7,11 @@ precision mediump float;
+ varying vec2 v_texcoord;
+ uniform sampler2D tex;
+ uniform float alpha;
++// Output color transform as gain and offset per channel (premultiplied alpha)
++uniform vec3 color_gain;
++uniform vec3 color_offset;
+ 
+ void main() {
+-	gl_FragColor = vec4(texture2D(tex, v_texcoord).rgb, 1.0) * alpha;
++	vec4 c = vec4(texture2D(tex, v_texcoord).rgb, 1.0) * alpha;
++	gl_FragColor = vec4(c.rgb * color_gain + color_offset * c.a, c.a);
+ }

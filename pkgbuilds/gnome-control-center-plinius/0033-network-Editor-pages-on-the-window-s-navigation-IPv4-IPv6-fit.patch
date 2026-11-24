@@ -1,0 +1,513 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:45:30 +0100
+Subject: [PATCH] network: Editor pages on the window's navigation, IPv4/IPv6
+ fit a phone
+
+Plinius: as a page of the window's navigation the editor still had a
+navigation of its own inside, and the back swipe did not get through
+it: neither on "Add VPN" nor on the settings pages. The editor now
+takes its own navigation apart when it is a page: the first page's
+content goes straight into the page, the settings pages (and the
+settings of a picked VPN type) go on the window's navigation. The
+header bars show the window's back arrow, which replaces the arrow made
+from Cancel, and the swipe works everywhere.
+
+IPv4 and IPv6 were wider than the screen and scrolled sideways, which
+also swallowed the swipe: the methods now stand one below the other
+under the heading, address and route entries are narrower (they still
+grow on a wider page), margins as on the other pages.
+---
+ .../network/connection-editor/ce-page-ip4.c   | 19 +++--
+ .../network/connection-editor/ce-page-ip6.c   | 19 +++--
+ panels/network/connection-editor/ip4-page.blp | 33 +++++----
+ panels/network/connection-editor/ip6-page.blp | 37 +++++-----
+ .../connection-editor/net-connection-editor.c | 69 +++++++++++++++----
+ 5 files changed, 117 insertions(+), 60 deletions(-)
+
+diff --git a/panels/network/connection-editor/ce-page-ip4.c b/panels/network/connection-editor/ce-page-ip4.c
+index b6776105d..4d82fc6a2 100644
+--- a/panels/network/connection-editor/ce-page-ip4.c
++++ b/panels/network/connection-editor/ce-page-ip4.c
+@@ -33,6 +33,11 @@
+ #include "ce-page.h"
+ #include "ui-helpers.h"
+ 
++/* Plinius: narrow enough that a row of address, mask, gateway and metric fits a phone; the
++ * entries still grow on a wider page */
++#define ENTRY_WIDTH_CHARS 7
++#define METRIC_WIDTH_CHARS 3
++
+ static void ensure_empty_address_row (CEPageIP4 *self);
+ static void ensure_empty_routes_row (CEPageIP4 *self);
+ 
+@@ -246,7 +251,7 @@ add_address_row (CEPageIP4 *self, const gchar *address, const gchar *network, co
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_address_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "address", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), address);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->address_address_label, NULL, -1);
+@@ -257,7 +262,7 @@ add_address_row (CEPageIP4 *self, const gchar *address, const gchar *network, co
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_address_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "netmask", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), network);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->address_netmask_label, NULL, -1);
+@@ -268,7 +273,7 @@ add_address_row (CEPageIP4 *self, const gchar *address, const gchar *network, co
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_address_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "gateway", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), gateway ? gateway : "");
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->address_gateway_label, NULL, -1);
+@@ -412,7 +417,7 @@ add_route_row (CEPageIP4 *self, const gchar *address, const gchar *netmask, cons
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_routes_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "address", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), address);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_address_label, NULL, -1);
+@@ -425,7 +430,7 @@ add_route_row (CEPageIP4 *self, const gchar *address, const gchar *netmask, cons
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_routes_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "netmask", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), netmask);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_netmask_label, NULL, -1);
+@@ -438,7 +443,7 @@ add_route_row (CEPageIP4 *self, const gchar *address, const gchar *netmask, cons
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_routes_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "gateway", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), gateway ? gateway : "");
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_gateway_label, NULL, -1);
+@@ -454,7 +459,7 @@ add_route_row (CEPageIP4 *self, const gchar *address, const gchar *netmask, cons
+         g_autofree gchar *s = g_strdup_printf ("%d", metric);
+         gtk_editable_set_text (GTK_EDITABLE (widget), s);
+     }
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 5);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), METRIC_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_metric_label, NULL, -1);
+diff --git a/panels/network/connection-editor/ce-page-ip6.c b/panels/network/connection-editor/ce-page-ip6.c
+index 57dd59d7b..752ffc9ad 100644
+--- a/panels/network/connection-editor/ce-page-ip6.c
++++ b/panels/network/connection-editor/ce-page-ip6.c
+@@ -32,6 +32,11 @@
+ #include "ce-page.h"
+ #include "ui-helpers.h"
+ 
++/* Plinius: narrow enough that a row of address, mask, gateway and metric fits a phone; the
++ * entries still grow on a wider page */
++#define ENTRY_WIDTH_CHARS 7
++#define METRIC_WIDTH_CHARS 3
++
+ static void ensure_empty_address_row (CEPageIP6 *self);
+ static void ensure_empty_routes_row (CEPageIP6 *self);
+ 
+@@ -231,7 +236,7 @@ add_address_row (CEPageIP6 *self, const gchar *address, const gchar *network, co
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_address_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "address", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), address);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->address_address_label, NULL, -1);
+@@ -242,7 +247,7 @@ add_address_row (CEPageIP6 *self, const gchar *address, const gchar *network, co
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_address_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "prefix", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), network);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->address_prefix_label, NULL, -1);
+@@ -253,7 +258,7 @@ add_address_row (CEPageIP6 *self, const gchar *address, const gchar *network, co
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_address_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "gateway", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), gateway ? gateway : "");
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->address_gateway_label, NULL, -1);
+@@ -390,7 +395,7 @@ add_route_row (CEPageIP6 *self, const gchar *address, const gchar *prefix, const
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_routes_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "address", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), address);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_address_label, NULL, -1);
+@@ -403,7 +408,7 @@ add_route_row (CEPageIP6 *self, const gchar *address, const gchar *prefix, const
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_routes_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "prefix", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), prefix ? prefix : "");
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_prefix_label, NULL, -1);
+@@ -416,7 +421,7 @@ add_route_row (CEPageIP6 *self, const gchar *address, const gchar *prefix, const
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_routes_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "gateway", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), gateway);
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 16);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), ENTRY_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_gateway_label, NULL, -1);
+@@ -429,7 +434,7 @@ add_route_row (CEPageIP6 *self, const gchar *address, const gchar *prefix, const
+     g_signal_connect_object (widget, "activate", G_CALLBACK (ensure_empty_routes_row), self, G_CONNECT_SWAPPED);
+     g_object_set_data (G_OBJECT (row), "metric", widget);
+     gtk_editable_set_text (GTK_EDITABLE (widget), metric ? metric : "");
+-    gtk_editable_set_width_chars (GTK_EDITABLE (widget), 5);
++    gtk_editable_set_width_chars (GTK_EDITABLE (widget), METRIC_WIDTH_CHARS);
+     gtk_widget_set_hexpand (widget, TRUE);
+     gtk_accessible_update_relation (GTK_ACCESSIBLE (widget), GTK_ACCESSIBLE_RELATION_LABELLED_BY,
+                                     self->routes_prefix_label, NULL, -1);
+diff --git a/panels/network/connection-editor/ip4-page.blp b/panels/network/connection-editor/ip4-page.blp
+index 7675cf5cd..08a4ad85b 100644
+--- a/panels/network/connection-editor/ip4-page.blp
++++ b/panels/network/connection-editor/ip4-page.blp
+@@ -7,11 +7,13 @@ template $CEPageIP4: Adw.Bin {
+     propagate-natural-width: true;
+ 
+     Viewport {
++      // Plinius: the methods one below the other under the heading, two columns of them next to
++      // it do not fit a phone; margins as on the other pages
+       Grid main_box {
+-        margin-start: 24;
+-        margin-end: 24;
+-        margin-top: 24;
+-        margin-bottom: 24;
++        margin-start: 12;
++        margin-end: 12;
++        margin-top: 12;
++        margin-bottom: 12;
+         orientation: vertical;
+         row-spacing: 6;
+         column-spacing: 6;
+@@ -25,6 +27,7 @@ template $CEPageIP4: Adw.Bin {
+           layout {
+             row: 0;
+             column: 0;
++            column-span: 3;
+           }
+ 
+           styles [
+@@ -38,8 +41,8 @@ template $CEPageIP4: Adw.Bin {
+           action-target: "'automatic'";
+ 
+           layout {
+-            row: 0;
+-            column: 1;
++            row: 1;
++            column: 0;
+           }
+         }
+ 
+@@ -49,8 +52,8 @@ template $CEPageIP4: Adw.Bin {
+           action-target: "'local'";
+ 
+           layout {
+-            row: 0;
+-            column: 2;
++            row: 2;
++            column: 0;
+           }
+         }
+ 
+@@ -60,8 +63,8 @@ template $CEPageIP4: Adw.Bin {
+           action-target: "'manual'";
+ 
+           layout {
+-            row: 1;
+-            column: 1;
++            row: 3;
++            column: 0;
+           }
+         }
+ 
+@@ -71,8 +74,8 @@ template $CEPageIP4: Adw.Bin {
+           action-target: "'disabled'";
+ 
+           layout {
+-            row: 1;
+-            column: 2;
++            row: 4;
++            column: 0;
+           }
+         }
+ 
+@@ -82,8 +85,8 @@ template $CEPageIP4: Adw.Bin {
+           action-target: "'shared'";
+ 
+           layout {
+-            row: 2;
+-            column: 1;
++            row: 5;
++            column: 0;
+           }
+         }
+ 
+@@ -92,7 +95,7 @@ template $CEPageIP4: Adw.Bin {
+           spacing: 6;
+ 
+           layout {
+-            row: 3;
++            row: 6;
+             column: 0;
+             column-span: 3;
+           }
+diff --git a/panels/network/connection-editor/ip6-page.blp b/panels/network/connection-editor/ip6-page.blp
+index e0f90bea5..c9b5e057c 100644
+--- a/panels/network/connection-editor/ip6-page.blp
++++ b/panels/network/connection-editor/ip6-page.blp
+@@ -7,11 +7,13 @@ template $CEPageIP6: Adw.Bin {
+     propagate-natural-width: true;
+ 
+     Viewport {
++      // Plinius: the methods one below the other under the heading, two columns of them next to
++      // it do not fit a phone; margins as on the other pages
+       Grid main_box {
+-        margin-start: 24;
+-        margin-end: 24;
+-        margin-top: 24;
+-        margin-bottom: 24;
++        margin-start: 12;
++        margin-end: 12;
++        margin-top: 12;
++        margin-bottom: 12;
+         orientation: vertical;
+         row-spacing: 6;
+         column-spacing: 6;
+@@ -25,6 +27,7 @@ template $CEPageIP6: Adw.Bin {
+           layout {
+             row: 0;
+             column: 0;
++            column-span: 3;
+           }
+ 
+           styles [
+@@ -38,8 +41,8 @@ template $CEPageIP6: Adw.Bin {
+           action-target: "'automatic'";
+ 
+           layout {
+-            row: 0;
+-            column: 1;
++            row: 1;
++            column: 0;
+           }
+         }
+ 
+@@ -49,8 +52,8 @@ template $CEPageIP6: Adw.Bin {
+           action-target: "'dhcp'";
+ 
+           layout {
+-            row: 0;
+-            column: 2;
++            row: 2;
++            column: 0;
+           }
+         }
+ 
+@@ -60,8 +63,8 @@ template $CEPageIP6: Adw.Bin {
+           action-target: "'local'";
+ 
+           layout {
+-            row: 1;
+-            column: 1;
++            row: 3;
++            column: 0;
+           }
+         }
+ 
+@@ -71,8 +74,8 @@ template $CEPageIP6: Adw.Bin {
+           action-target: "'manual'";
+ 
+           layout {
+-            row: 1;
+-            column: 2;
++            row: 4;
++            column: 0;
+           }
+         }
+ 
+@@ -82,8 +85,8 @@ template $CEPageIP6: Adw.Bin {
+           action-target: "'disabled'";
+ 
+           layout {
+-            row: 2;
+-            column: 1;
++            row: 5;
++            column: 0;
+           }
+         }
+ 
+@@ -93,8 +96,8 @@ template $CEPageIP6: Adw.Bin {
+           action-target: "'shared'";
+ 
+           layout {
+-            row: 2;
+-            column: 2;
++            row: 6;
++            column: 0;
+           }
+         }
+ 
+@@ -103,7 +106,7 @@ template $CEPageIP6: Adw.Bin {
+           spacing: 6;
+ 
+           layout {
+-            row: 3;
++            row: 7;
+             column: 0;
+             column-span: 3;
+           }
+diff --git a/panels/network/connection-editor/net-connection-editor.c b/panels/network/connection-editor/net-connection-editor.c
+index f7bbfaed6..91da4063d 100644
+--- a/panels/network/connection-editor/net-connection-editor.c
++++ b/panels/network/connection-editor/net-connection-editor.c
+@@ -71,6 +71,11 @@ struct _NetConnectionEditor {
+     /* Plinius: the settings of the VPN type picked in "Add VPN", a page above the list of types
+      * (pages_box and apply_button move there) */
+     AdwNavigationPage *config_page;
++    /* Plinius: as a page of the window's navigation the editor's own navigation is taken apart
++     * (flatten_into_page); kept here, it holds the first page. "popped" of the navigation the
++     * settings pages go on is connected. */
++    AdwNavigationView *own_navigation;
++    gboolean popped_connected;
+ 
+     NMClient *client;
+     NMDevice *device;
+@@ -176,7 +181,6 @@ eap_method_ca_cert_ignore_load (NMConnection *connection)
+ 
+ static void page_changed (NetConnectionEditor *self);
+ static void page_row_activated_cb (NetConnectionEditor *self, GtkListBoxRow *row);
+-static void navigation_popped_cb (NetConnectionEditor *self, AdwNavigationPage *page);
+ 
+ /* Shown as a page of the window's navigation (cc-plinius-dialog-pages.c): the dialog itself has
+  * no parent then, its child moved into the page */
+@@ -195,19 +199,56 @@ close_editor (NetConnectionEditor *self)
+         adw_dialog_force_close (ADW_DIALOG (self));
+ }
+ 
+-/* As a page "Cancel" becomes a back arrow, as on every other page. The header bar shows none of
+- * its own: it belongs to the first page of the editor's own navigation. Leaving the page by the
+- * back swipe cancels as well (net_connection_editor_closed). */
++/* As a page of the window's navigation (cc-plinius-dialog-pages.c) the editor's own navigation
++ * would sit inside it: then neither its header bar shows the window's back arrow nor does the back
++ * swipe work. So the first page's content goes straight into the page, and the settings pages go
++ * on the window's navigation (get_navigation). "Cancel" gives way to the back arrow; leaving by
++ * the arrow or the swipe cancels (net_connection_editor_closed). */
+ static void
+-content_map_cb (NetConnectionEditor *self)
++flatten_into_page (NetConnectionEditor *self)
+ {
+-    if (!is_page (self))
++    GtkWidget *parent = gtk_widget_get_parent (GTK_WIDGET (self->toast_overlay));
++    GtkWidget *content;
++
++    if (self->own_navigation || !ADW_IS_NAVIGATION_PAGE (parent) || !is_page (self))
+         return;
+ 
+-    gtk_button_set_icon_name (self->cancel_button, "go-previous-symbolic");
+-    gtk_widget_set_tooltip_text (GTK_WIDGET (self->cancel_button), g_dgettext ("libadwaita", "Back"));
+-    gtk_accessible_update_property (GTK_ACCESSIBLE (self->cancel_button),
+-                                    GTK_ACCESSIBLE_PROPERTY_LABEL, g_dgettext ("libadwaita", "Back"), -1);
++    self->own_navigation = g_object_ref (self->navigation_view);
++    content = g_object_ref (adw_navigation_page_get_child (self->main_page));
++    adw_navigation_page_set_child (self->main_page, NULL);
++    adw_toast_overlay_set_child (self->toast_overlay, content);
++    g_object_unref (content);
++
++    gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), FALSE);
++}
++
++/* The navigation the settings pages go on */
++static AdwNavigationView *
++get_navigation (NetConnectionEditor *self)
++{
++    GtkWidget *window_navigation;
++
++    if (!self->own_navigation)
++        return self->navigation_view;
++
++    window_navigation = gtk_widget_get_ancestor (GTK_WIDGET (self->toast_overlay), ADW_TYPE_NAVIGATION_VIEW);
++    return window_navigation ? ADW_NAVIGATION_VIEW (window_navigation) : self->navigation_view;
++}
++
++static void navigation_popped_cb (NetConnectionEditor *self, AdwNavigationPage *page);
++
++static void
++push_page (NetConnectionEditor *self, AdwNavigationPage *page)
++{
++    AdwNavigationView *navigation = get_navigation (self);
++
++    if (!self->popped_connected) {
++        g_signal_connect_object (navigation, "popped", G_CALLBACK (navigation_popped_cb), self,
++                                 G_CONNECT_SWAPPED);
++        self->popped_connected = TRUE;
++    }
++
++    adw_navigation_view_push (navigation, page);
+ }
+ 
+ /* Title of the dialog and of its first page (the back button of the settings pages shows it) */
+@@ -355,8 +396,7 @@ net_connection_editor_init (NetConnectionEditor *self)
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
+     self->pages = g_ptr_array_new ();
+-    g_signal_connect_object (self->toast_overlay, "map", G_CALLBACK (content_map_cb), self, G_CONNECT_SWAPPED);
+-    g_signal_connect_object (self->navigation_view, "popped", G_CALLBACK (navigation_popped_cb), self,
++    g_signal_connect_object (self->toast_overlay, "notify::parent", G_CALLBACK (flatten_into_page), self,
+                              G_CONNECT_SWAPPED);
+ }
+ 
+@@ -366,6 +406,7 @@ net_connection_editor_finalize (GObject *object)
+     NetConnectionEditor *self = NET_CONNECTION_EDITOR (object);
+ 
+     g_clear_object (&self->config_page);
++    g_clear_object (&self->own_navigation);
+     g_clear_object (&self->connection);
+     g_clear_object (&self->orig_connection);
+     g_clear_object (&self->device);
+@@ -610,7 +651,7 @@ page_row_activated_cb (NetConnectionEditor *self, GtkListBoxRow *row)
+     AdwNavigationPage *page = g_object_get_data (G_OBJECT (row), "navigation-page");
+ 
+     if (page != NULL)
+-        adw_navigation_view_push (self->navigation_view, page);
++        push_page (self, page);
+ }
+ 
+ static void
+@@ -857,7 +898,7 @@ push_config_page (NetConnectionEditor *self, const gchar *title)
+     }
+ 
+     adw_navigation_page_set_title (self->config_page, title);
+-    adw_navigation_view_push (self->navigation_view, self->config_page);
++    push_page (self, self->config_page);
+ }
+ 
+ static void
+-- 
+2.55.0
+

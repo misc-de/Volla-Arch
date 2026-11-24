@@ -1,0 +1,59 @@
+#!/bin/sh
+# Runs mmsd only while the SIM for mobile data has MMS switched on in Settings (Mobile Network >
+# SIM > MMS, the key sims of org.plinius.mms holds the ICCIDs). mmsd serves the modem of the data
+# SIM and nothing else (patch 0007), so that SIM decides. Off, mmsd and routectld use no memory;
+# MMS is switched off in Germany since 2026-06-30 and of use with a SIM from abroad only.
+#
+# Watched: the data SIM moving to another modem, a modem or SIM card appearing, oFono starting
+# again, and the setting itself. Each of these checks again.
+set -u
+
+# ICCID of the SIM in the modem of the data SIM, empty if there is none
+data_sim_iccid() {
+	modem=$(gdbus call --system -d org.ofono -o / \
+		-m org.nemomobile.ofono.ModemManager.GetDefaultDataModem 2>/dev/null) || return 0
+	# ('/ril_0',)
+	modem=${modem#"('"}
+	modem=${modem%%"'"*}
+	case $modem in
+	/*) ;;
+	*) return 0 ;;
+	esac
+	gdbus call --system -d org.ofono -o "$modem" -m org.ofono.SimManager.GetProperties 2>/dev/null |
+		sed -n "s/.*'CardIdentifier': <'\([0-9A-Fa-f]\{1,22\}\)'>.*/\1/p"
+}
+
+last=
+apply() {
+	iccid=$(data_sim_iccid)
+	want=stop
+	if [ -n "$iccid" ]; then
+		case $(gsettings get org.plinius.mms sims 2>/dev/null) in
+		*"'$iccid'"*) want=start ;;
+		esac
+	fi
+	if [ "$want" != "$last" ]; then
+		[ "$want" = start ] && echo "MMS on for the data SIM: starting mmsd" ||
+			echo "MMS off for the data SIM (or no data SIM): mmsd stays stopped"
+		last=$want
+	fi
+	# --no-block: mmsd waits for oFono and its D-Bus name, the loop must not
+	systemctl --user --no-block "$want" mmsd.service
+}
+
+events() {
+	gsettings monitor org.plinius.mms sims &
+	settings=$!
+	# The first check once both monitors listen
+	(sleep 1; echo check) &
+	gdbus monitor --system --dest org.ofono
+	# gdbus only ends when the system bus is gone: let systemd start again
+	kill "$settings" 2>/dev/null
+}
+
+events | grep --line-buffered -E \
+	"^check$|^sims:|DefaultDataModemChanged|ModemAdded|ModemRemoved|'CardIdentifier'|'Present'|is owned by" |
+	while read -r _; do
+		apply
+	done
+exit 1

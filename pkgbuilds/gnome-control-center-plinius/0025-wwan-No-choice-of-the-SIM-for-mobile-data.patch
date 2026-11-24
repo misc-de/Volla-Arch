@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 23:21:35 +0100
+Subject: [PATCH] wwan: No choice of the SIM for mobile data
+
+Plinius: the "Data Connection" row (SIM card used for internet) is not
+shown; the SIM tabs stay.
+---
+--- a/panels/wwan/cc-wwan-panel.blp
++++ b/panels/wwan/cc-wwan-panel.blp
+@@ -88,7 +88,9 @@
+                     child: Box {
+                       orientation: vertical;
+ 
++                      /* Plinius: no choice of the SIM for mobile data */
+                       ListBox data_sim_select_listbox {
++                        visible: false;
+                         margin-bottom: 32;
+ 
+                         styles [

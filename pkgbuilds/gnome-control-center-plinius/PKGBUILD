@@ -1,0 +1,843 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on: Arch's PKGBUILD (gnome-control-center 51.1); ALARM builds it unchanged.
+
+pkgname=gnome-control-center-plinius
+pkgver=51.1
+pkgrel=106
+pkgdesc="GNOME Settings with the Plinius settings built in"
+url="https://apps.gnome.org/Settings/"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+# GNOME Settings is GPL-2.0-or-later, our own files (cc-username-dialog.*, cc-plinius-device.*,
+# cc-plinius-display.*, cc-plinius-buttons.*, cc-assistant-panel.*, cc-nfc-panel.*, cc-esim-dialog.*,
+# cc-pattern-dialog.*, cc-plinius-battery.*, cc-plinius-crypt.*, cc-plinius-dialog-pages.c,
+# cc-plinius-accent.*, cc-plinius-security.*, cc-plinius-ambient.*, cc-plinius-panorama.*, cc-face-dialog.*,
+# cc-plinius-hardware.*, cc-plinius-beacondb.*, cc-plinius-epo.*, cc-plinius-dictate.*, cc-plinius-pinguard.*,
+# cc-streaming-panel.*, cc-usb-panel.*, cc-plinius-osk-style.*, cc-plinius-ssh.*,
+# cc-desktop-vnc-panel.*, cc-plinius-text-focus.*, cc-plinius-swap.*, cc-plinius-hubs.*,
+# cc-plinius-hub-panels.c, cc-lock-panel.*, cc-security-panel.c, cc-plinius-software.*,
+# cc-plinius-hidden-wifi.*, cc-plinius-battery-usage.*, cc-plinius-dnsfilter.*,
+# cc-plinius-webapps.*, cc-plinius-widevine.*, cc-plinius-appearance.*, cc-plinius-bgcolor.*,
+# cc-plinius-bt-contacts.*, cc-feedback-panel.*, cc-plinius-appaccess.*, cc-plinius-selftest.*) are MIT; ce-plinius-ip-row.* (from ce-netmask-entry.c) GPL-2.0-or-later
+license=(GPL-2.0-or-later MIT)
+# Why a custom build: GNOME Settings has no plugins, all pages are compiled in.
+# Our own settings should still live here, not in separate apps.
+# Must follow the gnome-control-center version in ALARM (same GNOME version as
+# gnome-settings-daemon and gnome-shell). Dependencies as in ALARM, plus plinius-account
+# (plinius-rename-user for "Username", from 0.6 plinius-add-user for Add on Local Accounts),
+# appstream (the app catalog under Apps > Explore) and gstreamer with gst-plugins-base (playbin,
+# videoconvert, appsink: the thumbnails of the videos on the Background page).
+depends=(
+	accountsservice bolt cairo colord-gtk4 cups-pk-helper dconf fontconfig gcr-4 gdk-pixbuf2
+	glib2 glibc gnome-bluetooth-3.0 gnome-color-manager gnome-desktop-4 gnome-keybindings
+	gnome-online-accounts gnome-settings-daemon gnome-shell gnutls graphene
+	gsettings-desktop-schemas gsound gst-plugins-good gtk4 hicolor-icon-theme json-glib krb5
+	libadwaita libcolord libcups libepoxy libgcc libgoa libgtop libgudev libibus libmalcontent
+	libmm-glib libnm libnma-gtk4 libpulse libpwquality libsecret libsoup3 libwacom libx11 libxi
+	libxml2 pango polkit smbclient sound-theme-freedesktop tecla udisks2 upower wayland
+	'plinius-account>=0.6' appstream gstreamer gst-plugins-base
+)
+makedepends=(blueprint-compiler docbook-xsl git glib2-devel meson modemmanager gettext)
+optdepends=(
+	'plinius-security: password ratings and known vulnerabilities on the Device Security page'
+	'plinius-netlog: connections per app on the Device Security page and on each app'"'"'s page under Apps'
+	'plinius-dnsfilter: DNS Filter on the Network page (blocklists, own rules, query log)'
+	'plinius-ambient>=0.5: animated effect, 360° photos and videos as the background (Appearance > Background)'
+	'gnome-remote-desktop: screen sharing'
+	'gnome-user-share: WebDAV file sharing'
+	'malcontent: application permission control'
+	'networkmanager: network settings'
+	'openssh: remote login'
+	'power-profiles-daemon: power profiles'
+	'rygel: media sharing'
+	'system-config-printer: printer settings'
+	'lpac>=2.3.0.r121.654215e-3: eSIM management in Mobile Network (with ofono-sailfish; -3 brings the GSMA CI roots for checking the server)'
+	'plinius-assist: assistant button panel'
+	'plinius-wake: wake up by double tap or tilt, brighten when picked up, on the Display page'
+	'plinius-charge: charge limit and fast charging on the Power page'
+	'plinius-energy: the page Battery Usage (estimated energy per app) on the Power page'
+	'phosh-plinius: custom accent color on the Appearance page (org.plinius.appearance)'
+	'plinius-face: Face Unlock on the Users page'
+	'furios-gps-contribute: Contribute to beaconDB on the Location page'
+	'plinius-epo: Faster GPS Fix on the Location page (orbit predictions for the GPS)'
+	'feedbackd: Sounds and Vibration panel (sound and vibration of calls, messages, alarms, keyboard, alert sound)'
+	'phoc-plinius>=0.59.0-3: the alert sound of Sounds and Vibration (phoc hands the bell of the apps to feedbackd)'
+	'plinius-pinguard: Wait After Wrong PINs on the Screen Lock page'
+	'schwupp: Streaming panel (settings for mirroring the screen to TVs)'
+	'plinius-usb: USB panel (file sharing, network and internet for a computer)'
+	'stevia-plinius: look of the on-screen keyboard on the Keyboard page'
+	'plinius-ssh: allowed networks (USB, local, all) on the Secure Shell page'
+	'plinius-desktop: Desktop over VNC with its taskbar edge on the Remote Access page'
+	'plinius-swap: the page Memory and Swap in System'
+	'plinius-health: the page Self-Test in System'
+	'plinius-rollback: Take Back Update on the Self-Test page'
+	'plinius-software: Explore and Remove under Apps, the panel Updates (System and Security)'
+	'firefox: the tab Web Apps under Apps (websites as apps)'
+	'chromium: Chromium as the browser of web apps (Apps > Web Apps)'
+	'plinius-widevine: Protected Content (DRM) on the Privacy page'
+	'mmsd4ofono>=1.3.2.20261111-4: the MMS switch of each SIM (Mobile Network)'
+	'plinius-appaccess: Access on each app'"'"'s page under Apps (USB camera, security key, network: ask, allow or not, with the attempts)'
+)
+provides=("gnome-control-center=$pkgver")
+conflicts=(gnome-control-center 'plinius-software<0.12-16')
+# Our own strings are English, translated in *.po (gettext domain plinius-control-center,
+# template plinius-control-center.pot); GNOME's own translations stay untouched.
+_langs=(de fr es it pt nl pl ru)
+# Commit on the stable branch gnome-51 after tag $pkgver (translations and a Thunderbolt fix
+# since the tag): a branch moves, a commit hash does not.
+# libgnome-volume-control is a submodule; prepare() checks out the commit the tag records.
+_commit=b2ef9847c1e4afcd938c3ed0b6cb2dc28a080136
+source=(
+	"git+https://gitlab.gnome.org/GNOME/gnome-control-center.git#commit=$_commit"
+	"git+https://gitlab.gnome.org/GNOME/libgnome-volume-control.git"
+	"git+https://gitlab.gnome.org/GNOME/libgxdp.git#commit=df896e3412b749947bc6f62a91a1aac8e6b6d19b"
+	0001-users-rename-own-account.patch
+	0002-phone-device-facts-scale-steps-notch.patch
+	0003-wwan-eSIM-management-for-modems-with-an-eUICC.patch
+	0004-Phone-options-on-the-Display-page-no-Color-start-at-.patch
+	0005-Assistant-button-on-the-Power-page-no-own-language-o.patch
+	0006-window-Swipe-back-from-a-panel-to-the-panel-list.patch
+	0007-wwan-Name-the-SIM-tabs-after-their-slots.patch
+	0008-background-App-overview-options-on-top-of-Appearance.patch
+	0009-Assistant-button-as-a-panel-of-its-own.patch
+	0010-NFC-as-a-panel-of-its-own.patch
+	0011-panel-list-Assistant-button-among-the-input-devices.patch
+	0012-privacy-screen-Lock-delays-of-5-10-and-15-seconds.patch
+	0013-printers-Add-Printer-as-an-adaptive-dialog.patch
+	0014-display-Night-Light-in-the-display-s-own-list.patch
+	0015-users-Unlock-pattern-for-the-lock-screen.patch
+	0017-network-Connection-editor-as-a-dialog-with-pages.patch
+	0018-users-Fingerprint-dialog-around-a-sensor-under-the-display.patch
+	0019-wacom-Test-area-with-the-pen-or-a-finger.patch
+	0020-network-Hotspot-on-an-AP-only-interface.patch
+	0021-Users-as-a-panel-of-its-own-above-Privacy-Security.patch
+	0022-power-Battery-condition-and-charging-options.patch
+	0023-users-No-Add-User-on-the-phone.patch
+	0024-privacy-Encryption-page-for-plinius-crypt.patch
+	0025-wwan-No-choice-of-the-SIM-for-mobile-data.patch
+	0026-display-Rotation-speed-right-below-Auto-Rotate.patch
+	0027-shell-Form-dialogs-as-pages-of-the-navigation.patch
+	0028-users-Say-when-the-new-password-is-the-encryption-password.patch
+	0029-background-A-custom-accent-color-after-GNOME-s-nine.patch
+	0030-network-Connection-editor-closes-as-a-page-with-a-back-arrow.patch
+	0031-network-WireGuard-settings-on-the-editor-s-first-page.patch
+	0032-network-Add-VPN-the-settings-of-the-picked-type-as-a-page.patch
+	0033-network-Editor-pages-on-the-window-s-navigation-IPv4-IPv6-fit.patch
+	0034-privacy-Device-Security-with-the-phone-s-own-checks.patch
+	0035-background-Animated-effect-over-the-background.patch
+	0036-search-The-phone-s-own-searches-on-top-of-the-Search.patch
+	0037-network-VPN-plugin-editors-in-one-column-their-dialogs-as-pages.patch
+	0038-users-Face-unlock.patch
+	0039-system-Hardware-chips-and-firmware-versions.patch
+	0040-background-No-image-decoding-to-open-Appearance.patch
+	0041-mouse-Videos-load-when-their-row-shows.patch
+	0042-power-logind-s-answers-without-waiting.patch
+	0043-about-GPU-and-storage-from-a-thread.patch
+	0044-datetime-Time-zones-and-permissions-without-waiting.patch
+	0045-region-Login-permission-without-waiting.patch
+	0046-keyboard-Login-permission-without-waiting.patch
+	0047-region-Locale-names-from-a-cache.patch
+	0048-location-Contribute-to-beaconDB-below-the-location-switch.patch
+	0049-keyboard-Speech-to-text-below-the-input-sources.patch
+	0050-privacy-screen-Wait-after-wrong-PINs-below-the-lock-options.patch
+	0051-Streaming-as-a-panel-of-its-own-above-NFC.patch
+	0052-USB-as-a-panel-of-its-own-below-NFC.patch
+	0053-keyboard-Look-of-the-on-screen-keyboard-below-the-input-sources.patch
+	0054-system-secure-shell-Allowed-networks-below-the-SSH-switch.patch
+	0055-Desktop-over-VNC-as-a-panel-of-its-own-below-Printers.patch
+	0056-shell-No-automatic-focus-into-text-fields.patch
+	0057-region-Formats-in-one-column.patch
+	0058-system-Memory-and-Swap.patch
+	0059-Settings-ordered-by-what-one-wants-to-do.patch
+	0060-power-No-Automatic-Suspend.patch
+	0061-Apps-Explore-Installed-Settings-Updates-as-a-panel.patch
+	0062-background-360-photos-and-headings-in-the-background-chooser.patch
+	0063-wwan-Below-each-network-found-whether-the-phone-could-register.patch
+	0064-wwan-All-dialogs-of-the-mobile-network-as-pages-with-the-back-swipe.patch
+	0065-Wi-Fi-dialogs-avatar-crop-and-printer-driver-as-pages.patch
+	0066-users-A-PIN-is-accepted-as-the-password-rated-weak-but-allowed.patch
+	0067-users-A-new-password-equal-to-the-current-one-is-refused-in-the-dialog.patch
+	0068-Forms-with-the-button-below-SIM-Lock-in-the-list-style.patch
+	0069-users-Fingerprint-and-Change-Password-as-pages-with-back.patch
+	0070-network-Hidden-network-and-hotspot-in-the-list-style.patch
+	0071-List-style-for-the-connection-editor-modem-details-sound-and-fast-charging.patch
+	0072-power-Battery-Usage-and-Battery-Condition-as-pages.patch
+	0073-network-DNS-Filter-at-the-top.patch
+	cc-username-dialog.c cc-username-dialog.h cc-username-dialog.blp
+	cc-plinius-device.c cc-plinius-device.h
+	cc-plinius-display.c cc-plinius-display.h
+	cc-plinius-buttons.c cc-plinius-buttons.h
+	cc-assistant-panel.c cc-assistant-panel.h gnome-assistant-panel.desktop
+	cc-nfc-panel.c cc-nfc-panel.h gnome-nfc-panel.desktop plinius-nfc-symbolic.svg
+	cc-esim-dialog.c cc-esim-dialog.h cc-esim-dialog.blp
+	cc-pattern-dialog.c cc-pattern-dialog.h
+	cc-plinius-battery.c cc-plinius-battery.h cc-plinius-battery-usage.c cc-plinius-battery-usage.h
+	cc-plinius-crypt.c cc-plinius-crypt.h
+	cc-plinius-dialog-pages.c
+	cc-plinius-accent.c cc-plinius-accent.h
+	cc-plinius-security.c cc-plinius-security.h
+	cc-plinius-ambient.c cc-plinius-ambient.h
+	cc-plinius-panorama.c cc-plinius-panorama.h
+	cc-face-dialog.c cc-face-dialog.h
+	cc-plinius-hardware.c cc-plinius-hardware.h
+	cc-plinius-beacondb.c cc-plinius-beacondb.h
+	cc-plinius-dictate.c cc-plinius-dictate.h
+	cc-plinius-pinguard.c cc-plinius-pinguard.h
+	cc-plinius-osk-style.c cc-plinius-osk-style.h
+	cc-plinius-ssh.c cc-plinius-ssh.h
+	cc-desktop-vnc-panel.c cc-desktop-vnc-panel.h gnome-desktop-vnc-panel.desktop
+	cc-plinius-swap.c cc-plinius-swap.h
+	cc-plinius-hubs.c cc-plinius-hubs.h
+	cc-plinius-hub-panels.c gnome-connected-devices-panel.desktop gnome-accounts-panel.desktop
+	cc-lock-panel.c cc-lock-panel.h gnome-lock-panel.desktop
+	cc-security-panel.c gnome-security-panel.desktop
+	cc-plinius-software.c cc-plinius-software.h gnome-updates-panel.desktop
+	cc-plinius-hidden-wifi.c cc-plinius-hidden-wifi.h
+	cc-plinius-dnsfilter.c cc-plinius-dnsfilter.h
+	ce-plinius-ip-row.c ce-plinius-ip-row.h
+	cc-plinius-text-focus.c cc-plinius-text-focus.h
+	cc-streaming-panel.c cc-streaming-panel.h gnome-streaming-panel.desktop plinius-cast-symbolic.svg
+	cc-usb-panel.c cc-usb-panel.h gnome-usb-panel.desktop plinius-usb-symbolic.svg
+	de.po fr.po es.po it.po pt.po nl.po pl.po ru.po
+	LICENSE
+	0074-applications-Web-Apps-as-a-tab-of-its-own.patch
+	cc-plinius-webapps.c cc-plinius-webapps.h
+	0075-privacy-Protected-Content-below-Devices.patch
+	cc-plinius-widevine.c cc-plinius-widevine.h
+	0076-network-Forget-asks-first-no-Airplane-Mode-other-security-as-a-page.patch
+	0077-background-Style-and-Background-as-pages-of-their-own.patch
+	cc-plinius-appearance.c cc-plinius-appearance.h
+	cc-plinius-bgcolor.c cc-plinius-bgcolor.h
+	0078-wwan-MMS-switch-for-each-SIM-card.patch
+	0079-background-One-add-button-the-animation-as-a-group-of-its-own.patch
+	0080-network-Facts-of-a-known-connection-on-the-editor-s-first-page.patch
+	0081-printers-Say-when-the-test-page-could-not-be-printed.patch
+	0082-printers-Printer-options-without-options-say-so-and-keep-back.patch
+	cc-plinius-bt-contacts.c cc-plinius-bt-contacts.h
+	0083-bluetooth-Contacts-which-devices-may-read-them.patch
+	0084-background-Video-thumbnails-through-GStreamer.patch
+	cc-feedback-panel.c cc-feedback-panel.h gnome-feedback-panel.desktop plinius-vibration-symbolic.svg
+	0085-Sounds-and-Vibration-as-a-panel-of-its-own-below-Sound.patch
+	0086-network-hotspot-opens-the-Wi-Fi-panel-with-the-hotspot-s-page.patch
+	0087-window-Never-start-larger-than-the-largest-screen.patch
+	cc-plinius-appaccess.c cc-plinius-appaccess.h
+	0088-applications-Access-to-a-USB-camera-a-security-key-and-the-network-per-app.patch
+	0089-wwan-A-label-of-one-s-own-for-each-SIM-card.patch org.plinius.sim.gschema.xml
+	0090-users-Local-Accounts-with-one-s-own-account-first-Add-in-the-header-bar.patch
+	0091-bluetooth-Contacts-on-top-no-explanation-above-the-devices.patch
+	0092-privacy-Contacts-below-Cameras.patch
+	0093-network-Delete-below-the-pages-of-a-known-Wi-Fi-network.patch
+	0094-wwan-The-settings-of-an-access-point-in-the-list-style.patch
+	0095-network-No-trash-button-in-the-list-of-saved-Wi-Fi-networks.patch
+	0096-gvc-Sources-marked-plinius.hidden-are-not-listed.patch
+	0097-sound-Volume-Levels-at-the-end-of-Output-no-group-Sounds.patch
+	cc-plinius-epo.c cc-plinius-epo.h
+	0098-location-Faster-GPS-Fix-below-the-location-switch.patch
+	# Mobile Network > Access Points: Delete on the page of a saved access point, with a question
+	0099-wwan-Delete-on-the-page-of-an-access-point.patch
+	# Mobile Network > Access Points: Save in the header bar of an access point, back swipe to the list
+	0100-wwan-Save-in-the-header-bar-of-an-access-point-back-swipe-to-the-list.patch
+	# System › Self-Test: what plinius-health found, Check Again, Take Back Update (plinius-rollback)
+	cc-plinius-selftest.c cc-plinius-selftest.h
+	0101-system-Self-Test-what-the-check-after-the-start-found.patch
+	# Mobile Network > Access Points: the SIM's own provider, nameless suggestions named, no doubles
+	0102-wwan-The-access-points-of-the-SIM-s-own-provider-named-not-Default.patch
+	0103-users-The-password-of-another-account-is-set-now-not-at-its-next-login.patch
+)
+sha256sums=('a16c2590bceb402e399fcd2c6a0119232c48f7a1b7f1c1a5e22158c30422b8d8'
+	'SKIP'
+	'ca801b54d5de3521c4cf475623deaf146a64cbdc36722ac651dd1a21bcd8ff71'
+	'af960ddd70039ce9b98d6dae80b2e7efdf33f55cad8d8364d31af007ad5f80cd'
+	'ba7c72727801316c2650ef9ca15e65b0ae9ac9cea5b7b78a7a6ba2974f3ae93a'
+	'62025df5ef5c7ff29e5ea64ac664e74163d4fd65fb569bcae846112919e10270'
+	'd8bf9ef86ed3a0e298d6b6140d380ab132ec0d9f6d7291e29e662bbcfdccc430'
+	'2f299a22b7a431b6d71914f6f1bab07e705ec3eff061a3466419868937dd88e9'
+	'2decc5b63cb9fd6c2e2762af1705ab6cc84fff5cba8b64e1134d8cb127315c6f'
+	'95a2cf91a334bd456bf502050006d52439ad7062e87c16a4a251a679b47f06ae'
+	'071bcc51e0b86959c365754f2a0283ec349fb52b16be6f6406d3cf372824c6a8'
+	'5a491f6a8479576a88fcbd4f7863aef84e0edf680610c3eb1f5b361273cb52fd'
+	'bf711b51573463c3341f4288ec7df9b9bf1714d252f120899e553d0980a6080d'
+	'0742bb109927a90becac5fb16ffd1230766af0220650c0dcbd30e5535fb3a67d'
+	'571d029025479971003ea92491546416414da790f786584d86b8ddbd07f7bda9'
+	'1d4e4542634bd1d8040db058a3d18083cf4dd5c7356257602f7b6d21a9a88d3c'
+	'85410e7648ca5ccbfffce6c45a85e5b97e3729163ef6ff005ac93fc06446685f'
+	'8f534cba0b362a7c28dd4eb7b48f08579e00c61405297c7c52d4bd02b1dbdd83'
+	'288f68689f42220cfa898eec4f727ebe568de493d33d7668ca8551764bd26422'
+	'8a6b9b48c4d9175005d2b8a7f3903fd8e30a5e51207bcdba6f8e764d64e9a89f'
+	'01f19e38ed0d0525c1aa41794365b4479c82be25b15ac4a2c76ce547af878659'
+	'b6ec7842b2dabb1dec4009e493018ac1135f4929e76c2505f17fedf22148996f'
+	'5d447d19a33b8ff7f9f569883160cb12e1f527feba4392fd6e73ef5bc314479b'
+	'241ca166db71916e328e6b29506129f071febca68562358eb2df7dc5e072fbe7'
+	'06e817f9c87610e22b7f01b34ee0ce445d44f8c1f566c2bf8b115d9d79ce8405'
+	'6d6ee2858b17f5511d57d612c725b8627ba54afda5455c871eccff239f5e3b69'
+	'7c881cdf0678989bd35343423c7e57df68ebb7b51e9993d3f73d7f72c561ae5a'
+	'bded283ac3a05b33de7e3eaaf7705d748d8809423f13924b3f43deb553d92725'
+	'10c1d0a9832feee5952532fe72e4c0d58cd84261ff7aa33f63413ec8bb941f24'
+	'21d590d93bae06bbdb0c581a8583be1412355ce684b16a9238adba6f2166698d'
+	'10750de71b8d899fb3ff363ada66fc68d70c986a98687b480f9ce43d44a750bc'
+	'b4020e82a30d4d9cbe7c47e06d774f6c71f28cdd7947d884fb6d0f548d1756b8'
+	'7392d15db8bd1f15c4ba47e548b265cebe49b0ec845521c4b2ba1db1c33337eb'
+	'44dffc926864d08bf61d0838ad51458fe2f6e70f6c57fdd32edf9df01146f6b7'
+	'c312467b3fa5fff6ac35cc87ccd29be94dfb2936493de299c7a2bc7ffd8fde3c'
+	'23524184cee2c20cb7c8b5d4f93bc1be1b6f94992bbeaf5915df757c06a49d54'
+	'f507437e2d3aab4b26fd89ecd95a8c41f827ff64b205542bd6fc86b9e9f27e28'
+	'c5f66be7d5154e6d2779066e4b0ac93627d948a1bc9e648e3744f0126b49347c'
+	'c1b49cd77bbb59ed6af22ceae29d8ce1cd51094747235af80000a77efec23f26'
+	'364f15f1d5249f0ac054a0c63042de17e88ea0e65f4e9d18d137531c0f46948a'
+	'7f02f8d3659fbe13ab7ab11f40e33781ea2397e404a28300bc9e3f9db6d21451'
+	'd072688054d89fccb4e7baaa73f8d2dd81ef8df0f1bbbede73b8c1f6a75b151f'
+	'ddfb8b2d9460f528ed666418fb4067ca4712b81ee1ccab6a82c5401d7438d67d'
+	'158728100a364c9bd999b586644e6be9cff8d90d98b4aeb2057e77f582900578'
+	'579c07833e607fe0a9fa86c1fa59d482e991f879b60c04db3afec07f24842dae'
+	'9d40b24e2341ea5a50ac8517f5f155695ad579d944cbca38806c97655a7e570f'
+	'd4445e7ae25ae552a269cbc65526de00f8bbd4125041615d143e7479728ddb6e'
+	'0afa6ca777ce76620c3c73fe20c7b9e0d57fa14a01d0eceadc0c3afac5eb479b'
+	'72a32a2c0791753a9645feea1ae1d8cad93444d9821173740b52a2b11b9b99f3'
+	'eeaa24ca8358904e61a16c694606a4b0b6d44abe56ced42b9fb0438d1f96af43'
+	'c2c3ba227c3a17f4591cff246ce484683aec7ba4d16e2ecfc8b41323e08afe3c'
+	'9e1f4bdd78533f47966b32381a091983bba4d478809a6ae0a7d80197d3a8706d'
+	'3ff2e98cc0146ab2fbe5ccfb99b58feb39cd7c73abd6b6cf811a2f04f10b2c81'
+	'61fe9ac49bea244155cac8fb374ba3221e36140b679bfaf6264154883538dc9f'
+	'b9a2de77ef174ccb1107d3f034709feb4e63d179219d6f0c50018356df61c177'
+	'438f5e4c6b6494af5dc78892607af531b16e87352a1dfa9dbbfe4eb9e71f2036'
+	'0e33975d29fb8d9670753f1723399f1e67d6293398a5d3b774a79a4181097af8'
+	'1852b5aebdbdabcbfb9f4f74150fe04d78deb247fdb07906155a577427c91402'
+	'1087f70d5ae6e73b2734558273fc70760d5e82a027e7080e83b4dbbc8648f9fc'
+	'4a1a4c61d5fd136a2d2ea0a2750406e299c67a6fd9a7df6984468d85e9d805ac'
+	'26393e85dc3bc1d850dd22353b0981f6b280899228a1a8826503e4f5cce23e97'
+	'6c7fc61257f95415cc0841bb7b0367776473cccc8e979bf455072674f05b6eae'
+	'4fcd79a9c1917c2d6ad4a88599a41214825449a8206fc8ad1bf62b7d7d7494df'
+	'56c3527365dd5a14e64f2e94c274312d960d10139887d568ea0e0b1053dd8c96'
+	'c78804b65aa09c00b4ef951393519b13c0e4e7771c34b2b0d5be3d4c4d4e3c18'
+	'f11ffea78d341f92da80c8cf71bbd69111fc563449cece7a67e86de814d50469'
+	'cadacef9c628a82c519b2f92db89c6725f2505a7e9e9b88e47692b7fb7d23cd6'
+	'9125abfd5430efd9db2727fad48657b88b9bb03cef1eb172e7f5cce754fdb881'
+	'5f0003820b2d135996f33bce1622f32aba33951a18c5debbd572581da5a30422'
+	'4b84a786d05876430683aec387e6a30cb130f12e28235e4e3ef85b461ba80874'
+	'8298916472a7b3559d6cb83d057c1659c5174ac8d349d398ca08b08579ae3ad8'
+	'407c4aec7101b7c1ee8e49bd2f54229a42a67e6066924ef7d14c5c33808416d9'
+	'cb17344cb68a53ddd96ad40a17483c2317f1cb5d66b705f6ccfdf7b5828e6e4f'
+	'9552f53dbe4fa4faeff103624333fe71f89ad2a099c3fb0f5f4c767a3b46bd6b'
+	'0d64625f6ec69f528894409830c0b64a42818281db936a521fca6aa1dbb26864'
+	'43925257f8c52e069c5a5acea79bb2683d8d62209e958b6615ca39087e3446e6'
+	'529ac2c897013caccd643ac03547c0f9aaadc00afa8134e3807705283c8fc5cb'
+	'7ea2323d00acfcaf8e91a692cee22304b05e4de2840402805876c42cae7f05ce'
+	'2f9a14489deb9cfc94ba37a4243571bc956e49951e0187bc4a8950fd86e64294'
+	'24fbf993d27afb83075e46d90361d145ebac97dda1d1937e3e259a91ba32dac4'
+	'6694883b94d0badd992046d3cc170fdc8dc4f02d09acb65168e09b4039764aa0'
+	'ccd571f320ead43c006728345ffc3c25b56c4ba84d1893d84bcebfd6f6a2d48f'
+	'1fd01c615ab85a3cdd656d01a27553b450b5278ebe08e6c9dd59377a831da1ed'
+	'e5bdab8212c0d05a58cce2bb0986f522079ebdbd68da5330d0077012f524e52b'
+	'66b1dea995a9385d6a485024e51faa673bceff9550c2e6965ca88157fd42075a'
+	'dafe6fb695d2a390c0404bdb62450868190ccec0675e5d85b77aaf03bfb7ddc9'
+	'b7b14f183641709ca546509e07eccf285b5b86028372183e1fd7c8104c4a4580'
+	'b9a89f5f7e57fe521945c5def3521e6f9e890cae9af598b757edbd9ef321b227'
+	'a436c952f40e705b77bc870b047ae2d36ec736f72f4c5efe8945460da9e0eb86'
+	'565919687923151a9ee7e2021d52660f8ece06751d005064b2afb1b431fbdd3d'
+	'd4e611ead698bfd229ac67d67516260a19850c52b2e2ffc02243f22ccc0523fc'
+	'69df2104be9620beba2727822aa9f0b2e9f1fa8c99108cfd120dcc06fbe409b1'
+	'3e02532ea5db08b9884106d5fcd4a8b41bf070c9cb27d6e02ec980f17a805282'
+	'a9de78616ad185fc3d5529c36f92c292a9eac31857e96da58f5e0ced6fb792f0'
+	'a7a34d144a970b6c96b60adc38622a3fe06143801ffb4dc33979d5182b231453'
+	'96498572a4414a1b1f8cf436e25d48f77b674ae58ebb62c8236736d8706a82d7'
+	'2ff3de25c6f33158425b426616a600745dca71b0c363b37bc7e585594e66766c'
+	'9b72a3fd8b9426ceef511ce2fdbf8854a979266803ec10ccfaddd2a81ea3de04'
+	'315a729a7723badb6fb3ac12ac21b4ee211a02990149c985ee6abea2f1d4e5fc'
+	'94837da0b777f3ab57585fbbfcd5568868a6a95f117912a62c0966a34a19bc1a'
+	'd2e716745d1b4269b2d8a34a00e5db47110248400e8a02e4400bd9abaa661a25'
+	'31ab9d8ad60da58dc15a168d1f8a1104fc84385c831eb75a5b3b94cef7b25df0'
+	'9d2550dd932ddbac1f8b457648a1a674c383152d36d5dbc7076350878a2c50e1'
+	'017cb43a72371b02ce37fccd5c13fd357b511e9192372a4ff1c76d94b23171e1'
+	'fdd28e911455c3a04b2d6c0639d2c28835bdc518ff0a62b6c37e58aceb7de842'
+	'4bc6c6d3bdcfd61c86af80b7cae4ad03eee4720ee24a499256d153e04d189dc8'
+	'd43042eca74deba87734499f373604812705561aaf532cb85f985e6a89fd0945'
+	'462a67062abdc0090803d6a7df7800bed9f19028680d71d2fb43853308559bc9'
+	'3acc8029dafda57660008fdb3dd0326860ecafbd7fe3b4106660c211f9451a89'
+	'f2b86f0cec32f8fbbdf54c34d38591d4f988ce765a8e33330cf5e0c195365f93'
+	'091769e7b9f7fd4c4ca0d3fbad2f043aa1c446386e98e89719c1921eb23acccd'
+	'a35123771d6f3b7a40ec658babd060a7d10cc3f434eb2ba9660e206399273a94'
+	'426bcef648bad3250742079e3a26eb6a9e1c41d1f411dd2fca894bbe3557cbfe'
+	'da01cc0ad8c4e260e56b016799deaf95db63fa1d94e099e78062eb7c2a7cf428'
+	'f2d421855df25b400de79e6bb20222df05435ae494ae1f68e131fda32d1585b7'
+	'b9f540104a1ff81d873e1c847cbf91e19be6e206f64142393f5e84c841750ecc'
+	'970d4fd675613d705dfab7c3adef96dcb6c0f3cffde3fefb753672b40feb6a3e'
+	'34ca180f232a621790cdf8246e42a5988eb438a69de53c8618b0be6d1fd0b17a'
+	'b4b5f01c038e7edd1b2669da5a6391630ec1d72c63bbf9dd9c9bbafcbcf0ff22'
+	'6138d627e7c93478b613f111ac9519a9896344fc24fc7af0a5702aad479b9b1d'
+	'66f3de2789dfd3bcbc8e4623357310020d29e187b935696bad9605683ea28c21'
+	'a6457a3e152f8fc86bbff779a4c690e7bd28c392654d1514a8bad89fdb8072d8'
+	'18b307ae157592523e1a15aac55dabce8dffba3207ffd463ff1a1c60fdb5b0db'
+	'2d8885c72d7d4f320f7bf943b89806d2fe2fc9d74b6f7feddbd784a902dba506'
+	'7c4608483ed898959ad9d791851ff23239004af104a0e141b7791ad3eea57845'
+	'4fd31a2bdf1a2174bbad97be2d84915fb16163eebee13943705bdc1173e9597c'
+	'545ff2502a03712b24e2cb18835be7316948b7794592c9f12d43e053e16e7791'
+	'75d2ccd0de95a7ff5a9e9ed72c8f8b9effcc20eba90007a8f07a5beff3283225'
+	'aa6171e06da2ffdf20d7cf5ac9aa33f8a1d4691de7b4dd110220610172015a2c'
+	'e012316bac540b9aba7badf0f4022a4e78f8ce5b9eaa06bc3bb25adc10af4ca6'
+	'20c5ca2e03f35fc10c4d6f3712670260a3e56455f3c189e1de881d9bb68e0489'
+	'4445fb3dfc9cb470d58d4f4d866d70bead9da49e45e872bbf6f46cce1da107c7'
+	'cedda7bcd3122c8cc951abfc3e1a40cd353da83d2ef3d55968fbb3e72d6784a0'
+	'a8be46026e0cfe2bf5099913d464861f25d27b7ddcfbd731f669cd53514170ff'
+	'872221b0f733902debcd5e0c873abb40ec451b2ab1d17d0b13686e577ee3e622'
+	'9531cc4dc20a0107dc3a651e572d213df6e751fa3e41d677222e9febb67ccdaf'
+	'c377c9f3979ee4ea5cac87389c6ba68a27dada022b72ba251e0778191d695ba0'
+	'a3c486d52eb5157ba6720b4d6847f05e1610e95462daf573b99e9091e649ac30'
+	'dda9496c39d9fe73ce8f6d3d5113d48e309189280538e91948554f1040f2e8fa'
+	'2b61a055cdd0f360745c2ca8699b596bcf1d8df56340ce4d428f289a55c34bfb'
+	'50296b3782bbfde506971ce459058fc155a151757094257d63e06cbaeee02e6e'
+	'297e82cc455b6f1124a1ca746fe82c8fdb2dff6dc5eda9282d4d001056d2230a'
+	'5c068a1700b990228cf4babfeaaf4bb4e865f00001ce4df2537f6d0654d2fd74'
+	'263f27dc1cd2edf39bba801bb1fb94fab4a4608de5621980f6dde072d2e9a85f'
+	'abbf15a47af8c014bedb5a8dca43f70cfc5d767e3243a37b9ccc00b1aaf8a852'
+	'7ea9ca482f1d96ac8a2854fe66752dca81de33d96ba455c616895d0f28810420'
+	'88b6d3d960a5c385c3d532f5b86b5d0cacad069636888246b8997c96a558d869'
+	'0709e454850e1d2b3d9b70db4691c91b3ec36369ff46b35ef46d367433f8771a'
+	'0e2dd4ef423663bae1daaa0c48dc1695c4db43240df9519a1bb54ddae40f5ffe'
+	'b174334ff5a78412b7a3a98d482cd51342a2e8bd973fd295bb2553937aa3644b'
+	'c89c2304a67a7fb448b60c5a8cbae4583afcb7e094cfe210f3108c305546dd5d'
+	'94dd74a3a13286935e468e8335183b58ff2eab57fd71563d8eb253f9fa1a685e'
+	'f33ce39ab8f1ed676c5eff1487c6a033b94183d9192db7027d7702143e1b6150'
+	'9d6304f9693b7eb5efdb2b86ca010ca2802f9433b297f5f5898a14c4921b9ab6'
+	'84feebf74ebc1cf5c1f0ace73837d642e518f49f99164cbe8c5017e14f4a0953'
+	'fdf89cd16d19cc8a8ed120d9d2ccc0e75e00f9d3f4e60bbc07771e35fb9aa0ca'
+	'ba916bba4c8ad3a428904544d162a979f31f2f3a4582b1c769e3d59aeec4fa18'
+	'cf2e15228ce733f39c1a4134512a8ba3830da222d63093e52341838670009deb'
+	'122f061952866892f077395ac086969715678980fc439ee1cb8a5852a33091ce'
+	'a95a114bb86b50d6b2d3ad37e9618820437df69aac68164c6f1eb6cb85026d07'
+	'820d396dd237d33887fdf61b6fff22ec8c8b5a88201a9ccb53e1117de26157ed'
+	'33c1cfd18d6ce5cb5de324b550bbfd5c4c98b5c336df6af9105ae73d5aee2296'
+	'9bb708d681b1255329fff7faf338a555f5ce4962b787c1780a3f115d0f3e2ba3'
+	'0e513445759f46d2c5f50b78b0f09fe370df72c58ca3778845ab89aa1f78cb34'
+	'df62c4142f4a6c4fbae80bbfa95bab3ff7aeaeb13fef39c90cc995439bfabf87'
+	'bd0174ff1a3491ae0219917d74e4dbe4de544122f60dede713d009d471560dc3'
+	'78a9108b0608b33182eb2874c8ad0014d84960456ce5de744b42889f541c5a72'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
+	'cd363ab9e113fd69f654a4a4805dffd09dbbbcf6a08f0df78bb337305653cafa'
+	'a99b4f7d7e188037c9c4f79e4c5ca81f2039be022af10b581446fa2192d5b722'
+	'7f05c7df2a5068e105bb9fb49e8ec2b1a1b209a3bc190854d92bcd77e5fd829c'
+	'55b41104113a7f21ecb2dbc8a453edd36cc0974fe39392900ef1b0e7644ee072'
+	'8788b885fbc77f73c3e672ffad0d1cf1a93cb64c92571455605d9c6d74e47fde'
+	'2383432a6eb3e2bfc1c1806e2f31c87d4edb332db224d896ff12284d7a3ffa3d'
+	'7daa8372185e255ad810c5635c713d8b1be8bea5e5e97652542d87822fe4c551'
+	'82753d1b37f5ea04440c2805c8d4351224eb73ed109e0c110f909f0cba59b294'
+	'9a5659bebb9f24c66aa1a9ea1c1af0b5edaad1414e11ee1ed79002e368afcc99'
+	'878ff5385325ff2a50d8078ccdc8ea25e6504d20687cf4aa6a922d1a3a6f8ac4'
+	'c0814418f384a50ac3a480aa151e204769a98c726ce188abe8fc2e178c65b096'
+	'8268a995281c7d9b4e7a32aa0a4852b44586b25f9fa7797f50147aabc14887ec'
+	'd998fe689c1a586768c03016bc40462001c058f0f5458c4c51f112fa738c645a'
+	'e8fd0edea7a4f228f45fb4fa92402a168b9cfa0341ec65df5fd834f5c3790c06'
+	'5a537ce91ff2f2576f3a568082b1cfc4a900104eca6aa4697022686bd83109e1'
+	'3b90aa5e4fe6e98fe1b338d15bf5a3b67abda896a4a2ffc7f4c6cd3784a171f2'
+	'5997e7ee63c314232d282ab630de912ddb39a56a36b528d83c42950c0a5c2f01'
+	'9239ad24b3c1cb663f26d6c90c2e6552931cc823d2f939144a9d4e0c5c58f2d1'
+	'4c99592761b969e55100777663e82aac1fa03c21eb746a2e8a39b2f3542a7bb4'
+	'8e84d96a7441ade7bc598d81b56f88a236eedbfda72c13d69876bd39c13de27d'
+	'86757a46f08a2709f51ebb22228d6668962fb9e9dd60eb6931cbe47b855ce083'
+	'1096551d99aaf2be6cdababe11fa6e8d37e6d70726eea0866302fdbf0a2fd756'
+	'd58c42bf8e85b0e814f7fecc8aa14f46e3325fb3e1699283cc5f40b88380e647'
+	'29c814b32f32d542366c47e49c86c65787fa5448d8be17e60a1e4de6ab23a9cd'
+	'126decb09a1eef56f4d1ea56a81d63cffeeff8c457753b9297b04855a3518754'
+	'821d79feed2709976784464c9b7dca2d51eeb6a118cba1e3ef4afd1bf3f82c2f'
+	'1adb5ba19193459775d14d1c9ef2b86dd70df5291ab3f02a16fdb6d21c76a179'
+	'd396fdfea9e197d7e910eae9629b882099ac929cf9fedd706d38ef6a444a73af'
+	'772e28794a206f44892205fe8dac5594ed8460367c4cf884af43787a0c371b75'
+	'1f4e71a044ae35d8ea8f3b48713751b2e4266c25e3b7d659096e43ab1d202325'
+	'aa8e7553818883ab95a98749ff9936b1d24499607d719acc14e97d09477db2bb'
+	'777c37ee6a95fe2c72e1bf1c3489b779e067ed2b475d8705817ae437e73c4163'
+	'3f6e7a1bdda909f8eaeb6c585f8757396f4072dcb184cf543066f6ef92cea394'
+	'c3a25acddc25c15871f8c026db13ebfb5105dfdd35f4c83df035d603321f6254'
+	'ad17b1dee02033d8a8e2aaa5297f6b67cf6497b68630eddd748cb9430ec3d413'
+	'c8881e32c3465c8df4969459823925502aaa6cd17431ab51a9eb0f4d05ca9931'
+	'9708856f69165d74155ecf69b3a215f7e890354f17e40857401af9250fe3bba6'
+	'd1a06c284dd49f724b528d2ecf96067c497a1f998af18f1fd141090c735b0249'
+	'19c147d8d01187ec7866293d3399502d0da0a6df38afefec33c20f3606f0d36d'
+	'dfa332fb9e1ff6373bf5c998dc6946ea0cda054cd207e67a5a4b5c1dd76e4a24'
+	'f4b87990d23454ce08927d2096b4e95767ae97158a731e5afb65db72a94f7f4f'
+	'6c7b6b23c351d904d51173db858fd5f3d3fef5abdc3249eac5543d9979405171'
+	'f3ef819f9b737d4592840881c55ab0b0fdf91f7b670d32b36b105f54543d520e'
+	'ede9cd65a24d15d9180d02b47a8fd34e63323610fc4902da423061a51131f7e2'
+	'06b07846e85ed5f795f9dc857766c2743b27c83fe2250989a1dcbb09edc34943'
+	'328e4440be6ed3c8a8de0fb651ab957f145d03dea60600c0c8c652d873e5521c'
+	'94a2d29b509481812ebebf77929ce4f75a0f13887f0ad5670f09557f9ba7f11f'
+	'7249a70e34e84cd66011ed8595509f708b7f1eab37e605e41a70b0d6112e76a9'
+	'92b5b24c8427c44c167ac20dbdaab5b28fac826f9c81c8163cdfb541c864b9bf'
+	'65e2bd980ff170a678d2181ec84464c97dd3609de7d77b72a53c6630110f12a5'
+	'ba57975ab00cb3f4051efd4ce1fcc96416f77febed6c241483b66cea6fa0abf0')
+
+prepare() {
+	cd gnome-control-center
+
+	git submodule init
+	git submodule set-url subprojects/gvc "$srcdir/libgnome-volume-control"
+	git -c protocol.file.allow=always -c protocol.allow=never submodule update
+
+	# Our own pages as whole files; the patch only hooks them in (small, survives updates)
+	cp "$srcdir"/cc-username-dialog.{c,h,blp} panels/system/users/
+	patch -Np1 -i "$srcdir/0001-users-rename-own-account.patch"
+	# Phone: processor, RAM, scale steps, notch, no Multitasking (device facts in the device package)
+	cp "$srcdir"/cc-plinius-device.{c,h} panels/common/
+	patch -Np1 -i "$srcdir/0002-phone-device-facts-scale-steps-notch.patch"
+	# Mobile Network: eSIM profiles for a modem with an eUICC (lpac through oFono)
+	cp "$srcdir"/cc-esim-dialog.{c,h,blp} panels/wwan/
+	patch -Np1 -i "$srcdir/0003-wwan-eSIM-management-for-modems-with-an-eUICC.patch"
+	# Phone: rotation speed, wake up and app overview on the Display page, no Color,
+	# start at the overview, memory card in About
+	cp "$srcdir"/cc-plinius-display.{c,h} panels/common/
+	patch -Np1 -i "$srcdir/0004-Phone-options-on-the-Display-page-no-Color-start-at-.patch"
+	# Assistant button on the Power page, no own-language row on Users
+	cp "$srcdir"/cc-plinius-buttons.{c,h} panels/common/
+	patch -Np1 -i "$srcdir/0005-Assistant-button-on-the-Power-page-no-own-language-o.patch"
+	# Phone: swipe back from a panel to the panel list
+	patch -Np1 -i "$srcdir/0006-window-Swipe-back-from-a-panel-to-the-panel-list.patch"
+	# Mobile Network: "SIM 2" is the second slot (the eSIM), not the second modem found
+	patch -Np1 -i "$srcdir/0007-wwan-Name-the-SIM-tabs-after-their-slots.patch"
+	# Appearance: the app overview options on top
+	patch -Np1 -i "$srcdir/0008-background-App-overview-options-on-top-of-Appearance.patch"
+	# Assistant button: a panel of its own in the sidebar (the patch creates its meson.build)
+	patch -Np1 -i "$srcdir/0009-Assistant-button-as-a-panel-of-its-own.patch"
+	cp "$srcdir"/cc-assistant-panel.{c,h} "$srcdir/gnome-assistant-panel.desktop" panels/assistant/
+	# NFC: a panel of its own after Bluetooth (the patch creates its meson.build)
+	patch -Np1 -i "$srcdir/0010-NFC-as-a-panel-of-its-own.patch"
+	cp "$srcdir"/cc-nfc-panel.{c,h} "$srcdir/gnome-nfc-panel.desktop" panels/nfc/
+	# The assistant button among the input devices (Mouse, Keyboard, Printers)
+	patch -Np1 -i "$srcdir/0011-panel-list-Assistant-button-among-the-input-devices.patch"
+	# Screen Lock: lock 5, 10 or 15 seconds after the screen blanks
+	patch -Np1 -i "$srcdir/0012-privacy-screen-Lock-delays-of-5-10-and-15-seconds.patch"
+	# Printers: "Add Printer" and "Printer Options" as adaptive dialogs (bottom sheets with a
+	# close button on the phone), printer options in tabs instead of a sidebar, driver window
+	# not wider than the screen
+	patch -Np1 -i "$srcdir/0013-printers-Add-Printer-as-an-adaptive-dialog.patch"
+	# Displays: Night Light at the end of the display's own list on a single display (phone)
+	patch -Np1 -i "$srcdir/0014-display-Night-Light-in-the-display-s-own-list.patch"
+	# Users: unlock pattern for the lock screen (plinius-pattern), the dialog as a file of its own
+	cp "$srcdir"/cc-pattern-dialog.{c,h} panels/system/users/
+	patch -Np1 -i "$srcdir/0015-users-Unlock-pattern-for-the-lock-screen.patch"
+	# Network: the connection editor (also "Add VPN") as a dialog whose settings are pages, not tabs
+	patch -Np1 -i "$srcdir/0017-network-Connection-editor-as-a-dialog-with-pages.patch"
+	# Users: fingerprint dialog as a sheet with room for the sensor under the display (biomd),
+	# no trying fingers on the list page there
+	patch -Np1 -i "$srcdir/0018-users-Fingerprint-dialog-around-a-sensor-under-the-display.patch"
+	# Graphics Tablets: the test area draws with the pen or a finger (switch)
+	patch -Np1 -i "$srcdir/0019-wacom-Test-area-with-the-pen-or-a-finger.patch"
+	# Wi-Fi: hotspot on ap0 when the WLAN driver runs it on an interface of its own (MediaTek),
+	# ap0 not listed as a device of its own
+	patch -Np1 -i "$srcdir/0020-network-Hotspot-on-an-AP-only-interface.patch"
+	# Users as a panel of its own, above Privacy & Security instead of inside System
+	patch -Np1 -i "$srcdir/0021-Users-as-a-panel-of-its-own-above-Privacy-Security.patch"
+	# Power: battery condition, charge limit and fast charging of plinius-charge (the battery has no
+	# charge thresholds for UPower), the group and its helpers as a file of its own
+	cp "$srcdir"/cc-plinius-battery.{c,h} panels/power/
+	patch -Np1 -i "$srcdir/0022-power-Battery-condition-and-charging-options.patch"
+	# Users: no "Add User", a phone has one user
+	patch -Np1 -i "$srcdir/0023-users-No-Add-User-on-the-phone.patch"
+	# Privacy & Security: "Encryption" page for plinius-crypt (state, encrypt, change the password),
+	# the page as a file of its own
+	cp "$srcdir"/cc-plinius-crypt.{c,h} panels/privacy/
+	patch -Np1 -i "$srcdir/0024-privacy-Encryption-page-for-plinius-crypt.patch"
+	# Mobile Network: no "Data Connection" choice of the SIM for internet
+	patch -Np1 -i "$srcdir/0025-wwan-No-choice-of-the-SIM-for-mobile-data.patch"
+	# Displays: rotation speed right below Auto Rotate instead of a group of its own
+	patch -Np1 -i "$srcdir/0026-display-Rotation-speed-right-below-Auto-Rotate.patch"
+	# Form dialogs as pages of the window's navigation instead of sheets over it: the executable
+	# overrides adw_dialog_present/close, the code as a file of its own
+	cp "$srcdir"/cc-plinius-dialog-pages.c shell/
+	patch -Np1 -i "$srcdir/0027-shell-Form-dialogs-as-pages-of-the-navigation.patch"
+	# Users: a new password that is the encryption password (pam_plinius_crypt) gets a message
+	patch -Np1 -i "$srcdir/0028-users-Say-when-the-new-password-is-the-encryption-password.patch"
+	# Appearance: a custom accent color after GNOME's nine (org.plinius.appearance from
+	# phosh-plinius), also for GTK 4 apps through ~/.config/gtk-4.0/gtk.css; the code as a file
+	# of its own
+	cp "$srcdir"/cc-plinius-accent.{c,h} panels/background/
+	patch -Np1 -i "$srcdir/0029-background-A-custom-accent-color-after-GNOME-s-nine.patch"
+	# Network: the connection editor closes as a page too, with a back arrow instead of Cancel
+	patch -Np1 -i "$srcdir/0030-network-Connection-editor-closes-as-a-page-with-a-back-arrow.patch"
+	# Network: the WireGuard settings on the connection editor's first page, not behind a row
+	patch -Np1 -i "$srcdir/0031-network-WireGuard-settings-on-the-editor-s-first-page.patch"
+	# Add VPN: the settings of the picked type on a page above the list of types, back leads there
+	patch -Np1 -i "$srcdir/0032-network-Add-VPN-the-settings-of-the-picked-type-as-a-page.patch"
+	# Network: the editor's pages on the window's navigation (back arrow and swipe everywhere),
+	# IPv4/IPv6 no wider than a phone
+	patch -Np1 -i "$srcdir/0033-network-Editor-pages-on-the-window-s-navigation-IPv4-IPv6-fit.patch"
+	# Privacy & Security: Device Security with the phone's own checks instead of fwupd's (screen
+	# lock, encryption, boot chain, software sources, connections per app, known vulnerabilities),
+	# the pages as a file of their own
+	cp "$srcdir"/cc-plinius-security.{c,h} panels/privacy/
+	patch -Np1 -i "$srcdir/0034-privacy-Device-Security-with-the-phone-s-own-checks.patch"
+	# Appearance: the animated effect over the background (plinius-ambient) after the pictures,
+	# the rows as a file of their own
+	cp "$srcdir"/cc-plinius-ambient.{c,h} panels/background/
+	patch -Np1 -i "$srcdir/0035-background-Animated-effect-over-the-background.patch"
+	# Search: search from the notch on/off and the app overview's search field on top
+	# (cc-plinius-display.c)
+	patch -Np1 -i "$srcdir/0036-search-The-phone-s-own-searches-on-top-of-the-Search.patch"
+	# Network: the editors of the VPN plugins (OpenVPN, OpenConnect) in one column, their own
+	# dialogs (OpenVPN's "Advanced…") as pages
+	patch -Np1 -i "$srcdir/0037-network-VPN-plugin-editors-in-one-column-their-dialogs-as-pages.patch"
+	# Users: face unlock (plinius-face) below the unlock pattern, the page as a file of its own
+	cp "$srcdir"/cc-face-dialog.{c,h} panels/system/users/
+	patch -Np1 -i "$srcdir/0038-users-Face-unlock.patch"
+	# System: "Hardware" above About, chips and firmware versions that the device package collects
+	# at boot (plinius-hardware-info), the page as a file of its own
+	cp "$srcdir"/cc-plinius-hardware.{c,h} panels/system/
+	patch -Np1 -i "$srcdir/0039-system-Hardware-chips-and-firmware-versions.patch"
+	# Pages open without waiting (measured on the phone, see each patch)
+	# Appearance: no decoding of the whole background picture just for its size
+	patch -Np1 -i "$srcdir/0040-background-No-image-decoding-to-open-Appearance.patch"
+	# Video illustrations (Mouse & Touchpad) load when their row shows, not when it is built
+	patch -Np1 -i "$srcdir/0041-mouse-Videos-load-when-their-row-shows.patch"
+	# Power: logind's CanPowerOff/CanSuspend/CanHibernate without waiting (polkit behind each)
+	patch -Np1 -i "$srcdir/0042-power-logind-s-answers-without-waiting.patch"
+	# About: GPU name and storage size from a thread
+	patch -Np1 -i "$srcdir/0043-about-GPU-and-storage-from-a-thread.patch"
+	# Date & Time: time zone items made when shown, permissions without waiting
+	patch -Np1 -i "$srcdir/0044-datetime-Time-zones-and-permissions-without-waiting.patch"
+	# Region & Language: the login permission without waiting
+	patch -Np1 -i "$srcdir/0045-region-Login-permission-without-waiting.patch"
+	# Keyboard: the login permission without waiting
+	patch -Np1 -i "$srcdir/0046-keyboard-Login-permission-without-waiting.patch"
+	# Region & Language: its four locale names from a cache, not a check of every locale
+	patch -Np1 -i "$srcdir/0047-region-Locale-names-from-a-cache.patch"
+	# Location: "Contribute to beaconDB" below the location switch (furios-gps-contribute)
+	cp "$srcdir"/cc-plinius-beacondb.{c,h} panels/privacy/location/
+	patch -Np1 -i "$srcdir/0048-location-Contribute-to-beaconDB-below-the-location-switch.patch"
+	# Keyboard: "Speech to Text" switch for the microphone key of the on-screen keyboard
+	# (plinius-dictate; nothing shows without it)
+	cp "$srcdir"/cc-plinius-dictate.{c,h} panels/keyboard/
+	patch -Np1 -i "$srcdir/0049-keyboard-Speech-to-text-below-the-input-sources.patch"
+	# Screen Lock: "Wait After Wrong PINs" (plinius-pinguard) below the lock options, on without a
+	# password, off with the PIN (nothing shows without it)
+	cp "$srcdir"/cc-plinius-pinguard.{c,h} panels/privacy/screen/
+	patch -Np1 -i "$srcdir/0050-privacy-screen-Wait-after-wrong-PINs-below-the-lock-options.patch"
+	# Streaming: a panel of its own between Bluetooth and NFC with Schwupp's settings for
+	# mirroring to TVs (defaults and a page per TV); the patch creates its meson.build
+	patch -Np1 -i "$srcdir/0051-Streaming-as-a-panel-of-its-own-above-NFC.patch"
+	cp "$srcdir"/cc-streaming-panel.{c,h} "$srcdir/gnome-streaming-panel.desktop" panels/streaming/
+	# USB: a panel of its own below NFC with the functions for a computer (plinius-usb)
+	patch -Np1 -i "$srcdir/0052-USB-as-a-panel-of-its-own-below-NFC.patch"
+	cp "$srcdir"/cc-usb-panel.{c,h} "$srcdir/gnome-usb-panel.desktop" panels/usb/
+	# Keyboard: look of the on-screen keyboard (glass or Stevia's original) below the input
+	# sources (stevia-plinius >= 0.58.0-3, setting org.plinius.keyboard style; nothing shows without it)
+	cp "$srcdir"/cc-plinius-osk-style.{c,h} panels/keyboard/
+	patch -Np1 -i "$srcdir/0053-keyboard-Look-of-the-on-screen-keyboard-below-the-input-sources.patch"
+	# System › Secure Shell: the networks SSH answers on (USB, local, all) below the switch
+	# (plinius-ssh; nothing shows without it)
+	cp "$srcdir"/cc-plinius-ssh.{c,h} panels/system/secure-shell/
+	patch -Np1 -i "$srcdir/0054-system-secure-shell-Allowed-networks-below-the-SSH-switch.patch"
+	# Desktop over VNC: a panel of its own below Printers (plinius-desktop); the patch creates its meson.build
+	patch -Np1 -i "$srcdir/0055-Desktop-over-VNC-as-a-panel-of-its-own-below-Printers.patch"
+	cp "$srcdir"/cc-desktop-vnc-panel.{c,h} "$srcdir/gnome-desktop-vnc-panel.desktop" panels/desktop-vnc/
+	# Focus moves nobody asked for stay out of text fields (on-screen keyboard), a file of its own
+	cp "$srcdir"/cc-plinius-text-focus.{c,h} shell/
+	patch -Np1 -i "$srcdir/0056-shell-No-automatic-focus-into-text-fields.patch"
+	# Formats in one column: dialogs open as pages, without the breakpoint of the dialog
+	patch -Np1 -i "$srcdir/0057-region-Formats-in-one-column.patch"
+	# System › Memory and Swap (plinius-swap; nothing shows without it), the page as a file of its own
+	cp "$srcdir"/cc-plinius-swap.{c,h} panels/system/
+	patch -Np1 -i "$srcdir/0058-system-Memory-and-Swap.patch"
+	# The list ordered by what one wants to do: sections with names, hubs (Connected Devices,
+	# Accounts), Lock & Unlock, Privacy and Security apart, Remote Access, brightness and screen
+	# off on Display, a setting
+	# in one place only; the table of what belongs where is a file of its own, the patch creates
+	# panels/hubs/meson.build
+	cp "$srcdir"/cc-plinius-hubs.{c,h} shell/
+	mkdir -p panels/hubs
+	cp "$srcdir"/cc-plinius-hub-panels.c "$srcdir"/gnome-{connected-devices,accounts}-panel.desktop panels/hubs/
+	cp "$srcdir"/cc-lock-panel.{c,h} "$srcdir/gnome-lock-panel.desktop" panels/system/users/
+	cp "$srcdir/cc-security-panel.c" "$srcdir/gnome-security-panel.desktop" panels/privacy/
+	patch -Np1 -i "$srcdir/0059-Settings-ordered-by-what-one-wants-to-do.patch"
+	# No Automatic Suspend on Power: plinius-suspend puts the phone to sleep whenever the display
+	# is off, gsd-power's suspend would go through logind (docs/STANDBY.md)
+	patch -Np1 -i "$srcdir/0060-power-No-Automatic-Suspend.patch"
+	# plinius-software's pages: Apps gets the tabs Explore, Installed and Settings, Updates is a
+	# panel with rows on System and Security; also: all apps listed without malcontent
+	cp "$srcdir"/cc-plinius-software.{c,h} "$srcdir/gnome-updates-panel.desktop" panels/applications/
+	patch -Np1 -i "$srcdir/0061-Apps-Explore-Installed-Settings-Updates-as-a-panel.patch"
+	# Appearance: the background chooser with headings - 360° photos on top (shown by
+	# plinius-ambient, turning with the phone), own pictures, GNOME's light/dark wallpapers - and
+	# switching between them both ways; the 360° part as a file of its own
+	cp "$srcdir"/cc-plinius-panorama.{c,h} panels/background/
+	patch -Np1 -i "$srcdir/0062-background-360-photos-and-headings-in-the-background-chooser.patch"
+	# Mobile network selection: below each network found, whether the phone could register there
+	# (plinius-satellite, org.plinius.Satellite Assess; forbidden networks from ModemManager)
+	patch -Np1 -i "$srcdir/0063-wwan-Below-each-network-found-whether-the-phone-could-register.patch"
+	# Mobile network: network mode, network selection, SIM lock, modem details and access points as
+	# pages with the back swipe (AdwDialogs for cc-plinius-dialog-pages.c instead of GtkDialog
+	# windows; the access points' editor keeps its own back button)
+	patch -Np1 -i "$srcdir/0064-wwan-All-dialogs-of-the-mobile-network-as-pages-with-the-back-swipe.patch"
+	# The last windows a phone meets as pages: libnma's Wi-Fi dialogs (hidden network, create,
+	# 802.1X) and the avatar crop through cc_plinius_gtk_dialog_present_as_page(), the printer
+	# driver selection as an AdwDialog
+	patch -Np1 -i "$srcdir/0065-Wi-Fi-dialogs-avatar-crop-and-printer-driver-as-pages.patch"
+	# A PIN as the password: libpwquality rates it weak, the dialogs say so but accept it
+	patch -Np1 -i "$srcdir/0066-users-A-PIN-is-accepted-as-the-password-rated-weak-but-allowed.patch"
+	# The same password again: the dialog refuses it itself instead of waiting for passwd
+	patch -Np1 -i "$srcdir/0067-users-A-new-password-equal-to-the-current-one-is-refused-in-the-dialog.patch"
+	# Forms with the confirming button below: libnma's Wi-Fi dialogs without icon and caption, the
+	# hotspot without "Cancel"; SIM Lock as one page in the list style (PIN below the switch)
+	patch -Np1 -i "$srcdir/0068-Forms-with-the-button-below-SIM-Lock-in-the-list-style.patch"
+	# Fingerprint (so called, no longer "Fingerprint Authentication") as a page instead of a sheet,
+	# Change Password with back instead of "Cancel" and "Change" below the form
+	patch -Np1 -i "$srcdir/0069-users-Fingerprint-and-Change-Password-as-pages-with-back.patch"
+	# Wi-Fi: Connect to Hidden Networks as our own page in the list style (libnma's dialog stays
+	# for WEP, LEAP and 802.1X); the hotspot with entry rows, filled also as a page
+	cp "$srcdir"/cc-plinius-hidden-wifi.{c,h} panels/network/
+	patch -Np1 -i "$srcdir/0070-network-Hidden-network-and-hotspot-in-the-list-style.patch"
+	# List style for the connection editor (Details, Identity, IPv4/IPv6 with entry rows of
+	# ce-plinius-ip-row.c, Security, VPN plugin forms, WireGuard), modem details with prominent
+	# titles, sound without the level bar and a round speaker test, Fast Charging on top
+	cp "$srcdir"/ce-plinius-ip-row.{c,h} panels/network/connection-editor/
+	patch -Np1 -i "$srcdir/0071-List-style-for-the-connection-editor-modem-details-sound-and-fast-charging.patch"
+	# Battery: Battery Usage (estimated energy per app from plinius-energy) and Battery Condition
+	# as pages of their own, their rows after the battery level
+	cp "$srcdir"/cc-plinius-battery-usage.{c,h} panels/power/
+	patch -Np1 -i "$srcdir/0072-power-Battery-Usage-and-Battery-Condition-as-pages.patch"
+	# Network: DNS Filter (plinius-dnsfilter) as a group of its own at the top, its pages (query
+	# log, a name's page with Block/Unblock and its queries by app, statistics, blocklists, own
+	# rules, servers, settings) as a file of its own
+	cp "$srcdir"/cc-plinius-dnsfilter.{c,h} panels/network/
+	patch -Np1 -i "$srcdir/0073-network-DNS-Filter-at-the-top.patch"
+	# Apps: the tab Web Apps (websites as apps with a Firefox profile each, an icon among the apps
+	# while switched on) as a file of its own, built with the Apps panel
+	cp "$srcdir"/cc-plinius-webapps.{c,h} panels/applications/
+	patch -Np1 -i "$srcdir/0074-applications-Web-Apps-as-a-tab-of-its-own.patch"
+	# Privacy: Protected Content (Widevine DRM from Google through plinius-widevine, off unless
+	# switched on) as a file of its own, its group below Devices
+	cp "$srcdir"/cc-plinius-widevine.{c,h} panels/privacy/
+	patch -Np1 -i "$srcdir/0075-privacy-Protected-Content-below-Devices.patch"
+	# Wi-Fi: forgetting a saved network asks first; no Airplane Mode switch (only the quick setting
+	# of phosh switches it, the page "Airplane Mode On" points there); "Other Security" of a hidden
+	# network as a list-style page above the first one, so back leads there
+	# (cc-plinius-hidden-wifi.c, copied above for 0070)
+	patch -Np1 -i "$srcdir/0076-network-Forget-asks-first-no-Airplane-Mode-other-security-as-a-page.patch"
+	# Appearance: Style (light/dark, accent color) and Background as pages of their own, their rows
+	# on top; Background in five sections that open on their own (animated effect, video, 360°
+	# photos, own and GNOME's pictures), each with its own "Add" row, removing asks first; the rows
+	# as a file of its own (cc-plinius-ambient.* and cc-plinius-panorama.* copied above); Style also
+	# with the background color (cc-plinius-bgcolor.*), shown when no background is selected: a tap
+	# on the background shown takes it away
+	cp "$srcdir"/cc-plinius-appearance.{c,h} "$srcdir"/cc-plinius-bgcolor.{c,h} panels/background/
+	patch -Np1 -i "$srcdir/0077-background-Style-and-Background-as-pages-of-their-own.patch"
+	# Mobile Network: MMS on or off for each SIM card (by its ICCID, org.plinius.mms of
+	# mmsd4ofono); mmsd only runs while the SIM for mobile data has it on
+	patch -Np1 -i "$srcdir/0078-wwan-MMS-switch-for-each-SIM-card.patch"
+	# Background: one add button in the header bar instead of a row in each section, each file
+	# sorted into its section by its type (video/GIF, 360° photo, own picture); the animated
+	# effect and its amount as a group of their own on top
+	patch -Np1 -i "$srcdir/0079-background-One-add-button-the-animation-as-a-group-of-its-own.patch"
+	# Network: the facts of a known connection (signal, addresses, DNS …) on the editor's first
+	# page above its pages; Details keeps the options and Forget
+	patch -Np1 -i "$srcdir/0080-network-Facts-of-a-known-connection-on-the-editor-s-first-page.patch"
+	# Printers: a test page CUPS refuses (a printer found on the network whose queue could not be
+	# set up, one that cannot be reached) says so instead of nothing
+	patch -Np1 -i "$srcdir/0081-printers-Say-when-the-test-page-could-not-be-printed.patch"
+	# Printers: options without any options (no queue yet, no answer) say so on a status page, and
+	# "Test Page" moves to the end so that the options page keeps its back button
+	patch -Np1 -i "$srcdir/0082-printers-Printer-options-without-options-say-so-and-keep-back.patch"
+	# Bluetooth: "Contacts", a row at the bottom with a page of a switch for each device that
+	# asked for the contacts (PBAP), in the file obexd of bluez-obex-plinius reads; nothing
+	# without bluez-obex-plinius
+	cp "$srcdir"/cc-plinius-bt-contacts.{c,h} panels/bluetooth/
+	patch -Np1 -i "$srcdir/0083-bluetooth-Contacts-which-devices-may-read-them.patch"
+	# Background: the videos' tiles show a frame of them (cc-plinius-panorama.c through GStreamer,
+	# copied above) instead of an icon and the name
+	patch -Np1 -i "$srcdir/0084-background-Video-thumbnails-through-GStreamer.patch"
+	# Sounds and Vibration: a panel of its own below Sound, for calls, messages, email, other
+	# notifications, alarms and the keyboard's keys a sound (default, none, a system sound or an
+	# own Ogg Vorbis/WAV file) and a vibration rhythm (taps for the keyboard) with its strength,
+	# in a feedbackd theme of the user's own (plinius.json, the theme before as its parent);
+	# listed with feedbackd only; the patch creates its meson.build
+	patch -Np1 -i "$srcdir/0085-Sounds-and-Vibration-as-a-panel-of-its-own-below-Sound.patch"
+	cp "$srcdir"/cc-feedback-panel.{c,h} "$srcdir/gnome-feedback-panel.desktop" panels/feedback/
+	# Wi-Fi: "hotspot" as parameter opens the hotspot's page (long press of Phosh's hotspot tile)
+	patch -Np1 -i "$srcdir/0086-network-hotspot-opens-the-Wi-Fi-panel-with-the-hotspot-s-page.patch"
+	# Window: never start larger than the largest screen, so the phone does not show the sidebar
+	# layout for a moment before phoc sizes the window (the size kept for the desktop stays)
+	patch -Np1 -i "$srcdir/0087-window-Never-start-larger-than-the-largest-screen.patch"
+	# Apps: the group Access on an app's page - Ask, Allow or Don't Allow for a camera on USB, a
+	# security key and the network, with the attempts counted (plinius-appaccess), on top of
+	# Required Permissions in one group (as GNOME has it without the daemon), as a file of its own
+	cp "$srcdir"/cc-plinius-appaccess.{c,h} panels/applications/
+	patch -Np1 -i "$srcdir/0088-applications-Access-to-a-USB-camera-a-security-key-and-the-network-per-app.patch"
+	# Mobile Network: a label of one's own for each SIM card on its Network page, shown on the SIM
+	# page instead of the network's name; the same key as the label of an eSIM profile
+	# (org.plinius.sim, installed in package())
+	patch -Np1 -i "$srcdir/0089-wwan-A-label-of-one-s-own-for-each-SIM-card.patch"
+	# Accounts: Local Accounts as a list (one's own account by its username first, the others below)
+	# with "Add" in the header bar; new accounts through plinius-add-user (IDs from 32012, the
+	# device groups, the password in the same step), for plinius-greeter
+	patch -Np1 -i "$srcdir/0090-users-Local-Accounts-with-one-s-own-account-first-Add-in-the-header-bar.patch"
+	# Bluetooth: Contacts at the top (also with Bluetooth off), no explanation above the devices
+	patch -Np1 -i "$srcdir/0091-bluetooth-Contacts-on-top-no-explanation-above-the-devices.patch"
+	# Privacy: the same Contacts row below Cameras, a second way to the page
+	patch -Np1 -i "$srcdir/0092-privacy-Contacts-below-Cameras.patch"
+	# Wi-Fi: opening a known network, Delete (Forget) below the rows of its pages, not inside Details
+	patch -Np1 -i "$srcdir/0093-network-Delete-below-the-pages-of-a-known-Wi-Fi-network.patch"
+	# Mobile Network: the settings of an access point as entry and combo rows, Save below them
+	patch -Np1 -i "$srcdir/0094-wwan-The-settings-of-an-access-point-in-the-list-style.patch"
+	# Wi-Fi: no trash button in the list of saved networks, Delete only on a network's pages
+	patch -Np1 -i "$srcdir/0095-network-No-trash-button-in-the-list-of-saved-Wi-Fi-networks.patch"
+	# Sound: the FM tuner's sound (audio-hal-bridge, plinius.hidden) is no input to choose; the
+	# radio app opens it by name (the same patch as phosh-plinius 0095)
+	patch -d subprojects/gvc -Np1 -i "$srcdir/0096-gvc-Sources-marked-plinius.hidden-are-not-listed.patch"
+	# Sound: no group "Sounds"; Volume Levels at the end of Output, the alert sound in Sounds and
+	# Vibration (feedbackd plays it, phoc-plinius 0032 hands the bell to it)
+	patch -Np1 -i "$srcdir/0097-sound-Volume-Levels-at-the-end-of-Output-no-group-Sounds.patch"
+	# Location: "Faster GPS Fix" below the location switch (plinius-epo; nothing shows without it)
+	cp "$srcdir"/cc-plinius-epo.{c,h} panels/privacy/location/
+	patch -Np1 -i "$srcdir/0098-location-Faster-GPS-Fix-below-the-location-switch.patch"
+	# Access Points: Delete (with a question) on the page of an access point saved on the phone
+	patch -Np1 -i "$srcdir/0099-wwan-Delete-on-the-page-of-an-access-point.patch"
+	# Mobile Network > Access Points: list and settings as pages, Save in the header bar, back swipe
+	patch -Np1 -i "$srcdir/0100-wwan-Save-in-the-header-bar-of-an-access-point-back-swipe-to-the-list.patch"
+	# System › Self-Test (plinius-health; nothing shows without it), the page as a file of its own
+	cp "$srcdir"/cc-plinius-selftest.{c,h} panels/system/
+	patch -Np1 -i "$srcdir/0101-system-Self-Test-what-the-check-after-the-start-found.patch"
+	# Access points: the suggestions of the SIM's own provider, named, none beside a saved APN
+	patch -Np1 -i "$srcdir/0102-wwan-The-access-points-of-the-SIM-s-own-provider-named-not-Default.patch"
+	# The password of another account is set at once: "set at next login" removed it (passwd -d)
+	# and left the account to whoever holds the phone until then
+	patch -Np1 -i "$srcdir/0103-users-The-password-of-another-account-is-set-now-not-at-its-next-login.patch"
+	# German: "WiFi" instead of "WLAN" in GNOME's own translation (msgstr lines only; the search
+	# keyword "WLAN;" stays so that searching for it still finds the page)
+	sed -i '/^msgstr/,/^$/{/^#/!s/WLAN\([^;]\)/WiFi\1/g}' po/de.po
+}
+
+build() {
+	local meson_options=(
+		-D documentation=true
+		-D location-services=enabled
+		-D malcontent=true
+	)
+
+	# Make libgxdp available
+	export MESON_PACKAGE_CACHE_DIR="$srcdir"
+
+	arch-meson gnome-control-center build "${meson_options[@]}"
+	meson compile -C build
+
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+# No check(): the tests need Xvfb and dbusmock, not sensible under qemu-user
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+
+	# Owned by the gnome-keybindings package from ALARM (a split package on Arch)
+	rm -r "$pkgdir"/usr/share/gettext/its/gnome-keybindings.* \
+		"$pkgdir/usr/share/gnome-control-center/keybindings" \
+		"$pkgdir/usr/share/pkgconfig/gnome-keybindings.pc"
+	rmdir --ignore-fail-on-non-empty -p "$pkgdir/usr/share/gettext/its" "$pkgdir/usr/share/pkgconfig"
+
+	# Sidebar icons of the NFC, Streaming and USB panels (the latter two as in Phosh's tiles)
+	install -Dm644 plinius-{nfc,cast,usb,vibration}-symbolic.svg -t "$pkgdir/usr/share/icons/hicolor/symbolic/apps"
+
+	# Labels of the SIM cards (Mobile Network and the eSIM page)
+	install -Dm644 org.plinius.sim.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"
+
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-control-center.mo"
+	done
+}

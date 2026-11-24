@@ -1,0 +1,372 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:00:00 +0100
+Subject: [PATCH] network: Forget asks first, no Airplane Mode, other security
+ as a page
+
+Plinius, three changes on the Wi-Fi pages:
+
+- Saved Wi-Fi Networks: the trash button of a network asks "Forget
+  <name>?" (Cancel, Forget in red) and only then deletes it, at once.
+  Before, one tap hid the row and the network was deleted when the
+  "Undo" toast went away, easily missed on a phone.
+- No "Airplane Mode" switch on the Wi-Fi page: airplane mode is a quick
+  setting of phosh and only switched there. The page still shows
+  "Airplane Mode On" while it is on and points to the quick settings,
+  with a hardware switch it says to turn that off instead.
+- Connect to Hidden Networks: "Other Security" (WEP, LEAP, Dynamic WEP,
+  WPA & WPA2 / WPA3 Enterprise) is a page of cc-plinius-hidden-wifi.c
+  (a whole file copied in prepare()) in the list style, pushed on top
+  of the first page. libnma's dialog was opened in place of the first
+  page, which closed itself for it, so back from there led past it to
+  Wi-Fi. The libnma fallback for hidden networks goes.
+---
+ panels/network/cc-wifi-panel.blp |  15 ++---
+ panels/network/cc-wifi-panel.c   |  56 ++++++----------
+ panels/network/net-device-wifi.c | 110 ++++++++++++-------------------
+ panels/network/network-dialogs.c |  12 +---
+ panels/network/network-dialogs.h |   3 -
+ 5 files changed, 69 insertions(+), 127 deletions(-)
+
+diff --git a/panels/network/cc-wifi-panel.blp b/panels/network/cc-wifi-panel.blp
+index 7f18bade9..e0c16939c 100644
+--- a/panels/network/cc-wifi-panel.blp
++++ b/panels/network/cc-wifi-panel.blp
+@@ -25,14 +25,7 @@ template $CcWifiPanel: $CcPanel {
+         Stack device_stack {}
+       }
+ 
+-      Adw.PreferencesGroup rfkill_widget {
+-        Adw.SwitchRow rfkill_row {
+-          title: _("Airplane Mode");
+-          subtitle: _("Disables Wi-Fi, Bluetooth and mobile broadband");
+-          notify::active => $rfkill_switch_notify_activate_cb(template);
+-        }
+-      }
+-
++      /* Plinius: no Airplane Mode switch here, it is a quick setting of phosh */
+       Adw.PreferencesGroup {
+         Stack main_stack {
+           hhomogeneous: false;
+@@ -63,10 +56,12 @@ template $CcWifiPanel: $CcPanel {
+           StackPage {
+             name: "airplane-mode";
+ 
+-            child: Adw.StatusPage {
++            /* Plinius: title and description follow software or hardware airplane mode
++             * (sync_airplane_mode_switch); no button, airplane mode is switched in the quick
++             * settings only */
++            child: Adw.StatusPage airplane_page {
+               icon-name: "airplane-mode-symbolic";
+               title: _("Airplane Mode On");
+-              description: _("Turn off to use Wi-Fi");
+             };
+           }
+ 
+diff --git a/panels/network/cc-wifi-panel.c b/panels/network/cc-wifi-panel.c
+index b25de648b..17f9f4867 100644
+--- a/panels/network/cc-wifi-panel.c
++++ b/panels/network/cc-wifi-panel.c
+@@ -44,10 +44,10 @@ typedef enum {
+ struct _CcWifiPanel {
+     CcPanel parent;
+ 
+-    /* RFKill (Airplane Mode) */
++    /* RFKill (Airplane Mode); Plinius: no switch, the quick setting of phosh turns it on */
+     GDBusProxy *rfkill_proxy;
+-    AdwSwitchRow *rfkill_row;
+-    GtkWidget *rfkill_widget;
++    gboolean airplane_mode;
++    AdwStatusPage *airplane_page;
+ 
+     /* Main widgets */
+     GtkStack *center_stack;
+@@ -73,8 +73,6 @@ struct _CcWifiPanel {
+     gchar *arg_access_point;
+ };
+ 
+-static void rfkill_switch_notify_activate_cb (CcWifiPanel *self);
+-
+ static void update_devices_names (CcWifiPanel *self);
+ 
+ G_DEFINE_FINAL_TYPE (CcWifiPanel, cc_wifi_panel, CC_TYPE_PANEL)
+@@ -290,7 +288,7 @@ check_main_stack_page (CcWifiPanel *self)
+     nm_version = nm_client_get_version (self->client);
+     wireless_hw_enabled = nm_client_wireless_hardware_get_enabled (self->client);
+     wireless_enabled = nm_client_wireless_get_enabled (self->client);
+-    airplane_mode_active = adw_switch_row_get_active (self->rfkill_row);
++    airplane_mode_active = self->airplane_mode;
+ 
+     if (!nm_version)
+         gtk_stack_set_visible_child_name (self->main_stack, "nm-not-running");
+@@ -344,25 +342,25 @@ sync_airplane_mode_switch (CcWifiPanel *self)
+ 
+     enabled = get_cached_rfkill_property (self, "HasAirplaneMode");
+     should_show = get_cached_rfkill_property (self, "ShouldShowAirplaneMode");
+-
+-    gtk_widget_set_visible (GTK_WIDGET (self->rfkill_widget), enabled && should_show);
+-    if (!enabled || !should_show)
+-        return;
+-
+-    enabled = get_cached_rfkill_property (self, "AirplaneMode");
+     hw_enabled = get_cached_rfkill_property (self, "HardwareAirplaneMode");
+ 
+-    enabled |= hw_enabled;
++    /* Plinius: as the switch was, airplane mode counts where it would have been shown */
++    self->airplane_mode = enabled && should_show &&
++                          (get_cached_rfkill_property (self, "AirplaneMode") || hw_enabled);
+ 
+-    if (enabled != adw_switch_row_get_active (self->rfkill_row)) {
+-        g_signal_handlers_block_by_func (self->rfkill_row, rfkill_switch_notify_activate_cb, self);
+-        g_object_set (self->rfkill_row, "active", enabled, NULL);
+-        check_main_stack_page (self);
+-        g_signal_handlers_unblock_by_func (self->rfkill_row, rfkill_switch_notify_activate_cb, self);
++    /* A switch of the device's own cannot be turned off from here */
++    if (hw_enabled) {
++        adw_status_page_set_title (self->airplane_page, _("Hardware Airplane Mode is On"));
++        adw_status_page_set_description (self->airplane_page,
++                                         g_dgettext ("plinius-control-center",
++                                                     "Turn off the airplane mode switch to use Wi-Fi"));
++    } else {
++        adw_status_page_set_title (self->airplane_page, _("Airplane Mode On"));
++        adw_status_page_set_description (self->airplane_page,
++                                         g_dgettext ("plinius-control-center",
++                                                     "Turn off airplane mode in the quick settings to use Wi-Fi"));
+     }
+ 
+-    gtk_widget_set_sensitive (GTK_WIDGET (self->rfkill_row), !hw_enabled);
+-
+     check_main_stack_page (self);
+ }
+ 
+@@ -601,20 +599,6 @@ rfkill_proxy_acquired_cb (GObject *source_object, GAsyncResult *res, gpointer us
+     sync_airplane_mode_switch (self);
+ }
+ 
+-static void
+-rfkill_switch_notify_activate_cb (CcWifiPanel *self)
+-{
+-    gboolean enable;
+-
+-    enable = adw_switch_row_get_active (self->rfkill_row);
+-
+-    g_dbus_proxy_call (self->rfkill_proxy, "org.freedesktop.DBus.Properties.Set",
+-                       g_variant_new_parsed ("('org.gnome.SettingsDaemon.Rfkill',"
+-                                             "'AirplaneMode', %v)",
+-                                             g_variant_new_boolean (enable)),
+-                       G_DBUS_CALL_FLAGS_NONE, -1, cc_panel_get_cancellable (CC_PANEL (self)), NULL, NULL);
+-}
+-
+ static void
+ on_stack_visible_child_changed_cb (CcWifiPanel *self)
+ {
+@@ -752,20 +736,18 @@ cc_wifi_panel_class_init (CcWifiPanelClass *klass)
+ 
+     gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/network/cc-wifi-panel.ui");
+ 
++    gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, airplane_page);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, center_stack);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, device_stack);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, hotspot_box);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, hotspot_off_button);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, list_label);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, main_stack);
+-    gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, rfkill_row);
+-    gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, rfkill_widget);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, spinner);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, stack);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, stop_hotspot_dialog);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, wifi_qr);
+ 
+-    gtk_widget_class_bind_template_callback (widget_class, rfkill_switch_notify_activate_cb);
+     gtk_widget_class_bind_template_callback (widget_class, on_stack_visible_child_changed_cb);
+     gtk_widget_class_bind_template_callback (widget_class, on_stop_hotspot_dialog_response_cb);
+ 
+diff --git a/panels/network/net-device-wifi.c b/panels/network/net-device-wifi.c
+index 121aa2645..704a4664e 100644
+--- a/panels/network/net-device-wifi.c
++++ b/panels/network/net-device-wifi.c
+@@ -68,8 +68,6 @@ struct _NetDeviceWifi {
+     AdwDialog *saved_networks_dialog;
+     GtkStack *saved_networks_stack;
+     AdwToastOverlay *saved_networks_toast_overlay;
+-    AdwToast *saved_networks_undo_toast;
+-    GPtrArray *saved_networks_forgotten_rows;
+ 
+     AdwSwitchRow *device_enable_row;
+     CcListRow *saved_network_row;
+@@ -732,89 +730,67 @@ really_forget (gpointer data)
+     nm_remote_connection_delete_async (connection, self->cancellable, really_forgotten, g_object_ref (self));
+ }
+ 
+-static void
+-undo_forget (gpointer data)
++/* Whether a saved network other than @row is still listed */
++static gboolean
++other_rows_shown (CcWifiConnectionList *list, GtkWidget *row)
+ {
+-    CcWifiConnectionRow *row = CC_WIFI_CONNECTION_ROW (data);
+-    NetDeviceWifi *self;
+-
+-    self = NET_DEVICE_WIFI (g_object_get_data (G_OBJECT (row), "net"));
++    GtkWidget *child;
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (row), TRUE);
++    for (child = gtk_widget_get_first_child (GTK_WIDGET (cc_wifi_connection_list_get_list_box (list))); child;
++         child = gtk_widget_get_next_sibling (child)) {
++        if (child != row && CC_IS_WIFI_CONNECTION_ROW (child) && gtk_widget_get_visible (child))
++            return TRUE;
++    }
+ 
+-    cc_wifi_connection_list_thaw (self->saved_networks_list);
++    return FALSE;
+ }
+ 
++/* Plinius: confirmed in the alert below, the network goes at once (no toast to undo it) */
+ static void
+-on_saved_networks_forget_dismissed (NetDeviceWifi *self)
++forget_confirmed_cb (NetDeviceWifi *self, const char *response, AdwAlertDialog *dialog)
+ {
+-    self->saved_networks_undo_toast = NULL;
++    CcWifiConnectionRow *row = g_object_get_data (G_OBJECT (dialog), "row");
+ 
+-    /* Since the free function is set to either undo or really forget,
+-       this always does the right thing */
+-    g_clear_pointer (&self->saved_networks_forgotten_rows, g_ptr_array_unref);
+-}
++    if (!row || !cc_wifi_connection_row_get_connection (row))
++        return;
+ 
+-static void
+-on_saved_networks_forget_undo (NetDeviceWifi *self)
+-{
+-    g_ptr_array_set_free_func (self->saved_networks_forgotten_rows, undo_forget);
+-    gtk_stack_set_visible_child_name (self->saved_networks_stack, "saved-networks-page");
+-}
++    cc_wifi_connection_list_freeze (self->saved_networks_list);
+ 
+-static gboolean
+-deleted_row_is_last (CcWifiConnectionList *list, GtkWidget *row)
+-{
+-    GtkListBox *listbox;
++    gtk_widget_set_visible (GTK_WIDGET (row), FALSE);
++    g_object_set_data (G_OBJECT (row), "net", self);
++    /* thawed when NetworkManager answers: then the list is built anew */
++    really_forget (row);
+ 
+-    listbox = cc_wifi_connection_list_get_list_box (list);
+-    return !gtk_list_box_get_row_at_index (listbox, 1) && !gtk_widget_get_visible (GTK_WIDGET (row));
++    if (!other_rows_shown (self->saved_networks_list, GTK_WIDGET (row)))
++        gtk_stack_set_visible_child_name (self->saved_networks_stack, "no-saved-networks-page");
+ }
+ 
++/* Plinius: the trash button asks first; one tap was enough to lose a network and its password */
+ static void
+ forget_selected (NetDeviceWifi *self, CcWifiConnectionRow *row, CcWifiConnectionList *list)
+ {
+-    g_autofree gchar *message = NULL;
+-
+-    cc_wifi_connection_list_freeze (list);
+-
+-    gtk_widget_set_visible (GTK_WIDGET (row), FALSE);
+-    g_object_set_data (G_OBJECT (row), "net", self);
+-
+-    /* Add row to the array of rows to be handled by the undo toast */
+-    if (!self->saved_networks_forgotten_rows)
+-        self->saved_networks_forgotten_rows = g_ptr_array_new_with_free_func (really_forget);
+-
+-    g_ptr_array_add (self->saved_networks_forgotten_rows, row);
+-
+-    /* If undo toast does not exist, create it, otherwise update title and extend timeout */
+-    if (!self->saved_networks_undo_toast) {
+-        message = g_strdup (_("Network deleted"));
+-        self->saved_networks_undo_toast = adw_toast_new (message);
+-        adw_toast_set_button_label (self->saved_networks_undo_toast, _("_Undo"));
++    NMConnection *connection = cc_wifi_connection_row_get_connection (row);
++    g_autofree gchar *heading = NULL;
++    AdwDialog *dialog;
+ 
+-        g_signal_connect_swapped (self->saved_networks_undo_toast, "button-clicked",
+-                                  G_CALLBACK (on_saved_networks_forget_undo), self);
+-
+-        g_signal_connect_swapped (self->saved_networks_undo_toast, "dismissed",
+-                                  G_CALLBACK (on_saved_networks_forget_dismissed), self);
+-    } else {
+-        /* Translators: %d is the number of network connections deleted. */
+-        message = g_strdup_printf (
+-            ngettext ("%d network deleted", "%d networks deleted", self->saved_networks_forgotten_rows->len),
+-            self->saved_networks_forgotten_rows->len);
+-
+-        adw_toast_set_title (self->saved_networks_undo_toast, message);
+-
+-        g_object_ref (self->saved_networks_undo_toast);
+-    }
+-
+-    adw_toast_overlay_add_toast (self->saved_networks_toast_overlay, self->saved_networks_undo_toast);
++    if (!connection)
++        return;
+ 
+-    if (deleted_row_is_last (list, GTK_WIDGET (row)))
+-        gtk_stack_set_visible_child_name (self->saved_networks_stack, "no-saved-networks-page");
+-    else
+-        gtk_stack_set_visible_child_name (self->saved_networks_stack, "saved-networks-page");
++    /* Translators: "%s" is the name of the saved Wi-Fi network */
++    heading = g_strdup_printf (g_dgettext ("plinius-control-center", "Forget “%s”?"),
++                               nm_connection_get_id (connection));
++    dialog = adw_alert_dialog_new (heading,
++                                   g_dgettext ("plinius-control-center",
++                                               "Its password and settings will be deleted from this device."));
++    adw_alert_dialog_add_responses (ADW_ALERT_DIALOG (dialog), "cancel", _("_Cancel"), "forget", _("_Forget"), NULL);
++    adw_alert_dialog_set_response_appearance (ADW_ALERT_DIALOG (dialog), "forget", ADW_RESPONSE_DESTRUCTIVE);
++    adw_alert_dialog_set_default_response (ADW_ALERT_DIALOG (dialog), "cancel");
++    adw_alert_dialog_set_close_response (ADW_ALERT_DIALOG (dialog), "cancel");
++
++    /* the list may be built anew while the alert is open: the row stays alive for the answer */
++    g_object_set_data_full (G_OBJECT (dialog), "row", g_object_ref (row), g_object_unref);
++    g_signal_connect_object (dialog, "response::forget", G_CALLBACK (forget_confirmed_cb), self, G_CONNECT_SWAPPED);
++    adw_dialog_present (dialog, GTK_WIDGET (row));
+ }
+ 
+ static gint
+diff --git a/panels/network/network-dialogs.c b/panels/network/network-dialogs.c
+index e58a2358a..c8335d255 100644
+--- a/panels/network/network-dialogs.c
++++ b/panels/network/network-dialogs.c
+@@ -261,19 +261,11 @@ void
+ cc_network_panel_connect_to_hidden_network (GtkWidget *toplevel, NMClient *client)
+ {
+     g_debug ("connect to hidden wifi");
+-    /* Plinius: a form page in the list style of the other pages (cc-plinius-hidden-wifi.c);
+-     * libnma's dialog stays for WEP, LEAP and 802.1X, see below */
++    /* Plinius: form pages in the list style of the other pages (cc-plinius-hidden-wifi.c), WEP,
++     * LEAP and 802.1X on a second page of their own */
+     adw_dialog_present (cc_plinius_hidden_wifi_new (client), toplevel);
+ }
+ 
+-/* Plinius: libnma's dialog for a hidden network, for the kinds of security the page above
+- * does not offer ("Other Security") */
+-void
+-cc_network_panel_connect_to_hidden_network_other (GtkWidget *toplevel, NMClient *client)
+-{
+-    show_wireless_dialog (toplevel, client, nma_wifi_dialog_new_for_hidden (client));
+-}
+-
+ void
+ cc_network_panel_connect_to_8021x_network (GtkWidget *toplevel, NMClient *client, NMDevice *device,
+                                            const gchar *arg_access_point)
+diff --git a/panels/network/network-dialogs.h b/panels/network/network-dialogs.h
+index f9352ad8e..d276275c5 100644
+--- a/panels/network/network-dialogs.h
++++ b/panels/network/network-dialogs.h
+@@ -26,9 +26,6 @@ void cc_network_panel_create_wifi_network (GtkWidget *toplevel, NMClient *client
+ 
+ void cc_network_panel_connect_to_hidden_network (GtkWidget *toplevel, NMClient *client);
+ 
+-/* Plinius: libnma's dialog, for WEP, LEAP and 802.1X */
+-void cc_network_panel_connect_to_hidden_network_other (GtkWidget *toplevel, NMClient *client);
+-
+ void cc_network_panel_connect_to_8021x_network (GtkWidget *toplevel, NMClient *client, NMDevice *device,
+                                                 const gchar *arg_access_point);
+ 
+-- 
+2.55.0

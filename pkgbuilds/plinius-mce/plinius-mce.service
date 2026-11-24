@@ -1,0 +1,43 @@
+[Unit]
+Description=Display, charger and battery state for ofono (com.nokia.mce)
+# ofono tells the modem about a display that is off only while this name exists
+Before=ofono.service
+
+[Service]
+Type=dbus
+BusName=com.nokia.mce
+ExecStart=/usr/bin/plinius-mce
+Restart=on-failure
+RestartSec=3
+
+# Sandbox (docs/DIENSTE-HAERTEN.md): no capabilities. The Wi-Fi driver's command file
+# /proc/net/wlan/driver is rw for the group aid_wifi. No PrivateNetwork: /proc/net shows the
+# service's own network namespace. Netlink for the udev monitor (power_supply).
+CapabilityBoundingSet=
+SupplementaryGroups=aid_wifi
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateIPC=yes
+DevicePolicy=closed
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

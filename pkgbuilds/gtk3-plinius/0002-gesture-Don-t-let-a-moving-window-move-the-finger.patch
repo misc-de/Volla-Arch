@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 18:10:00 +0100
+Subject: [PATCH] gesture: Don't let a moving window move the finger
+
+A slow drag on the app grid of a phone shell made the list jump back
+and forth by a whole row between two frames while the finger moved
+steadily.
+
+GDK converts a touch event to the coordinates of its window when the
+event arrives, GtkGesture converts it back with the window's position
+at the time it is handled. A scrolled GtkViewport moves its bin window
+with each event, so when more events are waiting, every further one
+contains the window's move as if the finger had made it. The scrolled
+window follows that again, and the content oscillates. The same
+happens to every gesture on a widget whose window moves under the
+finger (libhandy's carousel showed it on the lock screen).
+
+For touch events, take the root coordinates instead, which GDK computes
+when the event arrives and which don't depend on any window, and
+subtract the event widget window's current origin. Root coordinates
+and window positions are whole pixels, so the fraction of the window
+coordinates is kept.
+
+Measured on a phone with a 240 Hz touch screen, recording the screen
+and the raw touch positions: the finger moved 20 px per frame, the
+grid of Phosh's overview jumped by -52, +52, -54 px and by whole rows
+of 180 px in consecutive frames.
+---
+  gtk/gtkgesture.c | 37 +++++++++++++++++++++++++++++++++++++
+  1 file changed, 37 insertions(+)
+
+diff --git a/gtk/gtkgesture.c b/gtk/gtkgesture.c
+index bfc8ce0..2d21673 100644
+--- a/gtk/gtkgesture.c
++++ b/gtk/gtkgesture.c
+@@ -465,6 +465,21 @@ _get_event_coordinates (PointData *data,
+     *y = event_y;
+ }
+ 
++static gboolean
++_gtk_gesture_event_is_touch (const GdkEvent *event)
++{
++  switch ((guint) event->type)
++    {
++    case GDK_TOUCH_BEGIN:
++    case GDK_TOUCH_UPDATE:
++    case GDK_TOUCH_END:
++    case GDK_TOUCH_CANCEL:
++      return TRUE;
++    default:
++      return FALSE;
++    }
++}
++
+ static void
+ _update_widget_coordinates (GtkGesture *gesture,
+                             PointData  *data)
+@@ -497,6 +512,28 @@ _update_widget_coordinates (GtkGesture *gesture,
+   if (!window)
+     return;
+ 
++  /* GDK gives a touch event the coordinates of its window when the event arrives, the loop above
++   * converts them back with the positions the windows have now. A scrolled viewport or a swiped
++   * page moves its window with each event, so with more events waiting, every further one would
++   * contain the move made for those before it as if the finger had made it, and the content
++   * jumps back and forth. Take the finger's place on the surface instead, it doesn't depend on
++   * any window. Root coordinates are whole pixels, as are window positions, so the fraction is
++   * the one of the window coordinates.
++   */
++  if (_gtk_gesture_event_is_touch (data->event))
++    {
++      gdouble root_x, root_y;
++      gint origin_x, origin_y;
++
++      if (gdk_event_get_root_coords (data->event, &root_x, &root_y))
++        {
++          _get_event_coordinates (data, &event_x, &event_y);
++          gdk_window_get_root_coords (event_widget_window, 0, 0, &origin_x, &origin_y);
++          event_x = floor (root_x) - origin_x + (event_x - floor (event_x));
++          event_y = floor (root_y) - origin_y + (event_y - floor (event_y));
++        }
++    }
++
+   if (!gtk_widget_get_has_window (event_widget))
+     {
+       gtk_widget_get_allocation (event_widget, &allocation);

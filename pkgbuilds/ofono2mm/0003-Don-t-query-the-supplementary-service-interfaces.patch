@@ -1,0 +1,45 @@
+From 8f013f948e781fa0448c7f9cc5ff176b4c006af1 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:23:52 +0100
+Subject: [PATCH] Don't query the supplementary service interfaces
+
+GetProperties on org.ofono.CallBarring, CallForwarding and CallSettings
+makes oFono ask the network. Without a network the RIL may never answer
+(seen on a MediaTek phone with an eSIM test profile); the binder plugin
+sends these requests as blocking ones with a 5 minute timeout, so every
+SIM request of that slot waits meanwhile, eSIM management included.
+oFono2MM uses none of their properties, so leave them alone.
+---
+ ofono2mm/mm_modem.py | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index d3db49f..2e7eb5f 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -96,6 +96,9 @@ class MMModemInterface(ServiceInterface):
+             'SupportedIpFamilies': Variant('u', 3) # hardcoded value ipv4 and ipv6 MM_BEARER_IP_FAMILY_IPV4V6
+         }
+ 
++    SUPPLEMENTARY_SERVICE_INTERFACES = ('org.ofono.CallBarring', 'org.ofono.CallForwarding',
++                                        'org.ofono.CallSettings')
++
+     async def init_ofono_interfaces(self):
+         for iface in self.ofono_props['Interfaces'].value:
+             await self.add_ofono_interface(iface)
+@@ -106,6 +109,12 @@ class MMModemInterface(ServiceInterface):
+         })
+ 
+         try:
++            # GetProperties on these asks the network (supplementary services). Without a network
++            # the RIL may never answer, and the binder plugin holds back every SIM request of the
++            # slot meanwhile (5 minutes). The ModemManager API needs none of their properties.
++            if iface in self.SUPPLEMENTARY_SERVICE_INTERFACES:
++                raise DBusError('org.ofono.Error.NotImplemented', 'not queried')
++
+             self.ofono_interface_props.update({
+                 iface: await self.ofono_interfaces[iface].call_get_properties()
+             })
+-- 
+2.55.0
+

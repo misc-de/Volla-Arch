@@ -1,0 +1,63 @@
+From 91b659bf573e239f82127ae11586e643b7367142 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 00:49:40 +0100
+Subject: [PATCH] fprintd: idle right after stopping identification or
+ enrollment
+
+GNOME Settings verifies an existing finger, stops and starts enrolling
+within the same moment. biomd-fprintd kept biomd's state from the
+StateChanged signal only, which had not arrived yet when EnrollStart came
+in, so enrolling another finger always failed with AlreadyInUse ("the
+device is already claimed by another process").
+
+biomd is idle as soon as StopIdentify or StopEnroll returns, so take that
+state right away.
+---
+ src/fprintd/fprintd.c | 24 ++++++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/src/fprintd/fprintd.c b/src/fprintd/fprintd.c
+index adc0e6d..ef55070 100644
+--- a/src/fprintd/fprintd.c
++++ b/src/fprintd/fprintd.c
+@@ -340,7 +340,17 @@ biomd_stop_identify(Fprintd *self, GError **error)
+         error
+     );
+ 
+-    return (*error == NULL);
++    if (*error != NULL)
++        return FALSE;
++
++    /*
++     * biomd is idle once StopIdentify returns; its StateChanged signal saying
++     * so may still be queued. Clients such as GNOME Settings stop verifying
++     * and start enrolling right away, and the stale state would turn that
++     * down as AlreadyInUse.
++     */
++    self->state = STATE_IDLE;
++    return TRUE;
+ }
+ 
+ static gboolean
+@@ -374,7 +384,17 @@ biomd_stop_enroll(Fprintd *self, GError **error)
+         error
+     );
+ 
+-    return (*error == NULL);
++    if (*error != NULL)
++        return FALSE;
++
++    /*
++     * biomd is idle once StopEnroll returns; its StateChanged signal saying
++     * so may still be queued. Clients such as GNOME Settings stop verifying
++     * and start enrolling right away, and the stale state would turn that
++     * down as AlreadyInUse.
++     */
++    self->state = STATE_IDLE;
++    return TRUE;
+ }
+ 
+ static gboolean
+-- 
+2.56.0
+

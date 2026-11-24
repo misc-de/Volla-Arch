@@ -1,0 +1,16 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=mce-dev
+pkgver=1.36.0
+pkgrel=1
+pkgdesc="D-Bus interface headers of the Sailfish OS mode control entity (MCE), for libmce-glib"
+arch=(any)
+url="https://github.com/sailfishos/mce-dev"
+license=(LGPL-2.1-or-later)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('a52c2e1bc0660ae0fe1beaf63b4ca426bfb0cb9a9a72762ccf442e1d7df2e81b')
+
+package() {
+	cd "$pkgname-$pkgver"
+	make DESTDIR="$pkgdir" install
+}

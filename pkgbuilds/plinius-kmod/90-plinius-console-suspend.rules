@@ -1,0 +1,5 @@
+# The MediaTek low-power debug module turns console_suspend off when it loads (the container
+# loads it after plinius-kmod.service). Without it the kernel switches to a text console on
+# every suspend, which pauses the seat and wakes the display (docs/STANDBY.md). The module
+# uevent arrives after its init function, so setting it here wins.
+ACTION=="add", SUBSYSTEM=="module", KERNEL=="mtk_lpm_dbg_common_v2", RUN+="/usr/bin/sh -c 'echo Y > /sys/module/printk/parameters/console_suspend'"

@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 10:30:00 +0100
+Subject: [PATCH] top-panel: The clock row is part of the black card
+
+The lock and power buttons, the time and the date floated above the settings'
+card with the home screen moving behind them, which was restless with the
+transparency. They now share the card and its rounded corners.
+---
+ src/stylesheet/common.css | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 8da35ffc..e0c4ff97 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -60,6 +60,12 @@ phosh-top-panel .phosh-topbar-date {
+ 
+ .phosh-clock-box {
+   padding: 16px;
++  /* Plinius: part of the settings' card, nothing moves behind the clock */
++  margin-left: 6px;
++  margin-right: 6px;
++  background-color: @phosh_bg_color;
++  border-top-left-radius: 24px;
++  border-top-right-radius: 24px;
+ }
+ 
+ .phosh-topbar-button {
+@@ -77,7 +83,9 @@ phosh-top-panel .phosh-topbar-date {
+ 
+ widget.phosh-settings-menu > scrolledwindow {
+     background-color: @phosh_bg_color;
+-    border-radius: 24px;
++    /* Plinius: the top corners are the clock row's */
++    border-bottom-left-radius: 24px;
++    border-bottom-right-radius: 24px;
+     margin-left: 6px;
+     margin-right: 6px;
+ }

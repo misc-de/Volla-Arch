@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- GNOME Settings runs plinius-encrypt via pkexec: request or cancel the encryption, change its
+     password (interface at the top of plinius-encrypt). An administrator has to authenticate;
+     changing the password also needs the current encryption password. -->
+<policyconfig>
+  <action id="org.plinius.crypt.manage">
+    <description>Manage the encryption of the device</description>
+    <description xml:lang="de">Verschlüsselung des Geräts verwalten</description>
+    <description xml:lang="es">Gestionar el cifrado del dispositivo</description>
+    <description xml:lang="fr">Gérer le chiffrement de l'appareil</description>
+    <description xml:lang="it">Gestire la cifratura del dispositivo</description>
+    <description xml:lang="nl">De versleuteling van het apparaat beheren</description>
+    <description xml:lang="pl">Zarządzanie szyfrowaniem urządzenia</description>
+    <description xml:lang="pt">Gerir a encriptação do dispositivo</description>
+    <description xml:lang="ru">Управление шифрованием устройства</description>
+    <message>Authentication is required to change the encryption of the device</message>
+    <message xml:lang="de">Zum Ändern der Verschlüsselung des Geräts ist eine Legitimierung erforderlich</message>
+    <message xml:lang="es">Se necesita autenticación para cambiar el cifrado del dispositivo</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour modifier le chiffrement de l'appareil</message>
+    <message xml:lang="it">È richiesta l'autenticazione per modificare la cifratura del dispositivo</message>
+    <message xml:lang="nl">Om de versleuteling van het apparaat te wijzigen is authenticatie vereist</message>
+    <message xml:lang="pl">Zmiana szyfrowania urządzenia wymaga uwierzytelnienia</message>
+    <message xml:lang="pt">É necessária autenticação para alterar a encriptação do dispositivo</message>
+    <message xml:lang="ru">Для изменения шифрования устройства требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/plinius-encrypt</annotate>
+  </action>
+</policyconfig>

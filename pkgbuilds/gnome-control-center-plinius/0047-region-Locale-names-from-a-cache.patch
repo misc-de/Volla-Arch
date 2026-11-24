@@ -1,0 +1,156 @@
+From 0252f3ea3869a93fc7224a0ba504967730eaba66 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 00:11:34 +0100
+Subject: [PATCH] region: Locale names from a cache
+
+Plinius: the first name gnome-desktop gives for a locale makes it
+check every locale of the system with newlocale(), to know whether a
+language comes with more than one territory. The phone has ~500 of
+them (glibc-locales), which cost the Region & Language page 0.2 s, and
+2.3-2.6 s with 37 MB read from the SD card while their files were not
+in the page cache yet (the first opening after a boot).
+
+The page shows four names (language and formats of the user and of the
+system). They are now kept in ~/.cache/gnome-control-center/locale-names,
+valid while the modification times of /usr/lib/locale and
+/usr/share/xml/iso-codes stay the same. Opening the page with a cold
+page cache now takes 0.12 s. The chooser dialogs still ask
+gnome-desktop.
+---
+ panels/system/region/cc-region-page.c | 77 ++++++++++++++++++++++++---
+ 1 file changed, 69 insertions(+), 8 deletions(-)
+
+diff --git a/panels/system/region/cc-region-page.c b/panels/system/region/cc-region-page.c
+index 7a9c6a617..f64e293ad 100644
+--- a/panels/system/region/cc-region-page.c
++++ b/panels/system/region/cc-region-page.c
+@@ -38,6 +38,7 @@
+ #include <errno.h>
+ #include <gio/gdesktopappinfo.h>
+ #include <gio/gio.h>
++#include <glib/gstdio.h>
+ #include <glib/gi18n.h>
+ #include <gtk/gtk.h>
+ 
+@@ -458,6 +459,66 @@ choose_region_permission_cb (GObject *source, GAsyncResult *res, gpointer user_d
+         show_format_chooser (self, SYSTEM);
+ }
+ 
++/*
++ * Plinius: the first name gnome-desktop gives for a locale makes it check every locale of the
++ * system with newlocale(), to know whether a language comes with more than one territory. The
++ * phone has ~500 of them (glibc-locales): 0.2 s, and 1.5-2.6 s while their files are not in the
++ * page cache yet and come from the SD card. The page needs four names; they are kept in
++ * ~/.cache/gnome-control-center/locale-names, valid while the installed locales and iso-codes
++ * stay the same. The chooser dialogs still ask gnome-desktop.
++ */
++#define LOCALE_NAMES_DIRS { "/usr/lib/locale", "/usr/share/xml/iso-codes" }
++
++static char *
++locale_names_stamp (void)
++{
++    const char *dirs[] = LOCALE_NAMES_DIRS;
++    GString *stamp = g_string_new ("v1");
++
++    for (guint i = 0; i < G_N_ELEMENTS (dirs); i++) {
++        GStatBuf st;
++
++        if (g_stat (dirs[i], &st) == 0)
++            g_string_append_printf (stamp, "-%" G_GINT64_FORMAT, (gint64) st.st_mtime);
++    }
++    return g_string_free_and_steal (stamp);
++}
++
++static char *
++cached_locale_name (gboolean country, const char *locale)
++{
++    static GKeyFile *names;
++    static char *path, *stamp;
++    g_autofree char *key = g_strconcat (country ? "country:" : "language:", locale, NULL);
++    char *name;
++
++    if (names == NULL) {
++        names = g_key_file_new ();
++        path = g_build_filename (g_get_user_cache_dir (), "gnome-control-center", "locale-names", NULL);
++        stamp = locale_names_stamp ();
++        g_key_file_load_from_file (names, path, G_KEY_FILE_NONE, NULL);
++    }
++
++    name = g_key_file_get_string (names, stamp, key, NULL);
++    if (name != NULL)
++        return name;
++
++    name = country ? gnome_get_country_from_locale (locale, locale) : gnome_get_language_from_locale (locale, locale);
++    if (name != NULL) {
++        g_autofree char *dir = g_path_get_dirname (path);
++        g_auto(GStrv) groups = g_key_file_get_groups (names, NULL);
++
++        /* Names of older locale sets go */
++        for (guint i = 0; groups[i] != NULL; i++)
++            if (g_strcmp0 (groups[i], stamp) != 0)
++                g_key_file_remove_group (names, groups[i], NULL);
++        g_key_file_set_string (names, stamp, key, name);
++        if (g_mkdir_with_parents (dir, 0700) == 0)
++            g_key_file_save_to_file (names, path, NULL);
++    }
++    return name;
++}
++
+ static void
+ update_user_region_row (CcRegionPage *self)
+ {
+@@ -465,10 +526,10 @@ update_user_region_row (CcRegionPage *self)
+     g_autofree gchar *name = NULL;
+ 
+     if (region)
+-        name = gnome_get_country_from_locale (region, region);
++        name = cached_locale_name (TRUE, region);
+ 
+     if (!name)
+-        name = gnome_get_country_from_locale (DEFAULT_LOCALE, DEFAULT_LOCALE);
++        name = cached_locale_name (TRUE, DEFAULT_LOCALE);
+ 
+     cc_list_row_set_secondary_label (self->formats_row, name);
+ }
+@@ -479,10 +540,10 @@ update_user_language_row (CcRegionPage *self)
+     g_autofree gchar *name = NULL;
+ 
+     if (self->language)
+-        name = gnome_get_language_from_locale (self->language, self->language);
++        name = cached_locale_name (FALSE, self->language);
+ 
+     if (!name)
+-        name = gnome_get_language_from_locale (DEFAULT_LOCALE, DEFAULT_LOCALE);
++        name = cached_locale_name (FALSE, DEFAULT_LOCALE);
+ 
+     cc_list_row_set_secondary_label (self->language_row, name);
+ 
+@@ -537,10 +598,10 @@ update_login_region (CcRegionPage *self)
+     g_autofree gchar *name = NULL;
+ 
+     if (region)
+-        name = gnome_get_country_from_locale (region, region);
++        name = cached_locale_name (TRUE, region);
+ 
+     if (!name)
+-        name = gnome_get_country_from_locale (DEFAULT_LOCALE, DEFAULT_LOCALE);
++        name = cached_locale_name (TRUE, DEFAULT_LOCALE);
+ 
+     cc_list_row_set_secondary_label (self->login_formats_row, name);
+ }
+@@ -551,10 +612,10 @@ update_login_language (CcRegionPage *self)
+     g_autofree gchar *name = NULL;
+ 
+     if (self->system_language)
+-        name = gnome_get_language_from_locale (self->system_language, self->system_language);
++        name = cached_locale_name (FALSE, self->system_language);
+ 
+     if (!name)
+-        name = gnome_get_language_from_locale (DEFAULT_LOCALE, DEFAULT_LOCALE);
++        name = cached_locale_name (FALSE, DEFAULT_LOCALE);
+ 
+     cc_list_row_set_secondary_label (self->login_language_row, name);
+     update_login_region (self);
+-- 
+2.55.0
+

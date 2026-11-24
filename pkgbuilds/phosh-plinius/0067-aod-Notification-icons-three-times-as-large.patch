@@ -1,0 +1,45 @@
+From a71e384ce18402ab1c2c06dc12fd00aec7018e07 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 10:16:36 +0100
+Subject: [PATCH] aod: Notification icons three times as large
+
+At 22 px the icons of the apps with notifications were hard to see on
+the phone. They are now 66 px, with 20 px between them instead of 10 so
+they don't run into each other.
+---
+ src/aod.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/aod.c b/src/aod.c
+index 55f02238..276d7ca1 100644
+--- a/src/aod.c
++++ b/src/aod.c
+@@ -31,6 +31,9 @@
+ 
+ #include <glib/gstdio.h>
+ 
++#define AOD_ICON_SIZE    66
++#define AOD_ICON_SPACING 20
++
+ /* Most app icons shown before a "+N" */
+ #define AOD_MAX_ICONS 5
+ /* How far the content moves against burn-in, in logical pixels */
+@@ -150,7 +153,8 @@ update_icons (PhoshAod *self)
+     else
+       image = gtk_image_new_from_icon_name ("preferences-system-notifications-symbolic",
+                                             GTK_ICON_SIZE_LARGE_TOOLBAR);
+-    gtk_image_set_pixel_size (GTK_IMAGE (image), 22);
++    /* Three times the old 22 px: at the phone's scale the small ones were hard to see */
++    gtk_image_set_pixel_size (GTK_IMAGE (image), AOD_ICON_SIZE);
+     gtk_widget_show (image);
+     gtk_container_add (GTK_CONTAINER (self->box_icons), image);
+     n_icons++;
+@@ -299,7 +303,7 @@ phosh_aod_constructed (GObject *object)
+   gtk_container_add (GTK_CONTAINER (self->box), info);
+ 
+   /* A row of their own, about two and a half lines below the battery */
+-  self->box_icons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
++  self->box_icons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, AOD_ICON_SPACING);
+   gtk_widget_set_halign (self->box_icons, GTK_ALIGN_CENTER);
+   gtk_widget_set_margin_top (self->box_icons, 48);
+   gtk_style_context_add_class (gtk_widget_get_style_context (self->box_icons), "phosh-aod-info");

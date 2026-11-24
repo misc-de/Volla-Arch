@@ -1,0 +1,61 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-bootcheck
+pkgver=0.2
+pkgrel=3
+pkgdesc="Detect changes to the boot chain (kernel, ramdisk, bootloader) and warn in the session"
+arch=(any)
+license=(MIT)
+# What gets checked is supplied by the device package (/usr/lib/plinius-bootcheck.d/*.list): only
+# what starts this installation. e2fsprogs: debugfs reads the boot menu card without mounting it.
+# Notification via org.freedesktop.Notifications using gdbus (glib2). Strings English, translated in *.po.
+# polkit: GNOME Settings accepts a change through pkexec (org.plinius.bootcheck.policy).
+depends=(bash coreutils gawk grep sed findutils systemd glib2 gettext e2fsprogs polkit)
+makedepends=(gettext)
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-bootcheck
+	notify
+	plinius-bootcheck.service
+	plinius-bootcheck-notify.service
+	org.plinius.bootcheck.policy
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('f4f7bb9af30e7268e63375e484559817702be2c36043562df22c762830e7fb4b'
+	'2af9373333580bc3babd95938dfd415ae5de7e2f8d1bc95f904b9c79060cf4db'
+	'386c79cf790369ea1217637239e0bdb0473032a8e5676cb64856eb155c45c00f'
+	'a9b3c01b8dd97fd07eafe63033cd8fedcc9ada4ce52d785a79ecc6022481bdd0'
+	'969da6214060dfa765a3cc2c4c7fc83311b5c0bdf9d2a4cb7b9b689dd1cb6691'
+	'6e05ed34a9eccf6fd6b614496c286267734a016dc04b2219cda8b8ebb8d99634'
+	'344b16a7b1bcd3a0585b86a7c86752bb4a0e13cb240d390a5dbe01bd59c6d144'
+	'54d18ea4242a165212ca0a084ccbbd059bdd5794891d90e31d89767d14994976'
+	'89ee1a9d12f236f8584adbd7a072b5f8b5a43cb2bc4df5a85ce26004a81ec331'
+	'04b6f05f16ea0a67ff78b539f8734d2913862896308390b65783db7ddd97ec2e'
+	'5e9256039451b2fc6db2dd2c60ab01f16b90ad434fc3a718bf5c42e5467e3037'
+	'8e3840e8628f026f1d6caba3794b016484dad51fb8414895eda3d76b2077620a'
+	'acfeceda9961a6ff6847277c4505ed5e4141cf2dd9d13972b4e3b758d12e98b1'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-bootcheck -t "$pkgdir/usr/bin"
+	install -Dm755 notify -t "$pkgdir/usr/lib/plinius-bootcheck"
+	install -Dm644 org.plinius.bootcheck.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	install -d "$pkgdir/usr/lib/plinius-bootcheck.d"
+	install -Dm644 plinius-bootcheck.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 plinius-bootcheck-notify.service -t "$pkgdir/usr/lib/systemd/user"
+	# Without lists the check does nothing, so always enabled
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants" \
+		"$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../plinius-bootcheck.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	ln -s ../plinius-bootcheck-notify.service \
+		"$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-bootcheck.mo"
+	done
+}

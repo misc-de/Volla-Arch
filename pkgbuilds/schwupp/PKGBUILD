@@ -1,0 +1,103 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=schwupp
+pkgver=0.6.3
+pkgrel=1
+pkgdesc="Cast the screen, YouTube and media to TVs, and all sound to Cast, Sonos, DLNA and AirPlay speakers"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://github.com/misc-de/Schwupp"
+license=(MIT)
+# Why on the Plinius: Phosh's cast quick setting (phosh-plinius 0019) mirrors the screen
+# through Schwupp's D-Bus interface (de.cais.Schwupp.Cast1, started without a window), and
+# Schwupp keeps the settings per TV (resolution, bitrate, sound). They are shown on the
+# "Streaming" page of GNOME Settings (gnome-control-center-plinius) over the same interface
+# (GetSettings/SetSetting), so the app itself has no launcher on the phone. The screen comes from
+# xdg-desktop-portal-wlr-plinius, H.264 from the phone's hardware encoder (v4l2h264enc).
+# AirPlay TVs get the screen as HLS (hlssink2 from gst-plugins-bad); the other AirPlay route
+# needs doubletake, which is not packaged.
+# Speakers get all sound of the phone: a virtual output (pactl) feeds a live MP3 stream
+# (lamemp3enc from gst-plugins-good) for Cast, Sonos and DLNA; AirPlay speakers go through
+# PipeWire's RAOP sink (pipewire-zeroconf, Avahi).
+# Arch does not package pyatv (AirPlay), pywebostv (LG webOS) and three libraries of
+# pyatv; they are vendored into /usr/lib/schwupp/vendor.
+depends=(
+	gst-plugin-pipewire gst-plugins-bad gst-plugins-bad-libs gst-plugins-base gst-plugins-good gstreamer gtk4
+	libadwaita libpulse
+	pipewire-zeroconf python
+	python-aiohttp python-cffi python-chacha20poly1305-reuseable python-cryptography
+	python-gobject python-ifaddr python-protobuf python-pychromecast python-pydantic
+	python-requests python-six python-tabulate python-ws4py python-zeroconf
+	xdg-desktop-portal yt-dlp
+)
+makedepends=(git python-flit-core python-hatchling python-pip python-setuptools python-wheel)
+optdepends=(
+	'gst-plugins-ugly: x264enc where no hardware H.264 encoder exists'
+)
+# Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
+_commit=e93e6aab588880575ba1f21445dd0aa934145e87
+source=(
+	"git+$url.git#commit=$_commit"
+	schwupp.sh
+	https://files.pythonhosted.org/packages/source/p/pyatv/pyatv-0.18.0.tar.gz
+	https://files.pythonhosted.org/packages/source/s/srptools/srptools-2.0.0.tar.gz
+	https://files.pythonhosted.org/packages/source/m/miniaudio/miniaudio-1.73.tar.gz
+	https://files.pythonhosted.org/packages/source/t/tinytag/tinytag-2.3.2.tar.gz
+	https://files.pythonhosted.org/packages/source/p/pywebostv/pywebostv-0.8.9.tar.gz
+	pyatv-0001-Support-srptools-2.0.patch
+)
+sha256sums=('SKIP'
+            'ffec634844cb85f2bd8ed6a9a135731b97c4e5d2050fb803fb95b7a86462be85'
+            'f650807f6d5c15460677152d38c97e83d22ddfe2113d63689e71d9a27b616c35'
+            '3b5296fde4b70e76443bbeacc641f4e4125c81b6bd20e4e228bba340f00c06c5'
+            '6652da7e60fabde24d4f3b56c062d4be5f3bfb626818c5a2877f2c782d6e2c4f'
+            '021d711cdbdbf840d3b67b976cb34dadc58d2fcfd490eb74ef9602b37b991414'
+            '6e44c9c655c6d6e069162a447a9921ac9c0c49485d676574136577f0fc369878'
+            'e635228429b5add11c7bfb802c09efdbb729a8154327006e5ff90c0ee8952a1e')
+
+_vendored=(pyatv-0.18.0 srptools-2.0.0 miniaudio-1.73 tinytag-2.3.2 pywebostv-0.8.9)
+
+prepare() {
+	# srptools 2.0 made the session arguments keyword-only: pairing with an AirPlay TV failed with
+	# a TypeError once the PIN was entered. pyatv PR #2947 (open), works with srptools 1.x too
+	patch -d pyatv-0.18.0 -Np1 -i "$srcdir/pyatv-0001-Support-srptools-2.0.patch"
+}
+
+build() {
+	# miniaudio has a C part (cffi), the rest is pure Python
+	for dir in "${_vendored[@]}"; do
+		pip wheel --no-deps --no-build-isolation --no-index -w wheels "$srcdir/$dir"
+	done
+}
+
+package() {
+	local lib="$pkgdir/usr/lib/schwupp"
+
+	# Without dependencies: those come from Arch (depends) or from this list
+	pip install --no-deps --no-index --no-compile --target "$lib/vendor" wheels/*.whl
+	rm -rf "$lib/vendor/bin"
+	python -m compileall -q -d /usr/lib/schwupp/vendor "$lib/vendor"
+
+	cd Schwupp
+	# app/paths.py finds VERSION and lang/ next to the app package
+	install -d "$lib"
+	cp -r app lang VERSION "$lib/"
+	find "$lib/app" -name __pycache__ -prune -exec rm -rf {} +
+	python -m compileall -q -d /usr/lib/schwupp/app "$lib/app"
+	install -Dm755 "$srcdir/schwupp.sh" "$pkgdir/usr/bin/schwupp"
+
+	# Kept for D-Bus activation and the application id, but not in the app grid: on the
+	# phone everything goes through the quick setting and the Streaming page of the settings
+	install -Dm644 data/de.cais.Schwupp.desktop -t "$pkgdir/usr/share/applications"
+	echo 'NoDisplay=true' >>"$pkgdir/usr/share/applications/de.cais.Schwupp.desktop"
+	install -Dm644 data/de.cais.Schwupp.metainfo.xml -t "$pkgdir/usr/share/metainfo"
+	install -Dm644 data/icons/hicolor/256x256/apps/de.cais.Schwupp.png \
+		-t "$pkgdir/usr/share/icons/hicolor/256x256/apps"
+	# D-Bus starts Schwupp without a window when the quick setting calls it
+	install -Dm644 data/de.cais.Schwupp.service -t "$pkgdir/usr/share/dbus-1/services"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	for dir in "${_vendored[@]}"; do
+		for f in "$srcdir/$dir"/LICENSE*; do
+			[[ -f $f ]] && install -Dm644 "$f" "$pkgdir/usr/share/licenses/$pkgname/${dir%-*}-${f##*/}"
+		done
+	done
+}

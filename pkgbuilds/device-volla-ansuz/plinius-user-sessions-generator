@@ -1,0 +1,15 @@
+#!/bin/sh
+# greetd waits for systemd-user-sessions.service, which is ordered after network.target for remote
+# logins and network home directories. The phone has neither, and the ordering keeps Phosh waiting
+# until NetworkManager is up (about 2 s). This writes a copy of the unit without network.target to
+# the generator directory, which takes precedence over /usr/lib (drop-ins still apply). The copy
+# is derived at every boot, so it follows systemd updates; without the dependency it changes
+# nothing.
+# Usage: plinius-user-sessions-generator <normal-dir> <early-dir> <late-dir>   (run by systemd)
+set -eu
+umask 022
+
+unit=/usr/lib/systemd/system/systemd-user-sessions.service
+
+grep -q '^After=.*network\.target' "$unit" || exit 0
+sed '/^After=/s/ *network\.target\b//' "$unit" > "$1/systemd-user-sessions.service"

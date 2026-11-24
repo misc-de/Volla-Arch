@@ -1,0 +1,57 @@
+From f0bea06c333894613dae016258e0c8f0c3a65c13 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 01:05:37 +0100
+Subject: [PATCH] fprintd: stop what is running when the device is released
+
+GNOME Settings releases the device without EnrollStop when its enrollment
+dialog is cancelled. biomd-fprintd ignored Release, so the enrollment went
+on until the HAL timed out, and with it the touch target of an
+under-display sensor stayed in front of everything. fprintd ends a
+running enrollment or verification on Release; do the same.
+---
+ src/fprintd/fprintd.c | 28 ++++++++++++++++++++++++++--
+ 1 file changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/src/fprintd/fprintd.c b/src/fprintd/fprintd.c
+index ef55070..51a816b 100644
+--- a/src/fprintd/fprintd.c
++++ b/src/fprintd/fprintd.c
+@@ -738,9 +738,33 @@ handle_method_call(GDBusConnection *connection,
+ 
+             g_dbus_method_invocation_return_value(invocation, NULL);
+             return;
+-        } else if (g_strcmp0(method_name, "Claim") == 0 ||
+-                   g_strcmp0(method_name, "Release") == 0) {
++        } else if (g_strcmp0(method_name, "Claim") == 0) {
+             /* no op. do something? fprintd says polkit */
++            g_dbus_method_invocation_return_value(invocation, NULL);
++            return;
++        } else if (g_strcmp0(method_name, "Release") == 0) {
++            /*
++             * As in fprintd, releasing the device ends what the client left
++             * running: GNOME Settings releases without EnrollStop when its
++             * enrollment dialog is cancelled, and the enrollment (with the
++             * touch target of an under-display sensor) went on until the HAL
++             * timed out.
++             */
++            if (self->enroll_in_progress) {
++                g_autoptr(GError) error = NULL;
++                if (!biomd_stop_enroll(self, &error))
++                    g_warning("Failed to stop enrollment during Release: %s", error->message);
++                self->enroll_in_progress = FALSE;
++            }
++
++            if (self->verify_in_progress) {
++                g_autoptr(GError) error = NULL;
++                if (!biomd_stop_identify(self, &error))
++                    g_warning("Failed to stop identification during Release: %s", error->message);
++                self->verify_in_progress = FALSE;
++                g_clear_pointer(&self->verify_finger, g_free);
++            }
++
+             g_dbus_method_invocation_return_value(invocation, NULL);
+             return;
+         } else if (g_strcmp0(method_name, "VerifyStart") == 0) {
+-- 
+2.56.0
+

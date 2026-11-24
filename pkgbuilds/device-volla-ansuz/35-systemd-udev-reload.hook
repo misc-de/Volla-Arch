@@ -1,0 +1,13 @@
+# Replaces the hook of the same name from the systemd package: a hook in /etc/pacman.d/hooks takes
+# precedence over one with the same file name in /usr/share/libalpm/hooks. Why: plinius-udev-reload.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/lib/udev/rules.d/*
+
+[Action]
+Description = Reloading device manager configuration...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plinius-udev-reload

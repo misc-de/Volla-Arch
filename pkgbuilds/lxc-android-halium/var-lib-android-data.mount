@@ -1,0 +1,16 @@
+# Android's /data lives in /userdata/android-data (created by the Halium ramdisk);
+# mount-android-partitions binds it from here into the container. UT does this with its
+# writable-paths ("persistent"), which Arch does not have.
+[Unit]
+Description=Android data from /userdata/android-data
+DefaultDependencies=no
+ConditionPathIsDirectory=/userdata/android-data
+RequiresMountsFor=/userdata
+Before=local-fs.target umount.target
+Conflicts=umount.target
+
+[Mount]
+What=/userdata/android-data
+Where=/var/lib/android-data
+Type=none
+Options=bind,x-mount.mkdir

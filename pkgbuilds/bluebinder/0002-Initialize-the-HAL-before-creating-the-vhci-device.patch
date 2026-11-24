@@ -1,0 +1,129 @@
+From b9bd9c05a67d736fd802204cb550b0bf0f9661d9 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 11:42:04 +0100
+Subject: [PATCH] Initialize the HAL before creating the vhci device
+
+The kernel powers a new vhci device on at once and gives up when the
+reset command is not answered within 2 s. At boot the Bluetooth HAL of
+the Volla Phone Plinius needs up to 10 s to initialize, so the power-on
+failed. Powering the device on again later (patch 0001) brings it up,
+but the kernel never finishes its setup then: the controller never
+reaches bluetoothd and Bluetooth cannot be switched on.
+
+Turn the HAL on first and wait for init complete (at most 30 s), then
+create the vhci device.
+---
+ bluebinder.c | 52 +++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 49 insertions(+), 3 deletions(-)
+
+diff --git a/bluebinder.c b/bluebinder.c
+index d44ac22..3535749 100644
+--- a/bluebinder.c
++++ b/bluebinder.c
+@@ -93,6 +93,8 @@ typedef struct {
+ #define PRIORITY_HOST_READ_PACKETS (G_PRIORITY_DEFAULT + 3) // HAL -> vhci
+ #define PRIORITY_CHECK_BT_STATE (G_PRIORITY_DEFAULT + 4)
+ #define CHECK_BT_STATE_INTERVAL_MS 100
++/* How long to wait for the HAL before the vhci device is created anyway */
++#define HAL_INIT_TIMEOUT_S 30
+ // This one is to be executed after the setup procedure to potentially turn bluetooth off
+ // after the setup is complete if it was off before reboot for example.
+ // Needs to be higher than the rfkill channel otherwise an event from the user
+@@ -246,6 +248,9 @@ struct proxy {
+     const struct bluetooth_hal_protocol *protocol;
+ 
+     bool bluetooth_hal_initialized;
++    /* wait_for_hal runs the main loop until the HAL reports init complete */
++    bool waiting_for_hal;
++    bool quit_requested;
+     /* check_bt_state polls since the start; the last power-on retry happened at this poll */
+     unsigned int state_polls;
+     unsigned int last_power_on;
+@@ -662,6 +667,7 @@ signal_callback(
+     struct proxy *proxy = user_data;
+ 
+     fprintf(stderr, "Received signal, quitting\n");
++    proxy->quit_requested = TRUE;
+     g_main_loop_quit(proxy->loop);
+ 
+     return G_SOURCE_CONTINUE;
+@@ -819,10 +825,46 @@ turn_on_bt_after_startup(
+     struct proxy *proxy = user_data;
+     proxy->bluetooth_powered_known = TRUE;
+     proxy->bluetooth_powered = TRUE;
+-    configure_bt(proxy, TRUE);
++    /* Usually wait_for_hal has done this already */
++    if (!proxy->bluetooth_hal_initialized)
++        configure_bt(proxy, TRUE);
++    return G_SOURCE_REMOVE;
++}
++
++static
++gboolean
++hal_wait_timeout(
++    gpointer user_data)
++{
++    struct proxy *proxy = user_data;
++
++    fprintf(stderr, "Bluetooth HAL not initialized after %d s, going on\n", HAL_INIT_TIMEOUT_S);
++    g_main_loop_quit(proxy->loop);
+     return G_SOURCE_REMOVE;
+ }
+ 
++/* Turn the HAL on before the vhci device exists. The kernel powers a new device on at once
++ * and gives up when the reset command is not answered within 2 s; the device then never
++ * reaches bluetoothd, even if it is powered on later. At boot the HAL needs up to 10 s. */
++static
++void
++wait_for_hal(
++    struct proxy *proxy)
++{
++    guint timeout_id;
++
++    configure_bt(proxy, TRUE);
++    if (proxy->bluetooth_hal_initialized)
++        return;
++
++    proxy->waiting_for_hal = TRUE;
++    timeout_id = g_timeout_add_seconds(HAL_INIT_TIMEOUT_S, hal_wait_timeout, proxy);
++    g_main_loop_run(proxy->loop);
++    proxy->waiting_for_hal = FALSE;
++    if (proxy->bluetooth_hal_initialized)
++        g_source_remove(timeout_id);
++}
++
+ /* HCIDEVUP waits until the controller answered the reset, and the answer only arrives
+  * through our main loop: run it on its own thread */
+ static gpointer
+@@ -978,6 +1020,8 @@ bluebinder_callbacks_transact(
+                 proxy->bluetooth_hal_initialized = TRUE;
+                 fprintf(stderr, "Bluetooth binder initialized successfully\n");
+                 g_idle_add_full(PRIORITY_PROCESS_PACKETS_ONCE, process_packets_once, proxy, NULL);
++                if (proxy->waiting_for_hal)
++                    g_main_loop_quit(proxy->loop);
+             }
+ 
+             *status = GBINDER_STATUS_OK;
+@@ -1230,7 +1274,10 @@ int main(int argc, char *argv[])
+     proxy.death_id = gbinder_remote_object_add_death_handler
+             (proxy.remote, binder_remote_died, &proxy);
+ 
+-    if (setup_vhci(&proxy)) {
++    proxy.loop = g_main_loop_new(NULL, FALSE);
++    wait_for_hal(&proxy);
++
++    if (!proxy.quit_requested && setup_vhci(&proxy)) {
+         gboolean bluetooth_on = FALSE;
+         gboolean bluetooth_state_known = FALSE;
+ 
+@@ -1278,7 +1325,6 @@ int main(int argc, char *argv[])
+                                     NULL);
+         g_io_channel_set_flags(proxy.rfkill_channel, G_IO_FLAG_NONBLOCK, NULL);
+ 
+-        proxy.loop = g_main_loop_new(NULL, FALSE);
+         g_main_loop_run(proxy.loop);
+         g_main_loop_unref(proxy.loop);
+     }
+-- 
+2.55.0
+

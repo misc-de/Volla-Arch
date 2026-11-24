@@ -1,0 +1,60 @@
+#!/bin/bash
+# Schedules renaming a user for the next boot (runs as root, via pkexec).
+# Called by GNOME Settings (System > Users > Username, gnome-control-center-plinius).
+# The rename happens early at boot, before anyone logs in (plinius-account-rename.service):
+# a logged-in user cannot be renamed while their processes are running.
+#
+# Usage: plinius-rename-user OLD NEW | --status | --cancel
+set -euo pipefail
+
+request=/var/lib/plinius-account/rename
+
+# pkexec clears the environment; take the language from the system settings so that the
+# error shown in GNOME Settings is translated (gettext domain plinius-account)
+[[ -r /etc/locale.conf ]] && { . /etc/locale.conf; export LANG; }
+export TEXTDOMAIN=plinius-account
+
+die() { echo "plinius-rename-user: $*" >&2; exit 1; }
+# t MSGID [ARG...]: translated message, %s placeholders filled with ARGs
+t() {
+	local fmt
+	fmt=$(gettext "$1")
+	shift
+	# shellcheck disable=SC2059
+	printf "$fmt" "$@"
+}
+
+case ${1:-} in
+--status)
+	[[ -f $request ]] && cat "$request" || true
+	exit 0
+	;;
+--cancel)
+	# Under pkexec only a rename of the caller's own account can be withdrawn
+	if [[ -n ${PKEXEC_UID:-} && -f $request ]]; then
+		read -r pending _ < "$request"
+		[[ $(id -un "$PKEXEC_UID") == "$pending" ]] || die "$(t "only your own account can be renamed")"
+	fi
+	rm -f "$request"
+	exit 0
+	;;
+esac
+
+[[ $# -eq 2 ]] || die "$(t "usage: plinius-rename-user OLD NEW | --status | --cancel")"
+old=$1 new=$2
+[[ $(id -u) -eq 0 ]] || die "$(t "must be run as root")"
+# Under pkexec only the caller's own account: PKEXEC_UID is the calling user
+if [[ -n ${PKEXEC_UID:-} ]]; then
+	[[ $(id -un "$PKEXEC_UID") == "$old" ]] || die "$(t "only your own account can be renamed")"
+fi
+uid=$(id -u "$old" 2>/dev/null) || die "$(t "user %s does not exist" "$old")"
+((uid >= 1000)) || die "$(t "%s is not a regular user" "$old")"
+[[ $new =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] ||
+	die "$(t "invalid name: lower case letters, digits, _ and -, starting with a letter or _, at most 32 characters")"
+! getent passwd "$new" >/dev/null || die "$(t "user %s already exists" "$new")"
+! getent group "$new" >/dev/null || die "$(t "group %s already exists" "$new")"
+[[ ! -e /home/$new ]] || die "$(t "%s already exists" "/home/$new")"
+
+# World-readable so Settings can show the pending rename; the name is no secret
+install -d -m 0755 "${request%/*}"
+printf "%s %s\n" "$old" "$new" > "$request"

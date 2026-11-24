@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- GNOME Settings › System › Memory and Swap runs pkexec /usr/lib/plinius-swap/plinius-swap-set.
+     No PIN: nothing here opens the phone or shows anything of it, and the tool only takes its
+     fixed file and checked numbers. -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <action id="org.plinius.swap.manage">
+    <description>Change swap</description>
+    <message>Authentication is required to change swap</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-swap/plinius-swap-set</annotate>
+  </action>
+</policyconfig>

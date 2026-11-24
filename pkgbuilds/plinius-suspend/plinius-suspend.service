@@ -1,0 +1,44 @@
+[Unit]
+Description=Suspend while the display is off (wakeup_count loop, as UT's repowerd)
+# The display state comes from plinius-mce (com.nokia.mce)
+Wants=plinius-mce.service
+After=plinius-mce.service systemd-logind.service
+
+[Service]
+ExecStart=/usr/bin/plinius-suspend
+Restart=on-failure
+RestartSec=5
+# Writes /sys/power/{wakeup_count,state}; everything else stays read-only
+ProtectSystem=strict
+# Read-only, not "yes": that empties /run/user, where the always-on display's flag lies
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+# More sandbox (docs/DIENSTE-HAERTEN.md). /sys/power/state and wakeup_count belong to
+# aid_system without group write: CAP_DAC_OVERRIDE, which also lets it look in /run/user for
+# the always-on display's flag. CAP_WAKE_ALARM for the alarm timer that wakes it for the
+# always-on clock each minute; ProtectClock= would take that capability away.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_WAKE_ALARM
+PrivateNetwork=yes
+DevicePolicy=closed
+ReadWritePaths=/sys/power/state /sys/power/wakeup_count
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectProc=invisible
+PrivateIPC=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,87 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-progress
+pkgver=0.1
+pkgrel=17
+pkgdesc="Full-screen progress and message view for the initramfs, in the look of unl0kr"
+arch=(aarch64 x86_64)
+url="https://gitlab.postmarketos.org/postmarketOS/buffybox"
+# Own files MIT; the binary contains BuffyBox (GPL-3.0-or-later), LVGL (MIT) and Adwaita Sans
+# (OFL-1.1)
+license=(GPL-3.0-or-later MIT OFL-1.1)
+# Uses the configuration of unl0kr (/etc/unl0kr.conf.d) for backend, theme, background and quirks
+depends=(glibc libinih libinput systemd-libs libxkbcommon libdrm libevdev "buffybox>=3.6.0-9")
+makedepends=(git meson)
+# Built inside the BuffyBox source tree for its shared display/input/theme code;
+# tag, lvgl commit and patches as in pkgbuilds/buffybox (the 00*.patch files are copies; those only
+# unl0kr needs, as 0009-0012, are left out)
+_bbx_tag=3.6.0
+# Commit of that tag: a tag can be moved later, a commit hash cannot
+_bbx_commit=d0f52495f7f3afa8839eef4b19f43f4ca1243107
+_lvgl_commit=85aa60d18b3d5e5588d7b247abf90198f07c8a63
+source=(
+	"git+$url.git#commit=$_bbx_commit"
+	"git+https://github.com/lvgl/lvgl.git#commit=$_lvgl_commit"
+	plinius-progress.c
+	meson.build
+	0001-themes-make-the-text-cursor-of-the-Breezy-themes-2-d.patch
+	0002-unl0kr-add-placeholder-for-the-text-of-the-empty-pas.patch
+	0003-fonts-add-Cyrillic-U-0400-U-04FF-to-the-built-in-fon.patch
+	0004-unl0kr-add-a-Russian-keyboard-layout.patch
+	0005-themes-add-a-glass-look-and-a-background-image.patch
+	0006-unl0kr-add-options-for-the-texts-of-the-shutdown-con.patch
+	0007-themes-wider-keys-in-plinius-glass.patch
+	0008-themes-Stevia-s-look-for-the-keys-an-accent-color-fr.patch
+	0013-shared-a-smooth-scaling-of-the-background-image.patch
+	0014-shared-touches-in-any-slot-of-the-touchscreen.patch
+	LICENSE
+)
+sha256sums=('SKIP'
+            'SKIP'
+            '708db45c2d740d096b408e1aa4c52f65b8c784d6aeeda6eb23adf0c58b25c0cb'
+            'c758402859507c6e4dbb38136e19833e594944fda015461c6bcb7cf25d882bc0'
+            'b5b53154c23768cf826e3336d2c6d108702c08e8da56b7098e7e3a576bdc946b'
+            '836ab89c3df0d323777b1bf5bb7eb09843dafc57e3ba5d32ab007b9840ef1658'
+            'ae3937e118991f0ac2b2fa78b273095439859c6c0b78fa90bb3108a61cfccb64'
+            'bdd05b203845d0914849feb52cb37401a01945fa6ef0a65f8179c3b21f202869'
+            'c48e445828c4599581e1f580738e2e1f28772e5557894e28d5eeb6549664b791'
+            '7146577ff1698268d24fbf56763620a2ef3c7d5c54ace986d608cfc754a9259d'
+            'ee41fb2119e9211d51d3b4c3d2c8e1d5dd892fa8fb72557613c8f51cc5f794f9'
+            '51719a7464372a711cc4aa80a74d77f9009bcacf5e7d86bc7c0f99862473b83c'
+            '9342d6170c29969e6be2cb10bb44618e6270874c7ddde853a8ac477ccb4b5661'
+            'f16472481a95efec695022ced719a3d27f5434a96bfd2f4ef00048f220aabb58'
+            '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+prepare() {
+	cd buffybox
+	git submodule init
+	git config submodule.lvgl.url "$srcdir/lvgl"
+	git -c protocol.file.allow=always submodule update
+	# The patches of pkgbuilds/buffybox, so both build the same tree (theme, font, layouts)
+	local p
+	for p in "$srcdir"/00*.patch; do
+		git apply "$p"
+	done
+
+	mkdir -p plinius-progress
+	cp "$srcdir/plinius-progress.c" "$srcdir/meson.build" unl0kr/sq2lv_layouts.[ch] plinius-progress/
+	# unl0kr's LVGL configuration plus the bar widget
+	sed 's/^#define LV_USE_BAR        0$/#define LV_USE_BAR        1/' unl0kr/lv_conf.h \
+		> plinius-progress/lv_conf.h
+	grep -q '^#define LV_USE_BAR        1$' plinius-progress/lv_conf.h
+	echo "subdir('plinius-progress')" >> meson.build
+}
+
+build() {
+	arch-meson buffybox build \
+		-Dlvgl_backends=framebuffer,drm \
+		-Dman=false \
+		-Dsystemd=false
+	meson compile -C build plinius-progress
+}
+
+package() {
+	install -Dm644 LICENSE buffybox/shared/fonts/AdwaitaSans-LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	# --no-rebuild: build() made the one target; without it install builds the whole BuffyBox tree
+	meson install -C build --destdir "$pkgdir" --tags plinius-progress --no-rebuild
+}

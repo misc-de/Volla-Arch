@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: MPL-2.0
+ *
+ * Plinius: no light lines at the top and bottom of the screen in fullscreen.
+ *
+ * Firefox draws the web content as a card (rounded, with a margin, an outline and a separator
+ * line towards the toolbars) on the toolbar colour. It takes that back only in DOM fullscreen and
+ * while the toolbox slides away ([fullscreenNavToolboxHidden]); mobile-config-firefox hides the
+ * toolbars in fullscreen with display: none instead, so the card's edges stayed: 2 px at the top
+ * and a strip at the bottom of the phone's screen (measured 13.11.2026, Firefox 160, scale
+ * 2.27). In fullscreen the content now meets the screen's edges.
+ */
+:root[inFullscreen] :is(#navigator-toolbox, #browser, #appcontent, #tabbrowser-tabbox,
+                        #tabbrowser-tabpanels, .browserContainer, .browserStack) {
+    margin: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    outline: none !important;
+    box-shadow: none !important;
+    --content-area-start-radius: 0 !important;
+}

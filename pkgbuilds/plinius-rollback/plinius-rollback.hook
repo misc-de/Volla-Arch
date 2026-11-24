@@ -1,0 +1,13 @@
+# Keeps the installed and the previous version of every package in the cache, so that
+# plinius-rollback can take back the last update, and the cache does not grow without end.
+[Trigger]
+Operation = Upgrade
+Operation = Install
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Keeping two versions per package in the cache (plinius-rollback)...
+When = PostTransaction
+Exec = /usr/bin/paccache --remove --keep 2 --quiet

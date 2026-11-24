@@ -1,0 +1,12 @@
+# Started by /usr/lib/plinius-crypt/background-install and look-install when the background or
+# the look of the password prompt changed, and by plinius-crypt-locale.path when the system
+# language or keyboard layout changed; the install hook plinius-crypt takes them into the initramfs.
+[Unit]
+Description=Rebuild the initramfs for the password prompt at startup (background, look, language, keyboard)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius-crypt/rebuild-initramfs
+# A background job: the phone stays responsive meanwhile
+Nice=10
+IOSchedulingClass=idle

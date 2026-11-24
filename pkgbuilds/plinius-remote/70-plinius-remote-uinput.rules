@@ -1,0 +1,4 @@
+# plinius-remote --desktop: the touchpad and keyboard for the phone's desktop on a TV are a
+# virtual mouse and keyboard (uinput). The user at the phone's seat gets the device, as for a
+# Bluetooth mouse; no other user and no sandboxed app (no /dev access) does.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

@@ -1,0 +1,226 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 07 Nov 2026 17:55:00 +0100
+Subject: [PATCH] new-call-box: The dial pad grows with the page, in its middle
+
+At a lower scale (2.26 on the phone) the dial pad's buttons kept their
+size from the stylesheet and filled only part of the width, at the top of
+the page. Size them from the room the page has, as the lock screen's
+keypad does: 70 % of it (the full room looked too big), between 72 and
+84 px (81 px on the phone), the digits, letters, dial and delete button
+growing along. The page's height counts the dial button and the SIM
+selection if it shows. Only the dial page, not the keypad in a call.
+
+The page's content sits in the middle of its height now.
+---
+ src/calls-new-call-box.c | 124 +++++++++++++++++++++++++++++++++++++++
+ src/ui/new-call-box.ui   |   5 +-
+ 2 files changed, 128 insertions(+), 1 deletion(-)
+
+diff --git a/src/calls-new-call-box.c b/src/calls-new-call-box.c
+index 3b214f7..f164a82 100644
+--- a/src/calls-new-call-box.c
++++ b/src/calls-new-call-box.c
+@@ -47,6 +47,7 @@ struct _CallsNewCallBox {
+   AdwBin        parent_instance;
+ 
+   GtkWidget    *child;
++  GtkScrolledWindow *scroll;
+ 
+   GtkListBox   *origin_list_box;
+   AdwComboRow  *origin_list;
+@@ -61,10 +62,20 @@ struct _CallsNewCallBox {
+ 
+   /* Remembers the origin last dialed from (key last-origin-id) */
+   GSettings    *settings;
++
++  /* Size of the dial pad's buttons, set from the room the page has */
++  GtkCssProvider *dialpad_css;
++  int             dialpad_button;
++  int             dialpad_width;
++  int             dialpad_height;
++  guint           fit_dialpad_id;
+ };
+ 
+ G_DEFINE_TYPE (CallsNewCallBox, calls_new_call_box, ADW_TYPE_BIN);
+ 
++static gboolean fit_dialpad (gpointer user_data);
++static void page_size_changed_cb (CallsNewCallBox *self);
++
+ 
+ static CallsOrigin *
+ get_selected_origin (CallsNewCallBox *self)
+@@ -351,6 +362,10 @@ origin_count_changed_cb (CallsNewCallBox *self)
+ 
+   select_remembered_origin (self);
+ 
++  /* The SIM selection came or went: the dial pad has more or less room */
++  if (self->dialpad_width > 0 && !self->fit_dialpad_id)
++    self->fit_dialpad_id = g_idle_add (fit_dialpad, self);
++
+   if (n_items)
+     dial_queued (self);
+ 
+@@ -393,6 +408,12 @@ calls_new_call_box_init (CallsNewCallBox *self)
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
+   self->settings = g_settings_new ("org.gnome.Calls");
++  /* Scope for the dial pad's size (fit_dialpad), not the keypad during a call */
++  gtk_widget_add_css_class (GTK_WIDGET (self), "plinius-dialpad");
++  g_signal_connect_object (gtk_scrolled_window_get_hadjustment (self->scroll), "notify::page-size",
++                           G_CALLBACK (page_size_changed_cb), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (gtk_scrolled_window_get_vadjustment (self->scroll), "notify::page-size",
++                           G_CALLBACK (page_size_changed_cb), self, G_CONNECT_SWAPPED);
+ 
+   origins = calls_manager_get_origins (calls_manager_get_default ());
+   adw_combo_row_set_model (self->origin_list, origins);
+@@ -414,6 +435,102 @@ calls_new_call_box_init (CallsNewCallBox *self)
+ }
+ 
+ 
++/*
++ * The dial pad grows with the page, as the lock screen's keypad does: at a
++ * lower scale it filled only part of the width. Buttons between their size
++ * from the stylesheet and DIALPAD_BUTTON_MAX, digits, letters and the dial
++ * button growing along.
++ */
++#define DIALPAD_BUTTON_MIN    72   /* About the stylesheet's size: 32 px digit, padding, letters */
++#define DIALPAD_BUTTON_MAX    84
++/* Share of the room the buttons take: the full room made them look too big */
++#define DIALPAD_ROOM_SHARE    0.7
++/* Margins left and right: this page's and the dial pad's own (24 px each) */
++#define DIALPAD_SIDE_ROOM     (2 * 24 + 2 * 24)
++#define DIALPAD_COLUMN_GAP    16   /* column-spacing in cui-dialpad.ui */
++#define DIALPAD_ROW_GAP       10   /* row-spacing in cui-dialpad.ui */
++/* Number entry, margins and spacing above and below the keys; the dial button comes on top */
++#define DIALPAD_EXTRA_HEIGHT  170
++#define DIALPAD_DIAL_HEIGHT   70   /* The dial button at the minimum size */
++
++static gboolean
++fit_dialpad (gpointer user_data)
++{
++  CallsNewCallBox *self = CALLS_NEW_CALL_BOX (user_data);
++  int width = self->dialpad_width;
++  int height = self->dialpad_height;
++  int by_width, by_height, button;
++  double grow;
++  g_autofree char *css = NULL;
++
++  self->fit_dialpad_id = 0;
++
++  if (width <= 0 || height <= 0)
++    return G_SOURCE_REMOVE;
++
++  /* The SIM selection takes room above the dial pad when it shows */
++  if (gtk_widget_get_visible (GTK_WIDGET (self->origin_list_box)))
++    height -= gtk_widget_get_height (GTK_WIDGET (self->origin_list_box));
++
++  by_width = (width - DIALPAD_SIDE_ROOM - 2 * DIALPAD_COLUMN_GAP) / 3;
++  /* Four rows of keys and the dial button, which grows with them */
++  by_height = (height - DIALPAD_EXTRA_HEIGHT - 3 * DIALPAD_ROW_GAP) /
++    (4.0 + (double) DIALPAD_DIAL_HEIGHT / DIALPAD_BUTTON_MIN);
++  button = CLAMP (MIN (by_width, by_height) * DIALPAD_ROOM_SHARE,
++                  DIALPAD_BUTTON_MIN, DIALPAD_BUTTON_MAX);
++
++  if (button == self->dialpad_button)
++    return G_SOURCE_REMOVE;
++  self->dialpad_button = button;
++
++  grow = (double) button / DIALPAD_BUTTON_MIN;
++  /* Digit (200 %) and letters (70 %) are relative to the button's font */
++  css = g_strdup_printf (".plinius-dialpad cui-keypad > grid > button {"
++                         "  min-width: %dpx; min-height: %dpx; padding: 0; font-size: %d%%; }"
++                         " .plinius-dialpad cui-dialpad .dial-button {"
++                         "  padding: %dpx %dpx; }"
++                         " .plinius-dialpad cui-dialpad .dial-button image {"
++                         "  -gtk-icon-size: %dpx; }"
++                         " .plinius-dialpad cui-dialpad .delete-button image {"
++                         "  -gtk-icon-size: %dpx; }",
++                         button, button, (int) (100 * grow),
++                         (int) (19 * grow), (int) (42 * grow),
++                         (int) (32 * grow),
++                         (int) (16 * grow));
++  g_debug ("Dial pad buttons %d px for %d x %d", button, width, height);
++
++  if (!self->dialpad_css) {
++    self->dialpad_css = gtk_css_provider_new ();
++    gtk_style_context_add_provider_for_display (gtk_widget_get_display (GTK_WIDGET (self)),
++                                                GTK_STYLE_PROVIDER (self->dialpad_css),
++                                                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
++  }
++  gtk_css_provider_load_from_string (self->dialpad_css, css);
++
++  return G_SOURCE_REMOVE;
++}
++
++
++/* The scrolled window's page size is the room the page has; it changes with the window */
++static void
++page_size_changed_cb (CallsNewCallBox *self)
++{
++  GtkAdjustment *hadj = gtk_scrolled_window_get_hadjustment (self->scroll);
++  GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment (self->scroll);
++  int width = gtk_adjustment_get_page_size (hadj);
++  int height = gtk_adjustment_get_page_size (vadj);
++
++  if (width == self->dialpad_width && height == self->dialpad_height)
++    return;
++
++  self->dialpad_width = width;
++  self->dialpad_height = height;
++  /* Not while allocating: the new style sizes the dial pad in the next frame */
++  if (!self->fit_dialpad_id)
++    self->fit_dialpad_id = g_idle_add (fit_dialpad, self);
++}
++
++
+ static void
+ calls_new_call_box_dispose (GObject *object)
+ {
+@@ -423,6 +540,12 @@ calls_new_call_box_dispose (GObject *object)
+ 
+   clear_dial_queue (self);
+   g_clear_object (&self->settings);
++  g_clear_handle_id (&self->fit_dialpad_id, g_source_remove);
++  if (self->dialpad_css) {
++    gtk_style_context_remove_provider_for_display (gtk_widget_get_display (GTK_WIDGET (self)),
++                                                   GTK_STYLE_PROVIDER (self->dialpad_css));
++    g_clear_object (&self->dialpad_css);
++  }
+ 
+   g_clear_pointer (&child, gtk_widget_unparent);
+ 
+@@ -441,6 +564,7 @@ calls_new_call_box_class_init (CallsNewCallBoxClass *klass)
+ 
+   gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/Calls/ui/new-call-box.ui");
+   gtk_widget_class_bind_template_child (widget_class, CallsNewCallBox, child);
++  gtk_widget_class_bind_template_child (widget_class, CallsNewCallBox, scroll);
+   gtk_widget_class_bind_template_child (widget_class, CallsNewCallBox, origin_list_box);
+   gtk_widget_class_bind_template_child (widget_class, CallsNewCallBox, origin_list);
+   gtk_widget_class_bind_template_child (widget_class, CallsNewCallBox, dialpad);
+diff --git a/src/ui/new-call-box.ui b/src/ui/new-call-box.ui
+index 1a2b2f6..984d2d1 100644
+--- a/src/ui/new-call-box.ui
++++ b/src/ui/new-call-box.ui
+@@ -2,7 +2,7 @@
+ <interface>
+   <template class="CallsNewCallBox" parent="AdwBin">
+     <child>
+-      <object class="GtkScrolledWindow">
++      <object class="GtkScrolledWindow" id="scroll">
+         <property name="hexpand">True</property>
+         <property name="vexpand">True</property>
+         <property name="child">
+@@ -11,6 +11,9 @@
+             <property name="margin-start">24</property>
+             <property name="margin-end">24</property>
+             <property name="margin_top">6</property>
++            <property name="margin_bottom">6</property>
++            <!-- Plinius: the dial pad in the middle of the page, not at its top -->
++            <property name="valign">center</property>
+             <property name="orientation">vertical</property>
+             <child>
+               <object class="AdwClamp">
+-- 
+2.56.0
+

@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:03:34 +0100
+Subject: [PATCH] layersurface: Know the output while subclasses are
+ constructed
+
+wl-output was a plain property, so GObject set it only after
+constructed() had run. The lock screen asks for its output there to put
+its background on the same one, got NULL and created the background
+without an output. The compositor then picks one itself: with a second
+screen and the pointer on it, the background landed there, stacking it
+below the lock screen failed with "Layer surface not on same output"
+and phoc dropped phosh, again on every restart since phosh starts
+locked. As a construct property the output is set before constructed().
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/layersurface.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/layersurface.c b/src/layersurface.c
+index e33cbd22..543990cb 100644
+--- a/src/layersurface.c
++++ b/src/layersurface.c
+@@ -478,7 +478,7 @@ phosh_layer_surface_class_init (PhoshLayerSurfaceClass *klass)
+    */
+   props[PROP_WL_OUTPUT] =
+     g_param_spec_pointer ("wl-output", "", "",
+-                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
++                          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS);
+   /**
+    * PhoshLayerSurface:anchor:
+    *

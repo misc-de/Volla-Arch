@@ -1,0 +1,4 @@
+# Halium overlay: camera_service stays off, media.camera comes from minimediaservice (tested
+# 2026-11-05). What the original file does besides the service stays.
+on boot
+    exec - root -- /system/bin/micshm.sh

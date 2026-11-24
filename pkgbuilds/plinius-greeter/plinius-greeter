@@ -1,0 +1,869 @@
+#!/usr/bin/python3 -I
+"""plinius-greeter: the account picker in front of Phosh.
+
+greetd shows it (default_session, as the user greeter, in phoc) when the phone has more than one
+login account, and whenever no session runs, each account with its picture and username (not
+the full name). A tap on an account hands its name to root
+(/run/plinius-greeter/request, read by plinius-greeter-login.service); greetd then starts that
+account's Phosh, which locks itself at once. The greeter itself asks for no password: PIN or
+pattern, the waiting after wrong PINs and the biometrics stay those of Phosh's lock screen.
+
+The rest is what a phone needs before anyone logs in: the time, a power button (restart, power
+off) and a dark screen after a while without a touch, the power key turns it on and off.
+
+The first start: an account without a password yet (/run/plinius-login/first-start, written by
+plinius-greeter-config) gets no tiles but one question, a PIN or a password. That is what the lock
+screen, Settings and every other question for the password ask from then on. A PIN is typed on
+the greeter's own keypad, a password with the on-screen keyboard (Stevia, started for it). The
+greeter hands it to root in its own directory (/run/plinius-greeter/password); root sets it and
+logs the account in, or says why not (/run/plinius-login/password-result).
+
+For screenshots without a phone: PLINIUS_GREETER_TEST=1 writes no request, and
+PLINIUS_GREETER_USERS="name,..." with PLINIUS_GREETER_LAST=name replaces the
+accounts (never use real accounts for pictures), PLINIUS_GREETER_FIRST=name shows the first start.
+
+SPDX-License-Identifier: MIT
+"""
+
+import gettext
+import json
+import locale
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, "/usr/lib/plinius-greeter")
+sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))  # next to the script in the repo
+import plinius_greeter_accounts as accounts  # noqa: E402
+
+import gi  # noqa: E402
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+
+try:
+    gi.require_version("AccountsService", "1.0")
+    from gi.repository import AccountsService  # noqa: E402
+except (ValueError, ImportError):
+    AccountsService = None
+
+REQUEST_DIR = "/run/plinius-greeter"
+FIRST_START = "/run/plinius-login/first-start"
+PASSWORD_RESULT = "/run/plinius-login/password-result"
+KEYBOARD = "/usr/bin/phosh-osk-stevia"
+# How long root may take: the check against the encryption alone takes some seconds (argon2)
+PASSWORD_TIMEOUT_SECONDS = 60
+PIN_DIGITS = (4, 12)
+PASSWORD_LENGTH = (6, 128)
+LAST_USER = "/var/lib/plinius-greeter/last-user"
+ICON_DIR = "/var/lib/AccountsService/icons"
+TEST = os.environ.get("PLINIUS_GREETER_TEST") == "1"
+# Dark after this long without a touch; the session has this long to take over
+IDLE_SECONDS = 30
+START_TIMEOUT_SECONDS = 25
+POWER_KEY_LONG_MS = 800
+ACCENT = "#1793d1"  # Arch blue, the phone's default accent (device-volla-ansuz)
+
+CSS = f"""
+:root {{
+  --accent-bg-color: {ACCENT};
+  --accent-color: #5cb8e6;
+}}
+window.greeter {{
+  background-color: #050a14;
+  border-radius: 0;
+}}
+.greeter-bg {{
+  background-image:
+    radial-gradient(circle farthest-side at 15% 0%, alpha({ACCENT}, 0.55), transparent),
+    radial-gradient(circle farthest-side at 100% 85%, alpha(#6d28d9, 0.32), transparent),
+    linear-gradient(to bottom, #0d1830, #03060d);
+}}
+.clock {{
+  color: white;
+  font-size: 76px;
+  font-weight: 200;
+  font-feature-settings: "tnum";
+  letter-spacing: -1px;
+}}
+.date {{
+  color: alpha(white, 0.78);
+  font-size: 17px;
+  font-weight: 500;
+}}
+.greeter-title {{
+  color: white;
+  font-size: 21px;
+  font-weight: 700;
+}}
+.greeter-subtitle {{
+  color: alpha(white, 0.62);
+  font-size: 15px;
+}}
+button.user-tile {{
+  color: white;
+  background-color: alpha(white, 0.07);
+  border: 1px solid alpha(white, 0.10);
+  border-radius: 30px;
+  padding: 20px 10px 16px 10px;
+  min-width: 136px;
+  min-height: 0;
+  transition: background-color 180ms ease-out, opacity 250ms ease-out, border-color 180ms ease-out;
+}}
+button.user-tile:hover {{
+  background-color: alpha(white, 0.11);
+}}
+button.user-tile:active {{
+  background-color: alpha(white, 0.17);
+}}
+button.user-tile.chosen {{
+  background-color: alpha({ACCENT}, 0.28);
+  border-color: alpha({ACCENT}, 0.75);
+}}
+button.user-tile.dimmed {{
+  opacity: 0.22;
+}}
+.avatar-ring {{
+  border-radius: 9999px;
+  padding: 4px;
+  border: 3px solid alpha(white, 0.14);
+}}
+.last .avatar-ring {{
+  border-color: {ACCENT};
+}}
+.user-name {{
+  font-size: 17px;
+  font-weight: 700;
+}}
+.status {{
+  color: alpha(white, 0.85);
+  font-size: 15px;
+}}
+.status.error {{
+  color: #ff9b8f;
+}}
+button.power {{
+  color: white;
+  background-color: alpha(white, 0.10);
+  border-radius: 9999px;
+  min-width: 58px;
+  min-height: 58px;
+  padding: 0;
+}}
+button.power:active {{
+  background-color: alpha(white, 0.20);
+}}
+.blank {{
+  background-color: black;
+}}
+.pin-dots {{
+  color: white;
+  font-size: 30px;
+  letter-spacing: 8px;
+  min-height: 44px;
+}}
+button.key {{
+  color: white;
+  background-color: alpha(white, 0.08);
+  border-radius: 9999px;
+  min-width: 72px;
+  min-height: 72px;
+  font-size: 26px;
+  font-weight: 300;
+}}
+button.key:active {{
+  background-color: alpha(white, 0.20);
+}}
+"""
+
+
+def setup_locale():
+    """greetd starts the greeter without LANG: take the system's (as the other screens before login)."""
+    if not os.environ.get("LANG"):
+        try:
+            with open("/etc/locale.conf", encoding="utf-8") as f:
+                for line in f:
+                    key, _, value = line.strip().partition("=")
+                    if key.startswith("LANG") or key.startswith("LC_"):
+                        os.environ.setdefault(key, value.strip().strip('"'))
+        except OSError:
+            pass
+    try:
+        locale.setlocale(locale.LC_ALL, "")
+    except locale.Error:
+        locale.setlocale(locale.LC_ALL, "C.UTF-8")
+    gettext.bindtextdomain("plinius-greeter", "/usr/share/locale")
+    gettext.textdomain("plinius-greeter")
+
+
+_ = gettext.gettext
+
+
+class Account:
+    """An account as the greeter shows it: its picture and its username, never the full name."""
+
+    def __init__(self, name, icon=None):
+        self.name = name
+        self.icon = icon
+
+
+def read_last_user():
+    if TEST:
+        return os.environ.get("PLINIUS_GREETER_LAST", "")
+    try:
+        with open(LAST_USER, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def base_accounts():
+    if TEST and os.environ.get("PLINIUS_GREETER_USERS"):
+        result = []
+        for item in os.environ["PLINIUS_GREETER_USERS"].split(","):
+            result.append(Account(item.partition(":")[0].strip()))
+        return result
+    result = []
+    for entry in accounts.login_users():
+        icon = os.path.join(ICON_DIR, entry.pw_name)
+        result.append(Account(entry.pw_name, icon if os.path.isfile(icon) else None))
+    return result
+
+
+def ordered(account_list, last):
+    """The account used last first, the others by name."""
+    rest = sorted((a for a in account_list if a.name != last), key=lambda a: a.name)
+    first = [a for a in account_list if a.name == last]
+    return first + rest
+
+
+def read_first_start():
+    """The account that has no password yet, or ""."""
+    if TEST:
+        return os.environ.get("PLINIUS_GREETER_FIRST", "")
+    try:
+        with open(FIRST_START, encoding="utf-8") as f:
+            return f.read(256).strip()
+    except OSError:
+        return ""
+
+
+def secret_problem(kind, secret, again):
+    """Why the first PIN or password cannot be used, or "" (root checks the same, plinius-greeter-config)."""
+    if kind == "pin":
+        if not secret.isascii() or not secret.isdigit() or not PIN_DIGITS[0] <= len(secret) <= PIN_DIGITS[1]:
+            return _("A PIN has 4 to 12 digits.")
+        if secret != again:
+            return _("The PINs do not match. Please enter it again.")
+        return ""
+    if not PASSWORD_LENGTH[0] <= len(secret) <= PASSWORD_LENGTH[1] or any(ord(c) < 0x20 or ord(c) == 0x7F
+                                                                         for c in secret):
+        return _("A password has at least 6 characters.")
+    if secret.isascii() and secret.isdigit():
+        return _("A password of digits only is a PIN: choose PIN above.")
+    if secret != again:
+        return _("The passwords do not match. Please enter them again.")
+    return ""
+
+
+def time_format():
+    try:
+        t_fmt = locale.nl_langinfo(locale.T_FMT)
+    except (AttributeError, ValueError):
+        t_fmt = "%H:%M:%S"
+    return "%-l:%M" if ("%p" in t_fmt or "%I" in t_fmt or "%r" in t_fmt) else "%H:%M"
+
+
+class Greeter(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Plinius")
+        self.add_css_class("greeter")
+        self.accounts = []
+        self.last = read_last_user()
+        self.tiles = {}
+        self.choosing = None
+        self.failed = False
+        self.start_timeout = 0
+        self.idle_timeout = 0
+        self.blanked = False
+        self.saved_brightness = None
+        self.power_key_timeout = 0
+        self.power_key_long = False
+        self.time_format = time_format()
+        # The first start (see the module's text): the account, PIN or password, the PIN typed so far
+        # and the first of its two entries
+        self.first = read_first_start()
+        self.kind = "pin"
+        self.digits = ""
+        self.first_pin = None
+        self.result_before = None
+        self.password_timeout = 0
+        self.keyboard = None
+
+        overlay = Gtk.Overlay()
+        background = Gtk.Box()
+        background.add_css_class("greeter-bg")
+        overlay.set_child(background)
+
+        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        column.set_margin_start(24)
+        column.set_margin_end(24)
+        column.set_margin_top(64)
+        column.set_margin_bottom(40)
+        overlay.add_overlay(column)
+
+        self.clock = Gtk.Label(css_classes=["clock"])
+        self.date = Gtk.Label(css_classes=["date"])
+        column.append(self.clock)
+        column.append(self.date)
+
+        column.append(Gtk.Box(vexpand=True))
+
+        self.title = Gtk.Label(label=_("Who is using the phone?"), css_classes=["greeter-title"],
+                               wrap=True, justify=Gtk.Justification.CENTER)
+        self.subtitle = Gtk.Label(label=_("Tap your account, then unlock it as usual."),
+                                  css_classes=["greeter-subtitle"], wrap=True, justify=Gtk.Justification.CENTER)
+        self.subtitle.set_margin_top(6)
+        self.subtitle.set_margin_bottom(24)
+        column.append(self.title)
+        column.append(self.subtitle)
+
+        # Rows of two tiles; a single one in the last row stays in the middle
+        self.rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, halign=Gtk.Align.CENTER)
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_height=True,
+                                      max_content_height=560, child=self.rows)
+        column.append(scroller)
+        self.first_box = self.make_first_start()
+        self.first_box.set_visible(bool(self.first))
+        column.append(self.first_box)
+
+        self.status = Gtk.Box(spacing=10, halign=Gtk.Align.CENTER)
+        self.status.set_margin_top(22)
+        self.spinner = Adw.Spinner(width_request=20, height_request=20)
+        self.status_label = Gtk.Label(css_classes=["status"], wrap=True, justify=Gtk.Justification.CENTER)
+        self.status.append(self.spinner)
+        self.status.append(self.status_label)
+        self.status.set_opacity(0)
+        column.append(self.status)
+
+        column.append(Gtk.Box(vexpand=True))
+
+        power = Gtk.Button(icon_name="system-shutdown-symbolic", halign=Gtk.Align.CENTER,
+                           css_classes=["power"], tooltip_text=_("Power"))
+        power.update_property([Gtk.AccessibleProperty.LABEL], [_("Power")])
+        power.connect("clicked", lambda _b: self.ask_power())
+        column.append(power)
+
+        self.blank = Gtk.Box(css_classes=["blank"], visible=False, can_target=True)
+        tap = Gtk.GestureClick()
+        tap.connect("released", lambda *_a: self.wake())
+        self.blank.add_controller(tap)
+        overlay.add_overlay(self.blank)
+
+        self.set_content(overlay)
+
+        anything = Gtk.EventControllerLegacy()
+        anything.connect("event", self.on_any_event)
+        self.add_controller(anything)
+        keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_key_pressed)
+        keys.connect("key-released", self.on_key_released)
+        self.add_controller(keys)
+
+        self.update_clock()
+        GLib.timeout_add_seconds(1, self.update_clock)
+        self.load_accounts()
+        self.restart_idle()
+
+    # ----- accounts -----
+
+    def load_accounts(self):
+        self.accounts = base_accounts()
+        self.fill()
+        if AccountsService is None or TEST:
+            return
+        # AccountsService knows the pictures and the locked accounts; it can come late or not at all
+        manager = AccountsService.UserManager.get_default()
+        if manager.props.is_loaded:
+            self.from_accounts_service(manager)
+        else:
+            manager.connect("notify::is-loaded", lambda m, _p: self.from_accounts_service(m))
+
+    def from_accounts_service(self, manager):
+        if not manager.props.is_loaded or manager.no_service():
+            return
+        known = {u.get_user_name(): u for u in manager.list_users()}
+        result = []
+        for account in self.accounts:
+            user = known.get(account.name)
+            if user is not None and user.is_loaded():
+                if user.get_locked():
+                    continue
+                icon = user.get_icon_file()
+                if icon and os.path.isfile(icon):
+                    account.icon = icon
+            result.append(account)
+        self.accounts = result
+        self.fill()
+
+    def fill(self):
+        if self.choosing:
+            return
+        if self.first:
+            # One question instead of the accounts: nothing to pick, nothing logged in by itself
+            self.title.set_label(_("Protect your phone"))
+            self.subtitle.set_label(_("Choose how to unlock it. Settings and every other question for the password "
+                                      "ask for the same."))
+            return
+        while (child := self.rows.get_first_child()) is not None:
+            self.rows.remove(child)
+        self.tiles = {}
+        account_list = ordered(self.accounts, self.last)
+        # A single account to offer (the others locked) is no choice: log it in without showing it.
+        # Only once: after a failed start its tile shows, to try again by hand.
+        single = len(account_list) == 1 and not self.failed
+        self.title.set_visible(not single)
+        self.subtitle.set_visible(not single)
+        if single:
+            GLib.idle_add(self.choose, account_list[0])
+            return
+        row = None
+        for i, account in enumerate(account_list):
+            if i % 2 == 0:
+                row = Gtk.Box(spacing=16, halign=Gtk.Align.CENTER, homogeneous=True)
+                self.rows.append(row)
+            tile = self.make_tile(account, account.name == self.last and len(account_list) > 1)
+            self.tiles[account.name] = tile
+            row.append(tile)
+
+    def make_tile(self, account, last):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        ring = Gtk.Box(halign=Gtk.Align.CENTER, css_classes=["avatar-ring"])
+        avatar = Adw.Avatar(size=88, text=account.name, show_initials=True)
+        if account.icon:
+            try:
+                avatar.set_custom_image(Gdk.Texture.new_from_filename(account.icon))
+            except GLib.Error:
+                pass
+        ring.append(avatar)
+        box.append(ring)
+        name = Gtk.Label(label=account.name, css_classes=["user-name"], ellipsize=Pango.EllipsizeMode.END,
+                         max_width_chars=12)
+        box.append(name)
+
+        button = Gtk.Button(child=box, css_classes=["user-tile"], width_request=156)
+        if last:
+            button.add_css_class("last")
+        button.update_property([Gtk.AccessibleProperty.LABEL], [account.name])
+        button.connect("clicked", lambda _b: self.choose(account))
+        return button
+
+    # ----- the first start -----
+
+    def make_first_start(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, halign=Gtk.Align.CENTER)
+        kinds = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER, css_classes=["linked"])
+        self.pin_button = Gtk.ToggleButton(label=_("PIN"), active=True)
+        self.password_button = Gtk.ToggleButton(label=_("Password"), group=self.pin_button)
+        self.pin_button.connect("toggled", lambda b: b.get_active() and self.set_kind("pin"))
+        self.password_button.connect("toggled", lambda b: b.get_active() and self.set_kind("password"))
+        kinds.append(self.pin_button)
+        kinds.append(self.password_button)
+        box.append(kinds)
+        self.first_prompt = Gtk.Label(css_classes=["greeter-subtitle"], wrap=True, justify=Gtk.Justification.CENTER)
+        box.append(self.first_prompt)
+
+        # The PIN: dots and the keypad
+        self.pin_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, halign=Gtk.Align.CENTER)
+        self.dots = Gtk.Label(css_classes=["pin-dots"])
+        self.pin_box.append(self.dots)
+        keypad = Gtk.Grid(row_spacing=12, column_spacing=18, halign=Gtk.Align.CENTER)
+        keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "back", "0", "next"]
+        self.keys = {}
+        for i, key in enumerate(keys):
+            if key == "back":
+                button = Gtk.Button(icon_name="edit-clear-symbolic", css_classes=["key"])
+                button.update_property([Gtk.AccessibleProperty.LABEL], [_("Delete")])
+            elif key == "next":
+                button = Gtk.Button(icon_name="go-next-symbolic", css_classes=["key", "suggested-action"])
+                button.update_property([Gtk.AccessibleProperty.LABEL], [_("Continue")])
+            else:
+                button = Gtk.Button(label=key, css_classes=["key"])
+            button.connect("clicked", lambda _b, k=key: self.on_key(k))
+            self.keys[key] = button
+            keypad.attach(button, i % 3, i // 3, 1, 1)
+        self.pin_box.append(keypad)
+        box.append(self.pin_box)
+
+        # The password: two fields and the on-screen keyboard
+        self.password_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, visible=False, width_request=300)
+        self.secret = Gtk.PasswordEntry(show_peek_icon=True, placeholder_text=_("Password"))
+        self.again = Gtk.PasswordEntry(show_peek_icon=True, placeholder_text=_("Repeat password"))
+        self.again.connect("activate", lambda _e: self.submit_password())
+        self.secret.connect("activate", lambda _e: self.again.grab_focus())
+        self.password_box.append(self.secret)
+        self.password_box.append(self.again)
+        self.password_next = Gtk.Button(label=_("Continue"), css_classes=["suggested-action", "pill"],
+                                        halign=Gtk.Align.CENTER)
+        self.password_next.connect("clicked", lambda _b: self.submit_password())
+        self.password_box.append(self.password_next)
+        box.append(self.password_box)
+        self.update_first_prompt()
+        return box
+
+    def set_kind(self, kind):
+        if self.kind == kind:
+            return
+        self.kind, self.digits, self.first_pin = kind, "", None
+        self.pin_box.set_visible(kind == "pin")
+        self.password_box.set_visible(kind == "password")
+        self.update_first_prompt()
+        if kind == "password":
+            self.start_keyboard()
+            self.secret.grab_focus()
+
+    def update_first_prompt(self):
+        if self.kind == "pin":
+            self.first_prompt.set_label(_("Repeat the PIN.") if self.first_pin is not None
+                                        else _("Choose a PIN of 4 to 12 digits."))
+            self.dots.set_label("●" * len(self.digits))
+        else:
+            self.first_prompt.set_label(_("Choose a password of at least 6 characters."))
+
+    def on_key(self, key):
+        if self.password_timeout:
+            return
+        if key == "back":
+            self.digits = self.digits[:-1]
+        elif key == "next":
+            self.next_pin()
+            return
+        elif len(self.digits) < PIN_DIGITS[1]:
+            self.digits += key
+        self.update_first_prompt()
+
+    def next_pin(self):
+        if self.first_pin is None:
+            problem = secret_problem("pin", self.digits, self.digits)
+            if problem:
+                self.show_status(problem, error=True)
+                return
+            self.first_pin, self.digits = self.digits, ""
+            self.status.set_opacity(0)
+            self.update_first_prompt()
+            return
+        problem = secret_problem("pin", self.first_pin, self.digits)
+        if problem:
+            self.first_pin, self.digits = None, ""
+            self.update_first_prompt()
+            self.show_status(problem, error=True)
+            return
+        self.submit(self.first_pin)
+
+    def submit_password(self):
+        if self.password_timeout:
+            return
+        secret, again = self.secret.get_text(), self.again.get_text()
+        problem = secret_problem("password", secret, again)
+        if problem:
+            self.show_status(problem, error=True)
+            return
+        self.submit(secret)
+
+    def start_keyboard(self):
+        """Stevia for the password: greetd's session has no Phosh to start it. GSettings of its own, with the
+        keyboard turned on (the greeter's are in memory only)."""
+        if self.keyboard is not None or TEST or not os.access(KEYBOARD, os.X_OK):
+            return
+        config = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "plinius-greeter-keyboard")
+        try:
+            os.makedirs(os.path.join(config, "glib-2.0/settings"), mode=0o700, exist_ok=True)
+            with open(os.path.join(config, "glib-2.0/settings/keyfile"), "w", encoding="utf-8") as f:
+                f.write("[org/gnome/desktop/a11y/applications]\nscreen-keyboard-enabled=true\n")
+            # XDG_SESSION_CLASS: Stevia offers no settings in a greeter (stevia-plinius 0014)
+            env = dict(os.environ, GSETTINGS_BACKEND="keyfile", XDG_CONFIG_HOME=config,
+                       XDG_SESSION_CLASS="greeter")
+            self.keyboard = subprocess.Popen([KEYBOARD], env=env, stdin=subprocess.DEVNULL)
+        except OSError as e:
+            print(f"plinius-greeter: on-screen keyboard: {e}", file=sys.stderr)
+
+    def result_stamp(self):
+        try:
+            st = os.stat(PASSWORD_RESULT)
+            return st.st_mtime_ns, st.st_ino
+        except OSError:
+            return None
+
+    def submit(self, secret):
+        """Hands the PIN or password to root (plinius-greeter-config password) and waits for its answer."""
+        self.result_before = self.result_stamp()
+        try:
+            if TEST:
+                print(f"plinius-greeter: first {self.kind} for {self.first}", flush=True)
+            else:
+                tmp = os.path.join(REQUEST_DIR, "password.tmp")
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    json.dump({"user": self.first, "secret": secret}, f)
+                os.replace(tmp, os.path.join(REQUEST_DIR, "password"))
+        except OSError as e:
+            print(f"plinius-greeter: cannot hand over the password: {e}", file=sys.stderr)
+            self.password_failed(_("The password could not be set. Please try again."))
+            return
+        self.first_box.set_sensitive(False)
+        self.show_status(_("Setting it up…"), busy=True)
+        self.waited = 0
+        self.password_timeout = GLib.timeout_add(500, self.check_result)
+
+    def check_result(self):
+        self.waited += 500
+        stamp = self.result_stamp()
+        if stamp is None or stamp == self.result_before:
+            if self.waited >= PASSWORD_TIMEOUT_SECONDS * 1000:
+                self.password_timeout = 0
+                self.password_failed(_("The password could not be set. Please try again."))
+                return GLib.SOURCE_REMOVE
+            return GLib.SOURCE_CONTINUE
+        self.password_timeout = 0
+        try:
+            with open(PASSWORD_RESULT, encoding="utf-8") as f:
+                result = f.read(64).strip()
+        except OSError:
+            result = "failed"
+        if result == "ok":
+            # Root logs the account in now; as after a tap, try again should it not start
+            self.choosing = Account(self.first)
+            self.show_status(_("Starting…"), busy=True)
+            self.start_timeout = GLib.timeout_add_seconds(START_TIMEOUT_SECONDS, self.fail)
+        elif result == "same":
+            self.password_failed(_("That is the password of the encryption. Choose another one: it is typed in "
+                                   "view of others many times a day."))
+        elif result == "invalid":
+            self.password_failed(_("That cannot be used. A PIN has 4 to 12 digits, a password at least 6 characters."))
+        else:
+            self.password_failed(_("The password could not be set. Please try again."))
+        return GLib.SOURCE_REMOVE
+
+    def password_failed(self, text):
+        self.first_box.set_sensitive(True)
+        self.digits, self.first_pin = "", None
+        self.secret.set_text("")
+        self.again.set_text("")
+        self.update_first_prompt()
+        self.show_status(text, error=True)
+
+    # ----- logging in -----
+
+    def choose(self, account):
+        if self.choosing:
+            return GLib.SOURCE_REMOVE
+        self.choosing = account
+        for name, tile in self.tiles.items():
+            tile.set_can_target(False)
+            tile.add_css_class("chosen" if name == account.name else "dimmed")
+        self.show_status(_("Starting…"), busy=True)
+        try:
+            self.write_request(account.name)
+        except OSError as e:
+            print(f"plinius-greeter: cannot hand over {account.name}: {e}", file=sys.stderr)
+            self.fail()
+            return GLib.SOURCE_REMOVE
+        # greetd ends this session once the account's session starts; if it does not, try again
+        self.start_timeout = GLib.timeout_add_seconds(START_TIMEOUT_SECONDS, self.fail)
+        return GLib.SOURCE_REMOVE
+
+    def write_request(self, name):
+        if TEST:
+            print(f"plinius-greeter: request {name}", flush=True)
+            return
+        tmp = os.path.join(REQUEST_DIR, "request.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(name + "\n")
+        os.replace(tmp, os.path.join(REQUEST_DIR, "request"))
+
+    def fail(self):
+        self.start_timeout = 0
+        self.choosing = None
+        self.failed = True
+        # The password is set by now (root removed first-start): the account is a tile from here on
+        self.first = read_first_start()
+        self.first_box.set_visible(bool(self.first))
+        self.first_box.set_sensitive(True)
+        self.title.set_label(_("Who is using the phone?"))
+        self.subtitle.set_label(_("Tap your account, then unlock it as usual."))
+        self.fill()
+        self.show_status(_("The phone could not start this account. Please try again."), error=True)
+        # The idle timer may have run out while the account started (on_idle leaves the screen on
+        # then): dark again after IDLE_SECONDS without a touch
+        if not self.blanked:
+            self.restart_idle()
+        return GLib.SOURCE_REMOVE
+
+    def show_status(self, text, busy=False, error=False):
+        self.status_label.set_label(text)
+        self.spinner.set_visible(busy)
+        if error:
+            self.status_label.add_css_class("error")
+        else:
+            self.status_label.remove_css_class("error")
+        self.status.set_opacity(1)
+
+    # ----- clock -----
+
+    def update_clock(self):
+        now = GLib.DateTime.new_now_local()
+        self.clock.set_label(now.format(self.time_format).strip())
+        # Translators: the date below the clock (GLib's strftime codes), e.g. "%A, %-d. %B" in German
+        self.date.set_label(now.format(_("%A, %B %-d")))
+        return GLib.SOURCE_CONTINUE
+
+    # ----- power -----
+
+    def ask_power(self):
+        dialog = Adw.AlertDialog(heading=_("Power"), body=_("Restart the phone or power it off?"))
+        dialog.add_response("cancel", _("_Cancel"))
+        dialog.add_response("restart", _("_Restart"))
+        dialog.add_response("off", _("_Power Off"))
+        dialog.set_response_appearance("off", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self.on_power_response)
+        dialog.present(self)
+
+    def on_power_response(self, _dialog, response):
+        method = {"restart": "Reboot", "off": "PowerOff"}.get(response)
+        if not method:
+            return
+        if TEST:
+            print(f"plinius-greeter: {method}", flush=True)
+            return
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+        bus.call("org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
+                 method, GLib.Variant("(b)", (False,)), None, Gio.DBusCallFlags.NONE, -1, None, None)
+
+    # ----- dark screen -----
+
+    def on_any_event(self, _controller, _event):
+        if not self.blanked:
+            self.restart_idle()
+        return False
+
+    def restart_idle(self):
+        if self.idle_timeout:
+            GLib.source_remove(self.idle_timeout)
+        self.idle_timeout = GLib.timeout_add_seconds(IDLE_SECONDS, self.on_idle)
+
+    def on_idle(self):
+        self.idle_timeout = 0
+        if not self.choosing:
+            self.blank_screen()
+        return GLib.SOURCE_REMOVE
+
+    def blank_screen(self):
+        if self.blanked:
+            return
+        self.blanked = True
+        self.blank.set_visible(True)
+        self.saved_brightness = set_backlight(0)
+
+    def wake(self):
+        if not self.blanked:
+            return
+        self.blanked = False
+        self.blank.set_visible(False)
+        if self.saved_brightness is not None:
+            set_backlight(self.saved_brightness)
+            self.saved_brightness = None
+        self.restart_idle()
+
+    def on_key_pressed(self, _controller, keyval, _keycode, _state):
+        if keyval != Gdk.KEY_PowerOff:
+            return False
+        if not self.power_key_timeout:
+            self.power_key_long = False
+            self.power_key_timeout = GLib.timeout_add(POWER_KEY_LONG_MS, self.on_power_key_long)
+        return True
+
+    def on_power_key_long(self):
+        self.power_key_timeout = 0
+        self.power_key_long = True
+        self.wake()
+        self.ask_power()
+        return GLib.SOURCE_REMOVE
+
+    def on_key_released(self, _controller, keyval, _keycode, _state):
+        if keyval != Gdk.KEY_PowerOff:
+            return
+        if self.power_key_timeout:
+            GLib.source_remove(self.power_key_timeout)
+            self.power_key_timeout = 0
+        if self.power_key_long:
+            return
+        # A short press turns the screen off and on, as on the lock screen
+        if self.blanked:
+            self.wake()
+        else:
+            self.blank_screen()
+
+
+def backlight_device():
+    """(subsystem, name) of the panel's light: the Plinius has an LED class device."""
+    for subsystem in ("backlight", "leds"):
+        base = f"/sys/class/{subsystem}"
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        if subsystem == "leds":
+            names = [n for n in names if n == "lcd-backlight"]
+        for name in names:
+            if os.path.exists(os.path.join(base, name, "brightness")):
+                return subsystem, name
+    return None
+
+
+def set_backlight(value):
+    """Sets the panel's brightness through logind (allowed for the active session); returns the
+    brightness before, None if there is no such device or logind refused."""
+    if TEST:
+        return None
+    device = backlight_device()
+    if device is None:
+        return None
+    subsystem, name = device
+    try:
+        with open(f"/sys/class/{subsystem}/{name}/brightness", encoding="ascii") as f:
+            before = int(f.read().strip())
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+        bus.call_sync("org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
+                      "org.freedesktop.login1.Session", "SetBrightness",
+                      GLib.Variant("(ssu)", (subsystem, name, value)), None, Gio.DBusCallFlags.NONE, 2000, None)
+        return before
+    except (OSError, ValueError, GLib.Error) as e:
+        print(f"plinius-greeter: brightness: {e}", file=sys.stderr)
+        return None
+
+
+def main():
+    setup_locale()
+    app = Adw.Application(application_id="org.plinius.Greeter", flags=Gio.ApplicationFlags.NON_UNIQUE)
+
+    def activate(application):
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        provider = Gtk.CssProvider()
+        provider.load_from_string(CSS)
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        window = Greeter(application)
+        if not os.environ.get("PLINIUS_GREETER_WINDOWED"):
+            window.fullscreen()
+        window.present()
+
+    app.connect("activate", activate)
+    return app.run([sys.argv[0]])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

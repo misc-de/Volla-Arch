@@ -1,0 +1,207 @@
+From c349eaf2c5cb1a15a3af6a3ee18c884ab0ac5b77 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 11:37:00 +0100
+Subject: [PATCH] wwan: eSIM management for modems with an eUICC
+
+Plinius: when the card of a modem is an eUICC, the device page offers
+eSIM management (cc-esim-dialog.*, added as separate files): a row under
+Advanced, and a button on the No SIM page, since an eSIM without an
+active profile shows up there. The dialog uses lpac through oFono.
+---
+ panels/wwan/cc-wwan-device-page.blp | 16 ++++++++++
+ panels/wwan/cc-wwan-device-page.c   | 49 +++++++++++++++++++++++++++++
+ panels/wwan/meson.build             |  4 ++-
+ panels/wwan/wwan.gresource.xml      |  1 +
+ 4 files changed, 69 insertions(+), 1 deletion(-)
+
+diff --git a/panels/wwan/cc-wwan-device-page.blp b/panels/wwan/cc-wwan-device-page.blp
+index 3de177cd9..4dd08fe2b 100644
+--- a/panels/wwan/cc-wwan-device-page.blp
++++ b/panels/wwan/cc-wwan-device-page.blp
+@@ -14,6 +14,17 @@ template $CcWwanDevicePage: Box {
+         icon-name: "auth-sim-missing";
+         title: _("No SIM");
+         description: _("Insert a SIM card to use this modem");
++
++        Button esim_button {
++          visible: false;
++          halign: center;
++          use-underline: true;
++          clicked => $wwan_esim_clicked_cb(template);
++
++          styles [
++            "pill",
++          ]
++        }
+       };
+     }
+ 
+@@ -124,6 +135,11 @@ template $CcWwanDevicePage: Box {
+               title: _("M_odem Details");
+             }
+ 
++            $CcListRow esim_row {
++              visible: false;
++              show-arrow: true;
++            }
++
+             Adw.ComboRow sim_slot_row {
+               use-underline: true;
+               title: _("Primary S_IM Slot");
+diff --git a/panels/wwan/cc-wwan-device-page.c b/panels/wwan/cc-wwan-device-page.c
+index fb2554e61..41a611f68 100644
+--- a/panels/wwan/cc-wwan-device-page.c
++++ b/panels/wwan/cc-wwan-device-page.c
+@@ -31,6 +31,7 @@
+ #define GCR_API_SUBJECT_TO_CHANGE
+ #include <gcr/gcr.h>
+ 
++#include "cc-esim-dialog.h"
+ #include "cc-list-row.h"
+ #include "cc-wwan-apn-dialog.h"
+ #include "cc-wwan-data.h"
+@@ -64,6 +65,8 @@ struct _CcWwanDevicePage {
+     AdwSwitchRow *data_roaming_row;
+     GtkListBox *data_settings_list;
+     CcListRow *details_row;
++    GtkButton *esim_button;
++    CcListRow *esim_row;
+     GtkStack *main_stack;
+     CcListRow *network_mode_row;
+     CcListRow *network_name_row;
+@@ -79,6 +82,7 @@ struct _CcWwanDevicePage {
+     CcWwanData *wwan_data;
+     GDBusProxy *wwan_proxy;
+     GCancellable *cancellable;
++    char *esim_modem;   /* Plinius: oFono modem with an eUICC */
+ 
+     GtkWindow *network_mode_dialog;
+     GtkWindow *network_dialog;
+@@ -337,6 +341,37 @@ wwan_network_settings_activated_cb (CcWwanDevicePage *self, CcListRow *row)
+     gtk_window_present (GTK_WINDOW (dialog));
+ }
+ 
++/* Plinius: eSIM management, only for a modem whose card is an eUICC */
++#define PLINIUS_DOMAIN "plinius-control-center"
++
++static void
++wwan_esim_clicked_cb (CcWwanDevicePage *self)
++{
++    if (self->esim_modem)
++        adw_dialog_present (cc_esim_dialog_new (self->esim_modem), GTK_WIDGET (self));
++}
++
++static void
++wwan_esim_probe_cb (GObject *source, GAsyncResult *result, gpointer user_data)
++{
++    g_autoptr(CcWwanDevicePage) self = user_data;
++    g_autoptr(GError) error = NULL;
++    g_autofree char *modem = NULL;
++
++    modem = cc_esim_probe_finish (result, &error);
++    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        return;
++    if (error)
++        g_debug ("eSIM probe failed: %s", error->message);
++    if (!modem)
++        return;
++
++    self->esim_modem = g_steal_pointer (&modem);
++    /* The eSIM without an active profile is shown as "No SIM": manage it from there too */
++    gtk_widget_set_visible (GTK_WIDGET (self->esim_button), TRUE);
++    gtk_widget_set_visible (GTK_WIDGET (self->esim_row), TRUE);
++}
++
+ static void
+ wwan_advanced_settings_activated_cb (CcWwanDevicePage *self, CcListRow *row)
+ {
+@@ -353,6 +388,8 @@ wwan_advanced_settings_activated_cb (CcWwanDevicePage *self, CcListRow *row)
+         adw_dialog_present (dialog, GTK_WIDGET (top_level));
+     } else if (row == self->apn_settings_row) {
+         wwan_data_show_apn_dialog (self);
++    } else if (row == self->esim_row) {
++        wwan_esim_clicked_cb (self);
+     } else if (GTK_WIDGET (row) == GTK_WIDGET (self->sim_slot_row)) {
+         /* NOP handling sim_slot_row, since it is a combo row. */
+     } else {
+@@ -504,6 +541,14 @@ cc_wwan_device_page_constructed (GObject *object)
+ 
+     g_signal_connect_swapped (self->sim_slot_row, "notify::selected", (GCallback) wwan_device_set_primary_sim_slot_cb,
+                               self);
++
++    gtk_button_set_label (self->esim_button, g_dgettext (PLINIUS_DOMAIN, "_Manage eSIM"));
++    adw_preferences_row_set_use_underline (ADW_PREFERENCES_ROW (self->esim_row), TRUE);
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->esim_row), g_dgettext (PLINIUS_DOMAIN, "_eSIM"));
++    adw_action_row_set_subtitle (ADW_ACTION_ROW (self->esim_row),
++                                 g_dgettext (PLINIUS_DOMAIN, "Add, switch and delete profiles"));
++    cc_esim_probe_async (cc_wwan_device_get_identifier (self->device), self->cancellable,
++                         wwan_esim_probe_cb, g_object_ref (self));
+ }
+ 
+ static void
+@@ -519,6 +564,7 @@ cc_wwan_device_page_dispose (GObject *object)
+     g_cancellable_cancel (self->cancellable);
+ 
+     g_clear_object (&self->cancellable);
++    g_clear_pointer (&self->esim_modem, g_free);
+     g_clear_object (&self->wwan_proxy);
+     g_clear_object (&self->device);
+ 
+@@ -550,6 +596,8 @@ cc_wwan_device_page_class_init (CcWwanDevicePageClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, data_roaming_row);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, data_settings_list);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, details_row);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, esim_button);
++    gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, esim_row);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, main_stack);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, network_mode_row);
+     gtk_widget_class_bind_template_child (widget_class, CcWwanDevicePage, network_name_row);
+@@ -563,6 +611,7 @@ cc_wwan_device_page_class_init (CcWwanDevicePageClass *klass)
+     gtk_widget_class_bind_template_callback (widget_class, wwan_data_settings_changed_cb);
+     gtk_widget_class_bind_template_callback (widget_class, wwan_network_settings_activated_cb);
+     gtk_widget_class_bind_template_callback (widget_class, wwan_advanced_settings_activated_cb);
++    gtk_widget_class_bind_template_callback (widget_class, wwan_esim_clicked_cb);
+ }
+ 
+ static void
+diff --git a/panels/wwan/meson.build b/panels/wwan/meson.build
+index c093dd7c8..cd830c778 100644
+--- a/panels/wwan/meson.build
++++ b/panels/wwan/meson.build
+@@ -1,5 +1,5 @@
+ 
+-deps = common_deps + network_manager_deps + [gcr_dep, polkit_gobject_dep]
++deps = common_deps + network_manager_deps + [gcr_dep, polkit_gobject_dep, json_glib_dep]
+ panels_list += cappletname
+ desktop = 'gnome-@0@-panel.desktop'.format(cappletname)
+ 
+@@ -13,6 +13,7 @@ i18n.merge_file(
+ )
+ 
+ ui_sources = files(
++  'cc-esim-dialog.blp',
+   'cc-wwan-apn-dialog.blp',
+   'cc-wwan-details-dialog.blp',
+   'cc-wwan-device-page.blp',
+@@ -34,6 +35,7 @@ blueprints = custom_target(
+ )
+ 
+ sources = files(
++  'cc-esim-dialog.c',
+   'cc-wwan-panel.c',
+   'cc-wwan-device.c',
+   'cc-wwan-data.c',
+diff --git a/panels/wwan/wwan.gresource.xml b/panels/wwan/wwan.gresource.xml
+index f128a164a..468d266b2 100644
+--- a/panels/wwan/wwan.gresource.xml
++++ b/panels/wwan/wwan.gresource.xml
+@@ -8,5 +8,6 @@
+     <file preprocess="xml-stripblanks">cc-wwan-details-dialog.ui</file>
+     <file preprocess="xml-stripblanks">cc-wwan-sim-lock-dialog.ui</file>
+     <file preprocess="xml-stripblanks">cc-wwan-apn-dialog.ui</file>
++    <file preprocess="xml-stripblanks">cc-esim-dialog.ui</file>
+   </gresource>
+ </gresources>
+-- 
+2.55.0
+

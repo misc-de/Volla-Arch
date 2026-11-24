@@ -1,0 +1,70 @@
+# pacman install script of plinius-pinguard: lists pam_plinius_pinguard.so in the PAM files of
+# other packages, which pacman keeps on their updates as backup files. Removed with the package.
+# The lock screen (phosh-plinius) and polkit (/etc/pam.d/polkit-1 of this package) list it
+# themselves.
+#
+# - /etc/pam.d/sudo (sudo): before the first auth line, so sudo shares the count of wrong PINs
+#   with the lock screen and polkit.
+# - /etc/pam.d/su, /etc/pam.d/su-l (util-linux): their auth was pam_unix alone, without any count:
+#   from a second local account, "su plinius" tried the first user's PIN without limit and in
+#   parallel (attack review 2026-11-18, T13). Right after "auth sufficient pam_rootok.so", so root
+#   (services, scripts running "su -s /bin/sh USER -c ...") still goes on without being asked:
+#     auth  requisite  pam_wheel.so use_uid   only members of wheel may use su at all; anyone
+#                                             else is refused at once, without a password prompt
+#                                             (no PIN is tried, nothing is counted)
+#     auth  [...]      pam_plinius_pinguard.so  the PIN with the count; from another account the
+#                                             daemon counts per pair of accounts, always
+#   pam_unix stays below as the fallback when the daemon is missing (authinfo_unavail=ignore).
+#   A file without a pam_rootok line is left alone: putting anything before it could ask root for
+#   a password.
+
+_pam_line='auth		[success=done ignore=ignore authinfo_unavail=ignore module_unknown=ignore open_err=ignore symbol_err=ignore default=die]	pam_plinius_pinguard.so'
+_su_note='# plinius-pinguard: only members of wheel may use su, and the PIN is counted (removed with the package)'
+_wheel_line='auth		requisite	pam_wheel.so use_uid'
+_rootok='^auth[[:space:]]+sufficient[[:space:]]+pam_rootok\.so([[:space:]].*)?$'
+
+_add_sudo() {
+	local f=/etc/pam.d/sudo
+	[[ -f $f ]] || return 0
+	grep -q 'pam_plinius_pinguard\.so' "$f" && return 0
+	# Before the first auth line, so it checks the password first
+	if grep -q '^auth' "$f"; then
+		sed -i "0,/^auth/s//${_pam_line}\n&/" "$f"
+	fi
+}
+
+_add_su() {
+	local f=$1
+	[[ -f $f ]] || return 0
+	grep -q 'pam_plinius_pinguard\.so' "$f" && return 0
+	if ! grep -Eq "$_rootok" "$f"; then
+		echo "plinius-pinguard: $f has no line \"auth sufficient pam_rootok.so\", left as it is" >&2
+		return 0
+	fi
+	# After the first pam_rootok line: the note, pam_wheel, then the PIN check
+	sed -i -E "0,/${_rootok}/s//&\n${_su_note}\n${_wheel_line}\n${_pam_line}/" "$f"
+}
+
+_add_pam_lines() {
+	_add_sudo
+	_add_su /etc/pam.d/su
+	_add_su /etc/pam.d/su-l
+}
+
+post_install() {
+	_add_pam_lines
+}
+
+post_upgrade() {
+	_add_pam_lines
+}
+
+pre_remove() {
+	sed -i '/pam_plinius_pinguard\.so/d' /etc/pam.d/sudo 2>/dev/null || true
+	local f
+	for f in /etc/pam.d/su /etc/pam.d/su-l; do
+		[[ -f $f ]] || continue
+		sed -i -E -e '/pam_plinius_pinguard\.so/d' -e '/^# plinius-pinguard: /d' \
+			-e '/^auth[[:space:]]+requisite[[:space:]]+pam_wheel\.so use_uid$/d' "$f" || true
+	done
+}

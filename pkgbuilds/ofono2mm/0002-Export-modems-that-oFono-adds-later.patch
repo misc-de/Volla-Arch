@@ -1,0 +1,30 @@
+From b278316b0487351f85d2afb331baba99896c5945 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 13:45:34 +0100
+Subject: [PATCH] Export modems that oFono adds later
+
+ofono_modem_added passed the undefined name props instead of mprops, so
+the NameError was swallowed and a modem that oFono registered after
+oFono2MM had started was never exported. At boot the second slot of a
+dual-SIM phone often comes later, and its modem was missing until
+ModemManager was restarted.
+---
+ main.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/main.py b/main.py
+index 9a3c3f3..c5917a5 100755
+--- a/main.py
++++ b/main.py
+@@ -112,7 +112,7 @@ class MMInterface(ServiceInterface):
+ 
+     def ofono_modem_added(self, path, mprops):
+         try:
+-            self.loop.create_task(self.export_new_modem(path, props))
++            self.loop.create_task(self.export_new_modem(path, mprops))
+         except Exception as e:
+             pass
+ 
+-- 
+2.55.0
+

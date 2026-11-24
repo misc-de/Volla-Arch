@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 21:27:37 +0100
+Subject: [PATCH] view: An app picked in the app grid comes to that screen too
+
+Phosh's app grid and notifications activate a running app's window
+through xdg-activation or gtk-shell's request_focus, not through
+foreign-toplevel. With a second screen the window stayed where it was:
+tapping Firefox's icon on the phone left it on the other screen. Those
+activations now also bring the window to the screen of the last click
+or tap, with the phone's own rules (maximized there, floating with its
+remembered geometry on the second screen).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/gtk-shell.c         |  5 ++++-
+ src/view.c              | 19 ++++++++++++-------
+ src/view.h              |  2 ++
+ src/xdg-activation-v1.c |  2 ++
+ 4 files changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/src/gtk-shell.c b/src/gtk-shell.c
+index 23a96cf..8241314 100644
+--- a/src/gtk-shell.c
++++ b/src/gtk-shell.c
+@@ -151,8 +151,11 @@ handle_request_focus (struct wl_client   *client,
+     return;
+ 
+   view = phoc_view_from_wlr_surface (gtk_surface->wlr_surface);
+-  if (view)
++  if (view) {
++    /* An app picked on another screen (e.g. its icon in the app grid) comes there */
++    phoc_view_move_to_output_of_last_press (view, seat);
+     phoc_seat_set_focus_view (seat, view);
++  }
+ }
+ 
+ static const struct gtk_surface1_interface gtk_surface1_impl = {
+diff --git a/src/view.c b/src/view.c
+index e998f55..1d6969d 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -292,13 +292,18 @@ view_output_of_last_press (PhocSeat *seat)
+   return phoc_desktop_layout_get_output (desktop, seat->last_press_lx, seat->last_press_ly);
+ }
+ 
+-/*
+- * A task bar on one screen or the overview on another activates a window
+- * through foreign-toplevel: the window comes to the screen where the
+- * click or the tap for that happened.
++/**
++ * phoc_view_move_to_output_of_last_press:
++ * @self: The view
++ * @seat: The seat that activates it
++ *
++ * A task bar on one screen, the overview or the app grid on another
++ * activates a window (foreign-toplevel, xdg-activation, gtk-shell): the
++ * window comes to the screen where the click or the tap for that
++ * happened.
+  */
+-static void
+-view_move_to_output_of_last_press (PhocView *self, PhocSeat *seat)
++void
++phoc_view_move_to_output_of_last_press (PhocView *self, PhocSeat *seat)
+ {
+   PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+   PhocOutput *target, *current;
+@@ -331,7 +336,7 @@ handle_toplevel_handle_request_activate (struct wl_listener *listener, void *dat
+     if (event->seat != seat->seat)
+       continue;
+ 
+-    view_move_to_output_of_last_press (self, seat);
++    phoc_view_move_to_output_of_last_press (self, seat);
+     phoc_seat_set_focus_view (seat, self);
+   }
+ }
+diff --git a/src/view.h b/src/view.h
+index c00e686..ef66b06 100644
+--- a/src/view.h
++++ b/src/view.h
+@@ -19,6 +19,7 @@ G_BEGIN_DECLS
+ typedef struct _PhocBling PhocBling;
+ typedef struct _PhocDesktop PhocDesktop;
+ typedef struct _PhocOutput PhocOutput;
++typedef struct _PhocSeat PhocSeat;
+ 
+ typedef enum {
+   PHOC_VIEW_TILE_NONE  = 0,
+@@ -172,6 +173,7 @@ void                  phoc_view_move (PhocView *self, double x, double y);
+ bool                  phoc_view_move_to_next_output (PhocView *self, enum wlr_direction direction);
+ void                  phoc_view_move_to_output (PhocView *self, PhocOutput *output);
+ void                  phoc_view_remember_geometry (PhocView *self);
++void                  phoc_view_move_to_output_of_last_press (PhocView *self, PhocSeat *seat);
+ void                  phoc_view_move_to_corner (PhocView *self, PhocViewCorner corner);
+ void                  phoc_view_move_resize (PhocView *self,
+                                              double    x,
+diff --git a/src/xdg-activation-v1.c b/src/xdg-activation-v1.c
+index 1655b24..a7efae6 100644
+--- a/src/xdg-activation-v1.c
++++ b/src/xdg-activation-v1.c
+@@ -48,6 +48,8 @@ phoc_xdg_activation_v1_handle_request_activate (struct wl_listener *listener,
+       phoc_server_get_last_active_seat (phoc_server_get_default ());
+ 
+     g_debug ("Activating view %p via token '%s'", view, token_name);
++    /* An app picked on another screen (e.g. its icon in the app grid) comes there */
++    phoc_view_move_to_output_of_last_press (view, seat);
+     phoc_seat_set_focus_view (seat, view);
+   } else {
+     g_debug ("Setting view %p via token '%s' as pending activation", view, token_name);

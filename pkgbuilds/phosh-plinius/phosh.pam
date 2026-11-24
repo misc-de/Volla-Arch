@@ -1,0 +1,12 @@
+#%PAM-1.0
+
+# Unlock pattern (plinius-pattern): either PIN or pattern. While the user has a pattern, the
+# module checks it and refuses the PIN; without one it leaves the PIN to pam_unix. A missing or
+# broken module is skipped, so the PIN works then.
+auth       [success=done ignore=ignore module_unknown=ignore open_err=ignore symbol_err=ignore default=die] pam_plinius_pattern.so
+# PIN with a growing wait after wrong ones (plinius-pinguard): the daemon checks it and keeps the
+# count. Without the module or the daemon the PIN goes on to pam_unix as before.
+auth       [success=done ignore=ignore authinfo_unavail=ignore module_unknown=ignore open_err=ignore symbol_err=ignore default=die] pam_plinius_pinguard.so
+auth       include      system-local-login
+account    include      system-local-login
+session    include      system-local-login

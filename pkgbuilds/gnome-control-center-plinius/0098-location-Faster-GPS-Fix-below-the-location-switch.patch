@@ -1,0 +1,49 @@
+From 1df2968d54c917e4abfb7346f61df5a2271ad712 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 09:01:10 +0100
+Subject: [PATCH] location: Faster GPS Fix below the location switch
+
+A switch for plinius-epo: on, orbit predictions for MediaTek's GNSS daemon are
+downloaded every 6 hours, so the GPS finds the position in seconds. The group
+lives in cc-plinius-epo.c; this only calls it.
+---
+ panels/privacy/location/cc-location-page.c | 3 +++
+ panels/privacy/meson.build                 | 1 +
+ 2 files changed, 4 insertions(+)
+
+diff --git a/panels/privacy/location/cc-location-page.c b/panels/privacy/location/cc-location-page.c
+index 13741da67..ef058bb0e 100644
+--- a/panels/privacy/location/cc-location-page.c
++++ b/panels/privacy/location/cc-location-page.c
+@@ -20,6 +20,7 @@
+ 
+ #include "cc-location-page.h"
+ #include "cc-plinius-beacondb.h"
++#include "cc-plinius-epo.h"
+ #include "cc-util.h"
+ 
+ #include <gio/gdesktopappinfo.h>
+@@ -357,6 +358,8 @@ cc_location_page_init (CcLocationPage *self)
+     g_settings_bind (self->location_settings, LOCATION_ENABLED, self->location_row, "active", G_SETTINGS_BIND_DEFAULT);
+     /* Plinius: contributing to beaconDB, below the location switch */
+     cc_plinius_beacondb_setup (self->preferences_page, self->location_row);
++    /* Plinius: orbit predictions for a faster GPS fix, inserted last, so it comes first */
++    cc_plinius_epo_setup (self->preferences_page);
+ 
+     self->location_app_switches = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
+     self->location_app_rows = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
+diff --git a/panels/privacy/meson.build b/panels/privacy/meson.build
+index 1016aec9b..6ab901def 100644
+--- a/panels/privacy/meson.build
++++ b/panels/privacy/meson.build
+@@ -53,6 +53,7 @@ sources = files(
+   'firmware-security/cc-firmware-security-utils.c',
+   'location/cc-location-page.c',
+   'location/cc-plinius-beacondb.c',
++  'location/cc-plinius-epo.c',
+   'cc-plinius-crypt.c',
+   'cc-plinius-security.c',
+   'cc-plinius-widevine.c',
+-- 
+2.56.0
+

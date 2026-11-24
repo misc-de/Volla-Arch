@@ -1,0 +1,62 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-vdec
+pkgver=0.2
+pkgrel=8
+pkgdesc="Hardware video decoding (H.264, H.265, VP9) and H.264 encoding for GStreamer on the Volla Phone Plinius: MediaTek decoder plus MDP colour conversion in a service of its own, MediaTek encoder"
+arch=(aarch64)  # needs the vendor's libdpframework through libhybris
+license=(MIT)
+depends=(gstreamer gst-plugins-base-libs glib2 libhybris systemd)
+install=plinius-vdec.install
+source=(gstpliniusvdec.c
+	gstpliniusvenc.c
+	mdp.c
+	mdp.h
+	mdp-proto.h
+	mdp-client.c
+	mdpd.c
+	plinius-vdec-mdpd.service
+	plinius-vdec-mdpd.socket
+	plinius-vdec.sysusers
+	73-plinius-vdec.rules
+	LICENSE)
+sha256sums=('61a88165e190b117dde5cb948a1bcdb49be2893bc31dfeb1a9563c921a5d1a7a'
+	'8a334437b5358e4866e8d4dbff2a8b6e31527d70121345adb1b63df952ddb746'
+	'b21196d4d3fe49116066e76dded4660a5ea6b4ebd1c57bccbcce24502c130eac'
+	'cd54eb5ceccdaf2cba4b17e523e0c03ec873f87604b0bb1ab9371632c791c4d4'
+	'1c591a1cb01045b105511b3140238c85f772abf02f091901364682c18cec2d45'
+	'92fb6105ec0e782b3aae376a38f348b51d5d336d199cbae1ecd160fb1adf7d75'
+	'367449220f5afafcef2877ff116bff72e5cc1ab35381d87b61c0cf27d9496512'
+	'a21ab4671afe68ec44248fdd00f9c97082cdd0a0c7cdf3712af006cd7111dbd7'
+	'0ed9f30df1751d66fcfa3929d47e603b6e7d320204c8940a5e9a67c7070ed91d'
+	'ec7bc41afd77d88913280a1b5f819609b3a8414aeffdc79b5ccfbdd15404a63a'
+	'37855e35efff05c2d4e5361431d9ba9f298e026cdb11d13640018c356307328f'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# The plugin: the decoder in the app, each frame's MDP conversion through plinius-vdec-mdpd
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -fPIC -shared \
+		-o libgstpliniusvdec.so gstpliniusvdec.c mdp-client.c \
+		$(pkg-config --cflags --libs gstreamer-1.0 gstreamer-video-1.0 gstreamer-allocators-1.0 gio-2.0) $LDFLAGS
+	# The encoder plugin: frames from dma-bufs into the MediaTek encoder
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -fPIC -shared \
+		-o libgstpliniusvenc.so gstpliniusvenc.c \
+		$(pkg-config --cflags --libs gstreamer-1.0 gstreamer-video-1.0) $LDFLAGS
+	# The daemon with libdpframework through libhybris
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
+		-o plinius-vdec-mdpd mdpd.c mdp.c $(pkg-config --cflags --libs gio-2.0) -ldl $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 libgstpliniusvdec.so libgstpliniusvenc.so -t "$pkgdir/usr/lib/gstreamer-1.0"
+	install -Dm644 73-plinius-vdec.rules -t "$pkgdir/usr/lib/udev/rules.d"
+	install -Dm755 plinius-vdec-mdpd -t "$pkgdir/usr/lib/plinius-vdec"
+	install -Dm644 plinius-vdec-mdpd.service plinius-vdec-mdpd.socket -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 plinius-vdec.sysusers "$pkgdir/usr/lib/sysusers.d/plinius-vdec.conf"
+	install -d "$pkgdir/usr/lib/systemd/system/sockets.target.wants"
+	ln -s ../plinius-vdec-mdpd.socket "$pkgdir/usr/lib/systemd/system/sockets.target.wants/"
+}

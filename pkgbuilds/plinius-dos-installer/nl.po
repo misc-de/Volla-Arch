@@ -1,0 +1,363 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-dos-installer 0.1\n"
+"Report-Msgid-Bugs-To: https://plinius.cais.de\n"
+"POT-Creation-Date: 2026-11-22 07:59+0100\n"
+"PO-Revision-Date: 2026-11-17 14:30+0100\n"
+"Last-Translator: plinius-dos-installer\n"
+"Language-Team: none\n"
+"Language: nl\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: app.py:31
+msgid "Floppy Disk Images"
+msgstr "Diskette-images"
+
+#: app.py:32
+msgid "Disk 1 is enough, the other disks in its folder come along"
+msgstr "Diskette 1 is genoeg, de andere uit de map komen mee"
+
+#: app.py:34
+msgid "CD Image"
+msgstr "Cd-image"
+
+#: app.py:34
+msgid ".iso, or .cue with its tracks"
+msgstr ".iso, of .cue met de bijbehorende tracks"
+
+#: app.py:36
+msgid "ZIP Archive"
+msgstr "ZIP-archief"
+
+#: app.py:36
+msgid "A packed game, such as a freeware download"
+msgstr "Een ingepakt spel, zoals een freeware-download"
+
+#: app.py:38
+msgid "GOG Installer"
+msgstr "GOG-installatieprogramma"
+
+#: app.py:38
+msgid "setup_….exe from GOG"
+msgstr "setup_….exe van GOG"
+
+#: app.py:40
+msgid "Folder"
+msgstr "Map"
+
+#: app.py:40
+msgid "The game's files, or a copy of its disks"
+msgstr "De bestanden van het spel, of een kopie van de schijven"
+
+#: app.py:133 app.py:167
+msgid "DOS Installer"
+msgstr "DOS Installer"
+
+#: app.py:149 app.py:158 app.py:383
+msgid "Install a Game"
+msgstr "Een spel installeren"
+
+#: app.py:154
+msgid "No Games Yet"
+msgstr "Nog geen spellen"
+
+#: app.py:155
+msgid "Install a DOS game from floppy disk images, a CD image, a ZIP archive, a GOG installer or a folder."
+msgstr "Installeer een DOS-spel van diskette-images, een cd-image, een ZIP-archief, een GOG-installatieprogramma of een map."
+
+#: app.py:174
+msgid "Games"
+msgstr "Spellen"
+
+#: app.py:185 app.py:600
+msgid "Play"
+msgstr "Spelen"
+
+#: app.py:188
+msgid "Settings"
+msgstr "Instellingen"
+
+#: app.py:205
+msgid "Uninstall Game"
+msgstr "Spel verwijderen"
+
+#: app.py:216
+msgid "Controls"
+msgstr "Besturing"
+
+#: app.py:217
+msgid "Touch Joystick"
+msgstr "Aanraakjoystick"
+
+#: app.py:218
+msgid "Stick and buttons beside the picture"
+msgstr "Stick en knoppen naast het beeld"
+
+#: app.py:223
+msgid "Arrow Keys"
+msgstr "Pijltjestoetsen"
+
+#: app.py:223
+msgid "Number Pad"
+msgstr "Numeriek toetsenblok"
+
+#: app.py:225
+msgid "Stick"
+msgstr "Stick"
+
+#: app.py:225
+msgid "The keys it presses"
+msgstr "De toetsen die hij indrukt"
+
+#: app.py:233
+msgid "Mouse Speed"
+msgstr "Muissnelheid"
+
+#: app.py:234
+msgid "How far a swipe moves the mouse, in percent"
+msgstr "Hoe ver een veegbeweging de muis verplaatst, in procent"
+
+#: app.py:243
+msgid "Game"
+msgstr "Spel"
+
+#: app.py:247
+msgid "Automatic"
+msgstr "Automatisch"
+
+#: app.py:247
+msgid "Slow (286)"
+msgstr "Langzaam (286)"
+
+#: app.py:247
+msgid "Medium (386)"
+msgstr "Gemiddeld (386)"
+
+#: app.py:247
+msgid "Fast (486)"
+msgstr "Snel (486)"
+
+#: app.py:248
+msgid "Maximum"
+msgstr "Maximaal"
+
+#: app.py:253
+msgid "CPU Speed"
+msgstr "CPU-snelheid"
+
+#: app.py:254
+msgid "Slower if the game is too fast"
+msgstr "Langzamer als het spel te snel loopt"
+
+#: app.py:259
+msgid "Sharp Pixels"
+msgstr "Scherpe pixels"
+
+#: app.py:260
+msgid "The picture without smoothing"
+msgstr "Het beeld zonder vervaging"
+
+#: app.py:267
+msgid "Game Setup"
+msgstr "Spelinstellingen"
+
+#: app.py:268
+#, python-brace-format
+msgid "Starts {program}, for sound and controls"
+msgstr "Start {program}, voor geluid en besturing"
+
+#: app.py:300
+#, python-brace-format
+msgid "Could not save: {error}"
+msgstr "Opslaan mislukt: {error}"
+
+#: app.py:313
+#, python-brace-format
+msgid "Could not start: {error}"
+msgstr "Starten mislukt: {error}"
+
+#: app.py:327
+msgid "Its folder is deleted, saved games included."
+msgstr "De map wordt verwijderd, inclusief opgeslagen spellen."
+
+#: app.py:329
+msgid "Its files are deleted. Saved games stay in ScummVM."
+msgstr "De bestanden worden verwijderd. Opgeslagen spellen blijven in ScummVM."
+
+#: app.py:331
+msgid "It is taken off the list; its files stay where they are."
+msgstr "Het wordt uit de lijst gehaald; de bestanden blijven waar ze zijn."
+
+#: app.py:332
+#, python-brace-format
+msgid "Remove “{title}”?"
+msgstr "‘{title}’ verwijderen?"
+
+#: app.py:334 app.py:520 app.py:560
+msgid "Cancel"
+msgstr "Annuleren"
+
+#: app.py:335
+msgid "Remove"
+msgstr "Verwijderen"
+
+#: app.py:347
+#, python-brace-format
+msgid "Could not remove: {error}"
+msgstr "Verwijderen mislukt: {error}"
+
+#: app.py:373
+msgid "The DOS Installer finds the game by itself: it runs the installer if there is one and adds the game to the app grid with its icon."
+msgstr "De DOS Installer vindt het spel zelf: hij start het installatieprogramma als er een is en zet het spel met zijn pictogram in het app-overzicht."
+
+#: app.py:415
+msgid "These files do not go together."
+msgstr "Deze bestanden horen niet bij elkaar."
+
+#: app.py:430
+msgid "Getting Ready"
+msgstr "Voorbereiden"
+
+#: app.py:436
+msgid "Installing"
+msgstr "Installeren"
+
+#: app.py:467
+msgid "Insert Next Disk"
+msgstr "Volgende diskette plaatsen"
+
+#: app.py:470
+msgid "If the installer keeps asking for the same disk, insert the next one here."
+msgstr "Blijft het installatieprogramma om dezelfde diskette vragen, plaats hier dan de volgende."
+
+#: app.py:480
+#, python-brace-format
+msgid "Disk {number} of {total}"
+msgstr "Diskette {number} van {total}"
+
+#: app.py:489
+#, python-brace-format
+msgid "Could not insert the disk: {error}"
+msgstr "Diskette plaatsen mislukt: {error}"
+
+#: app.py:505
+#, python-brace-format
+msgid "DOSBox opens in fullscreen and starts {program}."
+msgstr "DOSBox opent op volledig scherm en start {program}."
+
+#: app.py:507
+msgid "The keyboard opens by itself, in its Terminal layout: only that one reaches DOSBox."
+msgstr "Het toetsenbord opent vanzelf, in de indeling Terminal: alleen die komt bij DOSBox aan."
+
+#: app.py:510
+msgid "The disks change by themselves: when the installer asks for the next disk, press Enter. Should it ask again, switch to the DOS Installer and insert the next disk there."
+msgstr "De diskettes wisselen vanzelf: vraagt het installatieprogramma om de volgende diskette, druk dan op Enter. Vraagt het opnieuw, ga dan naar de DOS Installer en plaats daar de volgende diskette."
+
+#: app.py:513
+msgid "DOSBox closes when the installer is done."
+msgstr "DOSBox sluit wanneer het installatieprogramma klaar is."
+
+#: app.py:515
+msgid "The Installer Needs a Keyboard"
+msgstr "Het installatieprogramma heeft een toetsenbord nodig"
+
+#: app.py:519
+msgid "Start the Installer"
+msgstr "Installatieprogramma starten"
+
+#: app.py:524
+msgid "Installer"
+msgstr "Installatieprogramma"
+
+#: app.py:536
+msgid "ScummVM does not know this game, so it runs in DOSBox."
+msgstr "ScummVM kent dit spel niet, dus het draait in DOSBox."
+
+#: app.py:537
+msgid "Name"
+msgstr "Naam"
+
+#: app.py:540 app.py:565
+msgid "Start File"
+msgstr "Startbestand"
+
+#: app.py:554
+msgid "No start file was found."
+msgstr "Geen startbestand gevonden."
+
+#: app.py:558
+msgid "Add the Game"
+msgstr "Spel toevoegen"
+
+#: app.py:584
+msgid "Installation Failed"
+msgstr "Installatie mislukt"
+
+#: app.py:585
+msgid "OK"
+msgstr "OK"
+
+#: app.py:589
+#, python-brace-format
+msgid "“{title}” Is Installed"
+msgstr "‘{title}’ is geïnstalleerd"
+
+#: app.py:590
+msgid "You find it in the app grid."
+msgstr "Je vindt het in het app-overzicht."
+
+#: app.py:601
+msgid "Done"
+msgstr "Klaar"
+
+#: app.py:611
+msgid "Installed"
+msgstr "Geïnstalleerd"
+
+#: install.py:119
+msgid "Looking up the game"
+msgstr "Spel wordt opgezocht"
+
+#: install.py:122
+msgid "Reading the disks"
+msgstr "Diskettes lezen"
+
+#: install.py:129
+msgid "Reading the CD"
+msgstr "Cd lezen"
+
+#: install.py:132
+msgid "Unpacking"
+msgstr "Uitpakken"
+
+#: install.py:145 install.py:186
+msgid "Looking for the game"
+msgstr "Spel zoeken"
+
+#: install.py:150 install.py:243
+msgid "Copying the game"
+msgstr "Spel kopiëren"
+
+#: install.py:168
+#, python-brace-format
+msgid "Installing {title}"
+msgstr "{title} wordt geïnstalleerd"
+
+#: install.py:172
+msgid "The installer is running"
+msgstr "Het installatieprogramma loopt"
+
+#: install.py:184
+msgid "The installer did not install anything."
+msgstr "Het installatieprogramma heeft niets geïnstalleerd."
+
+#: install.py:231
+msgid "Adding the game"
+msgstr "Spel toevoegen"
+
+#: install.py:235
+msgid "ScummVM did not take the game."
+msgstr "ScummVM heeft het spel niet overgenomen."

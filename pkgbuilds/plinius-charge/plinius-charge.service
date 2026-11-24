@@ -1,0 +1,43 @@
+[Unit]
+Description=Battery charging options (limit, fast charging)
+
+[Service]
+Type=dbus
+BusName=org.plinius.Charge
+ExecStart=/usr/bin/plinius-charge
+Restart=on-failure
+RestartSec=3
+# Settings from GNOME Settings > Power
+StateDirectory=plinius-charge
+
+# Sandbox (docs/DIENSTE-HAERTEN.md): no capabilities, the charger's sysfs nodes are writable
+# for root or everyone
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateIPC=yes
+DevicePolicy=closed
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ReadWritePaths=/sys/devices/platform/charger
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

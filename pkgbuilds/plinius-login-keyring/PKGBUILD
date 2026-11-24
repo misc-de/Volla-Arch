@@ -1,0 +1,38 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-login-keyring
+pkgver=0.1
+pkgrel=3
+pkgdesc="Opens the login keyring at the automatic login with a per-user device key instead of an unlock prompt"
+arch=(any)
+license=(MIT)
+# greetd logs the phone user in without a password, so gnome-keyring's default keyring stayed
+# locked and goa-daemon's first lookup raised an unlock prompt naming no application. The device
+# key lives in /var/lib (outside /home); see plinius-login-keyring-unlock for the whole flow.
+depends=(bash coreutils gnome-keyring python python-gobject systemd)
+source=(plinius-login-keyring-key
+	plinius-login-keyring-key@.service
+	user@-plinius-login-keyring.conf
+	plinius-login-keyring-unlock
+	plinius-login-keyring.service
+	LICENSE)
+sha256sums=('af8e4e048875d564b11fbe6b7cfe490dd7a2580a1e900f241a22fdd101108f04'
+	'c063c4c5bec7ab15b7278d220bf878df652482e449c4521dbcfb37f79a1b85cb'
+	'c33551a8dad4c03b9cfb1e1c35a476f0732f0b13cd3ebc78337744e04dc50cd8'
+	'2d3742b82ff04cbb8bd05ad40e3edf5bb30026337de28414b2779f63921a4fe5'
+	'9bc4bc9c40498160fcaeffdc1c5895978a83dfd9355f48c5338b983264c57a7b'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-login-keyring-key plinius-login-keyring-unlock \
+		-t "$pkgdir/usr/lib/plinius-login-keyring"
+	install -Dm644 plinius-login-keyring-key@.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 user@-plinius-login-keyring.conf \
+		"$pkgdir/usr/lib/systemd/system/user@.service.d/plinius-login-keyring.conf"
+	install -Dm644 plinius-login-keyring.service -t "$pkgdir/usr/lib/systemd/user"
+	# Enabled by the package: every session needs its keyring open before gnome-session starts
+	install -d "$pkgdir/usr/lib/systemd/user/gnome-session-pre.target.wants"
+	ln -s ../plinius-login-keyring.service \
+		"$pkgdir/usr/lib/systemd/user/gnome-session-pre.target.wants/"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

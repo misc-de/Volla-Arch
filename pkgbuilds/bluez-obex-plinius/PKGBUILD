@@ -1,0 +1,93 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=bluez-obex-plinius
+pkgver=5.88
+pkgrel=3
+pkgdesc="Object Exchange daemon for sharing content, with the phone book from evolution-data-server"
+arch=(aarch64 x86_64)
+url="http://www.bluez.org/"
+license=(GPL-2.0-only)
+# Why not Arch's bluez-obex: it builds obexd with the "dummy" phone book, which only reads
+# vCard files from ~/phonebook. A car asks for the phone book over PBAP when it connects and
+# got nothing. With the "ebook" plugin obexd serves the contacts of evolution-data-server
+# (GNOME Contacts), with patch 0003 of every enabled address book, not only the default one.
+# BlueZ < 5.87 failed every PBAP pull with this plugin (uninitialised error code in pbap.c
+# and phonebook-ebook.c), 5.87 is fixed.
+depends=(glib2 libical dbus readline systemd-libs glibc evolution-data-server python-gobject)
+makedepends=(git python-docutils)
+provides=("bluez-obex=$pkgver")
+conflicts=(bluez-obex)
+# Commit of tag $pkgver: a tag can be moved later, a commit hash cannot
+_commit=34b6f8e0e998728ce9e8e64e280d9d390c511804
+source=("bluez::git+https://github.com/bluez/bluez.git#commit=$_commit"
+        0001-obexd-Build-the-ebook-phone-book-with-evolution-data-server-3.60.patch
+        0002-obexd-Send-N-for-contacts-that-only-have-a-display-name.patch
+        0003-obexd-Serve-the-contacts-of-all-address-books.patch
+        0004-obexd-PBAP-only-for-devices-the-user-allowed.patch
+        plinius-pbap-ask
+        50-plinius-plugins.conf)
+sha256sums=('SKIP'
+            '6f1f3dbc8c2f43094279f36e9fd73fce46d14fe6af43af606dc1929f59f9cc43'
+            '6b2fb3797756be0293fa05305883bef7154d5104a2d60e825fca3a1722a78cad'
+            'a06bb1d987f7d18e57faa338162e1c9f367119b76532b6990b273f0b51f3e63a'
+            '37675e80b7a2eb30d1e5972253954717dcc4aa73ae9a7aa05c8a06135488be64'
+            'ad8cadb7f2e08b86e16ac287c8848b3b8d21ebd4ba49ffdcf393f8bf602c67fe'
+            '773b3a14da0c6c1bd9d72c9a3215cc354313acb6882336d973ce7e471a2f4c3d')
+
+prepare() {
+	cd bluez
+	# The ebook plugin still used the vCard API from before evolution-data-server 3.60
+	patch -Np1 -i ../0001-obexd-Build-the-ebook-phone-book-with-evolution-data-server-3.60.patch
+	# Contacts with only a display name (FN) reached the car as a bare number: the car asks for
+	# vCard 2.1 with N but not FN. Without N (or with a blank one) FN becomes the family name
+	patch -Np1 -i ../0002-obexd-Send-N-for-contacts-that-only-have-a-display-name.patch
+	# Only the default address book reached the car. With a Nextcloud the contacts are spread
+	# over several books ("Contacts", "FamilyContacts"), so read every enabled one. Contacts
+	# without a phone number stay out, the car cannot call them ("Accounts" of a Nextcloud)
+	patch -Np1 -i ../0003-obexd-Serve-the-contacts-of-all-address-books.patch
+	# Every paired, trusted device got all address books without a question, even with the phone
+	# locked. Now only the devices the user allowed (Settings > Bluetooth > Contacts); a new one is
+	# refused and the user asked (plinius-pbap-ask). Devices paired before the update stay allowed
+	patch -Np1 -i ../0004-obexd-PBAP-only-for-devices-the-user-allowed.patch
+	autoreconf -fi
+}
+
+build() {
+	cd bluez
+	# As Arch's bluez, plus the phone book from evolution-data-server
+	ICAL_LIBS="-lical -licalvcal" \
+	./configure \
+		--prefix=/usr \
+		--mandir=/usr/share/man \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--libexecdir=/usr/lib \
+		--with-dbusconfdir=/usr/share \
+		--with-phonebook=ebook
+	# Only what bluez-obex contains, not the whole of BlueZ (configure writes the .service files).
+	# builtin.h is generated before everything else only by "make all"
+	make obexd/src/builtin.h
+	make obexd/src/obexd \
+		tools/obexctl tools/obex-client-tool tools/obex-server-tool \
+		$(ls doc/org.bluez.obex.*.rst | sed 's/\.rst$/.5/')
+}
+
+package() {
+	cd bluez
+	# The same files as Arch's bluez-obex
+	install -Dm755 tools/obexctl tools/obex-client-tool tools/obex-server-tool -t "$pkgdir/usr/bin"
+	install -Dm755 obexd/src/obexd -t "$pkgdir/usr/lib/bluetooth"
+	install -Dm755 ../plinius-pbap-ask -t "$pkgdir/usr/lib/bluetooth"
+	install -Dm644 obexd/src/obex.service -t "$pkgdir/usr/lib/systemd/user"
+	# Without IrMC Sync, PC Suite and FTP: IrMC went past the PBAP permission per device
+	install -Dm644 ../50-plinius-plugins.conf -t "$pkgdir/usr/lib/systemd/user/obex.service.d"
+	ln -s obex.service "$pkgdir/usr/lib/systemd/user/dbus-org.bluez.obex.service"
+	# obexd only offers the phone book (PBAP) to bluetoothd while it runs, and Arch's unit has no
+	# [Install] target: it started only when something asked for it over D-Bus. A car reads the
+	# services once when it pairs, so obexd has to run with the session from the start.
+	install -dm755 "$pkgdir/usr/lib/systemd/user/gnome-session.target.wants"
+	ln -s ../obex.service "$pkgdir/usr/lib/systemd/user/gnome-session.target.wants/obex.service"
+	install -Dm644 obexd/src/org.bluez.obex.service -t "$pkgdir/usr/share/dbus-1/services"
+	install -Dm644 obexd/src/obex.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 doc/org.bluez.obex.*.5 -t "$pkgdir/usr/share/man/man5"
+}

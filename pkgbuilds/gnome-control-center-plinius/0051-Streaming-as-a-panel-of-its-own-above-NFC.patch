@@ -1,0 +1,92 @@
+From 911de43445e8067416b1dd761e7702d02532e9c8 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 18:35:47 +0100
+Subject: [PATCH] Streaming as a panel of its own above NFC
+
+Plinius: a panel "Streaming" in the sidebar between Bluetooth and NFC
+with the settings for mirroring the screen to TVs (Schwupp, through its
+D-Bus interface de.cais.Schwupp.Cast1): defaults for all TVs and a page
+per TV. The panel (cc-streaming-panel.*) and its desktop file come as
+separate files; it is only listed when Schwupp is installed.
+---
+ panels/meson.build           |  1 +
+ panels/streaming/meson.build | 20 ++++++++++++++++++++
+ shell/cc-panel-list.c        |  1 +
+ shell/cc-panel-loader.c      |  3 +++
+ 4 files changed, 25 insertions(+)
+ create mode 100644 panels/streaming/meson.build
+
+diff --git a/panels/meson.build b/panels/meson.build
+index f7c4266..70541b3 100644
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -21,6 +21,7 @@ panels = [
+   'search',
+   'sharing',
+   'sound',
++  'streaming',
+   'system',
+   'universal-access',
+   'wellbeing',
+diff --git a/panels/streaming/meson.build b/panels/streaming/meson.build
+new file mode 100644
+index 0000000..2f58fba
+--- /dev/null
++++ b/panels/streaming/meson.build
+@@ -0,0 +1,20 @@
++# Plinius: Streaming panel. The sources and the desktop file (with its translations)
++# come as separate files of gnome-control-center-plinius.
++panels_list += cappletname
++
++install_data(
++  'gnome-streaming-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
++sources = files(
++  'cc-streaming-panel.c',
++)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps,
++  c_args: cflags,
++)
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index 3e3972b..ace5de6 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -340,6 +340,7 @@ static const gchar *const panel_order[] = {
+     "wwan",
+     "mobile-broadband",
+     "bluetooth",
++    "streaming",
+     "nfc",
+ 
+     "separator",
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index db68446..a0e3319 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -36,6 +36,8 @@ extern GType cc_assistant_panel_get_type (void);
+ extern void cc_assistant_panel_static_init_func (void);
+ extern GType cc_nfc_panel_get_type (void);
+ extern void cc_nfc_panel_static_init_func (void);
++extern GType cc_streaming_panel_get_type (void);
++extern void cc_streaming_panel_static_init_func (void);
+ extern GType cc_background_panel_get_type (void);
+ #ifdef BUILD_BLUETOOTH
+ extern GType cc_bluetooth_panel_get_type (void);
+@@ -112,6 +114,7 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("search", cc_search_panel_get_type, NULL),
+     PANEL_TYPE ("sharing", cc_sharing_panel_get_type, cc_sharing_panel_static_init_func),
+     PANEL_TYPE ("sound", cc_sound_panel_get_type, NULL),
++    PANEL_TYPE ("streaming", cc_streaming_panel_get_type, cc_streaming_panel_static_init_func),
+     PANEL_TYPE ("system", cc_system_panel_get_type, NULL),
+     PANEL_TYPE ("universal-access", cc_ua_panel_get_type, NULL),
+     /* Plinius: Users as a panel of its own, above Privacy & Security, not inside System */
+-- 
+2.56.0
+

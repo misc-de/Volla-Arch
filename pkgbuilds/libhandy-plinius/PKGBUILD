@@ -1,0 +1,61 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=libhandy-plinius
+pkgver=1.8.3
+pkgrel=6
+pkgdesc="GTK 3 UI elements for mobile devices, with swipes that follow the finger on a fast touch screen"
+url="https://gitlab.gnome.org/GNOME/libhandy"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(LGPL-2.1-or-later)
+# As Arch's libhandy
+depends=(
+	at-spi2-core
+	cairo
+	fribidi
+	gdk-pixbuf2
+	glib2
+	glibc
+	gtk3
+	libgcc
+	pango
+)
+makedepends=(
+	git
+	glib2-devel
+	gobject-introspection
+	meson
+	vala
+)
+provides=("libhandy=$pkgver" libhandy-1.so)
+conflicts=(libhandy)
+# Commit on the stable branch libhandy-1-8 after tag $pkgver (only translations since the tag):
+# a branch moves, a commit hash does not
+_commit=26bef1f5aaa1388ced663263856fcef723d0987a
+source=(
+	"git+https://gitlab.gnome.org/GNOME/libhandy.git#commit=$_commit"
+	0001-swipe-tracker-Don-t-let-the-swiped-page-move-the-finger.patch
+	0002-carousel-box-Draw-a-page-away-from-its-place-when-its-owner-asks.patch
+)
+sha256sums=('SKIP'
+            'de35c83e9f526550933e2284efcc277fc1c7e50afaf1ce058375c732a2a3ac6e'
+            'e7fd7d49e31fbb6cc8b37d283513f544b808b24f92a599eaabbf7440c583d7a0')
+
+prepare() {
+	# A slow swipe on the lock screen flickered: the page's own movement went into the finger's
+	# position and the carousel jumped by whole screens (docs/upstream/libhandy/swipe-tracker)
+	patch -d libhandy -Np1 -i "$srcdir/0001-swipe-tracker-Don-t-let-the-swiped-page-move-the-finger.patch"
+	# A carousel page can be drawn away from its place: phosh lets a held card follow the finger
+	# and the card it passes slide into the gap
+	patch -d libhandy -Np1 -i "$srcdir/0002-carousel-box-Draw-a-page-away-from-its-place-when-its-owner-asks.patch"
+}
+
+build() {
+	# No Glade catalog (unlike Arch): Glade is not on the phone, and the module would link against
+	# libgladeui-2, which then is missing (tools/candidate.sh, ABI check)
+	arch-meson libhandy build -D glade_catalog=disabled
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+}

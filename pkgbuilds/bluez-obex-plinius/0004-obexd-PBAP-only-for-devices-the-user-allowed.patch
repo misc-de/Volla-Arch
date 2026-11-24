@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:47:00 +0100
+Subject: [PATCH] obexd: PBAP only for devices the user allowed
+
+Any paired, trusted device got every address book and the own card
+without a question, even with the phone locked: a rental car, a watch,
+a laptop paired once. The phone book now goes only to devices allowed
+in $XDG_DATA_HOME/plinius/bluetooth-contacts ([devices]
+<address>=true|false), which GNOME Settings shows and changes. A device
+not decided yet is refused, and plinius-pbap-ask asks the user in a
+notification (at most every 10 minutes per device); allowed, the device
+gets the contacts at its next try. When the file is missing, the helper
+allows the devices paired so far, so a car keeps its phone book.
+
+A refused CONNECT left the session with the service but without its
+data: a GET sent anyway reached pbap_get() with NULL. The session now
+drops the service when its connect fails.
+---
+ obexd/plugins/pbap.c | 112 +++++++++++++++++++++++++++++++++++++++++++
+ obexd/src/obex.c     |   5 ++
+ 2 files changed, 117 insertions(+)
+
+diff --git a/obexd/plugins/pbap.c b/obexd/plugins/pbap.c
+index 9f8684863..907799b41 100644
+--- a/obexd/plugins/pbap.c
++++ b/obexd/plugins/pbap.c
+@@ -15,6 +15,7 @@
+ 
+ #include <stdio.h>
+ #include <string.h>
++#include <time.h>
+ #include <errno.h>
+ #include <glib.h>
+ #include <stdlib.h>
+@@ -468,9 +469,108 @@ static struct apparam_field *parse_aparam(const uint8_t *buffer, uint32_t hlen)
+ 	return param;
+ }
+ 
++/*
++ * Volla Phone Plinius: the phone book only for the devices the user allowed.
++ * Any paired, trusted device got every address book and the own card without
++ * a question, even with the phone locked: a rental car, a smartwatch, a
++ * stranger's laptop paired once. The choice per device is kept in
++ * $XDG_DATA_HOME/plinius/bluetooth-contacts ([devices] <address>=true|false),
++ * where GNOME Settings > Bluetooth > Contacts shows and changes it. A device
++ * not decided yet is refused, and plinius-pbap-ask asks the user in a
++ * notification; with "Allow" the device gets the contacts at its next try.
++ * When the file is missing (first start after the update), the helper allows
++ * the devices that are paired already, so a car keeps its phone book.
++ */
++#define PBAP_ASK_HELPER "/usr/lib/bluetooth/plinius-pbap-ask"
++#define PBAP_ASK_AGAIN 600
++
++static GHashTable *pbap_asked;	/* address -> time of the last question */
++
++static char *pbap_access_path(void)
++{
++	return g_build_filename(g_get_user_data_dir(), "plinius",
++						"bluetooth-contacts", NULL);
++}
++
++/* 1 allowed, 0 refused, -1 not decided yet */
++static int pbap_device_access(const char *address)
++{
++	GKeyFile *kf = g_key_file_new();
++	char *path = pbap_access_path();
++	GError *gerr = NULL;
++	int access = -1;
++
++	if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL)) {
++		gboolean allowed = g_key_file_get_boolean(kf, "devices",
++							address, &gerr);
++
++		if (gerr)
++			g_error_free(gerr);
++		else
++			access = allowed ? 1 : 0;
++	}
++
++	g_free(path);
++	g_key_file_free(kf);
++	return access;
++}
++
++static void pbap_ask_helper(const char *arg)
++{
++	char *argv[] = { (char *) PBAP_ASK_HELPER, (char *) arg, NULL };
++	GError *gerr = NULL;
++
++	if (!g_spawn_async(NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL,
++						NULL, NULL, NULL, &gerr)) {
++		error("Cannot run %s: %s", PBAP_ASK_HELPER, gerr->message);
++		g_error_free(gerr);
++	}
++}
++
++static void pbap_ask_user(const char *address)
++{
++	time_t now = time(NULL);
++	gpointer last;
++
++	if (!pbap_asked)
++		pbap_asked = g_hash_table_new_full(g_str_hash, g_str_equal,
++								g_free, NULL);
++
++	/* A device tries again and again: one question at a time */
++	last = g_hash_table_lookup(pbap_asked, address);
++	if (last && now - GPOINTER_TO_SIZE(last) < PBAP_ASK_AGAIN)
++		return;
++
++	g_hash_table_insert(pbap_asked, g_strdup(address),
++						GSIZE_TO_POINTER(now));
++	pbap_ask_helper(address);
++}
++
+ static void *pbap_connect(struct obex_session *os, int *err)
+ {
+ 	struct pbap_session *pbap;
++	char *address = NULL;
++	int access;
++
++	if (obex_getpeername(os, &address) < 0 || address == NULL) {
++		error("PBAP: no address of the device, refused");
++		if (err)
++			*err = -EPERM;
++		return NULL;
++	}
++
++	access = pbap_device_access(address);
++	if (access <= 0) {
++		info("PBAP: %s may not read the contacts (%s)", address,
++				access == 0 ? "refused" : "asking the user");
++		if (access < 0)
++			pbap_ask_user(address);
++		g_free(address);
++		if (err)
++			*err = -EPERM;
++		return NULL;
++	}
++	g_free(address);
+ 
+ 	manager_register_session(os);
+ 
+@@ -979,6 +1079,15 @@ static int pbap_init(void)
+ 	if (err < 0)
+ 		goto fail_pbap_reg;
+ 
++	/* First start after the update: the devices paired so far are allowed */
++	{
++		char *path = pbap_access_path();
++
++		if (!g_file_test(path, G_FILE_TEST_EXISTS))
++			pbap_ask_helper("--init");
++		g_free(path);
++	}
++
+ 	return 0;
+ 
+ fail_pbap_reg:
+@@ -1000,6 +1109,9 @@ static void pbap_exit(void)
+ 	obex_mime_type_driver_unregister(&mime_list);
+ 	obex_mime_type_driver_unregister(&mime_vcard);
+ 	phonebook_exit();
++	if (pbap_asked)
++		g_hash_table_destroy(pbap_asked);
++	pbap_asked = NULL;
+ }
+ 
+ OBEX_PLUGIN_DEFINE(pbap, pbap_init, pbap_exit)
+diff --git a/obexd/src/obex.c b/obexd/src/obex.c
+index 370bfac9e..4ff7425ee 100644
+--- a/obexd/src/obex.c
++++ b/obexd/src/obex.c
+@@ -277,6 +277,11 @@ static void cmd_connect(GObex *obex, GObexPacket *req, void *user_data)
+ 
+ 	os->service_data = os->service->connect(os, &err);
+ 	if (err < 0) {
++		/* Refused: later requests of this session must not reach the
++		 * service with the data it never created (PBAP refuses devices
++		 * the user has not allowed, and a client may send GET anyway) */
++		os->service = NULL;
++		os->service_data = NULL;
+ 		os_set_response(os, err);
+ 		return;
+ 	}

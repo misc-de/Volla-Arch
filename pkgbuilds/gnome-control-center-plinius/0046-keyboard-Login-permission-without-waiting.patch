@@ -1,0 +1,67 @@
+From 0e761663b4466802309edf6214afa5d182a6ff01 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:13:33 +0100
+Subject: [PATCH] keyboard: Login permission without waiting
+
+Plinius: the input source list waited for a polkit check while the
+Keyboard page was built, 60-180 ms on the phone, more while polkit is
+busy with other checks. It now comes asynchronously; until it is
+there, changes stay with the user (login_auto_apply is FALSE), as
+without the permission.
+---
+ panels/keyboard/cc-input-list-box.c | 27 +++++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/panels/keyboard/cc-input-list-box.c b/panels/keyboard/cc-input-list-box.c
+index ad14ea0d3..0f5c5c9de 100644
+--- a/panels/keyboard/cc-input-list-box.c
++++ b/panels/keyboard/cc-input-list-box.c
+@@ -691,13 +691,25 @@ user_manager_loaded (CcInputListBox *self)
+         !has_multiple_users && (self->permission != NULL) && g_permission_get_allowed (self->permission);
+ }
+ 
++/*
++ * Plinius: a polkit check takes 60-180 ms on the phone, and the page waited for it before it
++ * opened. Until the answer is there, changes stay with the user (login_auto_apply is FALSE),
++ * as without the permission.
++ */
+ static void
+-setup_localed_proxy (CcInputListBox *self)
++locale_permission_ready_cb (GObject *source_object, GAsyncResult *result, gpointer user_data)
+ {
++    CcInputListBox *self;
+     g_autoptr(GDBusConnection) bus = NULL;
+     g_autoptr(GError) error = NULL;
++    GPermission *permission = polkit_permission_new_finish (result, &error);
++    gboolean loaded;
+ 
+-    self->permission = polkit_permission_new_sync ("org.freedesktop.locale1.set-locale", NULL, NULL, &error);
++    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        return;
++
++    self = CC_INPUT_LIST_BOX (user_data);
++    self->permission = permission;
+     if (self->permission == NULL) {
+         g_debug ("Could not get 'org.freedesktop.locale1.set-locale' permission: %s", error->message);
+         return;
+@@ -706,6 +718,17 @@ setup_localed_proxy (CcInputListBox *self)
+     bus = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, NULL);
+     g_dbus_proxy_new (bus, G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.locale1", "/org/freedesktop/locale1",
+                       "org.freedesktop.locale1", self->cancellable, (GAsyncReadyCallback) localed_proxy_ready, self);
++
++    g_object_get (self->user_manager, "is-loaded", &loaded, NULL);
++    if (loaded)
++        user_manager_loaded (self);
++}
++
++static void
++setup_localed_proxy (CcInputListBox *self)
++{
++    polkit_permission_new ("org.freedesktop.locale1.set-locale", NULL, self->cancellable,
++                           locale_permission_ready_cb, self);
+ }
+ 
+ static void
+-- 
+2.55.0
+

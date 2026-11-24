@@ -1,0 +1,8 @@
+#%PAM-1.0
+
+# A VNC login is the phone's PIN coming in over a network, where nobody watches: every password
+# goes through plinius-pinguard with its own counter for network logins. That counter always
+# counts, also when the wait for PINs at the phone is off, and failed tries here don't lock the
+# phone itself. No fallback to pam_unix: without the daemon nobody logs in over VNC.
+auth    required pam_plinius_pinguard.so network
+account required pam_unix.so

@@ -1,0 +1,18 @@
+# pacman install script of plinius-epo: the first download right away (on a running phone),
+# not only two minutes after the next boot. In the image build nothing runs (no systemd).
+
+post_install() {
+	systemctl daemon-reload 2>/dev/null || true
+	systemctl start --no-block plinius-epo.timer plinius-epo.service 2>/dev/null || true
+}
+
+post_upgrade() {
+	systemctl daemon-reload 2>/dev/null || true
+}
+
+# The files and EPO in mnl.prop go with the package; mnld then starts as it came
+pre_remove() {
+	systemctl stop plinius-epo.timer 2>/dev/null || true
+	/usr/lib/plinius-epo/plinius-epo clear 2>/dev/null || true
+	return 0
+}

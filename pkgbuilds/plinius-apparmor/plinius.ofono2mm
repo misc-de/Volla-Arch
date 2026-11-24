@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in. Starting profile in complain mode: it logs what the service does
+# beyond these rules; the rules are completed from those messages (tools/aa-denials.sh) before
+# the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# ofono2mm: ModemManager's API on top of oFono (Python). Emergency calls run here: enforce only after an emergency dry run
+profile plinius.ofono2mm flags=(complain, attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/python>
+  include <abstractions/dbus-strict>
+  /usr/bin/python3* ixr,
+  /usr/bin/ofono2mm r,
+  /usr/lib/ofono2mm/{,**} r,
+  /usr/lib/python3*/{,**} mr,
+  /etc/mobile-broadband-provider-info/{,**} r,
+  /usr/share/mobile-broadband-provider-info/{,**} r,
+  @{PROC}/@{pid}/{fd/,cmdline,stat,status} r,
+}

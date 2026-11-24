@@ -1,0 +1,70 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-apps
+pkgver=0.11
+pkgrel=19
+pkgdesc="Plinius app selection: adaptive GNOME/Phosh apps for phone use"
+arch=(any)
+license=(MIT)
+# Metapackage with what Phosh and the phone need; these apps cannot be removed.
+# All other apps of the selection are listed in recommended.list: the image preinstalls them,
+# plinius-software can remove them and offers missing ones under "Recommended".
+# Since 0.11-18 the apps below "# Not preinstalled" there are only offered, not preinstalled;
+# first plinius-retro-games (game emulators).
+# The browser is Firefox (maintainer's choice), not GNOME Web. Deliberately not included:
+# gnome-software with PackageKit (does not fit the update model with approved channels,
+# docs/PAKETIERUNG.md); apps and system updates are handled by plinius-software.
+depends=(
+	# System
+	gnome-control-center phosh-mobile-settings gnome-keyring xdg-user-dirs-gtk
+	# Install apps and update the system
+	plinius-software
+	# Phone; cellbroadcastd sets the warning channels (DE-Alert/EU-Alert) and keeps the warnings;
+	# plinius-aml sends the position of an emergency call (AML) where a destination is agreed
+	gnome-calls chatty gnome-contacts cellbroadcastd plinius-aml
+	# MMS for Chatty, straight on oFono (docs/HARDWARE.md, MMS). Switched off in Germany since
+	# 2026-06-30, still there with many foreign SIMs; idle without a notification or a send
+	mmsd4ofono
+	# Makes Firefox phone-ready once it is installed (recommended.list)
+	mobile-config-firefox
+	# Protected Content (DRM): idle until switched on in Settings > Apps > Settings
+	plinius-widevine
+)
+source=(90-plinius-apps.gschema.override
+	recommended.list
+	plinius-printing.hook
+	plinius-printing
+	thunderbird-plinius-prefs.js
+	LICENSE)
+sha256sums=('f99ff1e0d2a1f07bb3a33a5d843a061cd2ffcdad9223f2e49a87f7ef635d44d7'
+	'2c24fb88923d0f42c74f83acb6ec52b816630925abbaefde2927f05863c0fdde'
+	'e2e786b427b84cc8c219a76c54d7163c204437db12eb8f616cef1fc0caad3bf3'
+	'f36c298ba7364a4e2a3b2ac6084168d845c6f206d30bb3f6c0a85415a95a1396'
+	'39b74c546b81e18590d8397a4393a70440af2f793237a55a566541e75f22c1a1'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+# The gschema override is compiled by the glib2 pacman hook; plinius-software reads the list.
+# The override also turns Phosh's emergency call menu on (off upstream).
+# The own hook enables the printing service once CUPS is installed. Hiding pulled-in launchers
+# moved to device-volla-ansuz (0.5-38), which is always installed.
+# Thunderbird has no package of its own here, so its defaults are installed with this package; the
+# file does nothing while Thunderbird is not installed.
+# Chatty and Calls ship user units for gnome-session.target and hide their XDG autostart entries
+# under systemd (X-GNOME-HiddenUnderSystemd), but Arch does not enable those units. Without the
+# links Chatty never runs, so received SMS stay in ModemManager and nobody shows them.
+# cellbroadcastd (WantedBy=default.target, also not enabled) only ran once phosh-mobile-settings
+# asked for it: until then no one set the warning channels of the country.
+package() {
+	local wants="$pkgdir/usr/lib/systemd/user/gnome-session.target.wants"
+	install -dm755 "$wants"
+	ln -s ../sm.puri.Chatty-daemon.service "$wants/sm.puri.Chatty-daemon.service"
+	ln -s ../calls-daemon.service "$wants/calls-daemon.service"
+	ln -s ../cellbroadcastd.service "$wants/cellbroadcastd.service"
+
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm644 90-plinius-apps.gschema.override -t "$pkgdir/usr/share/glib-2.0/schemas"
+	install -Dm644 recommended.list -t "$pkgdir/usr/share/plinius-apps"
+	install -Dm644 plinius-printing.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	install -Dm755 plinius-printing -t "$pkgdir/usr/share/libalpm/scripts"
+	install -Dm644 thunderbird-plinius-prefs.js "$pkgdir/usr/lib/thunderbird/defaults/pref/plinius-prefs.js"
+}

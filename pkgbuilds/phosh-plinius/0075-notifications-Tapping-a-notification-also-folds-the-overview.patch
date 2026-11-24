@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 12:21:18 +0100
+Subject: [PATCH] notifications: Tapping a notification also folds the overview
+
+Plinius: tapping a notification folded only the top panel. With the
+overview open, the app the notification activated (with its
+xdg-activation token, so it was focused) stayed behind it, small among
+the running apps, and the tap looked as if nothing happened. E.g. the
+update notification opened Settings on its Updates panel there.
+
+Now the overview folds as well, like for an app started from the notch
+search.
+---
+ src/shell.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/shell.c b/src/shell.c
+index bbdc37bd..b3d73b22 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -951,6 +951,8 @@ on_notification_activated (PhoshShell *self)
+   priv = phosh_shell_get_instance_private (self);
+ 
+   phosh_top_panel_fold (PHOSH_TOP_PANEL (priv->top_panel));
++  /* Plinius: the app the notification opens comes to the front, not behind the overview */
++  phosh_home_set_state (PHOSH_HOME (priv->home), PHOSH_HOME_STATE_FOLDED);
+ }
+ 
+ 

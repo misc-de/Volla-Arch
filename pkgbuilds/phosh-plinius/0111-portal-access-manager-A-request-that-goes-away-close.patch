@@ -1,0 +1,363 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 12:00:00 +0100
+Subject: [PATCH] portal-access-manager: A request that goes away closes its
+ dialog
+
+Plinius: an access dialog stayed open when its request went away, and
+while it was open every later AccessDialog failed (handle_access_dialog
+returns FALSE, the caller gets UnknownMethod) until someone tapped it.
+Measured on the phone: xdg-desktop-portal calls
+org.freedesktop.impl.portal.Request.Close on Phosh's request object
+when the app closes its request, and PhoshPortalRequest's Close only
+unexported it. A direct caller of AccessDialog (plinius-appaccess's
+agent) may also leave the bus while its question is open.
+
+access-request.c exports the request object at the handle itself and
+watches the caller's unique name. Close, or the caller gone, closes the
+dialog and answers the call with response 2 ("plinius-choice" "cancel"):
+nothing is granted, nothing written to the permission store and no
+"Allow Once" clean-up started. The next question shows again.
+---
+ src/access-request.c        | 153 ++++++++++++++++++++++++++++++++++++
+ src/access-request.h        |  33 ++++++++
+ src/meson.build             |   2 +
+ src/portal-access-manager.c |  42 +++++++---
+ 4 files changed, 218 insertions(+), 12 deletions(-)
+ create mode 100644 src/access-request.c
+ create mode 100644 src/access-request.h
+
+diff --git a/src/access-request.c b/src/access-request.c
+new file mode 100644
+index 00000000..8da70515
+--- /dev/null
++++ b/src/access-request.c
+@@ -0,0 +1,153 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-access-request"
++
++#include "access-request.h"
++
++/**
++ * SECTION:access-request
++ *
++ * Plinius: the request of an open access dialog (org.freedesktop.impl.portal.Access).
++ *
++ * The request goes away before it is answered in two ways: xdg-desktop-portal calls
++ * org.freedesktop.impl.portal.Request.Close on the request object at the handle (the app
++ * closed its request or left), or the caller itself leaves the bus (a caller that asks
++ * AccessDialog directly, as plinius-appaccess's agent). Either way the dialog must go, or it
++ * stays open and blocks every later question.
++ *
++ * A #PhoshAccessRequest exports the request object at the handle on the connection of the
++ * call and watches the caller's unique name; whichever comes first calls the gone function,
++ * once. phosh_access_request_cancel() then answers the call as ended (response 2).
++ */
++
++#define REQUEST_INTERFACE "org.freedesktop.impl.portal.Request"
++
++static const char introspection[] =
++  "<node><interface name='" REQUEST_INTERFACE "'><method name='Close'/></interface></node>";
++
++struct _PhoshAccessRequest {
++  GDBusConnection            *bus;
++  char                       *handle;
++  guint                       registration;
++  guint                       watch;
++  PhoshAccessRequestGoneFunc  gone;
++  gpointer                    user_data;
++};
++
++
++static void
++request_gone (PhoshAccessRequest *self, const char *why)
++{
++  PhoshAccessRequestGoneFunc gone = self->gone;
++
++  if (gone == NULL)
++    return;
++
++  g_debug ("Request %s %s", self->handle, why);
++  self->gone = NULL;
++  /* The gone function may free the request */
++  gone (self->user_data, why);
++}
++
++
++static void
++on_method_call (GDBusConnection       *bus,
++                const char            *sender,
++                const char            *path,
++                const char            *iface,
++                const char            *method,
++                GVariant              *params,
++                GDBusMethodInvocation *invocation,
++                gpointer               user_data)
++{
++  /* Close is the interface's only method; GDBus refuses others */
++  g_dbus_method_invocation_return_value (invocation, NULL);
++  request_gone (user_data, "closed");
++}
++
++
++static void
++on_name_vanished (GDBusConnection *bus, const char *name, gpointer user_data)
++{
++  request_gone (user_data, "vanished");
++}
++
++
++/**
++ * phosh_access_request_new:
++ * @invocation: the pending AccessDialog call
++ * @handle: its request handle (an object path)
++ * @gone: called when the request goes away before it is answered
++ * @user_data: for @gone
++ *
++ * Returns: the request; free it with phosh_access_request_free() once answered or gone
++ */
++PhoshAccessRequest *
++phosh_access_request_new (GDBusMethodInvocation      *invocation,
++                          const char                 *handle,
++                          PhoshAccessRequestGoneFunc  gone,
++                          gpointer                    user_data)
++{
++  static const GDBusInterfaceVTable vtable = { on_method_call, NULL, NULL, { 0 } };
++  g_autoptr (GDBusNodeInfo) info = g_dbus_node_info_new_for_xml (introspection, NULL);
++  g_autoptr (GError) err = NULL;
++  PhoshAccessRequest *self = g_new0 (PhoshAccessRequest, 1);
++  const char *sender = g_dbus_method_invocation_get_sender (invocation);
++
++  self->bus = g_object_ref (g_dbus_method_invocation_get_connection (invocation));
++  self->handle = g_strdup (handle);
++  self->gone = gone;
++  self->user_data = user_data;
++
++  if (handle && g_variant_is_object_path (handle)) {
++    self->registration = g_dbus_connection_register_object (self->bus, handle, info->interfaces[0],
++                                                            &vtable, self, NULL, &err);
++    if (self->registration == 0)
++      g_warning ("Could not export request %s: %s", handle, err->message);
++  } else {
++    g_warning ("Request handle '%s' is no object path", handle ? handle : "");
++  }
++
++  /* A caller without a name (a peer-to-peer connection) cannot vanish but with it */
++  if (sender)
++    self->watch = g_bus_watch_name_on_connection (self->bus, sender, G_BUS_NAME_WATCHER_FLAGS_NONE,
++                                                  NULL, on_name_vanished, self, NULL);
++  return self;
++}
++
++
++void
++phosh_access_request_free (PhoshAccessRequest *self)
++{
++  if (self == NULL)
++    return;
++
++  if (self->registration)
++    g_dbus_connection_unregister_object (self->bus, self->registration);
++  g_clear_handle_id (&self->watch, g_bus_unwatch_name);
++  g_clear_object (&self->bus);
++  g_free (self->handle);
++  g_free (self);
++}
++
++
++/**
++ * phosh_access_request_cancel:
++ * @invocation: the AccessDialog call
++ *
++ * Answers the call as ended without an answer of the user (response 2): nothing is to be
++ * granted or stored.
++ */
++void
++phosh_access_request_cancel (GDBusMethodInvocation *invocation)
++{
++  g_autoptr (GVariantDict) results = g_variant_dict_new (NULL);
++
++  g_variant_dict_insert (results, "plinius-choice", "s", "cancel");
++  g_dbus_method_invocation_return_value (invocation,
++                                         g_variant_new ("(u@a{sv})", 2, g_variant_dict_end (results)));
++}
+diff --git a/src/access-request.h b/src/access-request.h
+new file mode 100644
+index 00000000..0aff7b74
+--- /dev/null
++++ b/src/access-request.h
+@@ -0,0 +1,33 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include <gio/gio.h>
++
++G_BEGIN_DECLS
++
++typedef struct _PhoshAccessRequest PhoshAccessRequest;
++
++/**
++ * PhoshAccessRequestGoneFunc:
++ * @user_data: the data given to phosh_access_request_new()
++ * @why: "closed" (Request.Close) or "vanished" (the caller left the bus)
++ *
++ * The request went away before it was answered. Called at most once.
++ */
++typedef void (*PhoshAccessRequestGoneFunc) (gpointer user_data, const char *why);
++
++PhoshAccessRequest *phosh_access_request_new (GDBusMethodInvocation      *invocation,
++                                              const char                 *handle,
++                                              PhoshAccessRequestGoneFunc  gone,
++                                              gpointer                    user_data);
++void                phosh_access_request_free (PhoshAccessRequest *self);
++void                phosh_access_request_cancel (GDBusMethodInvocation *invocation);
++
++G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhoshAccessRequest, phosh_access_request_free)
++
++G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index 27d74365..5e1903a5 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -116,6 +116,7 @@ phosh_generated_headers = [phosh_glib_generated_headers, wl_proto_headers]
+ 
+ phosh_tool_headers = files(
+   'access-once.h',
++  'access-request.h',
+   'activity.h',
+   'airplane-info.h',
+   'ambient.h',
+@@ -201,6 +202,7 @@ phosh_tool_headers = files(
+ # Available in tools and unit tests:
+ phosh_tool_sources = files(
+   'access-once.c',
++  'access-request.c',
+   'activity.c',
+   'airplane-info.c',
+   'ambient.c',
+diff --git a/src/portal-access-manager.c b/src/portal-access-manager.c
+index 36b2194e..e12f9520 100644
+--- a/src/portal-access-manager.c
++++ b/src/portal-access-manager.c
+@@ -9,10 +9,10 @@
+ #define G_LOG_DOMAIN "phosh-portal-access-manager"
+ 
+ #include "access-once.h"
++#include "access-request.h"
+ #include "app-auth-prompt.h"
+ #include "dbus/portal-dbus.h"
+ #include "portal-access-manager.h"
+-#include "portal-request.h"
+ #include "shell-priv.h"
+ #include "util.h"
+ 
+@@ -26,12 +26,14 @@
+  * Implements org.freedesktop.impl.portal
+  *
+  * Plinius: every access dialog asks with "Allow Once", "Always Allow" and "Don't Allow"; what
+- * becomes of "Allow Once" in xdg-desktop-portal's permission store is in access-once.c.
++ * becomes of "Allow Once" in xdg-desktop-portal's permission store is in access-once.c. A
++ * request that goes away while its dialog is open (closed, or the caller left the bus) closes
++ * the dialog (access-request.c), so the next question can show.
+  */
+ 
+ typedef struct _PhoshPortalAccessManager {
+   PhoshDBusImplPortalAccessSkeleton access_portal;
+-  PhoshPortalRequest               *request;
++  PhoshAccessRequest               *request;
+   int                               dbus_name_id;
+   PhoshAppAuthPrompt               *app_auth_prompt;
+   GDBusMethodInvocation            *invocation;
+@@ -56,7 +58,7 @@ on_access_dialog_closed (PhoshPortalAccessManager *self)
+   GVariant *choices = NULL;
+   PhoshAccessChoice choice = phosh_app_auth_prompt_get_choice (GTK_WIDGET (self->app_auth_prompt));
+ 
+-  g_clear_object (&self->request);
++  g_clear_pointer (&self->request, phosh_access_request_free);
+ 
+   choices = phosh_app_auth_prompt_get_selected_choices (GTK_WIDGET (self->app_auth_prompt));
+   phosh_access_once_complete (self->invocation, self->app_id, self->options, choice, choices);
+@@ -70,6 +72,27 @@ on_access_dialog_closed (PhoshPortalAccessManager *self)
+ }
+ 
+ 
++/* Plinius: the request went away unanswered: close the dialog, answer as ended */
++static void
++on_request_gone (gpointer user_data, const char *why)
++{
++  PhoshPortalAccessManager *self = PHOSH_PORTAL_ACCESS_MANAGER (user_data);
++
++  g_debug ("Access request of %s %s, closing its dialog", self->app_id, why);
++  g_clear_pointer (&self->request, phosh_access_request_free);
++  phosh_access_request_cancel (self->invocation);
++  self->invocation = NULL;
++  g_clear_pointer (&self->app_id, g_free);
++  g_clear_pointer (&self->options, g_variant_unref);
++
++  if (self->app_auth_prompt != NULL) {
++    g_signal_handlers_disconnect_by_func (self->app_auth_prompt, on_access_dialog_closed, self);
++    gtk_widget_set_visible (GTK_WIDGET (self->app_auth_prompt), FALSE);
++  }
++  g_clear_pointer (&self->app_auth_prompt, phosh_cp_widget_destroy);
++}
++
++
+ static gboolean
+ handle_access_dialog (PhoshDBusImplPortalAccess *object,
+                       GDBusMethodInvocation     *invocation,
+@@ -81,15 +104,10 @@ handle_access_dialog (PhoshDBusImplPortalAccess *object,
+                       const char                *arg_body,
+                       GVariant                  *arg_options)
+ {
+-  const char *sender;
+   g_autoptr (GIcon) icon = NULL;
+   GVariant *choices = NULL;
+   GVariant *icon_variant = g_variant_lookup_value (arg_options, "icon", G_VARIANT_TYPE_STRING);
+   PhoshPortalAccessManager *self = PHOSH_PORTAL_ACCESS_MANAGER (object);
+-  g_autoptr (PhoshPortalRequest) request = NULL;
+-
+-  sender = g_dbus_method_invocation_get_sender (invocation);
+-  request = phosh_portal_request_new (sender, arg_app_id, arg_handle);
+ 
+   if (self->app_auth_prompt != NULL) {
+     return FALSE;
+@@ -109,7 +127,6 @@ handle_access_dialog (PhoshDBusImplPortalAccess *object,
+   self->choices = choices;
+   self->app_id = g_strdup (arg_app_id);
+   self->options = g_variant_ref (arg_options);
+-  self->request = g_steal_pointer (&request);
+   /* Plinius: the three buttons (or those the caller names) instead of grant and deny */
+   self->app_auth_prompt = PHOSH_APP_AUTH_PROMPT (
+     phosh_app_auth_prompt_new_with_buttons (icon,
+@@ -130,7 +147,8 @@ handle_access_dialog (PhoshDBusImplPortalAccess *object,
+                           self->app_auth_prompt, "visible",
+                           G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
+ 
+-  phosh_portal_request_export (self->request, g_dbus_method_invocation_get_connection (invocation));
++  /* Plinius: the request object at the handle; closed, or its caller gone, the dialog goes */
++  self->request = phosh_access_request_new (invocation, arg_handle, on_request_gone, self);
+   return TRUE;
+ }
+ 
+@@ -198,7 +216,7 @@ phosh_portal_access_manager_dispose (GObject *object)
+   PhoshPortalAccessManager *self = PHOSH_PORTAL_ACCESS_MANAGER (object);
+ 
+   g_clear_pointer (&self->app_auth_prompt, phosh_cp_widget_destroy);
+-  g_clear_object (&self->request);
++  g_clear_pointer (&self->request, phosh_access_request_free);
+   g_clear_pointer (&self->app_id, g_free);
+   g_clear_pointer (&self->options, g_variant_unref);
+ 
+-- 
+2.56.0
+

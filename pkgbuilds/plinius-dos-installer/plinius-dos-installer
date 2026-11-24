@@ -1,0 +1,22 @@
+#!/usr/bin/python3 -I
+"""DOS Installer: installs DOS games from disk images, CDs, archives or folders.
+
+    plinius-dos-installer              the window
+    plinius-dos-installer --play KEY   starts a DOS game in DOSBox (from its launcher)
+    plinius-dos-installer --setup KEY  starts the game's own setup (from its page in the window)
+"""
+
+import sys
+
+sys.path.insert(0, "/usr/lib/plinius-dos-installer")
+
+if len(sys.argv) == 3 and sys.argv[1] in ("--play", "--setup"):
+    from dosinstall import dosgames, library
+    game = dosgames.find_by_launcher(sys.argv[2], library.games())
+    if not game:
+        sys.exit(f"no such game: {sys.argv[2]}")
+    sys.exit(dosgames.play(game, setup=sys.argv[1] == "--setup"))
+
+from dosinstall.app import main  # noqa: E402
+
+sys.exit(main())

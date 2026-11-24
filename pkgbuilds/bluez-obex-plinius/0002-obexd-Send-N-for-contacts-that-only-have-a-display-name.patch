@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 10:41:19 +0100
+Subject: [PATCH] obexd: Send N for contacts that only have a display name
+
+A contact saved with only a display name (FN) has no N, or a blank one.
+N is mandatory in vCard 2.1 and 3.0, and a car that asks for vCard 2.1
+with only VERSION, N, ADR and TEL in its filter got such contacts as a
+bare number without a name. Take the display name as the family name
+when N is missing or blank.
+---
+ obexd/plugins/phonebook-ebook.c | 53 +++++++++++++++++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+
+diff --git a/obexd/plugins/phonebook-ebook.c b/obexd/plugins/phonebook-ebook.c
+index a0bfb31..d13f507 100644
+--- a/obexd/plugins/phonebook-ebook.c
++++ b/obexd/plugins/phonebook-ebook.c
+@@ -112,6 +112,57 @@ static void free_query_context(struct query_context *data)
+ 	g_free(data);
+ }
+ 
++/* Whether N holds anything but blanks */
++static gboolean name_is_set(EVCardAttribute *n)
++{
++	GList *l;
++
++	for (l = e_vcard_attribute_get_values(n); l; l = g_list_next(l)) {
++		const char *value = l->data;
++
++		while (value && g_ascii_isspace(*value))
++			value++;
++		if (value && *value)
++			return TRUE;
++	}
++
++	return FALSE;
++}
++
++/*
++ * A contact saved with only a display name (FN) has no N, or a blank one.
++ * N is mandatory in both vCard versions and the PCE may not ask for FN at
++ * all (a car asking for vCard 2.1 with VERSION, N, ADR and TEL showed such
++ * contacts as a bare number). Take the display name as the family name.
++ */
++static void add_missing_name(EVCard *evcard)
++{
++	EVCardAttribute *n, *fn;
++	char *name;
++
++	n = e_vcard_get_attribute(evcard, EVC_N);
++	if (n && name_is_set(n))
++		return;
++
++	fn = e_vcard_get_attribute(evcard, EVC_FN);
++	if (!fn)
++		return;
++
++	name = e_vcard_attribute_get_value(fn);
++	if (!name)
++		return;
++
++	g_strstrip(name);
++	if (*name) {
++		if (n)
++			e_vcard_remove_attribute(evcard, n);
++		e_vcard_add_attribute_with_values(evcard,
++					e_vcard_attribute_new(NULL, EVC_N),
++					name, "", "", "", "", NULL);
++	}
++	g_free(name);
++}
++
+ static char *evcard_to_string(EVCard *evcard, unsigned int format,
+ 							       uint64_t filter)
+ {
+@@ -119,6 +170,8 @@ static char *evcard_to_string(EVCard *evcard, unsigned int format,
+ 	GList *l;
+ 	char *vcard;
+ 
++	add_missing_name(evcard);
++
+ 	if (!filter)
+ 		return e_vcard_to_string(evcard, format);
+ 

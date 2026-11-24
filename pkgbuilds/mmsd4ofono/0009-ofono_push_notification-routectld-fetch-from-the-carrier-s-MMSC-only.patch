@@ -1,0 +1,266 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:15:00 +0100
+Subject: [PATCH] ofono_push_notification, routectld: fetch from the carrier's
+ MMSC only
+
+A notification is an SMS anyone can send. mmsd looked up and fetched
+whatever host its Content-Location named, and aiohttp followed up to
+ten redirects whose targets nobody checked: a server of the sender
+could lead each fetch on to 127.0.0.1 or into the home network, up to
+21 requests per SMS with the retries. The address filter let private
+networks and the device's own addresses through, and routectld routed
+such an address (the home router, say) onto the MMS bearer for as
+long as the fetch lived. The DNS query alone told the sender that the
+phone is on, even without mobile data.
+
+Now:
+- Only the MMSC of the MMS context is fetched from: the Content-Location
+  host must be the MMSC's host or one of its domain. Any other host is
+  neither looked up nor fetched. Without an MMSC (no MMS from the
+  carrier) nothing is fetched automatically.
+- Redirects are never followed, on fetching, confirming and sending. A
+  redirect of the MMSC is final, without retries.
+- Only addresses on the internet are fetched from; private ones only
+  for the MMSC's own host, as some carriers keep it in the MMS bearer's
+  network.
+- routectld sets no host route for an address of this device, of a
+  network on one of its other links (WLAN, USB, hotspot) or of a network
+  routed over another interface (a VPN). The cellular bearers and their
+  CLATs are left out of this, they share the carrier's networks.
+---
+ mmsd/ofono_mms_service.py       |  6 ++-
+ mmsd/ofono_push_notification.py | 77 +++++++++++++++++++++++++++++----
+ routectld/routectld.py          | 43 ++++++++++++++++++
+ 3 files changed, 115 insertions(+), 11 deletions(-)
+
+diff --git a/mmsd/ofono_mms_service.py b/mmsd/ofono_mms_service.py
+index dd1ee01..517bbce 100644
+--- a/mmsd/ofono_mms_service.py
++++ b/mmsd/ofono_mms_service.py
+@@ -306,10 +306,12 @@ class OfonoMMSServiceInterface(ServiceInterface):
+                                     request = session.post(
+                                         current_url, proxy=f"http://{current_proxy}",
+                                         headers=headers, data=payload,
+-                                        skip_auto_headers=['User-Agent']
++                                        skip_auto_headers=['User-Agent'],
++                                        allow_redirects=False
+                                     )
+                                 else:
+-                                    request = session.post(current_url, headers=headers, data=bytes(payload))
++                                    request = session.post(current_url, headers=headers, data=bytes(payload),
++                                                           allow_redirects=False)
+ 
+                                 async with request as response:
+                                     mmsd_print(f"Response status: {response.status}", self.verbose)
+diff --git a/mmsd/ofono_push_notification.py b/mmsd/ofono_push_notification.py
+index 16a1f9e..c4ca80a 100644
+--- a/mmsd/ofono_push_notification.py
++++ b/mmsd/ofono_push_notification.py
+@@ -37,21 +37,52 @@ FETCH_RETRY_DELAYS = (30, 60, 120, 300, 600, 1800)
+ # message and would only be held in memory.
+ MAX_MESSAGE_SIZE = 5 * 1024 * 1024
+ # A notification is an SMS anyone can send, and its Content-Location is
+-# fetched over a route set up for it. Addresses of this device or its link
+-# are never an MMSC. tools/mms-standin.py runs its MMSC on 127.0.0.1.
++# fetched over a route set up for it. Only the carrier's own MMSC is fetched
++# from (see carrier_host), and only at an address on the internet: addresses
++# of this device, its links and private networks are never an MMSC, unless
++# they belong to the MMSC set in the MMS context itself (some carriers keep it
++# in a private network of the MMS bearer). tools/mms-standin.py runs its MMSC
++# on 127.0.0.1.
+ ALLOW_LOOPBACK = environ.get('MMSD_ALLOW_LOOPBACK_MMSC', '') == '1'
+ 
+ class FetchRefused(Exception):
+     """A message that is not fetched, now or later."""
+ 
+-def unsafe_address(ip):
++def unsafe_address(ip, private_ok=False):
+     try:
+         address = ipaddress.ip_address(ip.split('%')[0])
+     except ValueError:
+         return True
+     if address.is_loopback:
+         return not ALLOW_LOOPBACK
+-    return address.is_unspecified or address.is_link_local or address.is_multicast
++    if address.is_unspecified or address.is_link_local or address.is_multicast:
++        return True
++    return not (address.is_global or private_ok)
++
++def carrier_host(host, mmsc):
++    """Whether a Content-Location host belongs to the MMSC of the MMS context.
++    An MMSC only ever points at itself (messages between carriers are relayed
++    from MMSC to MMSC), so any other host is not fetched from, and not even
++    looked up: the DNS query alone would tell the sender of the SMS that this
++    phone is on. Returns 'same' for the MMSC's own host, 'domain' for another
++    host of its domain (mms.carrier.example and mmsc.carrier.example), else None."""
++    mmsc_host = urlparse(mmsc).hostname if mmsc else None
++    if not host or not mmsc_host:
++        return None
++    host, mmsc_host = host.lower().rstrip('.'), mmsc_host.lower().rstrip('.')
++    if host == mmsc_host:
++        return 'same'
++    try:
++        ipaddress.ip_address(mmsc_host)
++        return None                              # an MMSC by address: that address only
++    except ValueError:
++        pass
++    labels = mmsc_host.split('.')
++    # The MMSC's domain without its first label, at least two labels deep
++    # (mms.t-mobile.de -> t-mobile.de, never just "de")
++    if len(labels) >= 3 and host.endswith('.' + '.'.join(labels[1:])):
++        return 'domain'
++    return None
+ 
+ def notify_response(transaction_id):
+     """m-notifyresp.ind with X-Mms-Status Retrieved (OMA-MMS-ENC 1.2, 6.2).
+@@ -376,6 +407,19 @@ class OfonoPushNotification(ServiceInterface):
+             mmsd_print(f"Not fetching {content_location}: {size} bytes is more than {MAX_MESSAGE_SIZE}", self.verbose)
+             return
+ 
++        # Only checked again in fetch_mms_content: a notification that names no http(s) address
++        # of the carrier's MMSC is not announced either, or every forged one would show up as a
++        # message that failed to download
++        try:
++            mmsc = (await self.get_mms_context_info())[1]
++        except Exception as e:
++            mmsd_print(f"Could not read the MMS context: {e}", self.verbose)
++        else:
++            location = urlparse(content_location)
++            if location.scheme not in ('http', 'https') or not carrier_host(location.hostname, mmsc):
++                mmsd_print(f"Not fetching {content_location}: not an address of the MMSC", self.verbose)
++                return
++
+         uuid = str(uuid4()).replace('-', '1')
+         sent_time = info['SentTime'].value if 'SentTime' in info else ''
+         self.announce_incoming(uuid, sub(r'[^0-9+]', '', sender) if sender else '', sent_time)
+@@ -540,7 +584,8 @@ class OfonoPushNotification(ServiceInterface):
+         pdu = notify_response(transaction_id)
+         for url, proxy in targets:
+             try:
+-                async with session.post(url, data=pdu, headers=headers, proxy=proxy) as response:
++                async with session.post(url, data=pdu, headers=headers, proxy=proxy,
++                                        allow_redirects=False) as response:
+                     mmsd_print(f"m-notifyresp.ind to {url}: HTTP {response.status}", self.verbose)
+                     if 200 <= response.status < 300:
+                         return
+@@ -555,6 +600,14 @@ class OfonoPushNotification(ServiceInterface):
+         if urlparse(url).scheme not in ('http', 'https'):
+             raise FetchRefused("only http and https are fetched")
+ 
++        # Without an MMSC there is no carrier MMS (as in Germany since 2026-06-30):
++        # nothing is fetched automatically, whoever sent the notification
++        if not mmsc:
++            raise FetchRefused("no MMSC is set in the MMS context")
++        own_host = carrier_host(urlparse(url).hostname, mmsc)
++        if not own_host:
++            raise FetchRefused(f"{urlparse(url).hostname} is not the MMSC {urlparse(mmsc).hostname}")
++
+         if proxy:
+             proxy_host = proxy if not ':' in proxy else proxy.split(':')[0]
+             proxy_ips = await resolve_host(proxy_host, self.verbose)
+@@ -577,8 +630,8 @@ class OfonoPushNotification(ServiceInterface):
+             if not url_ips:
+                 mmsd_print(f"Failed to resolve URL host: {url_parts.hostname}", self.verbose)
+                 return None
+-            if any(unsafe_address(ip) for ip in url_ips):
+-                raise FetchRefused(f"{url_parts.hostname} is an address of this device or its link")
++            if any(unsafe_address(ip, private_ok=own_host == 'same') for ip in url_ips):
++                raise FetchRefused(f"{url_parts.hostname} is not an address on the internet")
+             needed_ips.extend(url_ips)
+ 
+             # Every resolved address is a candidate. resolve_host() returns IPv6 ahead of
+@@ -626,17 +679,23 @@ class OfonoPushNotification(ServiceInterface):
+                             try:
+                                 mmsd_print(f"Fetching URL: {resolved_url} using proxy: {current_proxy} (attempt {attempt + 1}/3)", self.verbose)
+ 
++                                # A redirect would lead past the checks above, to any
++                                # address (127.0.0.1, the home network): never followed
+                                 if current_proxy:
+                                     request = session.get(
+                                         resolved_url,
+                                         proxy=f"http://{current_proxy}",
+-                                        headers=headers
++                                        headers=headers,
++                                        allow_redirects=False
+                                     )
+                                 else:
+-                                    request = session.get(resolved_url, headers=headers)
++                                    request = session.get(resolved_url, headers=headers,
++                                                          allow_redirects=False)
+ 
+                                 async with request as response:
+                                     mmsd_print(f"Response status: {response.status}", self.verbose)
++                                    if 300 <= response.status < 400:
++                                        raise FetchRefused(f"the MMSC redirects (HTTP {response.status})")
+                                     if response.status == 200:
+                                         content = await self.read_limited(response)
+                                         mmsd_print(f"Content length: {len(content)}", self.verbose)
+diff --git a/routectld/routectld.py b/routectld/routectld.py
+index 913cc5c..350db6d 100755
+--- a/routectld/routectld.py
++++ b/routectld/routectld.py
+@@ -27,6 +27,8 @@ MAX_ADDRESSES = 16
+ # behind. Longer than a fetch or send over three addresses with three tries
+ # of 120 s each (1080 s)
+ ROUTE_LIFETIME = 1200
++# Interfaces of the modem's bearers (MediaTek ccmni, Qualcomm rmnet, wwan) and of the CLATs
++CELLULAR_PREFIXES = ("ccmni", "rmnet", "wwan", "clat")
+ 
+ def host_address(value):
+     """A single remote host, nothing else: a prefix such as 0.0.0.0/0 would
+@@ -110,6 +112,43 @@ class MMSRouteController:
+ 
+         return None
+ 
++    def _reached_otherwise(self, ip, mms_idx, clat_idx):
++        """Why a host route for ip onto the MMS bearer would take traffic away
++        from where it belongs, or None. A host route wins over every other route
++        in the main table: for an address of this device, of a network on one of
++        its links (the home router behind wlan0, a hotspot or USB client) or of a
++        network routed over another interface (a VPN), the device would reach it
++        over the MMS bearer for as long as the route lives (ROUTE_LIFETIME)."""
++        address = ipaddress.ip_address(ip)
++        # The cellular bearers and their CLATs share the carrier's networks (on the
++        # Volla, the internet bearer ccmni1 holds 10.0.0.0/8, where an MMSC of the
++        # MMS bearer may live): they are not "elsewhere"
++        bearer = {mms_idx, clat_idx}
++        for link in self.ipr.get_links():
++            if (link.get_attr('IFLA_IFNAME') or '').startswith(CELLULAR_PREFIXES):
++                bearer.add(link['index'])
++        for a in self.ipr.get_addr():
++            for attr in ('IFA_LOCAL', 'IFA_ADDRESS'):
++                local = a.get_attr(attr)
++                if not local:
++                    continue
++                local = ipaddress.ip_address(local.split('%')[0])
++                if local.version != address.version:
++                    continue
++                if local == address:
++                    return "an address of this device"
++                if a['index'] in bearer or a['prefixlen'] >= local.max_prefixlen:
++                    continue
++                if address in ipaddress.ip_network(f"{local}/{a['prefixlen']}", strict=False):
++                    return f"on the network of interface {a['index']}"
++        for r in self.ipr.get_routes(family=10 if address.version == 6 else 2, table=254):
++            if not r['dst_len'] or r.get_attr('RTA_OIF') in bearer:
++                continue
++            dst = r.get_attr('RTA_DST')
++            if dst and address in ipaddress.ip_network(f"{dst}/{r['dst_len']}", strict=False):
++                return f"routed over interface {r.get_attr('RTA_OIF')} ({dst}/{r['dst_len']})"
++        return None
++
+     async def setup_routes(self, interface: str, ips: List[str]) -> bool:
+         await self._run_clatd_bearer_manager()
+         mmsd_print(f"Setting up route for interface: {interface} with ips: {ips}", self.verbose)
+@@ -144,6 +183,10 @@ class MMSRouteController:
+             ok = False
+             for ip in ips:
+                 is_ipv6 = ':' in ip
++                claimed = self._reached_otherwise(ip, idx, clat_idx)
++                if claimed:
++                    mmsd_print(f"Not routing {ip} onto {interface}: {claimed}", self.verbose)
++                    continue
+                 src_addr = global_src(is_ipv6)
+ 
+                 if src_addr is not None:

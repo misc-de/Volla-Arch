@@ -1,0 +1,12 @@
+[Unit]
+Description=Ask when an app was refused a camera, a security key or the network
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/lib/plinius-appaccess/plinius-appaccess-agent
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

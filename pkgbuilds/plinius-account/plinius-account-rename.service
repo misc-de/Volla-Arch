@@ -1,0 +1,13 @@
+[Unit]
+Description=Pending rename of a user
+Documentation=man:usermod(8)
+ConditionPathExists=/var/lib/plinius-account/rename
+After=local-fs.target
+Before=systemd-user-sessions.service greetd.service display-manager.service accounts-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius-account/rename-user-boot
+
+[Install]
+WantedBy=multi-user.target

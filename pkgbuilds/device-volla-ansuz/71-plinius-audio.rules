@@ -1,0 +1,8 @@
+# Volla Phone Plinius: device nodes of the audio HAL that Android sets up in init.mt6878.rc, not
+# in ueventd.rc, so tools/ueventd2udev.py does not see them. Owner and mode as there (media);
+# the user is in aid_media. Without /dev/usip the HAL cannot hand the speech parameters to the
+# modem (SpeechExtMemUSIP: open(/dev/usip) errno 13): in a call the other side did not hear the
+# microphone (2026-11-02).
+ACTION=="add|change", KERNEL=="usip", OWNER="aid_media", GROUP="aid_media", MODE="0660"
+ACTION=="add|change", KERNEL=="vow", OWNER="aid_media", GROUP="aid_media", MODE="0640"
+ACTION=="add|change", KERNEL=="mtk_usb_offload", OWNER="aid_media", GROUP="aid_media", MODE="0640"

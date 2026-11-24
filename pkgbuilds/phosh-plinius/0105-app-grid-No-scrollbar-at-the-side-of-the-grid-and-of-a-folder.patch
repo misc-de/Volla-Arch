@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 12:00:00 +0100
+Subject: [PATCH] app-grid: No scrollbar at the side of the grid and of a
+ folder
+
+Plinius: while the app grid or an open folder scrolled, GTK's overlay
+scrollbar showed at the right edge. Both scrolled windows now use the
+external policy for the vertical direction: they still scroll by touch,
+kinetic scrolling and the wheel, the scrollbar is not shown. The folder
+dock already scrolls sideways this way.
+---
+ src/ui/app-grid.ui | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/ui/app-grid.ui b/src/ui/app-grid.ui
+index d1889d67..0165c34c 100644
+--- a/src/ui/app-grid.ui
++++ b/src/ui/app-grid.ui
+@@ -43,6 +43,8 @@
+             <child>
+               <object class="GtkScrolledWindow" id="scrolled_window">
+                 <property name="visible">1</property>
++                <!-- Scrolls by touch and wheel, without a scrollbar at the side -->
++                <property name="vscrollbar-policy">external</property>
+                 <property name="hexpand">1</property>
+                 <property name="vexpand">1</property>
+                 <child>
+@@ -288,6 +290,7 @@
+                     <property name="visible">1</property>
+                     <property name="hexpand">1</property>
+                     <property name="vexpand">1</property>
++                    <property name="vscrollbar-policy">external</property>
+                     <child>
+                       <object class="GtkFlowBox" id="folder_apps">
+                         <property name="visible">1</property>

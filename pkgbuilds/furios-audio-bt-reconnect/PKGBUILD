@@ -1,0 +1,59 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=furios-audio-bt-reconnect
+# No version upstream: commit count and hash of _commit
+pkgver=r204.7b06d0a
+pkgrel=2
+pkgdesc="Dial Bluetooth headphones back that hung up and did not call again"
+arch=(any)
+url="https://github.com/misc-de/furios_audio"
+license=(MIT)
+# Why on the Plinius: BlueZ dials a paired device itself only when the adapter powers on and after
+# a lost radio link. Earbuds out of their case call the phone themselves, but once: a pair of
+# earbuds, 2026-11-11, once connected within the second, an hour earlier nothing reached
+# bluetoothd at all, and `bluetoothctl connect` worked at once. Nothing on Phosh calls back.
+# Only the reconnect watcher from furios_audio: the rest (droid HAL sink, WirePlumber
+# configuration, audioctl) is FuriOS's, the Plinius has its own audio (audio-hal-bridge,
+# pipewire-audio-plinius).
+# Patch 0001 adds three occasions to dial: the display on (plinius-mce's display_status_ind), a
+# player starting (MPRIS), and the candidate kept across a reboot. And it dials headphones only,
+# by class of device: the car kit calls itself audio-headset as well.
+depends=(bluez python python-gobject systemd)
+makedepends=(git)
+checkdepends=(python)
+# Commit of 2026-10-24, no tag upstream; a commit hash cannot move
+_commit=7b06d0a15d9f0a160341b5eaafbca2c52159f894
+source=("git+$url.git#commit=$_commit"
+	# Display on, music starting, a reboot, and no car kits (to be sent upstream)
+	0001-bt-reconnect-display-on-music-starting-a-reboot-and-no-car-kits.patch)
+sha256sums=('SKIP'
+	'2ce56b7cba2cfce57c538027eb69acdb0bfe521131a9566c7000ed4278eb24ab')
+
+prepare() {
+	cd furios_audio
+	patch -Np1 -i "$srcdir/0001-bt-reconnect-display-on-music-starting-a-reboot-and-no-car-kits.patch"
+}
+
+check() {
+	cd furios_audio
+	# Only the watcher's tests: the file runs every suite of the repository when started directly
+	python3 - <<'EOF'
+import importlib.util, sys, unittest
+spec = importlib.util.spec_from_file_location("furios_tests", "tests/test-python.py")
+tests = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tests)
+suite = unittest.defaultTestLoader.loadTestsFromTestCase(tests.BluetoothReconnect)
+sys.exit(not unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful())
+EOF
+}
+
+package() {
+	cd furios_audio
+	install -Dm755 tools/furios-audio-bt-reconnect.py "$pkgdir/usr/bin/furios-audio-bt-reconnect"
+	install -Dm644 furios-audio-bt-reconnect.service -t "$pkgdir/usr/lib/systemd/user"
+	install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../furios-audio-bt-reconnect.service \
+		"$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	install -Dm644 NOTICE -t "$pkgdir/usr/share/doc/$pkgname"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

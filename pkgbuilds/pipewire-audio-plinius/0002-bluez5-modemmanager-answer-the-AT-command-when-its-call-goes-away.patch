@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 11:44:10 +0100
+Subject: [PATCH] bluez5: modemmanager: answer the AT command when its call
+ goes away
+
+A command for a call (ATA, AT+CHUP, AT+VTS) waits for ModemManager's
+reply before the hands-free unit gets OK or ERROR. When the call went
+away first, call_free() cancelled the pending reply and the AT command
+was never answered: with ofono2mm, oFono ends the call before Hangup
+returns, so a car's AT+CHUP got no answer, the car kept showing the
+call and its next AT+CHUP got +CME ERROR: 3.
+
+Remember the command's user data with the pending call and answer it
+from call_free(): OK for a hang-up, which is done once the call is gone,
+an error for the others.
+---
+ spa/plugins/bluez5/modemmanager.c | 15 +++++++++++++++
+ spa/plugins/bluez5/modemmanager.h |  3 +++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/spa/plugins/bluez5/modemmanager.c b/spa/plugins/bluez5/modemmanager.c
+index 249f079..1922787 100644
+--- a/spa/plugins/bluez5/modemmanager.c
++++ b/spa/plugins/bluez5/modemmanager.c
+@@ -459,6 +459,14 @@ static void call_free(struct call *call)
+ {
+ 	spa_list_remove(&call->link);
+ 
++	if (call->pending && call->cmd_user_data) {
++		/* The call went away before ModemManager answered a command for it (oFono ends
++		 * the call before ofono2mm returns from Hangup): the AT command still needs its
++		 * answer, or the hands-free unit waits and keeps showing the call. A hang-up is
++		 * done by then. */
++		cancel_and_unref(&call->pending);
++		call->this->ops->send_cmd_result(call->cmd_done_when_gone, 0, call->cmd_user_data);
++	}
+ 	cancel_and_unref(&call->pending);
+ 
+ 	if (call->number)
+@@ -781,6 +789,7 @@ static void mm_get_call_simple_reply(DBusPendingCall *pending, void *data)
+ 	free(data);
+ 
+ 	spa_assert(call->pending == pending);
++	call->cmd_user_data = NULL;
+ 	spa_autoptr(DBusMessage) r = steal_reply_and_unref(&call->pending);
+ 	if (r == NULL)
+ 		return;
+@@ -875,6 +884,8 @@ bool mm_answer_call(void *modemmanager, void *user_data, enum cmee_error *error)
+ 			*error = CMEE_AG_FAILURE;
+ 		return false;
+ 	}
++	call_object->cmd_user_data = user_data;
++	call_object->cmd_done_when_gone = false;
+ 
+ 	return spa_steal_ptr(data), true;
+ }
+@@ -934,6 +945,8 @@ bool mm_hangup_call(void *modemmanager, void *user_data, enum cmee_error *error)
+ 			*error = CMEE_AG_FAILURE;
+ 		return false;
+ 	}
++	call_object->cmd_user_data = user_data;
++	call_object->cmd_done_when_gone = true;
+ 
+ 	return spa_steal_ptr(data), true;
+ }
+@@ -1067,6 +1080,8 @@ bool mm_send_dtmf(void *modemmanager, const char *dtmf, void *user_data, enum cm
+ 			*error = CMEE_AG_FAILURE;
+ 		return false;
+ 	}
++	call_object->cmd_user_data = user_data;
++	call_object->cmd_done_when_gone = false;
+ 
+ 	return spa_steal_ptr(data), true;
+ }
+diff --git a/spa/plugins/bluez5/modemmanager.h b/spa/plugins/bluez5/modemmanager.h
+index 09bd655..a4a8718 100644
+--- a/spa/plugins/bluez5/modemmanager.h
++++ b/spa/plugins/bluez5/modemmanager.h
+@@ -46,6 +46,9 @@ struct call {
+ 	unsigned int index;
+ 	struct impl *this;
+ 	DBusPendingCall *pending;
++	/* The AT command waiting for pending, and whether the call going away fulfils it */
++	void *cmd_user_data;
++	bool cmd_done_when_gone;
+ 
+ 	char *path;
+ 	char *number;

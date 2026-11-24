@@ -1,0 +1,13 @@
+# Google updates the CDM a few times a year; asking once a day is enough (Chrome asks every
+# few hours). A day the phone was off is caught up at the next start.
+[Unit]
+Description=Look for a newer Widevine CDM once a day
+
+[Timer]
+OnBootSec=5min
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

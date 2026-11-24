@@ -1,0 +1,6 @@
+# The greeter's own directory: it names the picked account there (request) and counts its failed
+# starts; root reads it (plinius-greeter-login.path)
+d /run/plinius-greeter 0700 greeter greeter -
+# root's: greetd's configuration of this start and the account to log in
+d /run/plinius-login 0755 root root -
+d /var/lib/plinius-greeter 0755 root root -

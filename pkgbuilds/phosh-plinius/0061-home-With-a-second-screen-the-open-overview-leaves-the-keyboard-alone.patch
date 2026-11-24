@@ -1,0 +1,90 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] home: With a second screen the open overview leaves the keyboard alone
+
+Plinius: phoc gives the keyboard to a layer surface that wants it and takes
+it from all windows. The overview now stays open on the phone while a window
+on a second screen is used, so that window never got any key. The search of
+the phone's overview doesn't take text meanwhile.
+
+---
+ src/home.c | 35 ++++++++++++++++++++++++++++++++---
+ 1 file changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/src/home.c b/src/home.c
+index 49ba1597..30197ede 100644
+--- a/src/home.c
++++ b/src/home.c
+@@ -13,6 +13,7 @@
+ 
+ #include "activity.h"
+ #include "layersurface-priv.h"
++#include "monitor-manager.h"
+ #include "overview.h"
+ #include "home.h"
+ #include "shell-priv.h"
+@@ -618,19 +619,45 @@ phosh_home_dragged (PhoshDragSurface *drag_surface, int margin)
+ }
+ 
+ 
++/*
++ * Plinius: phoc gives the keyboard to a layer surface that wants it, and takes it from all windows.
++ * The overview stays open on the phone while a window on a second screen is used: it keeps out of
++ * the way then.
++ */
++static void
++update_kbd_interactivity (PhoshHome *self)
++{
++  PhoshShell *shell = phosh_shell_get_default ();
++  PhoshMonitorManager *manager = phosh_shell_get_monitor_manager (shell);
++  gboolean unfolded;
++
++  unfolded = phosh_drag_surface_get_drag_state (PHOSH_DRAG_SURFACE (self)) ==
++    PHOSH_DRAG_SURFACE_STATE_UNFOLDED;
++  phosh_layer_surface_set_kbd_interactivity (PHOSH_LAYER_SURFACE (self),
++                                             unfolded &&
++                                             phosh_monitor_manager_get_num_monitors (manager) <= 1);
++}
++
++
++static void
++on_n_monitors_changed (PhoshHome *self)
++{
++  update_kbd_interactivity (self);
++  phosh_layer_surface_wl_surface_commit (PHOSH_LAYER_SURFACE (self));
++}
++
++
+ static void
+ on_drag_state_changed (PhoshHome *self)
+ {
+   PhoshHomeState state = self->state;
+   PhoshDragSurfaceState drag_state;
+-  gboolean kbd_interactivity = FALSE;
+ 
+   drag_state = phosh_drag_surface_get_drag_state (PHOSH_DRAG_SURFACE (self));
+ 
+   switch (drag_state) {
+   case PHOSH_DRAG_SURFACE_STATE_UNFOLDED:
+     state = PHOSH_HOME_STATE_UNFOLDED;
+-    kbd_interactivity = TRUE;
+     if (self->focus_app_search) {
+       phosh_overview_focus_app_search (self->overview);
+       self->focus_app_search = FALSE;
+@@ -680,7 +707,7 @@ on_drag_state_changed (PhoshHome *self)
+ 
+   phosh_home_update_home_bar (self);
+ 
+-  phosh_layer_surface_set_kbd_interactivity (PHOSH_LAYER_SURFACE (self), kbd_interactivity);
++  update_kbd_interactivity (self);
+   update_drag_handle (self, TRUE);
+ }
+ 
+@@ -753,6 +780,8 @@ phosh_home_constructed (GObject *object)
+                           G_BINDING_SYNC_CREATE);
+ 
+   g_signal_connect (self, "notify::drag-state", G_CALLBACK (on_drag_state_changed), NULL);
++  g_signal_connect_object (phosh_shell_get_monitor_manager (shell), "notify::n-monitors",
++                           G_CALLBACK (on_n_monitors_changed), self, G_CONNECT_SWAPPED);
+ 
+   g_object_set_data (G_OBJECT (self->click_gesture), "phosh-home", self);
+   g_object_set_data (G_OBJECT (self->osk_toggle_long_press), "phosh-home", self);

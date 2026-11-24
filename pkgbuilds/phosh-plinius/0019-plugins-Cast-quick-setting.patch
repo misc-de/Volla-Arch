@@ -1,0 +1,714 @@
+From 31da5b06f362ecbb93a852df102ca0881b331084 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 14:12:09 +0100
+Subject: [PATCH] plugins: Cast quick setting
+
+Plinius: mirror the screen to a TV or send all sound to a speaker through
+Schwupp (de.cais.Schwupp.Cast1, D-Bus activated, no window). The status
+page lists TVs and speakers while it is shown (Schwupp searches only
+then); a tap starts, a second tap or the tile stops. AirPlay TVs ask for
+a code once, the page takes it. The footer and a long press open Schwupp
+with the settings of the TV (resolution, bitrate, sound).
+
+A tap on a TV leaves a stamp in the runtime directory, so the
+screencast portal (xdg-desktop-portal-wlr-plinius) does not ask a
+second time which screen to share.
+---
+ plugins/cast-quick-setting/cast-quick-setting.c    | 395 +++++++++++++++++++++
+ .../cast-quick-setting.desktop.in.in               |   8 +
+ plugins/cast-quick-setting/cast-quick-setting.h    |  17 +
+ .../icons/cast-quick-setting-symbolic.svg          |   3 +
+ plugins/cast-quick-setting/icons/cast-symbolic.svg |   3 +
+ plugins/cast-quick-setting/meson.build             |  48 +++
+ .../phosh-plugin-cast-quick-setting.c              |  39 ++
+ .../phosh-plugin-cast-quick-setting.gresources.xml |   7 +
+ plugins/cast-quick-setting/qs.ui                   | 100 ++++++
+ plugins/meson.build                                |   1 +
+ 10 files changed, 621 insertions(+)
+
+diff --git a/plugins/cast-quick-setting/cast-quick-setting.c b/plugins/cast-quick-setting/cast-quick-setting.c
+new file mode 100644
+index 00000000..a5702ed7
+--- /dev/null
++++ b/plugins/cast-quick-setting/cast-quick-setting.c
+@@ -0,0 +1,395 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "cast-quick-setting.h"
++#include "quick-setting.h"
++#include "status-icon.h"
++#include "status-page.h"
++#include "status-page-placeholder.h"
++
++#include <handy.h>
++#include <glib/gi18n.h>
++
++#define CAST_BUS_NAME "de.cais.Schwupp"
++#define CAST_OBJECT_PATH "/de/cais/Schwupp/Cast"
++#define CAST_INTERFACE "de.cais.Schwupp.Cast1"
++
++/* Read by xdg-desktop-portal-wlr-plinius' output chooser: the tap on a TV is the
++ * consent to share the screen, the portal does not ask a second time */
++#define CONSENT_STAMP "plinius-screencast-consent"
++/* Schwupp marks speakers (sound instead of the screen) with this icon */
++#define SPEAKER_ICON "audio-speakers-symbolic"
++
++/**
++ * PhoshCastQuickSetting:
++ *
++ * Mirror the screen to a TV or send all sound to a speaker through Schwupp
++ * (de.cais.Schwupp.Cast1). The status page lists TVs and speakers; a tap starts,
++ * a second tap stops. Schwupp searches only while the list is shown and keeps
++ * the settings per TV (resolution, bitrate, sound), the footer opens them.
++ */
++struct _PhoshCastQuickSetting {
++  PhoshQuickSetting  parent;
++
++  PhoshStatusIcon   *info;
++  PhoshStatusPage   *status_page;
++  GtkSpinner        *spinner;
++  GtkStack          *stack;
++  PhoshStatusPagePlaceholder *placeholder;
++  GtkListBox        *list_box;
++  GtkEntry          *pin_entry;
++  GtkLabel          *error_label;
++
++  GDBusProxy        *proxy;
++  GCancellable      *cancel;
++  gboolean           searching;
++};
++G_DEFINE_TYPE (PhoshCastQuickSetting, phosh_cast_quick_setting, PHOSH_TYPE_QUICK_SETTING);
++
++
++static char *
++get_string (PhoshCastQuickSetting *self, const char *name)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, name);
++  if (!value || !g_variant_is_of_type (value, G_VARIANT_TYPE_STRING))
++    return g_strdup ("");
++  return g_variant_dup_string (value, NULL);
++}
++
++
++static gboolean
++get_discovering (PhoshCastQuickSetting *self)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, "Discovering");
++  return value && g_variant_is_of_type (value, G_VARIANT_TYPE_BOOLEAN) &&
++    g_variant_get_boolean (value);
++}
++
++
++static GtkWidget *
++create_row (const char *id,
++            const char *name,
++            const char *description,
++            const char *icon_name,
++            gboolean    active,
++            const char *state)
++{
++  GtkWidget *row = hdy_action_row_new ();
++  GtkWidget *icon = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_BUTTON);
++
++  hdy_preferences_row_set_title (HDY_PREFERENCES_ROW (row), name);
++  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
++  hdy_action_row_add_prefix (HDY_ACTION_ROW (row), icon);
++  g_object_set_data_full (G_OBJECT (row), "cast-id", g_strdup (id), g_free);
++
++  if (!active) {
++    hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), description);
++  } else if (g_strcmp0 (state, "streaming") == 0) {
++    GtkWidget *check = gtk_image_new_from_icon_name ("object-select-symbolic",
++                                                     GTK_ICON_SIZE_BUTTON);
++
++    if (g_strcmp0 (icon_name, SPEAKER_ICON) == 0)
++      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), _("Playing the sound – tap to stop"));
++    else
++      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), _("Mirroring – tap to stop"));
++    gtk_container_add (GTK_CONTAINER (row), check);
++  } else {
++    GtkWidget *spinner = gtk_spinner_new ();
++
++    if (g_strcmp0 (state, "pin") == 0)
++      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), _("Enter the code shown on the TV"));
++    else
++      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), _("Connecting…"));
++    gtk_spinner_start (GTK_SPINNER (spinner));
++    gtk_container_add (GTK_CONTAINER (row), spinner);
++  }
++
++  gtk_widget_show_all (row);
++  return row;
++}
++
++
++static void
++update (PhoshCastQuickSetting *self)
++{
++  g_autoptr (GVariant) devices = NULL;
++  g_autofree char *owner = NULL;
++  g_autofree char *active = get_string (self, "ActiveDevice");
++  g_autofree char *state = get_string (self, "State");
++  g_autofree char *error = get_string (self, "Error");
++  g_autofree char *active_name = NULL;
++  g_autoptr (GList) children = NULL;
++  gboolean discovering = get_discovering (self);
++  gboolean busy = *active != '\0' && g_strcmp0 (state, "idle") != 0;
++  GVariantIter iter;
++  const char *id, *name, *description, *icon_name;
++  guint n_rows = 0;
++
++  if (self->proxy) {
++    owner = g_dbus_proxy_get_name_owner (self->proxy);
++    devices = g_dbus_proxy_get_cached_property (self->proxy, "Devices");
++  }
++
++  children = gtk_container_get_children (GTK_CONTAINER (self->list_box));
++  for (GList *child = children; child; child = child->next)
++    gtk_container_remove (GTK_CONTAINER (self->list_box), child->data);
++
++  if (devices && g_variant_is_of_type (devices, G_VARIANT_TYPE ("a(ssss)"))) {
++    g_variant_iter_init (&iter, devices);
++    while (g_variant_iter_next (&iter, "(&s&s&s&s)", &id, &name, &description, &icon_name)) {
++      gboolean is_active = g_strcmp0 (id, active) == 0;
++
++      if (is_active)
++        active_name = g_strdup (name);
++      gtk_list_box_insert (self->list_box,
++                           create_row (id, name, description, icon_name, is_active, state), -1);
++      n_rows++;
++    }
++  }
++
++  /* Tile: the TV while mirroring, otherwise what is going on */
++  phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), busy);
++  if (!busy)
++    phosh_status_icon_set_info (self->info, _("Cast"));
++  else if (g_strcmp0 (state, "streaming") == 0)
++    phosh_status_icon_set_info (self->info, active_name ?: _("Casting"));
++  else if (g_strcmp0 (state, "pin") == 0)
++    phosh_status_icon_set_info (self->info, _("Code needed"));
++  else
++    phosh_status_icon_set_info (self->info, _("Connecting…"));
++
++  /* Status page */
++  if (discovering)
++    gtk_spinner_start (self->spinner);
++  else
++    gtk_spinner_stop (self->spinner);
++
++  if (n_rows) {
++    gtk_stack_set_visible_child_name (self->stack, "list");
++  } else {
++    if (discovering || (self->searching && !owner))
++      phosh_status_page_placeholder_set_title (self->placeholder,
++                                               _("Searching for TVs and speakers…"));
++    else
++      phosh_status_page_placeholder_set_title (self->placeholder, _("No TVs or speakers found"));
++    gtk_stack_set_visible_child_name (self->stack, "empty");
++  }
++
++  if (g_strcmp0 (state, "pin") == 0) {
++    /* No focus grab: the on-screen keyboard opens only on a tap */
++    if (!gtk_widget_get_visible (GTK_WIDGET (self->pin_entry))) {
++      gtk_entry_set_text (self->pin_entry, "");
++      gtk_widget_set_visible (GTK_WIDGET (self->pin_entry), TRUE);
++    }
++  } else {
++    gtk_widget_set_visible (GTK_WIDGET (self->pin_entry), FALSE);
++  }
++
++  gtk_label_set_text (self->error_label, error);
++  gtk_widget_set_visible (GTK_WIDGET (self->error_label), *error != '\0');
++}
++
++
++static void
++on_call_done (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), res, &err);
++  PhoshCastQuickSetting *self;
++
++  if (reply || g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++  /* Stopping something while Schwupp does not run is fine (calls without auto start) */
++  if (g_error_matches (err, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER))
++    return;
++
++  self = PHOSH_CAST_QUICK_SETTING (user_data);
++  g_warning ("Schwupp call failed: %s", err->message);
++  /* Schwupp missing or broken: say so instead of searching forever */
++  g_dbus_error_strip_remote_error (err);
++  gtk_label_set_text (self->error_label, err->message);
++  gtk_widget_set_visible (GTK_WIDGET (self->error_label), TRUE);
++}
++
++
++static void
++call (PhoshCastQuickSetting *self, const char *method, GVariant *params, GDBusCallFlags flags)
++{
++  if (!self->proxy)
++    return;
++  g_dbus_proxy_call (self->proxy, method, params, flags, -1, self->cancel, on_call_done, self);
++}
++
++
++static void
++on_status_page_map (PhoshCastQuickSetting *self)
++{
++  /* Search only while the list is shown (battery), D-Bus starts Schwupp if needed */
++  self->searching = TRUE;
++  call (self, "StartDiscovery", NULL, G_DBUS_CALL_FLAGS_NONE);
++  update (self);
++}
++
++
++static void
++on_status_page_unmap (PhoshCastQuickSetting *self)
++{
++  self->searching = FALSE;
++  /* No need to start Schwupp just to stop the search */
++  call (self, "StopDiscovery", NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START);
++}
++
++
++static void
++on_clicked (PhoshCastQuickSetting *self)
++{
++  if (phosh_quick_setting_get_active (PHOSH_QUICK_SETTING (self))) {
++    call (self, "Disconnect", NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START);
++    return;
++  }
++  /* Nothing to toggle back on without a TV: show the list */
++  g_signal_emit_by_name (self, "show-status");
++}
++
++
++static void
++write_consent_stamp (void)
++{
++  g_autofree char *path = g_build_filename (g_get_user_runtime_dir (), CONSENT_STAMP, NULL);
++  g_autoptr (GError) err = NULL;
++
++  if (!g_file_set_contents_full (path, "", 0, G_FILE_SET_CONTENTS_NONE, 0600, &err))
++    g_warning ("Failed to write %s: %s", path, err->message);
++}
++
++
++static void
++on_row_activated (PhoshCastQuickSetting *self, GtkListBoxRow *row)
++{
++  const char *id = g_object_get_data (G_OBJECT (row), "cast-id");
++  g_autofree char *active = get_string (self, "ActiveDevice");
++
++  if (!id)
++    return;
++
++  if (g_strcmp0 (id, active) == 0) {
++    call (self, "Disconnect", NULL, G_DBUS_CALL_FLAGS_NONE);
++    return;
++  }
++
++  write_consent_stamp ();
++  call (self, "Connect", g_variant_new ("(s)", id), G_DBUS_CALL_FLAGS_NONE);
++}
++
++
++static void
++on_pin_activate (PhoshCastQuickSetting *self)
++{
++  const char *pin = gtk_entry_get_text (self->pin_entry);
++
++  if (!*pin)
++    return;
++  /* The TV may ask the screencast for a code of its own: the stamp covers that */
++  write_consent_stamp ();
++  call (self, "SubmitPin", g_variant_new ("(s)", pin), G_DBUS_CALL_FLAGS_NO_AUTO_START);
++}
++
++
++static void
++on_settings_clicked (PhoshCastQuickSetting *self)
++{
++  g_autofree char *active = get_string (self, "ActiveDevice");
++
++  /* Schwupp opens with the settings of the TV in use, or its device list */
++  call (self, "OpenSettings", g_variant_new ("(s)", active), G_DBUS_CALL_FLAGS_NONE);
++  g_signal_emit_by_name (self->status_page, "done", FALSE);
++}
++
++
++static void
++on_proxy_ready (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  PhoshCastQuickSetting *self;
++  g_autoptr (GError) err = NULL;
++  GDBusProxy *proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
++
++  if (!proxy) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("Failed to create the Schwupp proxy: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_CAST_QUICK_SETTING (user_data);
++  self->proxy = proxy;
++  g_signal_connect_object (proxy, "g-properties-changed", G_CALLBACK (update), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "notify::g-name-owner", G_CALLBACK (update), self,
++                           G_CONNECT_SWAPPED);
++  update (self);
++}
++
++
++static void
++phosh_cast_quick_setting_dispose (GObject *object)
++{
++  PhoshCastQuickSetting *self = PHOSH_CAST_QUICK_SETTING (object);
++
++  g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++  g_clear_object (&self->proxy);
++
++  G_OBJECT_CLASS (phosh_cast_quick_setting_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_cast_quick_setting_class_init (PhoshCastQuickSettingClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_cast_quick_setting_dispose;
++
++  gtk_widget_class_set_template_from_resource (widget_class,
++                                               "/mobi/phosh/plugins/cast-quick-setting/qs.ui");
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, info);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, status_page);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, spinner);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, stack);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, placeholder);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, list_box);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, pin_entry);
++  gtk_widget_class_bind_template_child (widget_class, PhoshCastQuickSetting, error_label);
++  gtk_widget_class_bind_template_callback (widget_class, on_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_status_page_map);
++  gtk_widget_class_bind_template_callback (widget_class, on_status_page_unmap);
++  gtk_widget_class_bind_template_callback (widget_class, on_row_activated);
++  gtk_widget_class_bind_template_callback (widget_class, on_pin_activate);
++  gtk_widget_class_bind_template_callback (widget_class, on_settings_clicked);
++}
++
++
++static void
++phosh_cast_quick_setting_init (PhoshCastQuickSetting *self)
++{
++  gtk_widget_init_template (GTK_WIDGET (self));
++  gtk_icon_theme_add_resource_path (gtk_icon_theme_get_default (),
++                                    "/mobi/phosh/plugins/cast-quick-setting/icons");
++
++  self->cancel = g_cancellable_new ();
++  update (self);
++  /* Schwupp is started on the first tap, not with the shell */
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SESSION,
++                            G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START_AT_CONSTRUCTION,
++                            NULL, CAST_BUS_NAME, CAST_OBJECT_PATH, CAST_INTERFACE,
++                            self->cancel, on_proxy_ready, self);
++}
+diff --git a/plugins/cast-quick-setting/cast-quick-setting.desktop.in.in b/plugins/cast-quick-setting/cast-quick-setting.desktop.in.in
+new file mode 100644
+index 00000000..6ba7a943
+--- /dev/null
++++ b/plugins/cast-quick-setting/cast-quick-setting.desktop.in.in
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=Cast Quick Setting
++Types=quick-setting;
++Comment=Mirror the screen to a TV or send the sound to a speaker (Schwupp)
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=cast-quick-setting
+diff --git a/plugins/cast-quick-setting/cast-quick-setting.h b/plugins/cast-quick-setting/cast-quick-setting.h
+new file mode 100644
+index 00000000..2ab8976d
+--- /dev/null
++++ b/plugins/cast-quick-setting/cast-quick-setting.h
+@@ -0,0 +1,17 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "quick-setting.h"
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_CAST_QUICK_SETTING phosh_cast_quick_setting_get_type ()
++G_DECLARE_FINAL_TYPE (PhoshCastQuickSetting, phosh_cast_quick_setting,
++                      PHOSH, CAST_QUICK_SETTING, PhoshQuickSetting)
++
++G_END_DECLS
+diff --git a/plugins/cast-quick-setting/icons/cast-quick-setting-symbolic.svg b/plugins/cast-quick-setting/icons/cast-quick-setting-symbolic.svg
+new file mode 100644
+index 00000000..4c31010e
+--- /dev/null
++++ b/plugins/cast-quick-setting/icons/cast-quick-setting-symbolic.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill="#222" d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5v8a1.5 1.5 0 0 1-1.5 1.5H9v-1.5h4.5v-8h-11V6H1zM1 12a2 2 0 0 1 2 2H1zm0-2.5A4.5 4.5 0 0 1 5.5 14H4a3 3 0 0 0-3-3zM1 7a7 7 0 0 1 7 7H6.5A5.5 5.5 0 0 0 1 8.5z"/>
++</svg>
+diff --git a/plugins/cast-quick-setting/icons/cast-symbolic.svg b/plugins/cast-quick-setting/icons/cast-symbolic.svg
+new file mode 100644
+index 00000000..4c31010e
+--- /dev/null
++++ b/plugins/cast-quick-setting/icons/cast-symbolic.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill="#222" d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5v8a1.5 1.5 0 0 1-1.5 1.5H9v-1.5h4.5v-8h-11V6H1zM1 12a2 2 0 0 1 2 2H1zm0-2.5A4.5 4.5 0 0 1 5.5 14H4a3 3 0 0 0-3-3zM1 7a7 7 0 0 1 7 7H6.5A5.5 5.5 0 0 0 1 8.5z"/>
++</svg>
+diff --git a/plugins/cast-quick-setting/meson.build b/plugins/cast-quick-setting/meson.build
+new file mode 100644
+index 00000000..41e66bb2
+--- /dev/null
++++ b/plugins/cast-quick-setting/meson.build
+@@ -0,0 +1,48 @@
++# Plinius: mirror the screen to a TV through Schwupp (de.cais.Schwupp.Cast1)
++name = 'cast-quick-setting'
++
++cast_quick_setting_resources = gnome.compile_resources(
++  'phosh-plugin-cast-quick-setting-resources',
++  'phosh-plugin-cast-quick-setting.gresources.xml',
++  c_name: 'phosh_plugin_cast_quick_setting',
++)
++
++cast_quick_setting_plugin_sources = files(
++  'cast-quick-setting.c',
++  'phosh-plugin-cast-quick-setting.c',
++)
++
++phosh_cast_quick_setting_plugin = shared_module(
++  'phosh-plugin-cast-quick-setting',
++  cast_quick_setting_plugin_sources,
++  cast_quick_setting_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: plugin_dep,
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: meson.project_source_root() / 'po',
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/cast-quick-setting-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+diff --git a/plugins/cast-quick-setting/phosh-plugin-cast-quick-setting.c b/plugins/cast-quick-setting/phosh-plugin-cast-quick-setting.c
+new file mode 100644
+index 00000000..93fedbf7
+--- /dev/null
++++ b/plugins/cast-quick-setting/phosh-plugin-cast-quick-setting.c
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Based on the location quick setting plugin
++ */
++
++#include "cast-quick-setting.h"
++#include "phosh-plugin.h"
++
++#include <gio/gio.h>
++#include <gtk/gtk.h>
++
++char **g_io_phosh_plugin_cast_quick_setting_query (void);
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET,
++                                  PHOSH_TYPE_CAST_QUICK_SETTING,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++char **
++g_io_phosh_plugin_cast_quick_setting_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+diff --git a/plugins/cast-quick-setting/phosh-plugin-cast-quick-setting.gresources.xml b/plugins/cast-quick-setting/phosh-plugin-cast-quick-setting.gresources.xml
+new file mode 100644
+index 00000000..0e723ac9
+--- /dev/null
++++ b/plugins/cast-quick-setting/phosh-plugin-cast-quick-setting.gresources.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/cast-quick-setting/">
++    <file preprocess="xml-stripblanks">qs.ui</file>
++    <file compressed="true">icons/cast-symbolic.svg</file>
++  </gresource>
++</gresources>
+diff --git a/plugins/cast-quick-setting/qs.ui b/plugins/cast-quick-setting/qs.ui
+new file mode 100644
+index 00000000..98ab9fe6
+--- /dev/null
++++ b/plugins/cast-quick-setting/qs.ui
+@@ -0,0 +1,100 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <requires lib="gtk+" version="3.24"/>
++  <template class="PhoshCastQuickSetting" parent="PhoshQuickSetting">
++    <property name="status-icon">info</property>
++    <property name="status-page">status_page</property>
++    <signal name="clicked" handler="on_clicked" object="PhoshCastQuickSetting" swapped="yes"/>
++    <signal name="long-pressed" handler="on_settings_clicked" object="PhoshCastQuickSetting" swapped="yes"/>
++  </template>
++  <object class="PhoshStatusIcon" id="info">
++    <property name="visible">1</property>
++    <property name="pixel-size">16</property>
++    <property name="icon-name">cast-symbolic</property>
++    <property name="info" translatable="yes">Cast</property>
++  </object>
++  <object class="PhoshStatusPage" id="status_page">
++    <property name="visible">1</property>
++    <property name="title" translatable="yes">Cast</property>
++    <property name="header">spinner</property>
++    <property name="content">content</property>
++    <property name="footer">footer</property>
++    <signal name="map" handler="on_status_page_map" object="PhoshCastQuickSetting" swapped="yes"/>
++    <signal name="unmap" handler="on_status_page_unmap" object="PhoshCastQuickSetting" swapped="yes"/>
++  </object>
++  <object class="GtkSpinner" id="spinner">
++    <property name="visible">1</property>
++    <property name="margin-start">4</property>
++    <property name="margin-top">4</property>
++    <property name="margin-end">4</property>
++    <property name="margin-bottom">4</property>
++  </object>
++  <object class="GtkBox" id="content">
++    <property name="visible">1</property>
++    <property name="orientation">vertical</property>
++    <property name="spacing">12</property>
++    <child>
++      <object class="GtkStack" id="stack">
++        <property name="visible">1</property>
++        <property name="transition-type">crossfade</property>
++        <property name="vhomogeneous">0</property>
++        <child>
++          <object class="PhoshStatusPagePlaceholder" id="placeholder">
++            <property name="visible">1</property>
++            <property name="icon-name">cast-symbolic</property>
++          </object>
++          <packing>
++            <property name="name">empty</property>
++          </packing>
++        </child>
++        <child>
++          <object class="GtkListBox" id="list_box">
++            <property name="visible">1</property>
++            <property name="selection-mode">none</property>
++            <property name="hexpand">1</property>
++            <signal name="row-activated" handler="on_row_activated" object="PhoshCastQuickSetting" swapped="yes"/>
++            <style>
++              <class name="content"/>
++            </style>
++          </object>
++          <packing>
++            <property name="name">list</property>
++          </packing>
++        </child>
++      </object>
++    </child>
++    <!-- AirPlay: the code the TV shows on the first connection -->
++    <child>
++      <object class="GtkEntry" id="pin_entry">
++        <property name="visible">0</property>
++        <property name="input-purpose">digits</property>
++        <property name="placeholder-text" translatable="yes">Code shown on the TV</property>
++        <signal name="activate" handler="on_pin_activate" object="PhoshCastQuickSetting" swapped="yes"/>
++      </object>
++    </child>
++    <child>
++      <object class="GtkLabel" id="error_label">
++        <property name="visible">0</property>
++        <property name="wrap">1</property>
++        <property name="xalign">0</property>
++        <property name="selectable">1</property>
++        <style>
++          <class name="dim-label"/>
++        </style>
++      </object>
++    </child>
++  </object>
++  <object class="GtkButton" id="footer">
++    <property name="visible">1</property>
++    <property name="hexpand">1</property>
++    <property name="focus-on-click">0</property>
++    <signal name="clicked" handler="on_settings_clicked" object="PhoshCastQuickSetting" swapped="yes"/>
++    <child>
++      <object class="GtkLabel">
++        <property name="visible">1</property>
++        <property name="ellipsize">end</property>
++        <property name="label" translatable="yes">Cast Settings</property>
++      </object>
++    </child>
++  </object>
++</interface>
+diff --git a/plugins/meson.build b/plugins/meson.build
+index c1909e56..a56b967d 100644
+--- a/plugins/meson.build
++++ b/plugins/meson.build
+@@ -69,6 +69,7 @@ lockscreen_plugins = [
+ 
+ quick_setting_plugins = [
+   'caffeine-quick-setting',
++  'cast-quick-setting',
+   'dark-mode-quick-setting',
+   'location-quick-setting',
+   'mobile-data-quick-setting',

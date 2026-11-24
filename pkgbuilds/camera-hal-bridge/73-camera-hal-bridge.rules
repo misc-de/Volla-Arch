@@ -1,0 +1,11 @@
+# The Android libraries in camera-hal-bridge's process check shared memory against
+# /dev/ashmem<boot id>, the name ueventd gives the device inside the Android container (Binder
+# passes camera metadata over 16 KB, and camera 0's is, as ashmem). Outside the container only the
+# plain node exists, for root: without this rule camera 0 is missing from the bridge. Android
+# itself has the device open for everyone; here it is for the session's users.
+ACTION=="add|change", KERNEL=="ashmem", GROUP="video", MODE="0660", PROGRAM="/usr/bin/cat /proc/sys/kernel/random/boot_id", SYMLINK+="ashmem%c"
+# The group video holds only administrators (plinius-account 0.6-2): every other local account
+# runs camera-hal-bridge too and gets the node through the ACL of the active session (uaccess,
+# applied by 73-seat-late.rules, which comes after this file), rw as for the group. Its bridge
+# loses it once another account is in front of the phone (attack review 2026-11-18, L14).
+ACTION=="add|change", KERNEL=="ashmem", TAG+="uaccess"

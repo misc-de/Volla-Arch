@@ -1,0 +1,29 @@
+# pacman install script of plinius-vdec: the MDP moves from the session to plinius-vdec-mdpd.
+# From boot on 73-plinius-vdec.rules gives /dev/mtk_mdp and /dev/mdp_sync to the group
+# plinius-vdec. Right after the install udevd does not know that group yet (it learns new
+# groups only when it restarts, and this script runs before pacman's sysusers hook), so the
+# group is made here and given to both nodes directly. The socket listens without a restart
+# (the package's link in sockets.target.wants does it at boot).
+
+_apply() {
+	systemd-sysusers plinius-vdec.conf 2>/dev/null || true
+	if getent group plinius-vdec >/dev/null; then
+		for dev in /dev/mtk_mdp /dev/mdp_sync; do
+			[ -c "$dev" ] && chgrp plinius-vdec "$dev" && chmod 0660 "$dev"
+		done
+	fi
+	systemctl daemon-reload 2>/dev/null || true
+	systemctl start plinius-vdec-mdpd.socket 2>/dev/null || true
+}
+
+post_install() {
+	_apply
+}
+
+post_upgrade() {
+	_apply
+}
+
+pre_remove() {
+	systemctl stop plinius-vdec-mdpd.socket plinius-vdec-mdpd.service 2>/dev/null || true
+}

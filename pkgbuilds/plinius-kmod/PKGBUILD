@@ -1,0 +1,94 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+# Out-of-tree modules for UT's Halium kernel on the Volla Phone Plinius (ansuz):
+# plinius-backlight (backlight class device on the panel LED, for Phosh's brightness slider) and
+# uleds from the kernel source (CONFIG_LEDS_USER is off; plinius-torch needs it) and plinius-novt
+# (no VT switch on suspend, so the graphical session stays active; docs/STANDBY.md) and
+# plinius-btsuspend (skips the Bluetooth core's suspend notifier, which kept the phone awake).
+#
+# They are built against exactly the running kernel release. config: /proc/config.gz of the
+# device. vmlinux.symvers: the symbol CRCs of that kernel (tools/kernel-crcs.py from UT's
+# boot.img); CRCs genksyms computes from the tree agree only with the original kconfig, and
+# the build checks the release. abicheck.c: sizes and member offsets of the shared structures
+# from the kernel's BTF (tools/kernel-abi.py); it fails the build if the tree disagrees.
+# For a new UT kernel: update _kcommit/_krelease, config, vmlinux.symvers and abicheck.c.
+# UT build 04112026: read from its boot.img, as the phone did not run it yet; CRCs and all ABI asserts
+# are the same as in build 24092026, and the same method reproduced that build's files exactly.
+pkgname=plinius-kmod
+_kcommit=994f2f422ca12fa39806bd0c405860117cce3252
+_krelease=6.1.145-g994f2f422ca1
+pkgver=0.5
+pkgrel=3
+pkgdesc="Kernel modules for Volla Phone Plinius: backlight device on the panel LED, userspace LEDs (uleds), no VT switch on suspend, no Bluetooth host suspend, IPsec AH matches for Wi-Fi calling"
+arch=(aarch64)
+url="https://gitlab.com/ubports/porting/community-ports/android12/generic/kernel-android-common"
+license=(GPL-2.0-only GPL-2.0-or-later)
+makedepends=(clang lld llvm bc bison flex python perl openssl)
+options=(!strip !debug)
+source=("kernel-android-common-$_kcommit.tar.gz::$url/-/archive/$_kcommit/kernel-android-common-$_kcommit.tar.gz"
+        "config-$_krelease"
+        vmlinux.symvers
+        abicheck.c
+        Kbuild
+        plinius-backlight.c
+        plinius-novt.c
+        plinius-btsuspend.c
+        plinius-kmod
+        plinius-kmod.service
+        90-plinius-console-suspend.rules)
+sha256sums=('9eb1d903f50abf23bfbc9e8ac324cfa37cae009a61f5a7a9ebe31e729ca9372d'
+            '00d3c30120119f4440872f67bbc4a0bf3b09183836808c1550dfad6dedda19b2'
+            'fc9c86369eea5354f0c6147f31977efcd0f93b22ac982f71ff470e763793a82a'
+            '74c2ede67733c7095b84f47c7403b11674216bccb80649e303401fc0fb14ce84'
+            'fe99da3b4e6d5314c7c9d4afd375763c3f6d326eca55adcf4f828de9319178e1'
+            '04ca4ad3d4acfd5ec0e7b4a3254aa34c352dd9ebabc5db15e6fed8a48ea4a313'
+            '1e635c7d3c6cf779377eca7e08b674dc057960d8d40a2a261375a0950dfcc49f'
+            '858d2953ab665e1c0a820e2a4aac8b3deb168304ce1feddd1b0fbcd846ec9289'
+            '8e4e8b61634f218977aac6d1e18bdd9d52f311697a4606888d684e535656559c'
+            '97bc90f07cca23ff899e8eecb5b1c1b316e188574b59af1b2e32a10e49ae8300'
+            '216ef558d0e89e9afd19f68e1237cb0a052c17b777d9c7660263848f982d6558')
+
+_make() {
+	# pahole is only asked for its version by kconfig (DEBUG_INFO_BTF_MODULES changes
+	# struct module); the original build had 1.23. Module BTF is skipped without vmlinux.
+	# u128.h: the tools of 6.1 (resolve_btfids) predate __u128, which the aarch64 system
+	# headers of today use in asm/sigcontext.h
+	PATH="$srcdir/bin:$PATH" make -C "$srcdir/kernel-android-common-$_kcommit" \
+		O="$srcdir/obj" ARCH=arm64 LLVM=1 LOCALVERSION=-g${_kcommit:0:12} \
+		HOSTCFLAGS="-include $srcdir/u128.h" "$@"
+}
+
+prepare() {
+	install -d bin obj mod abi
+	printf '#!/bin/sh\necho v1.23\n' > bin/pahole
+	printf 'typedef unsigned __int128 __u128;\ntypedef __int128 __s128;\n' > u128.h
+	chmod +x bin/pahole
+	cp "config-$_krelease" obj/.config
+	cp Kbuild plinius-backlight.c plinius-novt.c plinius-btsuspend.c "kernel-android-common-$_kcommit/drivers/leds/uleds.c" \
+		"kernel-android-common-$_kcommit/net/ipv4/netfilter/ipt_ah.c" \
+		"kernel-android-common-$_kcommit/net/ipv6/netfilter/ip6t_ah.c" mod/
+	cp abicheck.c abi/
+	echo 'obj-m += abicheck.o' > abi/Kbuild
+}
+
+build() {
+	_make olddefconfig
+	_make -j"$(nproc)" modules_prepare
+	local release
+	release=$(cat obj/include/config/kernel.release)
+	[[ $release == "$_krelease" ]] || { echo "kernel release $release, expected $_krelease" >&2; return 1; }
+	_make M="$srcdir/abi" abicheck.o
+	_make M="$srcdir/mod" KBUILD_EXTRA_SYMBOLS="$srcdir/vmlinux.symvers" modules
+}
+
+package() {
+	local m dir="$pkgdir/usr/lib/plinius/modules/$_krelease"
+	for m in plinius-backlight uleds plinius-novt plinius-btsuspend ipt_ah ip6t_ah; do
+		install -Dm644 "mod/$m.ko" -t "$dir"
+	done
+	install -Dm755 plinius-kmod -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 plinius-kmod.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+	ln -s ../plinius-kmod.service "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/"
+	install -Dm644 90-plinius-console-suspend.rules -t "$pkgdir/usr/lib/udev/rules.d"
+}

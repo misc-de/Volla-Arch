@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.plinius.CardShare
+Exec=/usr/bin/false
+SystemdService=plinius-cardshare.service

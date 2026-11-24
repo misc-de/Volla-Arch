@@ -1,0 +1,50 @@
+From b18c19972c2d46ff9fb58a070ed12dc99c25fb4c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:01:57 +0100
+Subject: [PATCH] osk-widget: Symbol rows fill the whole width
+
+The bottom row of the symbol layers is 11 key units wide, the rows above
+it only 10 and 9. They were centered, which left half a key to a whole
+key free on either side. On letters the offset of the shorter row follows
+the stagger of a real keyboard, on symbols it has no purpose: rows
+shorter than their layer now share the free width evenly among their
+keys.
+
+Touching only the widths keeps this working for every layout without
+changing their JSON files.
+---
+ src/pos-osk-widget.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/src/pos-osk-widget.c b/src/pos-osk-widget.c
+index 1495774..b1c8c1d 100644
+--- a/src/pos-osk-widget.c
++++ b/src/pos-osk-widget.c
+@@ -750,6 +750,27 @@ parse_rows (PosOskWidget *self, PosOskWidgetKeyboardLayer *layer, JsonArray *row
+     }
+   }
+ 
++  /* The offset of the letter rows follows the staggered keys of a real keyboard. Symbols have no
++     such order, so there the shorter rows fill the width as well instead of leaving gaps at
++     the sides. */
++  if (l == POS_OSK_WIDGET_LAYER_SYMBOLS || l == POS_OSK_WIDGET_LAYER_SYMBOLS2) {
++    for (int r = 0; r < num_rows; r++) {
++      PosOskWidgetRow *row = pos_osk_widget_get_layer_row (self, l, r);
++
++      if (row->width <= 0.0 || row->width >= layer->width)
++        continue;
++
++      double factor = layer->width / row->width;
++
++      for (int k = 0; k < row->keys->len; k++) {
++        PosOskKey *key = g_ptr_array_index (row->keys, k);
++
++        pos_osk_key_set_width (key, pos_osk_key_get_width (key) * factor);
++      }
++      row->width = layer->width;
++    }
++  }
++
+   /* We know the max width, now we can calculate offsets */
+   for (int r = 0; r < num_rows; r++) {
+     PosOskWidgetRow *row = pos_osk_widget_get_layer_row (self, l, r);

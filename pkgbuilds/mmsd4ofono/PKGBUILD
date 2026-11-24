@@ -1,0 +1,141 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=mmsd4ofono
+pkgver=1.3.2.20261116
+pkgrel=2
+pkgdesc="MMS daemon on top of oFono with the mmsd-tng D-Bus API, so Chatty can send and receive MMS"
+arch=(any)
+url="https://github.com/FuriLabs/mmsd4ofono"
+license=(GPL-2.0-only)
+# glib2: gdbus in ExecStartPre of the user unit; ofono-sailfish: PushNotification and the
+# MMS context
+depends=(glib2 ofono-sailfish python python-aiohttp python-dbus python-dbus-fast python-gobject
+	python-pyroute2 python-tenacity)
+makedepends=(git)
+optdepends=('chatty: sending and reading MMS'
+	'gnome-control-center-plinius: the MMS switch of each SIM (Mobile Network)')
+install=mmsd4ofono.install
+# Both own org.ofono.mms on the session bus
+conflicts=(mmsd-tng)
+# No release tags: commit pin on the forky branch, pkgver = version in main.py + commit date
+_commit=2e6f76d64a110297adfddd3165852bed575fb485
+source=("git+$url.git#commit=$_commit"
+	0001-ofono_push_notification-stop-retrying-a-fetch-that-keeps-failing.patch
+	0002-route_controller-routectld-take-the-socket-path-from-the-environment.patch
+	0003-main-don-t-wait-for-an-MMS-bearer-that-is-never-brought-up.patch
+	0004-ofono_mms_modemmanager-carry-the-carrier-settings-into-the-oFono-MMS-context.patch
+	0005-ofono_push_notification-confirm-a-fetched-message-fetch-each-one-once.patch
+	0006-main-serve-the-modem-of-the-data-SIM.patch
+	0007-routectld-host-routes-only-kept-until-the-last-client-is-done.patch
+	0008-ofono_mms_message-D-Bus-property-names-without-spaces.patch
+	0009-ofono_push_notification-routectld-fetch-from-the-carrier-s-MMSC-only.patch
+	0010-routectld-load-mmsd-s-logging-only-not-all-of-mmsd.patch
+	0011-routectld-start-through-a-socket-end-when-idle.patch
+	0012-ofono_push_notification-clean-values-a-quota-a-broken-message-alone.patch
+	mmsd-hardening.conf
+	routectld-sandbox.conf
+	mmsd-routectl-socket.conf
+	routectld.socket
+	routectld-on-demand.conf
+	mmsd-sim-gate
+	mmsd-sim-gate.service
+	mmsd-sim-gate.conf
+	org.plinius.mms.gschema.xml)
+sha256sums=('SKIP'
+	'4be44dd1368eac396944a669a989598c9d6701c72be711f2b247252e63685287'
+	'a7668b677438d353f5cb5c7005ea9e2f64ed1a9b86e3cf0d68d34990a95a68ab'
+	'5becd824841bc6efd21cb3d0ed63ccf37242bbef2c42e7712ed3bf6163f45b10'
+	'c271b3a6cc7860446f00f51db68c40d827a3c2d33d3b4f4b2c42290f612e1820'
+	'19d9f07425243a33cc066477380d628fa6544134826752482057866f5149446b'
+	'cbff1278ec27da1021893a2a100d12467662714e5f70e56d54c6640e8ab42d5d'
+	'6a6441fd6e9e0b195835377c39d490694aa685749b503ec233522e96b30c4af2'
+	'3e6ad863383e0b4310b2a531307df85f90702cb3d57cc30c66a135b68fb546f7'
+	'c46baaed9b02ba86d6d5c3180192bdb818bf19f636a1461d751fa5bd24447d91'
+	'4a1748127e9e08888b65e5dc0edae24384d1a2cfcb055708977cdaeae65b8e2a'
+	'b00ab578d4b4a7e74ab1de6c10a86ae629da8f79d523b1a7da050eabbfad380d'
+	'cbc3c050fbec67c17fe871cc56d068232e27c067626e905031599ca928b8a73a'
+	'41bed8366faf12ae2386366493e7804f2f761eaa30d081740275894450356589'
+	'bd791e9eba9c8866badb033227bc45125b91bc0e638b8dcf12ee79e13f0e909f'
+	'2edbdbabdffd6927380fd7d9a684c2849af397c5c9f2d05b24a2b93056bd093d'
+	'851c98444576cf3856f9887a36dae2c96f8726f283c1ccc1cd098ad8b0e18ec0'
+	'256b4d53063fa3ddc5416ef3fe4365c185d7eb51340c5863897092ea0e599030'
+	'303bd74821e8b2b18583c901f1289ec49a7887c13e4cadfa9f9a2e43c8c56e09'
+	'9e211ff2530d9ac39c53a10547bf44f2b7120cf7bfc326035f78f8c6bce72a7d'
+	'ea163244eae4c9a3b24396a09cc42518f3c3a8817ee4c37dc60c8573df072456'
+	'ef0cb5cb265c2b298a007826000ad78bf86e81ec353a627cf650e08a6de283c0')
+
+prepare() {
+	# Since 2026-11-16 upstream: the MMS context only up for a fetch or a send (our former 0001,
+	# PR #10), an incoming message shown while it downloads (PR #11)
+
+	# A notification whose message could not be fetched was tried again five times 5 s apart,
+	# each time bringing the MMS context up: now 30 s up to 30 min apart, then download_failed
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0001-ofono_push_notification-stop-retrying-a-fetch-that-keeps-failing.patch"
+	# routectld needed all of /run writable for its socket, and a test could not give mmsd a
+	# stand-in route daemon (tools/mms-standin.py)
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0002-route_controller-routectld-take-the-socket-path-from-the-environment.patch"
+	# With the context on demand, a carrier without an MMS context of its own (or the same APN
+	# as for the internet) failed every fetch and send after more than 3 minutes of waiting for
+	# a bearer that mmsd leaves down on purpose
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0003-main-don-t-wait-for-an-MMS-bearer-that-is-never-brought-up.patch"
+	# The MMSC, APN and proxy set in Chatty only went into a file and were replaced by the old
+	# values at the next modem change; the own number Chatty asks for was lost at each restart
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0004-ofono_mms_modemmanager-carry-the-carrier-settings-into-the-oFono-MMS-context.patch"
+	# No m-notifyresp.ind after a fetch: the MMSC sent the notification again (each repeat was
+	# stored once more) and never told the sender. Also: a notification is an SMS anyone can
+	# send, so its address is fetched over http(s) only, never from this device or its link,
+	# and up to 5 MiB
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0005-ofono_push_notification-confirm-a-fetched-message-fetch-each-one-once.patch"
+	# The first modem was served even with the SIM in the second slot (or an eSIM without a
+	# profile in the first): no MMS at all
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0006-main-serve-the-modem-of-the-data-SIM.patch"
+	# routectld (root) routed any prefix it was given onto the MMS bearer, 0.0.0.0/0 past a VPN,
+	# and an overlapping fetch and send took each other's routes down
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0007-routectld-host-routes-only-kept-until-the-last-client-is-done.patch"
+	# python-dbus-fast 5 refuses D-Bus property names with spaces at import: mmsd and routectld
+	# both crashed at start (1.3.2.20261111-1 restarted every 5 s on the phone)
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0008-ofono_mms_message-D-Bus-property-names-without-spaces.patch"
+	# A notification is an SMS anyone can send: mmsd looked up and fetched any host it named and
+	# followed redirects to 127.0.0.1 or the home network, and routectld routed the home router onto
+	# the MMS bearer. Now only the MMSC of the MMS context (none at all without one), no redirects,
+	# only addresses on the internet, and no host route for an address reached over another link.
+	# Such a notification is not shown as an incoming message either
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0009-ofono_push_notification-routectld-fetch-from-the-carrier-s-MMSC-only.patch"
+	# routectld imported all of mmsd (aiohttp, dbus-fast, the decoder) for its log function:
+	# 37 MB of its own memory on the phone, 11 MB of it for nothing
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0010-routectld-load-mmsd-s-logging-only-not-all-of-mmsd.patch"
+	# routectld ran from boot to shutdown for routes needed a few seconds per MMS: now it starts
+	# with a connection to routectld.socket and ends 30 s after the last one with no route left
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0011-routectld-start-through-a-socket-end-when-idle.patch"
+	# What a fetched message says goes into the .status file one line per value; invalid UTF-8
+	# in the SMIL no longer loses the message or stops the export of the old ones; no new fetch
+	# beyond 50 MiB stored or 8 open fetches (attack review 2026-11-12, E5/E6); a message that cannot
+	# be stored is marked download_failed instead of staying shown as downloading
+	patch -d mmsd4ofono -Np1 -i "$srcdir/0012-ofono_push_notification-clean-values-a-quota-a-broken-message-alone.patch"
+}
+
+package() {
+	cd mmsd4ofono
+	# Arch has no separate /usr/sbin (a link to bin); routectld.service still finds it there
+	make DESTDIR="$pkgdir" SBINDIR=/usr/bin install
+	# routectld hands its socket to GID 32011: the image's user plinius (image/mkimage.sh)
+	install -Dm644 ../routectld-sandbox.conf "$pkgdir/usr/lib/systemd/system/routectld.service.d/50-sandbox.conf"
+	install -Dm644 ../mmsd-routectl-socket.conf "$pkgdir/usr/lib/systemd/user/mmsd.service.d/50-routectl-socket.conf"
+	install -Dm644 ../mmsd-hardening.conf "$pkgdir/usr/lib/systemd/user/mmsd.service.d/60-hardening.conf"
+	# Unlike upstream's Debian package (mmsd in each session, routectld at boot): routectld starts
+	# with its socket when mmsd needs routes (patch 0011), mmsd runs only while the SIM for mobile
+	# data has MMS on (Settings > Mobile Network > SIM > MMS, off by default); otherwise neither
+	# uses memory (2026-11-12: 37 + 29 MB)
+	install -Dm644 ../routectld.socket -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 ../routectld-on-demand.conf "$pkgdir/usr/lib/systemd/system/routectld.service.d/50-on-demand.conf"
+	install -Dm755 ../mmsd-sim-gate -t "$pkgdir/usr/lib/mmsd"
+	install -Dm644 ../mmsd-sim-gate.service -t "$pkgdir/usr/lib/systemd/user"
+	install -Dm644 ../mmsd-sim-gate.conf "$pkgdir/usr/lib/systemd/user/mmsd.service.d/50-sim-gate.conf"
+	install -Dm644 ../org.plinius.mms.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"
+	install -d "$pkgdir/usr/lib/systemd/user/gnome-session.target.wants" \
+		"$pkgdir/usr/lib/systemd/system/sockets.target.wants"
+	ln -s ../mmsd-sim-gate.service "$pkgdir/usr/lib/systemd/user/gnome-session.target.wants/mmsd-sim-gate.service"
+	ln -s ../routectld.socket "$pkgdir/usr/lib/systemd/system/sockets.target.wants/routectld.socket"
+	python -m compileall -q -d /usr/lib/mmsd "$pkgdir/usr/lib/mmsd"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

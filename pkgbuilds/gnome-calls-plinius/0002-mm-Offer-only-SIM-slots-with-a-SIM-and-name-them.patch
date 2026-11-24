@@ -1,0 +1,496 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 07 Nov 2026 17:10:00 +0100
+Subject: [PATCH 2/3] mm: Offer only SIM slots with a SIM, and name them
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With two SIM slots oFono's ril plugin names both modems "binder", and the
+order of the origins came from the object manager at random. When the empty
+slot (an eSIM without a profile) came first, Calls dialed through it and
+every call failed with org.ofono.Error.NotAvailable; the dial pad offered
+"binder" twice, one of them a slot without a SIM.
+
+Offer a modem as an origin only while it has a usable SIM (state not
+"failed"). If no modem has one, offer all of them, so that an emergency call
+is still possible. Follow the modems' state: a modem that gets its SIM gets
+a new origin, one that loses it loses its origin unless a call is up.
+Origins are never moved, since CallsManager would add a moved origin a
+second time; they are inserted sorted, with a SIM first, then by device.
+
+Name an oFono SIM slot (device /ril_<n>) "SIM <n+1> · <operator>", with the
+own number instead of the operator if known, or "No SIM" when no slot has
+one, and keep the name current as the state, number and operator change.
+---
+ plugins/provider/mm/calls-mm-origin.c   | 125 +++++++++++++++-
+ plugins/provider/mm/calls-mm-origin.h   |   2 +
+ plugins/provider/mm/calls-mm-provider.c | 188 +++++++++++++++++++-----
+ 3 files changed, 274 insertions(+), 41 deletions(-)
+
+diff --git a/plugins/provider/mm/calls-mm-origin.c b/plugins/provider/mm/calls-mm-origin.c
+index 141b773..6c363c6 100644
+--- a/plugins/provider/mm/calls-mm-origin.c
++++ b/plugins/provider/mm/calls-mm-origin.c
+@@ -39,6 +39,7 @@ struct _CallsMMOrigin {
+   GObject          parent_instance;
+   MMObject        *mm_obj;
+   MMModemVoice    *voice;
++  MMModem3gpp     *modem_3gpp;
+   MMModem3gppUssd *ussd;
+   MMModemLocation *location;
+   MMLocation3gpp  *location_3gpp;
+@@ -1096,13 +1097,64 @@ get_property (GObject    *object,
+ }
+ 
+ 
++/*
++ * oFono's ril plugin names every modem "binder", so two SIM slots looked the
++ * same in the origin list. Returns the slot number (1-based) for a modem whose
++ * device is oFono's /ril_<n> (as oFono2MM reports it), 0 otherwise.
++ */
++static guint
++modem_get_sim_slot (MMModem *modem)
++{
++  const char *device = mm_modem_get_device (modem);
++  guint64 index;
++
++  if (!device || !g_str_has_prefix (device, "/ril_"))
++    return 0;
++
++  if (!g_ascii_string_to_unsigned (device + sizeof ("/ril_") - 1, 10, 0, G_MAXUINT - 1, &index, NULL))
++    return 0;
++
++  return (guint) index + 1;
++}
++
++
++/* A modem in state "failed" has no usable SIM (missing, or an eSIM without a profile) */
++static gboolean
++modem_has_sim (MMModem *modem)
++{
++  return mm_modem_get_state (modem) != MM_MODEM_STATE_FAILED;
++}
++
++
+ static char *
+-modem_get_name (MMModem *modem)
++modem_get_name (MMModem     *modem,
++                MMModem3gpp *modem_3gpp)
+ {
+   char *name = NULL;
+   const char * const *numbers = NULL;
++  guint slot;
+ 
+   numbers = mm_modem_get_own_numbers (modem);
++  slot = modem_get_sim_slot (modem);
++
++  /* Name a SIM slot after its number and what's in it: "SIM 1 · Operator", "SIM 2 · No SIM" */
++  if (slot > 0) {
++    const char *detail = NULL;
++
++    if (!modem_has_sim (modem))
++      detail = _("No SIM");
++    else if (numbers && g_strv_length ((char **) numbers) > 0)
++      detail = numbers[0];
++    else if (modem_3gpp)
++      detail = mm_modem_3gpp_get_operator_name (modem_3gpp);
++
++    if (STR_IS_NULL_OR_EMPTY (detail))
++      return g_strdup_printf (_("SIM %u"), slot);
++
++    /* Translators: SIM slot number and its operator, own number or "No SIM" */
++    return g_strdup_printf (_("SIM %u · %s"), slot, detail);
++  }
++
+   if (numbers && g_strv_length ((char **) numbers) > 0) {
+     name = g_strdup (numbers[0]);
+     return name;
+@@ -1127,6 +1179,26 @@ modem_get_name (MMModem *modem)
+ }
+ 
+ 
++/* The name follows the SIM and the network: notify the origin list when it changes */
++static void
++update_name (CallsMMOrigin *self)
++{
++  MMModem *modem = mm_object_peek_modem (self->mm_obj);
++  g_autofree char *name = NULL;
++
++  if (!modem)
++    return;
++
++  name = modem_get_name (modem, self->modem_3gpp);
++  if (g_strcmp0 (name, self->name) == 0)
++    return;
++
++  g_free (self->name);
++  self->name = g_steal_pointer (&name);
++  g_object_notify (G_OBJECT (self), "name");
++}
++
++
+ static void
+ ussd_properties_changed_cb (CallsMMOrigin *self,
+                             GVariant      *properties)
+@@ -1288,7 +1360,20 @@ constructed (GObject *object)
+   G_OBJECT_CLASS (calls_mm_origin_parent_class)->constructed (object);
+ 
+   modem = mm_object_get_modem (self->mm_obj);
+-  self->name = modem_get_name (modem);
++  self->modem_3gpp = mm_object_get_modem_3gpp (self->mm_obj);
++  self->name = modem_get_name (modem, self->modem_3gpp);
++
++  /* Keep the name current: the operator comes once registered, a SIM may come later */
++  g_signal_connect_object (modem, "notify::state",
++                           G_CALLBACK (update_name), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (modem, "notify::own-numbers",
++                           G_CALLBACK (update_name), self,
++                           G_CONNECT_SWAPPED);
++  if (self->modem_3gpp)
++    g_signal_connect_object (self->modem_3gpp, "notify::operator-name",
++                             G_CALLBACK (update_name), self,
++                             G_CONNECT_SWAPPED);
+ 
+   mm_modem_get_sim (modem,
+                     NULL,
+@@ -1330,6 +1415,7 @@ dispose (GObject *object)
+ 
+   remove_calls (self, NULL);
+   g_clear_object (&self->voice);
++  g_clear_object (&self->modem_3gpp);
+   g_clear_object (&self->mm_obj);
+   g_clear_object (&self->ussd);
+   g_clear_object (&self->sim);
+@@ -1438,6 +1524,41 @@ calls_mm_origin_new (MMObject   *mm_obj,
+                        NULL);
+ }
+ 
++/**
++ * calls_mm_origin_has_sim:
++ *
++ * Whether the modem has a usable SIM. An empty slot (or an eSIM without a
++ * profile) can't place a normal call.
++ */
++gboolean
++calls_mm_origin_has_sim (CallsMMOrigin *self)
++{
++  MMModem *modem;
++
++  g_return_val_if_fail (CALLS_IS_MM_ORIGIN (self), FALSE);
++
++  modem = mm_object_peek_modem (self->mm_obj);
++  return modem && modem_has_sim (modem);
++}
++
++
++/**
++ * calls_mm_origin_get_device:
++ *
++ * The modem's device (oFono's /ril_<n> with oFono2MM), for a stable order.
++ */
++const char *
++calls_mm_origin_get_device (CallsMMOrigin *self)
++{
++  MMModem *modem;
++
++  g_return_val_if_fail (CALLS_IS_MM_ORIGIN (self), NULL);
++
++  modem = mm_object_peek_modem (self->mm_obj);
++  return modem ? mm_modem_get_device (modem) : NULL;
++}
++
++
+ gboolean
+ calls_mm_origin_matches (CallsMMOrigin *self,
+                          MMObject      *mm_obj)
+diff --git a/plugins/provider/mm/calls-mm-origin.h b/plugins/provider/mm/calls-mm-origin.h
+index 939bd98..312d395 100644
+--- a/plugins/provider/mm/calls-mm-origin.h
++++ b/plugins/provider/mm/calls-mm-origin.h
+@@ -37,5 +37,7 @@ CallsMMOrigin *calls_mm_origin_new (MMObject   *modem,
+                                     const char *id);
+ gboolean       calls_mm_origin_matches (CallsMMOrigin *self,
+                                         MMObject      *modem);
++gboolean       calls_mm_origin_has_sim (CallsMMOrigin *self);
++const char    *calls_mm_origin_get_device (CallsMMOrigin *self);
+ 
+ G_END_DECLS
+diff --git a/plugins/provider/mm/calls-mm-provider.c b/plugins/provider/mm/calls-mm-provider.c
+index 2264acb..89140f9 100644
+--- a/plugins/provider/mm/calls-mm-provider.c
++++ b/plugins/provider/mm/calls-mm-provider.c
+@@ -50,6 +50,8 @@ struct _CallsMMProvider {
+   MMManager    *mm;
+   /* A list of CallsOrigins */
+   GListStore   *origins;
++  /* The voice-capable modems (MMObject), whether listed as an origin or not */
++  GPtrArray    *modems;
+ 
+   GCancellable *cancellable;
+ };
+@@ -92,44 +94,132 @@ update_status (CallsMMProvider *self)
+ }
+ 
+ 
++/* A modem in state "failed" has no usable SIM (missing, or an eSIM without a profile) */
+ static gboolean
+-mm_provider_contains (CallsMMProvider *self,
+-                      MMObject        *mm_obj)
++mm_object_has_sim (MMObject *mm_obj)
+ {
+-  GListModel *model;
+-  guint n_items;
++  MMModem *modem = mm_object_peek_modem (mm_obj);
+ 
+-  g_assert (CALLS_IS_MM_PROVIDER (self));
+-  g_assert (MM_OBJECT (mm_obj));
++  return modem && mm_modem_get_state (modem) != MM_MODEM_STATE_FAILED;
++}
+ 
+-  model = G_LIST_MODEL (self->origins);
+-  n_items = g_list_model_get_n_items (model);
+ 
+-  for (guint i = 0; i < n_items; i++) {
+-    g_autoptr (CallsMMOrigin) origin = NULL;
++static gboolean
++find_origin (CallsMMProvider *self,
++             MMObject        *mm_obj,
++             guint           *position)
++{
++  GListModel *model = G_LIST_MODEL (self->origins);
++  guint n_items = g_list_model_get_n_items (model);
+ 
+-    origin = g_list_model_get_item (model, i);
++  for (guint i = 0; i < n_items; i++) {
++    g_autoptr (CallsMMOrigin) origin = g_list_model_get_item (model, i);
+ 
+-    if (calls_mm_origin_matches (origin, mm_obj))
++    if (calls_mm_origin_matches (origin, mm_obj)) {
++      if (position)
++        *position = i;
+       return TRUE;
++    }
+   }
+ 
+   return FALSE;
+ }
+ 
++
++/*
++ * Calls dials through the first suitable origin, and the dial pad selects the
++ * first one. With two SIM slots the empty one (oFono's eSIM without a profile)
++ * came first at random and every call failed with NotAvailable. Put modems
++ * with a SIM first, then go by device (SIM slot) for a stable order.
++ */
++static int
++compare_origins (gconstpointer a,
++                 gconstpointer b,
++                 gpointer      user_data)
++{
++  CallsMMOrigin *origin_a = CALLS_MM_ORIGIN ((gpointer) a);
++  CallsMMOrigin *origin_b = CALLS_MM_ORIGIN ((gpointer) b);
++  gboolean sim_a = calls_mm_origin_has_sim (origin_a);
++  gboolean sim_b = calls_mm_origin_has_sim (origin_b);
++
++  if (sim_a != sim_b)
++    return sim_a ? -1 : 1;
++
++  return g_strcmp0 (calls_mm_origin_get_device (origin_a),
++                    calls_mm_origin_get_device (origin_b));
++}
++
++
++/*
++ * Only modems with a SIM are offered as origins: an empty slot can't place a
++ * call, and offering it made Calls dial through it. If no modem has a SIM,
++ * all of them are offered, so that an emergency call is still possible.
++ *
++ * An origin is never moved or added twice (CallsManager connects to every
++ * origin added to the list): a modem that gets or loses its SIM gets a new
++ * origin, or loses its origin. One with a call up is kept until the call ends.
++ */
++static void
++update_origins (CallsMMProvider *self)
++{
++  gboolean any_sim = FALSE;
++
++  for (guint i = 0; i < self->modems->len; i++) {
++    if (mm_object_has_sim (g_ptr_array_index (self->modems, i))) {
++      any_sim = TRUE;
++      break;
++    }
++  }
++
++  for (guint i = 0; i < self->modems->len; i++) {
++    MMObject *mm_obj = g_ptr_array_index (self->modems, i);
++    gboolean wanted = !any_sim || mm_object_has_sim (mm_obj);
++    guint position;
++    gboolean listed = find_origin (self, mm_obj, &position);
++
++    if (wanted && !listed) {
++      g_autoptr (MMModem3gpp) modem_3gpp = mm_object_get_modem_3gpp (mm_obj);
++      g_autoptr (CallsMMOrigin) origin = NULL;
++
++      g_debug ("Offering modem `%s'",
++               g_dbus_object_get_object_path (G_DBUS_OBJECT (mm_obj)));
++
++      origin = calls_mm_origin_new (mm_obj,
++                                    modem_3gpp ? mm_modem_3gpp_get_imei (modem_3gpp) : NULL);
++      /* A modem kept for its call is dropped once the call is gone */
++      g_signal_connect_object (origin, "call-removed",
++                               G_CALLBACK (update_origins), self,
++                               G_CONNECT_SWAPPED);
++      g_list_store_insert_sorted (self->origins, origin, compare_origins, NULL);
++    } else if (!wanted && listed) {
++      g_autoptr (CallsOrigin) origin = g_list_model_get_item (G_LIST_MODEL (self->origins), position);
++      GList *calls = calls_origin_get_calls (origin);
++
++      if (calls) {
++        g_list_free (calls);
++        continue;
++      }
++
++      g_debug ("No longer offering modem `%s' without a SIM",
++               g_dbus_object_get_object_path (G_DBUS_OBJECT (mm_obj)));
++      g_list_store_remove (self->origins, position);
++    }
++  }
++
++  update_status (self);
++}
++
++
+ static void
+ add_origin (CallsMMProvider *self,
+             GDBusObject     *object)
+ {
+-  MMObject *mm_obj;
+-
+-  g_autoptr (CallsMMOrigin) origin = NULL;
+-  g_autoptr (MMModem3gpp) modem_3gpp = NULL;
++  MMObject *mm_obj = MM_OBJECT (object);
++  MMModem *modem;
+   const gchar *path;
+ 
+-  mm_obj = MM_OBJECT (object);
+   path = g_dbus_object_get_object_path (object);
+-  if (mm_provider_contains (self, mm_obj)) {
++  if (g_ptr_array_find (self->modems, mm_obj, NULL)) {
+     g_warning ("New voice interface on existing"
+                " origin with path `%s'", path);
+     return;
+@@ -138,15 +228,38 @@ add_origin (CallsMMProvider *self,
+   g_debug ("Adding new voice-capable modem `%s'",
+            path);
+ 
+-  g_assert (MM_IS_OBJECT (object));
++  g_ptr_array_add (self->modems, g_object_ref (mm_obj));
+ 
+-  modem_3gpp = mm_object_get_modem_3gpp (mm_obj);
++  /* Whether it is offered follows its SIM, and the other modems' */
++  modem = mm_object_peek_modem (mm_obj);
++  if (modem)
++    g_signal_connect_object (modem, "notify::state",
++                             G_CALLBACK (update_origins), self,
++                             G_CONNECT_SWAPPED);
+ 
+-  origin = calls_mm_origin_new (mm_obj,
+-                                mm_modem_3gpp_get_imei (modem_3gpp));
+-  g_list_store_append (self->origins, origin);
++  update_origins (self);
++}
+ 
+-  update_status (self);
++
++static void
++forget_modem (CallsMMProvider *self,
++              guint            index)
++{
++  MMObject *mm_obj = g_ptr_array_index (self->modems, index);
++  MMModem *modem = mm_object_peek_modem (mm_obj);
++
++  if (modem)
++    g_signal_handlers_disconnect_by_func (modem, update_origins, self);
++
++  g_ptr_array_remove_index (self->modems, index);
++}
++
++
++static void
++forget_modems (CallsMMProvider *self)
++{
++  while (self->modems->len > 0)
++    forget_modem (self, self->modems->len - 1);
+ }
+ 
+ 
+@@ -175,24 +288,17 @@ remove_modem_object (CallsMMProvider *self,
+                      const gchar     *path,
+                      GDBusObject     *object)
+ {
+-  GListModel *model;
+-  guint n_items;
++  MMObject *mm_obj = MM_OBJECT (object);
++  guint position;
+ 
+-  model = G_LIST_MODEL (self->origins);
+-  n_items = g_list_model_get_n_items (model);
++  if (find_origin (self, mm_obj, &position))
++    g_list_store_remove (self->origins, position);
+ 
+-  for (guint i = 0; i < n_items; i++) {
+-    g_autoptr (CallsMMOrigin) origin = NULL;
+-
+-    origin = g_list_model_get_item (model, i);
+-
+-    if (calls_mm_origin_matches (origin, MM_OBJECT (object))) {
+-      g_list_store_remove (self->origins, i);
+-      update_status (self);
++  if (g_ptr_array_find (self->modems, mm_obj, &position))
++    forget_modem (self, position);
+ 
+-      break;
+-    }
+-  }
++  /* Without it another modem may have to be offered now */
++  update_origins (self);
+ }
+ 
+ 
+@@ -336,6 +442,7 @@ mm_vanished_cb (GDBusConnection *connection,
+   g_clear_object (&self->mm);
+ 
+   g_list_store_remove_all (self->origins);
++  forget_modems (self);
+   update_status (self);
+ }
+ 
+@@ -406,6 +513,7 @@ dispose (GObject *object)
+   g_clear_handle_id (&self->watch_id, g_bus_unwatch_name);
+ 
+   g_list_store_remove_all (self->origins);
++  forget_modems (self);
+ 
+   G_OBJECT_CLASS (calls_mm_provider_parent_class)->dispose (object);
+ }
+@@ -417,6 +525,7 @@ finalize (GObject *object)
+   CallsMMProvider *self = CALLS_MM_PROVIDER (object);
+ 
+   g_clear_object (&self->origins);
++  g_clear_pointer (&self->modems, g_ptr_array_unref);
+   g_clear_pointer (&self->status, g_free);
+ 
+   G_OBJECT_CLASS (calls_mm_provider_parent_class)->finalize (object);
+@@ -457,6 +566,7 @@ calls_mm_provider_init (CallsMMProvider *self)
+ {
+   self->status = g_strdup (_("Initialized"));
+   self->origins = g_list_store_new (CALLS_TYPE_ORIGIN);
++  self->modems = g_ptr_array_new_with_free_func (g_object_unref);
+ }
+ 
+ 
+-- 
+2.56.0
+

@@ -1,0 +1,342 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 06:25:02 +0100
+Subject: [PATCH] camera: Noise reduction and exposure for cameras of
+ camera-hal-bridge
+
+camera-hal-bridge now shoots through Camera2, which brings MediaTek's
+multi-frame noise reduction to photos and a working exposure compensation.
+The scene button's menu gets a switch for the noise reduction, on by default
+(the HAL then decides when several frames help), since it takes longer and
+softens fine detail, and an exposure section from -2 to +2 EV. Both are kept
+in the settings and go to the bridge with the others.
+---
+ data/org.gnome.Snapshot.gschema.xml.in | 17 +++++++++++++
+ data/resources/ui/camera.ui            | 34 ++++++++++++++++++++++++++
+ po/de.po                               |  8 ++++++
+ po/es.po                               |  8 ++++++
+ po/fr.po                               |  8 ++++++
+ po/it.po                               |  8 ++++++
+ po/nl.po                               |  8 ++++++
+ po/pl.po                               |  8 ++++++
+ po/pt.po                               |  8 ++++++
+ po/ru.po                               |  8 ++++++
+ src/camera_bridge.rs                   |  9 ++++---
+ src/widgets/camera.rs                  | 23 ++++++++++++++---
+ 12 files changed, 140 insertions(+), 7 deletions(-)
+
+diff --git a/data/org.gnome.Snapshot.gschema.xml.in b/data/org.gnome.Snapshot.gschema.xml.in
+index 75969b0..ae8380d 100644
+--- a/data/org.gnome.Snapshot.gschema.xml.in
++++ b/data/org.gnome.Snapshot.gschema.xml.in
+@@ -99,6 +99,23 @@
+       <summary>White balance</summary>
+       <description>The camera HAL's white balance, for cameras of camera-hal-bridge</description>
+     </key>
++    <key name="exposure-compensation" type="s">
++      <choices>
++        <choice value="-2" />
++        <choice value="-1" />
++        <choice value="0" />
++        <choice value="+1" />
++        <choice value="+2" />
++      </choices>
++      <default>"0"</default>
++      <summary>Exposure compensation</summary>
++      <description>How much brighter or darker than metered pictures come out, in EV, for cameras of camera-hal-bridge</description>
++    </key>
++    <key name="noise-reduction" type="b">
++      <default>true</default>
++      <summary>Noise reduction</summary>
++      <description>Whether the camera HAL may combine several frames into one photo against noise, for cameras of camera-hal-bridge. Slower, and fine detail comes out softer</description>
++    </key>
+     <key name="last-camera-id" type="s">
+       <default>""</default>
+       <summary>Last Camera Used ID</summary>
+diff --git a/data/resources/ui/camera.ui b/data/resources/ui/camera.ui
+index 36bec4b..96eb06a 100644
+--- a/data/resources/ui/camera.ui
++++ b/data/resources/ui/camera.ui
+@@ -786,6 +786,40 @@
+         <attribute name="target">incandescent</attribute>
+       </item>
+     </section>
++    <section>
++      <attribute name="label" translatable="yes" comments="TRANSLATORS how bright a picture comes out">Exposure</attribute>
++      <item>
++        <attribute name="action">camera.exposure-compensation</attribute>
++        <attribute name="label">+2 EV</attribute>
++        <attribute name="target">+2</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.exposure-compensation</attribute>
++        <attribute name="label">+1 EV</attribute>
++        <attribute name="target">+1</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.exposure-compensation</attribute>
++        <attribute name="label">0 EV</attribute>
++        <attribute name="target">0</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.exposure-compensation</attribute>
++        <attribute name="label">−1 EV</attribute>
++        <attribute name="target">-1</attribute>
++      </item>
++      <item>
++        <attribute name="action">camera.exposure-compensation</attribute>
++        <attribute name="label">−2 EV</attribute>
++        <attribute name="target">-2</attribute>
++      </item>
++    </section>
++    <section>
++      <item>
++        <attribute name="action">camera.noise-reduction</attribute>
++        <attribute name="label" translatable="yes" comments="TRANSLATORS several frames are combined into one photo against image noise">Noise Reduction</attribute>
++      </item>
++    </section>
+   </menu>
+   <menu id="countdown_menu">
+     <section>
+diff --git a/po/de.po b/po/de.po
+index c4d1f4b..c21b03f 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -512,6 +512,14 @@ msgstr "Party"
+ msgid "White Balance"
+ msgstr "Weißabgleich"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Belichtung"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Rauschunterdrückung"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Tageslicht"
+diff --git a/po/es.po b/po/es.po
+index 5aca75c..1a4c589 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -512,6 +512,14 @@ msgstr "Fiesta"
+ msgid "White Balance"
+ msgstr "Balance de blancos"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Exposición"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Reducción de ruido"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Luz de día"
+diff --git a/po/fr.po b/po/fr.po
+index 1024530..cc2b295 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -521,6 +521,14 @@ msgstr "Fête"
+ msgid "White Balance"
+ msgstr "Balance des blancs"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Exposition"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Réduction du bruit"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Lumière du jour"
+diff --git a/po/it.po b/po/it.po
+index 1cd5174..ad1830e 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -514,6 +514,14 @@ msgstr "Festa"
+ msgid "White Balance"
+ msgstr "Bilanciamento del bianco"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Esposizione"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Riduzione del rumore"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Luce diurna"
+diff --git a/po/nl.po b/po/nl.po
+index 2fac131..e59e136 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -516,6 +516,14 @@ msgstr "Feest"
+ msgid "White Balance"
+ msgstr "Witbalans"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Belichting"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Ruisonderdrukking"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Daglicht"
+diff --git a/po/pl.po b/po/pl.po
+index 29b3a3a..6adedb7 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -518,6 +518,14 @@ msgstr "Impreza"
+ msgid "White Balance"
+ msgstr "Balans bieli"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Ekspozycja"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Redukcja szumów"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Światło dzienne"
+diff --git a/po/pt.po b/po/pt.po
+index 24f0344..fd7f8b6 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -513,6 +513,14 @@ msgstr "Festa"
+ msgid "White Balance"
+ msgstr "Balanço de brancos"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Exposição"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Redução de ruído"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Luz do dia"
+diff --git a/po/ru.po b/po/ru.po
+index cb3acb8..1cd281a 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -510,6 +510,14 @@ msgstr "Вечеринка"
+ msgid "White Balance"
+ msgstr "Баланс белого"
+ 
++#: data/resources/ui/camera.ui
++msgid "Exposure"
++msgstr "Экспозиция"
++
++#: data/resources/ui/camera.ui
++msgid "Noise Reduction"
++msgstr "Шумоподавление"
++
+ #: data/resources/ui/camera.ui
+ msgid "Daylight"
+ msgstr "Дневной свет"
+diff --git a/src/camera_bridge.rs b/src/camera_bridge.rs
+index c7c3239..02e36e0 100644
+--- a/src/camera_bridge.rs
++++ b/src/camera_bridge.rs
+@@ -5,14 +5,14 @@
+ //! offers them as PipeWire nodes named `hal_camera_<id>`. Their stream carries
+ //! preview frames, far smaller than what the sensor gives. The bridge takes a
+ //! real photo through the HAL on `org.plinius.CameraBridge.TakePicture` and
+-//! writes it where asked; it also sets the HAL's scene mode and white balance
+-//! for all its cameras.
++//! writes it where asked; it also sets the HAL's scene mode, white balance,
++//! exposure compensation and multi-frame noise reduction for all its cameras.
+ use gtk::{gio, glib, prelude::*};
+ 
+ const BRIDGE: &str = "org.plinius.CameraBridge";
+ const BRIDGE_PATH: &str = "/org/plinius/CameraBridge";
+ const NODE_PREFIX: &str = "hal_camera_";
+-/// The HAL needs about 1.4 s for the largest photos
++/// A photo takes up to about 2 s, with noise reduction in the dark
+ const PICTURE_TIMEOUT_MS: i32 = 15000;
+ const CALL_TIMEOUT_MS: i32 = 2000;
+ 
+@@ -65,7 +65,8 @@ impl CameraBridge {
+             .map(|_| ())
+     }
+ 
+-    /// Sets a bridge setting (`SceneMode`, `WhiteBalance`) without waiting
++    /// Sets a bridge setting (`SceneMode`, `WhiteBalance`,
++    /// `ExposureCompensation`, `NoiseReduction`) without waiting
+     pub fn set(&self, property: &'static str, value: &str) {
+         let value = value.to_owned();
+         self.bus.call(
+diff --git a/src/widgets/camera.rs b/src/widgets/camera.rs
+index dd9e250..c7311ff 100644
+--- a/src/widgets/camera.rs
++++ b/src/widgets/camera.rs
+@@ -705,8 +705,9 @@ impl Camera {
+         self.update_flash_button();
+     }
+ 
+-    /// Scene mode and white balance of camera-hal-bridge, offered for its
+-    /// cameras only and kept in the settings; the bridge forgets them when it
++    /// Scene mode, white balance, exposure and noise reduction of
++    /// camera-hal-bridge, offered for its cameras only and kept in the
++    /// settings; the bridge forgets them when it
+     /// restarts, so they go out again with each camera picked
+     fn setup_bridge(&self) {
+         let imp = self.imp();
+@@ -719,6 +720,8 @@ impl Camera {
+         let actions = gio::SimpleActionGroup::new();
+         actions.add_action(&settings.create_action("scene-mode"));
+         actions.add_action(&settings.create_action("white-balance"));
++        actions.add_action(&settings.create_action("exposure-compensation"));
++        actions.add_action(&settings.create_action("noise-reduction"));
+         self.insert_action_group("camera", Some(&actions));
+ 
+         settings.connect_changed(
+@@ -727,7 +730,10 @@ impl Camera {
+                 #[weak(rename_to = obj)]
+                 self,
+                 move |_, key| {
+-                    if key == "scene-mode" || key == "white-balance" {
++                    if matches!(
++                        key,
++                        "scene-mode" | "white-balance" | "exposure-compensation" | "noise-reduction"
++                    ) {
+                         obj.send_bridge_settings();
+                     }
+                 }
+@@ -765,6 +771,17 @@ impl Camera {
+         if is_bridge_camera {
+             bridge.set("SceneMode", &scene);
+             bridge.set("WhiteBalance", &settings.string("white-balance"));
++            bridge.set(
++                "ExposureCompensation",
++                &settings.string("exposure-compensation"),
++            );
++            // Auto leaves it to the HAL when several frames help
++            let noise_reduction = if settings.boolean("noise-reduction") {
++                "auto"
++            } else {
++                "off"
++            };
++            bridge.set("NoiseReduction", noise_reduction);
+         }
+     }
+ 
+-- 
+2.56.0
+

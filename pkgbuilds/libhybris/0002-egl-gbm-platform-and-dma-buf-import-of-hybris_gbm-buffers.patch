@@ -1,0 +1,180 @@
+From da3212a9be5bd3e547479400051c578da5dd19be Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:00:42 +0100
+Subject: [PATCH] egl: GBM platform and dma-buf import of hybris_gbm buffers
+
+Compositors on real KMS (wlroots) create their EGL display on a GBM device
+and import the buffers of its allocator as dma-bufs. With the GBM backend
+hybris_gbm, which allocates gralloc buffers, this lets them render on the
+GPU while KMS shows the buffers:
+
+- EGL_PLATFORM_GBM_KHR maps to the "null" window system, advertised to
+  glvnd as EGL_KHR_platform_gbm and EGL_MESA_platform_gbm.
+- glvnd: the client extensions include EGL_EXT_platform_base, which
+  libhybris implements and glvnd reports only if a vendor does.
+- eglCreateImageKHR with EGL_LINUX_DMA_BUF_EXT looks up the native buffer
+  behind the dma-buf through hybris_gbm_native_buffer() of the backend and
+  imports that as EGL_NATIVE_BUFFER_HYBRIS.
+- The display extensions include EGL_EXT_image_dma_buf_import while the
+  backend is loaded.
+---
+ hybris/egl/egl.c              | 82 ++++++++++++++++++++++++++++++++++-
+ hybris/egl/glvnd/eglglvnd.cpp |  7 +++
+ 2 files changed, 88 insertions(+), 1 deletion(-)
+
+diff --git a/hybris/egl/egl.c b/hybris/egl/egl.c
+index 0051d37..4143a6e 100644
+--- a/hybris/egl/egl.c
++++ b/hybris/egl/egl.c
+@@ -26,6 +26,7 @@
+ #include <GLES2/gl2.h>
+ #include <GLES2/gl2ext.h>
+ #include <dlfcn.h>
++#include <link.h>
+ #include <stddef.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+@@ -42,6 +43,11 @@
+ #include <system/window.h>
+ #include "logging.h"
+ 
++// From platforms/common/hybris_nativebufferext.h (same value as EGL_NATIVE_BUFFER_ANDROID)
++#ifndef EGL_NATIVE_BUFFER_HYBRIS
++#define EGL_NATIVE_BUFFER_HYBRIS 0x3140
++#endif
++
+ static void *egl_handle = NULL;
+ static void *glesv2_handle = NULL;
+ static void *_hybris_libgles1 = NULL;
+@@ -241,6 +247,14 @@ EGLDisplay __eglHybrisGetPlatformDisplayCommon(EGLenum platform,
+ 			break;
+ #endif
+ 
++		case EGL_PLATFORM_GBM_KHR:
++			// Compositors on real KMS (wlroots) render into buffers of their
++			// GBM device and need no window system: like Android ("null").
++			// Their buffers come from the GBM backend hybris_gbm, see
++			// hybris_dmabuf_native_buffer().
++			hybris_ws = "null";
++			break;
++
+ 		default:
+ 			__eglHybrisSetError(EGL_BAD_PARAMETER);
+ 			return EGL_NO_DISPLAY;
+@@ -308,6 +322,51 @@ EGLBoolean eglTerminate(EGLDisplay dpy)
+ 	return (*_eglTerminate)(dpy);
+ }
+ 
++/*
++ * The GBM backend hybris_gbm allocates gralloc buffers and exports them as
++ * dma-bufs. It maps a dma-buf back to its native buffer with
++ * hybris_gbm_native_buffer(), which lets EGL_LINUX_DMA_BUF_EXT images become
++ * EGL_NATIVE_BUFFER_HYBRIS ones. libgbm may load the backend with
++ * RTLD_LOCAL, so if the symbol is not global, look for a loaded *_gbm.so.
++ */
++typedef EGLClientBuffer (*hybris_gbm_native_buffer_fn)(int fd);
++
++static int _find_gbm_backend(struct dl_phdr_info *info, size_t size, void *data)
++{
++	(void) size;
++	const char *name = info->dlpi_name;
++	size_t len = name ? strlen(name) : 0;
++	if (len < 7 || strcmp(name + len - 7, "_gbm.so") != 0)
++		return 0;
++	void *lib = dlopen(name, RTLD_NOW | RTLD_NOLOAD);
++	if (!lib)
++		return 0;
++	*(hybris_gbm_native_buffer_fn *) data = (hybris_gbm_native_buffer_fn) dlsym(lib, "hybris_gbm_native_buffer");
++	dlclose(lib);
++	return *(hybris_gbm_native_buffer_fn *) data != NULL;
++}
++
++static hybris_gbm_native_buffer_fn _gbm_native_buffer(void)
++{
++	static hybris_gbm_native_buffer_fn fn = NULL;
++	if (!fn)
++		fn = (hybris_gbm_native_buffer_fn) dlsym(RTLD_DEFAULT, "hybris_gbm_native_buffer");
++	if (!fn)
++		dl_iterate_phdr(_find_gbm_backend, &fn);
++	return fn;
++}
++
++static EGLClientBuffer hybris_dmabuf_native_buffer(const EGLint *attrib_list)
++{
++	hybris_gbm_native_buffer_fn fn = _gbm_native_buffer();
++	if (!fn || !attrib_list)
++		return NULL;
++	for (const EGLint *a = attrib_list; a[0] != EGL_NONE; a += 2)
++		if (a[0] == EGL_DMA_BUF_PLANE0_FD_EXT)
++			return fn(a[1]);
++	return NULL;
++}
++
+ const char * eglQueryString(EGLDisplay dpy, EGLint name)
+ {
+ 	HYBRIS_DLSYSM(egl, &_eglQueryString, "eglQueryString");
+@@ -324,7 +383,15 @@ const char * eglQueryString(EGLDisplay dpy, EGLint name)
+ 	}
+ #endif
+ 
+-	return ws_eglQueryString(dpy, name, _eglQueryString);
++	const char *ret = ws_eglQueryString(dpy, name, _eglQueryString);
++
++	// dma-buf import works for the buffers of hybris_gbm, if it is loaded
++	if (ret && dpy != EGL_NO_DISPLAY && name == EGL_EXTENSIONS && _gbm_native_buffer()) {
++		static char extensions[4096];
++		snprintf(extensions, sizeof(extensions), "%s EGL_EXT_image_dma_buf_import", ret);
++		return extensions;
++	}
++	return ret;
+ }
+ 
+ HYBRIS_IMPLEMENT_FUNCTION4(egl, EGLBoolean, eglGetConfigs, EGLDisplay, EGLConfig *, EGLint, EGLint *);
+@@ -490,6 +557,19 @@ static EGLImageKHR _my_eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum
+ {
+ 	HYBRIS_DLSYSM(egl, &_eglCreateImageKHR, "eglCreateImageKHR");
+ 	struct _EGLDisplay *display = hybris_egl_display_get_mapping(dpy);
++	// A dma-buf of hybris_gbm is imported as the native buffer behind it
++	if (target == EGL_LINUX_DMA_BUF_EXT) {
++		EGLClientBuffer native = hybris_dmabuf_native_buffer(attrib_list);
++		if (!native) {
++			__eglHybrisSetError(EGL_BAD_PARAMETER);
++			return EGL_NO_IMAGE_KHR;
++		}
++		ctx = EGL_NO_CONTEXT;
++		target = EGL_NATIVE_BUFFER_HYBRIS;
++		buffer = native;
++		attrib_list = NULL;
++	}
++
+ 	EGLContext newctx = ctx;
+ 	EGLenum newtarget = target;
+ 	EGLClientBuffer newbuffer = buffer;
+diff --git a/hybris/egl/glvnd/eglglvnd.cpp b/hybris/egl/glvnd/eglglvnd.cpp
+index 68786cc..a9e6d65 100644
+--- a/hybris/egl/glvnd/eglglvnd.cpp
++++ b/hybris/egl/glvnd/eglglvnd.cpp
+@@ -70,6 +70,12 @@ static std::string clientExtensionNoPlatform()
+                          // If end is npos then this value won't be used anyway.
+     } while (end != std::string::npos);
+ 
++    // libhybris implements eglGetPlatformDisplay(EXT) itself. glvnd reports
++    // EGL_EXT_platform_base only if a vendor does, and compositors such as
++    // wlroots require it for EGL_KHR_platform_gbm.
++    if (!clientExts.empty())
++        clientExts += " EGL_EXT_platform_base";
++
+     return clientExts;
+ }
+ 
+@@ -98,6 +104,7 @@ __eglGLVNDGetVendorString(int name)
+     if (name == __EGL_VENDOR_STRING_PLATFORM_EXTENSIONS) {
+         return
+             "EGL_KHR_platform_android"
++            " EGL_KHR_platform_gbm EGL_MESA_platform_gbm"
+ #ifdef WANT_WAYLAND
+             " EGL_EXT_platform_wayland EGL_KHR_platform_wayland"
+ #endif
+-- 
+2.55.0
+

@@ -1,0 +1,930 @@
+From b73974fabf89f7e6586cace4d59c38395057f368 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 11:21:20 +0100
+Subject: [PATCH] camera: A flash button for the flash LED: off, light with a
+ dimmer, flash
+
+Phones have a flash LED next to the back cameras. The button picks what it
+does: off, a lamp whose brightness a slider sets, or a flash that lights the
+scene shortly before a picture is taken. The lamp is lit only while a back
+camera is looked through, and goes out with the gallery, a locked screen or
+the app.
+
+The LED is the leds class device Phosh uses as torch (*:torch, *:flash),
+switched through logind's Session.SetBrightness; without one, the button
+stays hidden.
+---
+ data/org.gnome.Snapshot.gschema.xml.in        |  15 ++
+ .../icons/camera-flash-off-symbolic.svg       |   6 +
+ .../resources/icons/camera-flash-symbolic.svg |   4 +
+ .../resources/icons/camera-light-symbolic.svg |   7 +
+ data/resources/resources.gresource.xml.in     |   3 +
+ data/resources/ui/camera.ui                   | 139 ++++++++++++++-
+ po/de.po                                      |  18 ++
+ po/es.po                                      |  18 ++
+ po/fr.po                                      |  18 ++
+ po/it.po                                      |  18 ++
+ po/nl.po                                      |  18 ++
+ po/pl.po                                      |  19 +++
+ po/pt.po                                      |  18 ++
+ po/ru.po                                      |  18 ++
+ src/application.rs                            |  11 ++
+ src/main.rs                                   |   1 +
+ src/torch.rs                                  | 116 +++++++++++++
+ src/widgets/camera.rs                         | 160 +++++++++++++++++-
+ src/widgets/window.rs                         |   7 +
+ 19 files changed, 607 insertions(+), 7 deletions(-)
+ create mode 100644 data/resources/icons/camera-flash-off-symbolic.svg
+ create mode 100644 data/resources/icons/camera-flash-symbolic.svg
+ create mode 100644 data/resources/icons/camera-light-symbolic.svg
+ create mode 100644 src/torch.rs
+
+diff --git a/data/org.gnome.Snapshot.gschema.xml.in b/data/org.gnome.Snapshot.gschema.xml.in
+index 21d605f..92b739b 100644
+--- a/data/org.gnome.Snapshot.gschema.xml.in
++++ b/data/org.gnome.Snapshot.gschema.xml.in
+@@ -8,6 +8,11 @@
+   <enum id="org.gnome.Snapshot.PictureFormat">
+     <value nick="jpeg" value="0" />
+   </enum>
++  <enum id="org.gnome.Snapshot.FlashMode">
++    <value nick="off" value="0" />
++    <value nick="light" value="1" />
++    <value nick="flash" value="2" />
++  </enum>
+   <schema path="/org/gnome/Snapshot/" id="@app-id@" gettext-domain="@gettext-package@">
+     <key name="window-width" type="i">
+       <default>800</default>
+@@ -59,6 +64,16 @@
+       <summary>Picture format</summary>
+       <description>Whether to save pictures as png or jpeg</description>
+     </key>
++    <key name="flash-mode" enum="org.gnome.Snapshot.FlashMode">
++      <default>"off"</default>
++      <summary>Flash mode</summary>
++      <description>Whether the flash LED stays dark, lights the scene as a lamp or flashes when taking a picture. The lamp is not restored on start.</description>
++    </key>
++    <key name="light-level" type="i">
++      <default>0</default>
++      <summary>Lamp brightness</summary>
++      <description>The brightness of the flash LED as a lamp, in the LED's levels; 0 for the brightest</description>
++    </key>
+     <key name="last-camera-id" type="s">
+       <default>""</default>
+       <summary>Last Camera Used ID</summary>
+diff --git a/data/resources/icons/camera-flash-off-symbolic.svg b/data/resources/icons/camera-flash-off-symbolic.svg
+new file mode 100644
+index 0000000..5b37a0c
+--- /dev/null
++++ b/data/resources/icons/camera-flash-off-symbolic.svg
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path d="M 4.592 7.067 L 3.000 9.000 L 6.525 9.000 L 7.317 9.792 L 6.000 15.500 L 9.173 11.648 Z"/>
++  <path d="M 10.000 0.500 L 6.827 4.352 L 11.408 8.933 L 13.000 7.000 L 9.475 7.000 L 8.683 6.208 Z"/>
++  <path d="M 0.899 2.101 L 13.899 15.101 A 0.85 0.85 0 0 0 15.101 13.899 L 2.101 0.899 A 0.85 0.85 0 0 0 0.899 2.101 Z"/>
++</svg>
+diff --git a/data/resources/icons/camera-flash-symbolic.svg b/data/resources/icons/camera-flash-symbolic.svg
+new file mode 100644
+index 0000000..400f69c
+--- /dev/null
++++ b/data/resources/icons/camera-flash-symbolic.svg
+@@ -0,0 +1,4 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path d="M 10.000 0.500 L 3.000 9.000 L 7.500 9.000 L 6.000 15.500 L 13.000 7.000 L 8.500 7.000 Z"/>
++</svg>
+diff --git a/data/resources/icons/camera-light-symbolic.svg b/data/resources/icons/camera-light-symbolic.svg
+new file mode 100644
+index 0000000..9568555
+--- /dev/null
++++ b/data/resources/icons/camera-light-symbolic.svg
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <path fill-rule="evenodd" d="M 3.5 6 L 12.5 6 L 10.5 9 L 10.5 14.5 Q 10.5 15.5 9.5 15.5 L 6.5 15.5 Q 5.5 15.5 5.5 14.5 L 5.5 9 Z M 7.25 10.5 L 8.75 10.5 L 8.75 12.5 L 7.25 12.5 Z"/>
++  <path d="M 7.150 0.900 L 7.150 3.600 A 0.85 0.85 0 0 0 8.850 3.600 L 8.850 0.900 A 0.85 0.85 0 0 0 7.150 0.900 Z"/>
++  <path d="M 2.288 2.064 L 3.788 4.364 A 0.85 0.85 0 0 0 5.212 3.436 L 3.712 1.136 A 0.85 0.85 0 0 0 2.288 2.064 Z"/>
++  <path d="M 12.288 1.136 L 10.788 3.436 A 0.85 0.85 0 0 0 12.212 4.364 L 13.712 2.064 A 0.85 0.85 0 0 0 12.288 1.136 Z"/>
++</svg>
+diff --git a/data/resources/resources.gresource.xml.in b/data/resources/resources.gresource.xml.in
+index 032e6fc..a81c9b4 100644
+--- a/data/resources/resources.gresource.xml.in
++++ b/data/resources/resources.gresource.xml.in
+@@ -16,6 +16,9 @@
+     <file alias="video-camera-symbolic.svg">icons/video-camera-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias="cameras-symbolic.svg">icons/cameras-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias="camera-timer-symbolic.svg">icons/camera-timer-symbolic.svg</file>
++    <file preprocess="xml-stripblanks" alias="camera-flash-symbolic.svg">icons/camera-flash-symbolic.svg</file>
++    <file preprocess="xml-stripblanks" alias="camera-flash-off-symbolic.svg">icons/camera-flash-off-symbolic.svg</file>
++    <file preprocess="xml-stripblanks" alias="camera-light-symbolic.svg">icons/camera-light-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias ="external-link-symbolic.svg">icons/external-link-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias ="pick-camera-alt2-symbolic.svg">icons/pick-camera-alt2-symbolic.svg</file>
+     <file preprocess="xml-stripblanks" alias ="qr-code-symbolic.svg">icons/qr-code-symbolic.svg</file>
+diff --git a/data/resources/ui/camera.ui b/data/resources/ui/camera.ui
+index 0b993e5..0e6db2d 100644
+--- a/data/resources/ui/camera.ui
++++ b/data/resources/ui/camera.ui
+@@ -131,6 +131,89 @@
+                                 </style>
+                               </object>
+                             </child>
++                            <child type="flash-button">
++                              <object class="GtkMenuButton" id="flash_button">
++                                <property name="icon-name">camera-flash-off-symbolic</property>
++                                <property name="valign">center</property>
++                                <property name="halign">center</property>
++                                <property name="visible">False</property>
++                                <property name="tooltip-text" translatable="yes">Flash</property>
++                                <property name="popover">
++                                  <object class="GtkPopover">
++                                    <property name="child">
++                                      <object class="GtkBox">
++                                        <property name="orientation">vertical</property>
++                                        <property name="spacing">12</property>
++                                        <property name="margin-top">6</property>
++                                        <property name="margin-bottom">6</property>
++                                        <property name="margin-start">6</property>
++                                        <property name="margin-end">6</property>
++                                        <child>
++                                          <object class="AdwToggleGroup" id="flash_mode_toggles">
++                                            <property name="homogeneous">True</property>
++                                            <child>
++                                              <object class="AdwToggle">
++                                                <property name="name">off</property>
++                                                <property name="icon-name">camera-flash-off-symbolic</property>
++                                                <property name="label" translatable="yes" comments="TRANSLATORS the flash LED stays dark">Off</property>
++                                              </object>
++                                            </child>
++                                            <child>
++                                              <object class="AdwToggle">
++                                                <property name="name">light</property>
++                                                <property name="icon-name">camera-light-symbolic</property>
++                                                <property name="label" translatable="yes" comments="TRANSLATORS the flash LED stays lit as a lamp">Light</property>
++                                              </object>
++                                            </child>
++                                            <child>
++                                              <object class="AdwToggle">
++                                                <property name="name">flash</property>
++                                                <property name="icon-name">camera-flash-symbolic</property>
++                                                <property name="label" translatable="yes" comments="TRANSLATORS the flash LED lights up when a picture is taken">Flash</property>
++                                              </object>
++                                            </child>
++                                          </object>
++                                        </child>
++                                        <child>
++                                          <object class="GtkBox" id="light_level_box">
++                                            <property name="spacing">6</property>
++                                            <child>
++                                              <object class="GtkImage">
++                                                <property name="icon-name">display-brightness-symbolic</property>
++                                                <property name="accessible-role">presentation</property>
++                                              </object>
++                                            </child>
++                                            <child>
++                                              <object class="GtkScale" id="light_level_scale">
++                                                <property name="hexpand">True</property>
++                                                <property name="width-request">200</property>
++                                                <property name="digits">0</property>
++                                                <property name="round-digits">0</property>
++                                                <accessibility>
++                                                  <property name="label" translatable="yes">Brightness</property>
++                                                </accessibility>
++                                                <property name="adjustment">
++                                                  <object class="GtkAdjustment">
++                                                    <property name="lower">1</property>
++                                                    <property name="upper">1</property>
++                                                    <property name="step-increment">1</property>
++                                                    <property name="page-increment">1</property>
++                                                  </object>
++                                                </property>
++                                              </object>
++                                            </child>
++                                          </object>
++                                        </child>
++                                      </object>
++                                    </property>
++                                  </object>
++                                </property>
++                                <style>
++                                  <class name="circular" />
++                                  <class name="flat" />
++                                </style>
++                              </object>
++                            </child>
+                             <child type="primary-menu">
+                               <object class="GtkMenuButton">
+                                 <property name="icon-name">open-menu-symbolic</property>
+@@ -250,8 +333,21 @@
+                                           </object>
+                                         </child>
+                                         <child type="end">
+-                                          <object class="AdwLayoutSlot">
+-                                            <property name="id">countdown-button</property>
++                                          <object class="GtkBox">
++                                            <property name="orientation">vertical</property>
++                                            <property name="halign">center</property>
++                                            <property name="valign">center</property>
++                                            <property name="spacing">6</property>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">flash-button</property>
++                                              </object>
++                                            </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">countdown-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                       </object>
+@@ -307,8 +403,21 @@
+                                           </object>
+                                         </child>
+                                         <child type="end">
+-                                          <object class="AdwLayoutSlot">
+-                                            <property name="id">countdown-button</property>
++                                          <object class="GtkBox">
++                                            <property name="orientation">vertical</property>
++                                            <property name="halign">center</property>
++                                            <property name="valign">center</property>
++                                            <property name="spacing">6</property>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">flash-button</property>
++                                              </object>
++                                            </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">countdown-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                       </object>
+@@ -400,8 +509,21 @@
+                                           <class name="bottom" />
+                                         </style>
+                                         <child type="start">
+-                                          <object class="AdwLayoutSlot">
+-                                            <property name="id">countdown-button</property>
++                                          <object class="GtkBox">
++                                            <property name="orientation">horizontal</property>
++                                            <property name="halign">center</property>
++                                            <property name="valign">center</property>
++                                            <property name="spacing">6</property>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">countdown-button</property>
++                                              </object>
++                                            </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">flash-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                         <child type="center">
+@@ -450,6 +572,11 @@
+                                                 <property name="id">countdown-button</property>
+                                               </object>
+                                             </child>
++                                            <child>
++                                              <object class="AdwLayoutSlot">
++                                                <property name="id">flash-button</property>
++                                              </object>
++                                            </child>
+                                           </object>
+                                         </child>
+                                         <child type="center">
+diff --git a/po/de.po b/po/de.po
+index 0e6f99d..f459dea 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -459,6 +459,24 @@ msgstr ""
+ "Jürgen Benvenuti <gastornis@posteo.org>\n"
+ "Christian Kirbach <christian.kirbach@gmail.com>"
+ 
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Blitz"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Aus"
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Licht"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Helligkeit"
++
+ #~ msgid "Video format"
+ #~ msgstr "Videoformat"
+ 
+diff --git a/po/es.po b/po/es.po
+index 90bd4f0..8f65443 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -459,6 +459,24 @@ msgstr "No se pudo grabar el vídeo"
+ msgid "translator-credits"
+ msgstr "Daniel Mustieles <daniel.mustieles@gmail.com>, 2023-2025"
+ 
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Flash"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Apagado"
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Luz"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Brillo"
++
+ #~ msgid "Video format"
+ #~ msgstr "Formato de vídeo"
+ 
+diff --git a/po/fr.po b/po/fr.po
+index 0c2aa56..82c0824 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -468,6 +468,24 @@ msgstr ""
+ "Irénée Thirion <irenee.thirion@e.email>\n"
+ "Malo Billoré <malo.billore@gmail.com>"
+ 
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Flash"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Désactivé"
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Lampe"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Luminosité"
++
+ #~ msgid "Video format"
+ #~ msgstr "Format vidéo"
+ 
+diff --git a/po/it.po b/po/it.po
+index da9bd61..59ed2b4 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -461,6 +461,24 @@ msgstr ""
+ "Davide Ferracin <davide.ferracin@protonmail.com>, 2023\n"
+ "Lorenzo R. <lorenzorvd@tutanota.com>, 2023"
+ 
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Flash"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Spento"
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Luce"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Luminosità"
++
+ #~ msgid "Video format"
+ #~ msgstr "Formato video"
+ 
+diff --git a/po/nl.po b/po/nl.po
+index 268388e..eb60425 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -463,6 +463,24 @@ msgstr ""
+ "Nathan Follens <nfollens@gnome.org>\n"
+ "Meer info over GNOME-NL https://nl.gnome.org"
+ 
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Flitser"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Uit"
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Lamp"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Helderheid"
++
+ #~ msgid "Video format"
+ #~ msgstr "Videoformaat"
+ 
+diff --git a/po/pl.po b/po/pl.po
+index 88f2302..2499d93 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -464,3 +464,22 @@ msgstr ""
+ "Piotr Drąg <piotrdrag@gmail.com>, 2023-2025\n"
+ "Aviary.pl <community-poland@mozilla.org>, 2023-2025\n"
+ "Victoria Niedzielska <victorian@gnome.org>, 2026"
++
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Flesz"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Wyłączony"
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Latarka"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Jasność"
++
+diff --git a/po/pt.po b/po/pt.po
+index ae3ae38..12eb19b 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -460,6 +460,24 @@ msgstr ""
+ "Hugo Carvalho <hugokarvalho@hotmail.com>\n"
+ "João Carvalhinho <joao.carvalhinho@gmail.com>"
+ 
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Flash"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Desligado"
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Luz"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Brilho"
++
+ #~ msgid "Video format"
+ #~ msgstr "Formato do vídeo"
+ 
+diff --git a/po/ru.po b/po/ru.po
+index 08e989e..196d5ed 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -457,6 +457,24 @@ msgstr "Не удалось записать видео"
+ msgid "translator-credits"
+ msgstr "Aleksandr Melman <alexmelman88@gmail.com>, 2023"
+ 
++#: data/resources/ui/camera.ui
++msgid "Flash"
++msgstr "Вспышка"
++
++#. TRANSLATORS the flash LED stays dark
++#: data/resources/ui/camera.ui
++msgid "Off"
++msgstr "Выкл."
++
++#. TRANSLATORS the flash LED stays lit as a lamp
++#: data/resources/ui/camera.ui
++msgid "Light"
++msgstr "Фонарик"
++
++#: data/resources/ui/camera.ui
++msgid "Brightness"
++msgstr "Яркость"
++
+ #~ msgid "Video format"
+ #~ msgstr "Формат видео"
+ 
+diff --git a/src/application.rs b/src/application.rs
+index 4e16964..8f5d267 100644
+--- a/src/application.rs
++++ b/src/application.rs
+@@ -100,6 +100,17 @@ mod imp {
+             app.setup_gactions();
+             app.setup_accels();
+         }
++
++        fn shutdown(&self) {
++            // Quitting (Ctrl+Q) does not close the windows: a lamp lit by
++            // the camera goes out here
++            for window in self.obj().windows() {
++                if let Some(window) = window.downcast_ref::<crate::Window>() {
++                    window.switch_off_light();
++                }
++            }
++            self.parent_shutdown();
++        }
+     }
+ 
+     impl GtkApplicationImpl for Application {}
+diff --git a/src/main.rs b/src/main.rs
+index 324f5b0..56e97c4 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -3,6 +3,7 @@
+ mod config;
+ mod application;
+ mod enums;
++mod torch;
+ mod utils;
+ mod widgets;
+ 
+diff --git a/src/torch.rs b/src/torch.rs
+new file mode 100644
+index 0000000..7547b55
+--- /dev/null
++++ b/src/torch.rs
+@@ -0,0 +1,116 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! The phone's flash LED, lit by the camera as a lamp or as a flash.
++//!
++//! The LED is a `leds` class device named like `white:torch` or `*:flash`, the
++//! names Phosh looks for. It is switched through logind's
++//! `Session.SetBrightness`, which the user of the graphical session may call
++//! without further rights; Phosh's torch toggle follows the change.
++use std::cell::Cell;
++
++use gtk::{gio, glib, prelude::*};
++
++const LOGIND: &str = "org.freedesktop.login1";
++const SESSION_PATH: &str = "/org/freedesktop/login1/session/auto";
++const SESSION_IFACE: &str = "org.freedesktop.login1.Session";
++const CALL_TIMEOUT_MS: i32 = 2000;
++
++#[derive(Debug)]
++pub struct Torch {
++    name: String,
++    max_brightness: u32,
++    bus: gio::DBusConnection,
++    /// The brightness last set by us. Starts at 0, so a lamp switched on in
++    /// Phosh before the camera opened stays as it is until the user picks a
++    /// mode here.
++    brightness: Cell<u32>,
++}
++
++impl Torch {
++    /// Finds the first torch LED; `None` on machines without one, where the
++    /// camera shows no flash button.
++    pub fn find() -> Option<Self> {
++        let mut entries: Vec<_> = std::fs::read_dir("/sys/class/leds")
++            .ok()?
++            .flatten()
++            .collect();
++        // read_dir() has no order; pick the same LED on every start
++        entries.sort_by_key(|entry| entry.file_name());
++        let (name, max_brightness) = entries.iter().find_map(|entry| {
++            let name = entry.file_name().into_string().ok()?;
++            if !name.contains(":torch") && !name.contains(":flash") {
++                return None;
++            }
++            let max = std::fs::read_to_string(entry.path().join("max_brightness")).ok()?;
++            let max = max.trim().parse::<u32>().ok().filter(|max| *max > 0)?;
++            Some((name, max))
++        })?;
++
++        let bus = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE)
++            .inspect_err(|err| log::warn!("No system bus for the torch: {err}"))
++            .ok()?;
++
++        log::debug!("Torch LED {name}, {max_brightness} levels");
++        Some(Self {
++            name,
++            max_brightness,
++            bus,
++            brightness: Cell::new(0),
++        })
++    }
++
++    pub fn max_brightness(&self) -> u32 {
++        self.max_brightness
++    }
++
++    fn args(&self, brightness: u32) -> glib::Variant {
++        ("leds", self.name.as_str(), brightness).to_variant()
++    }
++
++    /// Sets the brightness without waiting. The call goes out at once, so
++    /// calls in a row, e.g. while dragging the slider, arrive in order.
++    pub fn set_brightness(&self, brightness: u32) {
++        let brightness = brightness.min(self.max_brightness);
++        if self.brightness.replace(brightness) == brightness {
++            return;
++        }
++
++        self.bus.call(
++            Some(LOGIND),
++            SESSION_PATH,
++            SESSION_IFACE,
++            "SetBrightness",
++            Some(&self.args(brightness)),
++            None,
++            gio::DBusCallFlags::NONE,
++            CALL_TIMEOUT_MS,
++            gio::Cancellable::NONE,
++            move |res| {
++                if let Err(err) = res {
++                    log::warn!("Could not set the torch to {brightness}: {err}");
++                }
++            },
++        );
++    }
++
++    /// Switches a lamp we lit off and waits for it, for when the app quits
++    /// and no main loop runs anymore to send the call.
++    pub fn switch_off_now(&self) {
++        if self.brightness.replace(0) == 0 {
++            return;
++        }
++
++        if let Err(err) = self.bus.call_sync(
++            Some(LOGIND),
++            SESSION_PATH,
++            SESSION_IFACE,
++            "SetBrightness",
++            Some(&self.args(0)),
++            None,
++            gio::DBusCallFlags::NONE,
++            CALL_TIMEOUT_MS,
++            gio::Cancellable::NONE,
++        ) {
++            log::warn!("Could not switch the torch off: {err}");
++        }
++    }
++}
+diff --git a/src/widgets/camera.rs b/src/widgets/camera.rs
+index 47b393e..5fd9e6f 100644
+--- a/src/widgets/camera.rs
++++ b/src/widgets/camera.rs
+@@ -11,8 +11,14 @@ use gtk::{gio, glib};
+ 
+ use super::CameraControls;
+ use crate::enums::ControlsLayout;
++use crate::torch::Torch;
+ use crate::{config, utils};
+ 
++/// How long the flash lights the scene before the picture is taken: the
++/// picture comes from the running preview, whose exposure needs a moment to
++/// follow the light.
++const FLASH_LEAD: std::time::Duration = std::time::Duration::from_millis(800);
++
+ mod imp {
+     use std::cell::{Cell, OnceCell, RefCell};
+ 
+@@ -45,6 +51,11 @@ mod imp {
+         #[property(get, set = Self::set_capture_mode, explicit_notify, default)]
+         capture_mode: Cell<crate::CaptureMode>,
+ 
++        /// The flash LED, if the machine has one
++        pub torch: OnceCell<Torch>,
++        /// The flash is lit for a picture being taken
++        pub flashing: Cell<bool>,
++
+         #[template_child]
+         pub single_landscape_bp: TemplateChild<adw::Breakpoint>,
+         #[template_child]
+@@ -72,6 +83,15 @@ mod imp {
+         #[template_child]
+         pub camera_controls: TemplateChild<crate::CameraControls>,
+ 
++        #[template_child]
++        pub flash_button: TemplateChild<gtk::MenuButton>,
++        #[template_child]
++        pub flash_mode_toggles: TemplateChild<adw::ToggleGroup>,
++        #[template_child]
++        pub light_level_box: TemplateChild<gtk::Box>,
++        #[template_child]
++        pub light_level_scale: TemplateChild<gtk::Scale>,
++
+         #[template_child]
+         pub bottom_sheet: TemplateChild<adw::BottomSheet>,
+         #[template_child]
+@@ -326,6 +346,8 @@ mod imp {
+                     }
+                 }
+             ));
++
++            obj.setup_flash();
+         }
+     }
+ 
+@@ -447,7 +469,18 @@ impl Camera {
+         let filename = utils::picture_file_name(format);
+         let path = utils::pictures_dir()?.join(filename);
+ 
+-        imp.viewfinder.take_picture(path)?;
++        if self.flash_fires() {
++            let torch = imp.torch.get().unwrap();
++            imp.flashing.set(true);
++            torch.set_brightness(torch.max_brightness());
++            glib::timeout_future(FLASH_LEAD).await;
++        }
++
++        // The flash goes out once the picture is stored, or now if there is none
++        if let Err(err) = imp.viewfinder.take_picture(path) {
++            self.end_flash();
++            return Err(err.into());
++        }
+         imp.flash_bin.flash();
+ 
+         let settings = imp.settings();
+@@ -543,6 +576,7 @@ impl Camera {
+             #[weak(rename_to = obj)]
+             self,
+             move |_, file| {
++                obj.end_flash();
+                 let window = obj.root().and_downcast::<crate::Window>().unwrap();
+                 window.set_shutter_enabled(true);
+                 // TODO Maybe report error via toast on None
+@@ -576,6 +610,130 @@ impl Camera {
+     pub fn set_page_visible(&self, visible: bool) {
+         self.imp().page_visible.set(visible);
+         self.update_idle_inhibit();
++        self.update_torch();
++    }
++
++    fn setup_flash(&self) {
++        let imp = self.imp();
++        let Some(torch) = Torch::find() else {
++            // No LED: the flash button stays hidden
++            return;
++        };
++        let max = torch.max_brightness();
++        imp.torch.set(torch).unwrap();
++
++        // The lamp is not lit again on start; a chosen flash is kept
++        let settings = imp.settings();
++        if settings.string("flash-mode") == "light" {
++            settings.set_string("flash-mode", "off").unwrap();
++        }
++        settings
++            .bind("flash-mode", &*imp.flash_mode_toggles, "active-name")
++            .build();
++
++        let adjustment = imp.light_level_scale.adjustment();
++        adjustment.set_upper(max as f64);
++        let level = settings.int("light-level");
++        adjustment.set_value(if level > 0 { level as f64 } else { max as f64 });
++        adjustment.connect_value_changed(glib::clone!(
++            #[weak(rename_to = obj)]
++            self,
++            move |adjustment| {
++                obj.imp()
++                    .settings()
++                    .set_int("light-level", adjustment.value() as i32)
++                    .unwrap();
++                obj.update_torch();
++            }
++        ));
++
++        imp.flash_mode_toggles
++            .connect_active_name_notify(glib::clone!(
++                #[weak(rename_to = obj)]
++                self,
++                move |_| {
++                    obj.update_flash_button();
++                    obj.update_torch();
++                }
++            ));
++        imp.viewfinder.connect_camera_notify(glib::clone!(
++            #[weak(rename_to = obj)]
++            self,
++            move |_| {
++                obj.update_flash_button();
++                obj.update_torch();
++            }
++        ));
++        self.update_flash_button();
++    }
++
++    fn flash_mode(&self) -> Option<glib::GString> {
++        self.imp().flash_mode_toggles.active_name()
++    }
++
++    /// Whether the LED lights what the camera sees: it sits next to the back
++    /// cameras
++    fn light_faces_scene(&self) -> bool {
++        self.imp().torch.get().is_some()
++            && self
++                .imp()
++                .viewfinder
++                .camera()
++                .is_some_and(|camera| matches!(camera.location(), aperture::CameraLocation::Back))
++    }
++
++    fn update_flash_button(&self) {
++        let imp = self.imp();
++        let mode = self.flash_mode();
++        let icon = match mode.as_deref() {
++            Some("light") => "camera-light-symbolic",
++            Some("flash") => "camera-flash-symbolic",
++            _ => "camera-flash-off-symbolic",
++        };
++
++        imp.flash_button.set_icon_name(icon);
++        imp.flash_button.set_visible(self.light_faces_scene());
++        imp.light_level_box
++            .set_sensitive(mode.as_deref() == Some("light"));
++    }
++
++    /// Lights the lamp while a back camera is looked through with the lamp
++    /// chosen, and puts it out otherwise
++    fn update_torch(&self) {
++        let imp = self.imp();
++        let Some(torch) = imp.torch.get() else {
++            return;
++        };
++        // A running flash restores the lamp when it ends
++        if imp.flashing.get() {
++            return;
++        }
++
++        let lit = imp.page_visible.get()
++            && self.light_faces_scene()
++            && self.flash_mode().as_deref() == Some("light");
++        torch.set_brightness(if lit {
++            imp.light_level_scale.value() as u32
++        } else {
++            0
++        });
++    }
++
++    fn flash_fires(&self) -> bool {
++        self.light_faces_scene() && self.flash_mode().as_deref() == Some("flash")
++    }
++
++    fn end_flash(&self) {
++        if self.imp().flashing.replace(false) {
++            self.update_torch();
++        }
++    }
++
++    /// Puts a lamp lit by the camera out before the app quits
++    pub fn switch_off_light(&self) {
++        if let Some(torch) = self.imp().torch.get() {
++            torch.switch_off_now();
++        }
+     }
+ 
+     fn update_idle_inhibit(&self) {
+diff --git a/src/widgets/window.rs b/src/widgets/window.rs
+index 8a3248b..2f8e65c 100644
+--- a/src/widgets/window.rs
++++ b/src/widgets/window.rs
+@@ -235,6 +235,8 @@ mod imp {
+                 log::warn!("Failed to save window state, {err:?}");
+             }
+ 
++            self.camera.switch_off_light();
++
+             // Pass close request on to the parent
+             self.parent_close_request()
+         }
+@@ -255,6 +257,11 @@ impl Window {
+         glib::Object::builder().property("application", app).build()
+     }
+ 
++    /// Puts a lamp lit by the camera out before the app quits
++    pub fn switch_off_light(&self) {
++        self.imp().camera.switch_off_light();
++    }
++
+     fn setup_gactions(&self) {
+         let imp = self.imp();
+ 
+-- 
+2.55.0
+

@@ -1,0 +1,21 @@
+[Desktop Entry]
+Name=Streaming
+Comment=Settings for mirroring the screen to TVs
+Comment[de]=Einstellungen für das Spiegeln des Bildschirms auf Fernseher
+Comment[fr]=Réglages de la recopie de l’écran sur les téléviseurs
+Comment[es]=Ajustes para duplicar la pantalla en televisores
+Comment[it]=Impostazioni per duplicare lo schermo sui televisori
+Comment[pt]=Definições para espelhar o ecrã em televisores
+Comment[nl]=Instellingen voor het spiegelen van het scherm naar tv’s
+Comment[pl]=Ustawienia wyświetlania ekranu na telewizorach
+Comment[ru]=Настройки трансляции экрана на телевизоры
+Exec=gnome-control-center streaming
+Icon=plinius-cast-symbolic
+Terminal=false
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=GNOME;GTK;Settings;DesktopSettings;X-GNOME-Settings-Panel;X-GNOME-ConnectivitySettings;
+OnlyShowIn=GNOME;Unity;
+Keywords=Cast;Chromecast;Mirror;Screen;TV;AirPlay;DLNA;webOS;Resolution;Bitrate;
+Keywords[de]=Cast;Chromecast;Spiegeln;Bildschirm;Fernseher;TV;AirPlay;DLNA;webOS;Auflösung;Bitrate;

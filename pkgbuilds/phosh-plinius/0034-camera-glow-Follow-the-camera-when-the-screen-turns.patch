@@ -1,0 +1,259 @@
+From 2323bffd7ca688a10b6b6bf396a6233e9ed9af07 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 15:49:31 +0100
+Subject: [PATCH] camera-glow: Follow the camera when the screen turns
+
+Plinius: the glow was placed once, at the notch of the upright screen,
+and stayed at that spot of the screen when it turned, away from the
+camera. Place it from the notch of the upright screen and the screen's
+transform, and place it anew when the built-in monitor changes.
+---
+ src/camera-glow.c    | 137 +++++++++++++++++++++++++++++++++++++++++++++------
+ src/layout-manager.c |  23 +++++++++
+ src/layout-manager.h |   2 +
+ 3 files changed, 148 insertions(+), 14 deletions(-)
+
+diff --git a/src/camera-glow.c b/src/camera-glow.c
+index 673bf0b7..05eff71c 100644
+--- a/src/camera-glow.c
++++ b/src/camera-glow.c
+@@ -24,8 +24,9 @@
+  *
+  * The glow is a soft white disc behind the camera hole. The hole itself has no pixels,
+  * so what shows is a ring of light around it, wherever exactly the hole sits in the
+- * notch. The surface takes no input: the notch stays tappable. Without a notch in the
+- * top bar (no panel data, phone turned) there is no glow.
++ * notch. The surface takes no input: the notch stays tappable. When the screen turns,
++ * the glow moves along with the camera to the screen's side or bottom. Without a notch
++ * (no panel data) or on a mirrored screen there is no glow.
+  */
+ 
+ #define BRIDGE_NAME      "org.plinius.CameraBridge"
+@@ -41,6 +42,7 @@ struct _PhoshCameraGlow {
+   GDBusProxy       *proxy;
+   GCancellable     *cancel;
+ 
++  PhoshMonitor     *monitor;   /* watched for turns of the screen */
+   GtkWidget        *surface;   /* while shown or fading out */
+   GdkRectangle      notch;     /* in surface coordinates */
+   double            level;     /* 0 … 1, how bright the glow is now */
+@@ -150,27 +152,92 @@ start_fade (PhoshCameraGlow *self)
+ }
+ 
+ 
++/*
++ * Where the camera hole is on the screen as it is turned now. @upright is the hole on the
++ * upright screen (w × h logical pixels). A transform of 90 turns the picture counter-clockwise
++ * (wl_output), so the screen's natural top edge, and with it the camera, is on the right.
++ */
++static gboolean
++get_turned_hole (PhoshMonitor *monitor, const GdkRectangle *upright, GdkRectangle *hole)
++{
++  float scale = phosh_monitor_get_fractional_scale (monitor);
++  int w = monitor->width / scale;
++  int h = monitor->height / scale;
++
++  switch (phosh_monitor_get_transform (monitor)) {
++  case PHOSH_MONITOR_TRANSFORM_NORMAL:
++    *hole = *upright;
++    break;
++  case PHOSH_MONITOR_TRANSFORM_90:
++    *hole = (GdkRectangle) {
++      .x = h - upright->y - upright->height,
++      .y = upright->x,
++      .width = upright->height,
++      .height = upright->width,
++    };
++    break;
++  case PHOSH_MONITOR_TRANSFORM_180:
++    *hole = (GdkRectangle) {
++      .x = w - upright->x - upright->width,
++      .y = h - upright->y - upright->height,
++      .width = upright->width,
++      .height = upright->height,
++    };
++    break;
++  case PHOSH_MONITOR_TRANSFORM_270:
++    *hole = (GdkRectangle) {
++      .x = upright->y,
++      .y = w - upright->x - upright->width,
++      .width = upright->height,
++      .height = upright->width,
++    };
++    break;
++  default:
++    /* Mirrored: no such thing on a phone */
++    return FALSE;
++  }
++
++  return TRUE;
++}
++
++
+ static gboolean
+ create_surface (PhoshCameraGlow *self)
+ {
+   PhoshShell *shell = phosh_shell_get_default ();
+   PhoshMonitor *monitor = phosh_shell_get_builtin_monitor (shell);
+   PhoshWayland *wl = phosh_wayland_get_default ();
+-  GdkRectangle notch;
++  GdkRectangle upright, hole, box, screen = { 0 };
++  float scale;
+   GtkWidget *area;
+-  int left;
+ 
+   if (!monitor ||
+-      !phosh_layout_manager_get_top_bar_notch (phosh_shell_get_layout_manager (shell), &notch))
++      !phosh_layout_manager_get_upright_notch (phosh_shell_get_layout_manager (shell), &upright) ||
++      !get_turned_hole (monitor, &upright, &hole))
++    return FALSE;
++
++  /* The surface covers the hole and the light around it, as far as it is on the screen */
++  scale = phosh_monitor_get_fractional_scale (monitor);
++  screen.width = monitor->width / scale;
++  screen.height = monitor->height / scale;
++  if (phosh_monitor_transform_is_tilted (phosh_monitor_get_transform (monitor))) {
++    screen.width = monitor->height / scale;
++    screen.height = monitor->width / scale;
++  }
++  box = (GdkRectangle) {
++    .x = hole.x - GLOW_SPREAD,
++    .y = hole.y - GLOW_SPREAD,
++    .width = hole.width + 2 * GLOW_SPREAD,
++    .height = hole.height + 2 * GLOW_SPREAD,
++  };
++  if (!gdk_rectangle_intersect (&box, &screen, &box))
+     return FALSE;
+ 
+-  /* The surface covers the notch and the light around it */
+-  left = MAX (0, notch.x - GLOW_SPREAD);
+   self->notch = (GdkRectangle) {
+-    .x = notch.x - left,
+-    .y = notch.y,
+-    .width = notch.width,
+-    .height = notch.height,
++    .x = hole.x - box.x,
++    .y = hole.y - box.y,
++    .width = hole.width,
++    .height = hole.height,
+   };
+ 
+   self->surface = g_object_new (PHOSH_TYPE_LAYER_SURFACE,
+@@ -182,9 +249,10 @@ create_surface (PhoshCameraGlow *self)
+                                 "kbd-interactivity", FALSE,
+                                 /* Over the top bar, not below its exclusive zone */
+                                 "exclusive-zone", -1,
+-                                "margin-left", left,
+-                                "width", self->notch.x + notch.width + GLOW_SPREAD,
+-                                "height", notch.y + notch.height + GLOW_SPREAD,
++                                "margin-left", box.x,
++                                "margin-top", box.y,
++                                "width", box.width,
++                                "height", box.height,
+                                 "namespace", "phosh camera-glow",
+                                 NULL);
+   gtk_widget_set_name (self->surface, "camera-glow");
+@@ -199,6 +267,43 @@ create_surface (PhoshCameraGlow *self)
+ }
+ 
+ 
++/* The screen turned (or changed otherwise): the glow moves to where the camera is now */
++static void
++on_monitor_configured (PhoshCameraGlow *self)
++{
++  double level = self->level;
++
++  if (!self->surface)
++    return;
++
++  destroy_surface (self);
++  if (!create_surface (self))
++    return;
++
++  self->level = level;
++  gtk_widget_queue_draw (self->surface);
++  if ((self->on && level < 1) || !self->on)
++    start_fade (self);
++}
++
++
++static void
++watch_monitor (PhoshCameraGlow *self)
++{
++  PhoshMonitor *monitor = phosh_shell_get_builtin_monitor (phosh_shell_get_default ());
++
++  if (monitor == self->monitor)
++    return;
++
++  if (self->monitor)
++    g_signal_handlers_disconnect_by_data (self->monitor, self);
++  g_set_weak_pointer (&self->monitor, monitor);
++  if (monitor)
++    g_signal_connect_object (monitor, "configured", G_CALLBACK (on_monitor_configured), self,
++                             G_CONNECT_SWAPPED);
++}
++
++
+ static void
+ update (PhoshCameraGlow *self)
+ {
+@@ -215,6 +320,7 @@ update (PhoshCameraGlow *self)
+   self->on = on;
+   g_debug ("Camera %s", on ? "on" : "off");
+ 
++  watch_monitor (self);
+   if (on && !self->surface && !create_surface (self))
+     return;
+   start_fade (self);
+@@ -253,6 +359,9 @@ phosh_camera_glow_dispose (GObject *object)
+   g_cancellable_cancel (self->cancel);
+   g_clear_object (&self->cancel);
+   g_clear_object (&self->proxy);
++  if (self->monitor)
++    g_signal_handlers_disconnect_by_data (self->monitor, self);
++  g_clear_weak_pointer (&self->monitor);
+   destroy_surface (self);
+ 
+   G_OBJECT_CLASS (phosh_camera_glow_parent_class)->dispose (object);
+diff --git a/src/layout-manager.c b/src/layout-manager.c
+index 2cefb1b3..d6014e58 100644
+--- a/src/layout-manager.c
++++ b/src/layout-manager.c
+@@ -763,3 +763,26 @@ phosh_layout_manager_get_top_bar_notch (PhoshLayoutManager *self, GdkRectangle *
+ 
+   return get_top_bar_notch (self, phosh_monitor_get_fractional_scale (self->builtin), notch);
+ }
++
++
++/**
++ * phosh_layout_manager_get_upright_notch:
++ * @self: The layout manager
++ * @notch: (out): The notch in the top bar of the upright display (GTK coordinates)
++ *
++ * Plinius: where the notch sits on the display in its natural (upright) orientation,
++ * also while the display is turned, e.g. to keep something next to the camera.
++ *
++ * Returns: %TRUE if the built-in display has a notch in its top bar
++ */
++gboolean
++phosh_layout_manager_get_upright_notch (PhoshLayoutManager *self, GdkRectangle *notch)
++{
++  g_return_val_if_fail (PHOSH_IS_LAYOUT_MANAGER (self), FALSE);
++  g_return_val_if_fail (notch, FALSE);
++
++  if (self->layout != PHOSH_SHELL_LAYOUT_DEVICE || self->builtin == NULL || self->panel == NULL)
++    return FALSE;
++
++  return get_top_bar_notch (self, phosh_monitor_get_fractional_scale (self->builtin), notch);
++}
+diff --git a/src/layout-manager.h b/src/layout-manager.h
+index 628db662..92841e9f 100644
+--- a/src/layout-manager.h
++++ b/src/layout-manager.h
+@@ -32,4 +32,6 @@ void                         phosh_layout_manager_set_top_bar_widths   (PhoshLay
+                                                                         int indicators);
+ gboolean                     phosh_layout_manager_get_top_bar_notch    (PhoshLayoutManager *self,
+                                                                         GdkRectangle *notch);
++gboolean                     phosh_layout_manager_get_upright_notch    (PhoshLayoutManager *self,
++                                                                        GdkRectangle *notch);
+ G_END_DECLS

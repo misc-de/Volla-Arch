@@ -1,0 +1,397 @@
+From 8cb981a68cb3d15b06630953f31833909dd36996 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 08:25:41 +0100
+Subject: [PATCH] provider-dialog: Add a Refresh button above Remove
+
+Checks the credentials and has the data of the account's calendars,
+contacts and tasks fetched again, through the program plinius-goa-refresh.
+---
+ po/de.po                           |  16 +++++
+ po/es.po                           |  16 +++++
+ po/fr.po                           |  16 +++++
+ po/it.po                           |  16 +++++
+ po/nl.po                           |  16 +++++
+ po/pl.po                           |  16 +++++
+ po/pt.po                           |  16 +++++
+ po/pt_BR.po                        |  16 +++++
+ po/ru.po                           |  16 +++++
+ src/goabackend/goaproviderdialog.c | 105 ++++++++++++++++++++++++++++-
+ 10 files changed, 248 insertions(+), 1 deletion(-)
+
+diff --git a/po/de.po b/po/de.po
+index fdb2588..13e776f 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -796,6 +796,22 @@ msgstr "Anmeldedaten-Cache für Identität konnte nicht erstellt werden"
+ msgid "Error closing file descriptor: %s"
+ msgstr "Fehler beim Schließen des Dateideskriptors: %s"
+ 
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "_Aktualisieren"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Wird aktualisiert …"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Konto aktualisiert"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Das Konto konnte nicht aktualisiert werden"
++
+ #~ msgid "Authorization failed"
+ #~ msgstr "Legitimierung gescheitert"
+ 
+diff --git a/po/es.po b/po/es.po
+index d878b48..9bbdb2e 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -824,6 +824,22 @@ msgid "Error closing file descriptor: %s"
+ msgstr "Error al cerrar el descriptor del archivo: %s"
+ 
+ #, fuzzy
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "Ac_tualizar"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Actualizando…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Cuenta actualizada"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "No se pudo actualizar la cuenta"
++
+ #~ msgid "List of providers that are allowed to be loaded"
+ #~ msgstr "Lista de proveedores que pueden cargarse"
+ 
+diff --git a/po/fr.po b/po/fr.po
+index 4bfc9ae..0a28b69 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -864,3 +864,19 @@ msgstr ""
+ #, c-format
+ msgid "Error closing file descriptor: %s"
+ msgstr "Erreur lors de la fermeture du descripteur de fichier : %s"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "_Actualiser"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Actualisation…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Compte actualisé"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Impossible d’actualiser le compte"
+diff --git a/po/it.po b/po/it.po
+index 9b5b5c8..5dd7233 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -827,6 +827,22 @@ msgstr "Impossibile creare la cache delle credenziali per l'identità"
+ msgid "Error closing file descriptor: %s"
+ msgstr "Errore nella chiusura del descrittore file: %s"
+ 
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "A_ggiorna"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Aggiornamento…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Account aggiornato"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Impossibile aggiornare l’account"
++
+ #~ msgid "List of providers that are allowed to be loaded"
+ #~ msgstr "Elenco di fornitori che è possibile caricare"
+ 
+diff --git a/po/nl.po b/po/nl.po
+index 097ec63..7bda8bc 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -844,6 +844,22 @@ msgstr "Kan aanmeldgegevensbuffer voor identiteit niet aanmaken"
+ msgid "Error closing file descriptor: %s"
+ msgstr "Fout bij sluiten van bestandsdescriptor: %s"
+ 
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "_Vernieuwen"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Vernieuwen…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Account vernieuwd"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Kan het account niet vernieuwen"
++
+ #~ msgid "List of providers that are allowed to be loaded"
+ #~ msgstr "Lijst van leveranciers die geladen mogen worden"
+ 
+diff --git a/po/pl.po b/po/pl.po
+index 5faa78e..a08c355 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -838,6 +838,22 @@ msgid "Error closing file descriptor: %s"
+ msgstr "Błąd podczas zamykania deskryptora pliku: %s"
+ 
+ #, c-format
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "O_dśwież"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Odświeżanie…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Konto odświeżone"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Nie można odświeżyć konta"
++
+ #~ msgid "Authorization response: %s"
+ #~ msgstr "Odpowiedź upoważnienia: %s"
+ 
+diff --git a/po/pt.po b/po/pt.po
+index 182f202..3a45408 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -852,6 +852,22 @@ msgstr "Não foi possível criar a cache de credenciais para a identidade"
+ msgid "Error closing file descriptor: %s"
+ msgstr "Erro ao fechar o descritor de ficheiro: %s"
+ 
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "A_tualizar"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "A atualizar…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Conta atualizada"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Não foi possível atualizar a conta"
++
+ #~ msgid "List of providers that are allowed to be loaded"
+ #~ msgstr "Lista de fornecedores que podem ser carregados"
+ 
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 26ab075..33fcd5f 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -832,6 +832,22 @@ msgstr "Não foi possível criar cache de credencial para a identidade"
+ msgid "Error closing file descriptor: %s"
+ msgstr "Erro ao fechar o descritor de aquivo: %s"
+ 
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "A_tualizar"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Atualizando…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Conta atualizada"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Não foi possível atualizar a conta"
++
+ #~ msgid "List of providers that are allowed to be loaded"
+ #~ msgstr "Lista de provedores que possuem permissão para serem carregados"
+ 
+diff --git a/po/ru.po b/po/ru.po
+index 6d72853..d899c81 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -825,6 +825,22 @@ msgstr "Не удалось создать кэш учётных данных д
+ msgid "Error closing file descriptor: %s"
+ msgstr "Ошибка при закрытии дескриптора файла: %s"
+ 
++#: src/goabackend/goaproviderdialog.c
++msgid "Re_fresh"
++msgstr "_Обновить"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Refreshing…"
++msgstr "Обновление…"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Account refreshed"
++msgstr "Учётная запись обновлена"
++
++#: src/goabackend/goaproviderdialog.c
++msgid "Could not refresh the account"
++msgstr "Не удалось обновить учётную запись"
++
+ #~ msgid "List of providers that are allowed to be loaded"
+ #~ msgstr "Список поставщиков, которые разрешены для загрузки"
+ 
+diff --git a/src/goabackend/goaproviderdialog.c b/src/goabackend/goaproviderdialog.c
+index 8a5ae1a..57c6149 100644
+--- a/src/goabackend/goaproviderdialog.c
++++ b/src/goabackend/goaproviderdialog.c
+@@ -96,6 +96,7 @@ struct _GoaProviderDialog
+   GtkWidget *view;
+   GtkWidget *current_page;
+   GtkWidget *current_group;
++  GtkWidget *sync_button;
+ };
+ 
+ G_DEFINE_TYPE (GoaProviderDialog, goa_provider_dialog, ADW_TYPE_DIALOG)
+@@ -641,6 +642,92 @@ on_remove_activated (GoaProviderDialog *self)
+   goa_provider_dialog_set_state (self, GOA_DIALOG_BUSY);
+ }
+ 
++/* Fetches the account's calendars, contacts and tasks again. A separate program, because this library
++ * does not link evolution-data-server (see plinius-goa-refresh). */
++#define PLINIUS_GOA_REFRESH "/usr/lib/plinius/plinius-goa-refresh"
++
++static void
++sync_account_finish (GoaProviderDialog *self,
++                     GError            *error)
++{
++  AdwToast *toast;
++
++  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  if (error != NULL)
++    g_warning ("Could not refresh account: %s", error->message);
++
++  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->sync_button), _("Re_fresh"));
++  gtk_widget_set_sensitive (self->sync_button,
++                            !goa_account_get_attention_needed (goa_object_peek_account (self->object)));
++
++  toast = adw_toast_new (error == NULL ? _("Account refreshed")
++                                       : _("Could not refresh the account"));
++  goa_provider_dialog_add_toast (self, toast);
++
++  if (self->state != GOA_DIALOG_DONE)
++    goa_provider_dialog_set_state (self, GOA_DIALOG_READY);
++}
++
++static void
++sync_account_subprocess_cb (GObject      *source_object,
++                            GAsyncResult *result,
++                            gpointer      user_data)
++{
++  g_autoptr(GoaProviderDialog) self = GOA_PROVIDER_DIALOG (user_data);
++  g_autoptr(GError) error = NULL;
++
++  g_subprocess_wait_check_finish (G_SUBPROCESS (source_object), result, &error);
++  sync_account_finish (self, error);
++}
++
++static void
++sync_account_credentials_cb (GObject      *source_object,
++                             GAsyncResult *result,
++                             gpointer      user_data)
++{
++  g_autoptr(GoaProviderDialog) self = GOA_PROVIDER_DIALOG (user_data);
++  g_autoptr(GSubprocess) subprocess = NULL;
++  g_autoptr(GError) error = NULL;
++
++  /* A rejected password also sets attention-needed: the dialog then offers to sign in again */
++  if (!goa_account_call_ensure_credentials_finish (GOA_ACCOUNT (source_object), NULL, result, &error))
++    {
++      sync_account_finish (self, error);
++      return;
++    }
++
++  subprocess = g_subprocess_new (G_SUBPROCESS_FLAGS_NONE,
++                                 &error,
++                                 PLINIUS_GOA_REFRESH,
++                                 goa_account_get_id (GOA_ACCOUNT (source_object)),
++                                 NULL);
++  if (subprocess == NULL)
++    {
++      sync_account_finish (self, error);
++      return;
++    }
++
++  g_subprocess_wait_check_async (subprocess,
++                                 self->cancellable,
++                                 sync_account_subprocess_cb,
++                                 g_steal_pointer (&self));
++}
++
++static void
++on_sync_activated (GoaProviderDialog *self)
++{
++  /* The state does not show on this page: the row itself tells that something is going on */
++  gtk_widget_set_sensitive (self->sync_button, FALSE);
++  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->sync_button), _("Refreshing…"));
++  goa_provider_dialog_set_state (self, GOA_DIALOG_BUSY);
++  goa_account_call_ensure_credentials (goa_object_peek_account (self->object),
++                                       self->cancellable,
++                                       sync_account_credentials_cb,
++                                       g_object_ref (self));
++}
++
+ static void
+ update_account_name_entry (GtkEditable *editable,
+                            const char  *message)
+@@ -929,11 +1016,27 @@ goa_provider_dialog_push_account (GoaProviderDialog *self,
+   if (content != NULL)
+     gtk_box_append (GTK_BOX (box), content);
+ 
+-  /* Remove */
++  /* Refresh and remove */
+   group = gtk_list_box_new ();
+   gtk_widget_add_css_class (group, "boxed-list");
+   gtk_box_append (GTK_BOX (box), group);
+ 
++  self->sync_button = g_object_new (ADW_TYPE_BUTTON_ROW,
++                                    "activatable",   TRUE,
++                                    "selectable",    FALSE,
++                                    "title",         _("Re_fresh"),
++                                    "use-underline", TRUE,
++                                    NULL);
++  gtk_list_box_append (GTK_LIST_BOX (group), self->sync_button);
++  g_object_bind_property (account,           "attention-needed",
++                          self->sync_button, "sensitive",
++                          G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
++  g_signal_connect_object (self->sync_button,
++                           "activated",
++                           G_CALLBACK (on_sync_activated),
++                           self,
++                           G_CONNECT_SWAPPED);
++
+   action_button = g_object_new (ADW_TYPE_BUTTON_ROW,
+                                 "activatable",   TRUE,
+                                 "selectable",    FALSE,
+-- 
+2.56.0
+

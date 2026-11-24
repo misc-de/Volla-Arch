@@ -1,0 +1,24 @@
+# GSettings defaults for the Plinius app selection (plinius-apps).
+
+# Arch names the launcher firefox.desktop, phosh only knows Debian's firefox-esr.desktop.
+# mobile-config-firefox makes Firefox phone-ready, so show it in the mobile filter.
+# This replaces the list from 00_mobi.Phosh.gschema.override, so its entries are kept.
+[mobi.phosh.shell:Phosh]
+force-adaptive=['firefox-esr.desktop', 'io.github.kolunmi.Bazaar.desktop', 'firefox.desktop']
+
+# Stevia: Calculator is Stevia's default (it has its own keys). Apps that focus a text field
+# on their own (Firefox, Settings, ...) must not be listed here: Stevia then ignores them
+# completely, also after a tap into a field. Since phoc 0.58 GTK 4 apps only ask for the
+# keyboard on a tap (text-input-v3 version 2).
+[mobi.phosh.osk]
+ignore-activation=['org.gnome.Calculator']
+
+# phoc scales down windows wider than the screen (e.g. "Add Printer" in Settings, with a fixed
+# minimum width of 480) instead of cutting them off. Windows that fit stay unchanged.
+[sm.puri.phoc]
+scale-to-fit=true
+
+# Phosh offers emergency calls (lock screen and power menu, numbers from GNOME Calls) only
+# when this is on; upstream's default is off.
+[mobi.phosh.shell.emergency-calls]
+enabled=true

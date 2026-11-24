@@ -1,0 +1,45 @@
+[Unit]
+Description=Android sensors HAL as iio-sensor-proxy D-Bus service
+# The device package adds After= on the Android container service via drop-in
+Conflicts=iio-sensor-proxy.service
+
+[Service]
+Type=dbus
+BusName=net.hadess.SensorProxy
+ExecStart=/usr/bin/sensor-proxy-bridge
+Restart=on-failure
+# Settings from GNOME Settings (rotation speed)
+StateDirectory=sensor-proxy-bridge
+RestartSec=3
+
+# Sandbox (docs/DIENSTE-HAERTEN.md): root only for the bus name, no capabilities; talks to the
+# sensors HAL over binder and to D-Bus, nothing else
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateIPC=yes
+DevicePolicy=closed
+DeviceAllow=/dev/binderfs/binder rw
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

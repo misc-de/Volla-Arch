@@ -1,0 +1,341 @@
+From 6c1a7e2d9b0f4a53c8e1d2f7a6b94e0c35d18f42 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 14:00:00 +0100
+Subject: [PATCH] brightness-manager: Smooth transitions
+
+Plinius: measured at the panel, auto brightness wrote every 400 ms with
+steps of up to 6 %, dimming every 20 ms with steps of up to 9 %. Both
+were visible as a flicker, while the way to the panel takes a single
+level every 8 ms without losing any.
+
+All transitions now tick at 8 ms and write when the level changes, so
+slow ones don't cost more writes. The curve runs on the clock instead of
+counting ticks, and in perceived brightness, so it also looks even at
+the dark end. The durations stay what they were, small auto brightness
+changes take at least 400 ms.
+
+The slider and the brightness keys no longer jump either: the backlight
+follows them closely, without restarting when the target moves.
+---
+ src/brightness-manager.c | 199 ++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 147 insertions(+), 52 deletions(-)
+
+diff --git a/src/brightness-manager.c b/src/brightness-manager.c
+index 71a382be..2c431d14 100644
+--- a/src/brightness-manager.c
++++ b/src/brightness-manager.c
+@@ -16,6 +16,8 @@
+ #include "shell-priv.h"
+ #include "util.h"
+ 
++#include <math.h>
++
+ #define KEYBINDINGS_SCHEMA_ID "org.gnome.shell.keybindings"
+ #define KEYBINDING_KEY_BRIGHTNESS_UP "screen-brightness-up"
+ #define KEYBINDING_KEY_BRIGHTNESS_DOWN "screen-brightness-down"
+@@ -60,7 +62,6 @@ struct _PhoshBrightnessManager {
+   PhoshBacklight *backlight;
+   GtkAdjustment  *adjustment;
+   gulong          value_changed_id;
+-  gboolean        setting_brightness;
+ 
+   GSettings      *settings_power;
+   GSettings      *settings_brightness;
+@@ -77,13 +78,19 @@ struct _PhoshBrightnessManager {
+ 
+   struct {
+     double target;
++    /* Plinius: start and position are perceived brightness, see to_perceived () */
+     double start;
+-    double interval;
++    double position;
+     double duration;
+-    double elapsed;
++    /* Plinius: when the transition started, or when following the last step */
++    gint64 time;
+     uint   id;
+     /* Plinius: an auto brightness transition, not a dimming one */
+     gboolean is_auto;
++    /* Plinius: heading for a target that can still move instead of a fixed curve */
++    gboolean follow;
++    /* Plinius: the target comes from the slider, which must not be moved back */
++    gboolean from_slider;
+   } transition;
+ 
+   const char *icon_name;
+@@ -107,41 +114,150 @@ smoothstep (float t)
+ }
+ 
+ 
++/*
++ * Plinius: all transitions tick at the 120 Hz of the panel. PhoshBacklight only writes when the
++ * level changes, so a slow transition doesn't cost more writes while a fast one moves in small
++ * steps. The ticks only sample the curve, it runs on the clock: a late tick doesn't make the
++ * transition longer.
++ */
++#define TRANSITION_TICK  8 /* ms */
++/*
++ * Plinius: the eye doesn't see the backlight level linearly, one level is a far bigger step at
++ * the dark end. Transitions move in this space so they look even from start to end.
++ */
++#define PERCEIVED_GAMMA  2.2
++/* Plinius: following the slider: time constant, and the largest change per second */
++#define FOLLOW_TIME      50.0 /* ms */
++#define FOLLOW_MAX_RATE  1.2
++
++static double
++to_perceived (double brightness)
++{
++  return pow (CLAMP (brightness, 0.0, 1.0), 1.0 / PERCEIVED_GAMMA);
++}
++
++
++static double
++from_perceived (double perceived)
++{
++  return CLAMP (pow (CLAMP (perceived, 0.0, 1.0), PERCEIVED_GAMMA), 0.0, 1.0);
++}
++
++
++/* Plinius: moves towards a target that can change, without ever starting over */
++static gboolean
++follow_step (PhoshBrightnessManager *self, gint64 now, double *next)
++{
++  double dt = (now - self->transition.time) / 1000.0;
++  double distance = to_perceived (self->transition.target) - self->transition.position;
++  double step = distance * (1.0 - exp (-dt / FOLLOW_TIME));
++  double max_step = FOLLOW_MAX_RATE * dt / 1000.0;
++  int levels = phosh_backlight_get_levels (self->backlight);
++
++  self->transition.time = now;
++  /* Kept here: reading the backlight back would round away steps below one level */
++  self->transition.position += CLAMP (step, -max_step, max_step);
++  *next = from_perceived (self->transition.position);
++
++  return ABS (*next - self->transition.target) * MAX (levels, 1) < 0.5;
++}
++
++
++/* Plinius: moves along the curve that was set up for the transition */
++static gboolean
++curve_step (PhoshBrightnessManager *self, gint64 now, double *next)
++{
++  double elapsed = (now - self->transition.time) / 1000.0;
++  double smooth = smoothstep (CLAMP (elapsed / self->transition.duration, 0.0, 1.0));
++  double target = to_perceived (self->transition.target);
++
++  *next = from_perceived (self->transition.start + (target - self->transition.start) * smooth);
++
++  return elapsed >= self->transition.duration;
++}
++
++
+ static gboolean
+ on_transition_step (gpointer user_data)
+ {
+   PhoshBrightnessManager *self = user_data;
+-  double next, current, smooth;
+-
+-  self->transition.elapsed += self->transition.interval;
+-  current = phosh_backlight_get_relative (self->backlight);
+-  smooth = smoothstep (CLAMP (self->transition.elapsed / self->transition.duration, 0.0, 1.0));
+-  next = self->transition.start + (self->transition.target - self->transition.start) * smooth;
++  gint64 now = g_get_monotonic_time ();
++  gboolean done;
++  double next;
+ 
+   if (self->transition.is_auto && !self->auto_brightness.enabled) {
+     g_debug ("Brightness transition aborted");
+     goto end;
+   }
+ 
+-  if (self->transition.elapsed >= self->transition.duration) {
+-    g_debug ("Brightness transition done at %f, target: %f", next, self->transition.target);
+-    phosh_backlight_set_relative (self->backlight, next);
++  if (self->transition.follow)
++    done = follow_step (self, now, &next);
++  else
++    done = curve_step (self, now, &next);
++
++  if (done) {
++    g_debug ("Brightness transition done at %f", self->transition.target);
++    phosh_backlight_set_relative (self->backlight, self->transition.target);
+     goto end;
+   }
+ 
+-  g_debug ("Brightness transition step: current %.3f, next %.3f, target: %.3f",
+-           current, next, self->transition.target);
+   phosh_backlight_set_relative (self->backlight, next);
+   return G_SOURCE_CONTINUE;
+ 
+  end:
+   self->transition.id = 0;
++  self->transition.follow = FALSE;
++  self->transition.from_slider = FALSE;
+   return G_SOURCE_REMOVE;
+ }
+ 
++
++/* Plinius: the same curve for auto brightness and dimming, they only differ in duration */
++static void
++start_transition (PhoshBrightnessManager *self, double target, double duration, gboolean is_auto)
++{
++  g_clear_handle_id (&self->transition.id, g_source_remove);
++
++  self->transition.target = target;
++  self->transition.start = to_perceived (phosh_backlight_get_relative (self->backlight));
++  self->transition.duration = duration;
++  self->transition.time = g_get_monotonic_time ();
++  self->transition.is_auto = is_auto;
++  self->transition.follow = FALSE;
++  self->transition.from_slider = FALSE;
++
++  g_debug ("Starting brightness transition to %.2f, duration: %.2fms", target, duration);
++
++  self->transition.id = g_timeout_add (TRANSITION_TICK, on_transition_step, self);
++}
++
++
++/*
++ * Plinius: the slider and the keys don't jump either, the backlight follows them closely. A new
++ * target doesn't restart anything, so dragging the slider keeps the movement going.
++ */
++static void
++follow_brightness (PhoshBrightnessManager *self, double target, gboolean from_slider)
++{
++  if (!self->transition.id || !self->transition.follow) {
++    g_clear_handle_id (&self->transition.id, g_source_remove);
++
++    self->transition.position = to_perceived (phosh_backlight_get_relative (self->backlight));
++    self->transition.time = g_get_monotonic_time ();
++    self->transition.is_auto = FALSE;
++    self->transition.follow = TRUE;
++    self->transition.id = g_timeout_add (TRANSITION_TICK, on_transition_step, self);
++  }
++
++  self->transition.target = target;
++  self->transition.from_slider = from_slider;
++}
++
++
+ /* Human eye adapts faster to higher brightness values */
+ #define AUTO_UP_INTERVAL   150 /* ms */
+ #define AUTO_DOWN_INTERVAL 400 /* ms */
++#define AUTO_MIN_DURATION  400 /* ms */
+ #define AUTO_MAX_DURATION  4000 /* ms */
+ #define AUTO_STEP_CHANGE   0.025
+ 
+@@ -149,7 +265,7 @@ static void
+ transition_to_brightness (PhoshBrightnessManager *self, double target)
+ {
+   double current = phosh_backlight_get_relative (self->backlight);
+-  uint steps;
++  double duration;
+ 
+   g_clear_handle_id (&self->transition.id, g_source_remove);
+ 
+@@ -157,23 +273,12 @@ transition_to_brightness (PhoshBrightnessManager *self, double target)
+   if (G_APPROX_VALUE (current, self->transition.target, DBL_EPSILON))
+     return;
+ 
+-  self->transition.interval = target > current ? AUTO_UP_INTERVAL : AUTO_DOWN_INTERVAL;
+-
+-  self->transition.elapsed = 0;
+-  self->transition.start = current;
+-  steps = ceil (ABS (self->transition.target - self->transition.start) / 0.025);
+-  if (steps * self->transition.interval > AUTO_MAX_DURATION) {
+-    g_debug ("Limiting max transition duration from %.0fms to %dms",
+-             steps * self->transition.interval, AUTO_MAX_DURATION);
+-    steps = ceil (AUTO_MAX_DURATION / self->transition.interval);
+-  }
+-  self->transition.duration = steps * self->transition.interval;
++  /* Plinius: these give the speed now, each step of it is many ticks */
++  duration = ceil (ABS (target - current) / AUTO_STEP_CHANGE);
++  duration *= target > current ? AUTO_UP_INTERVAL : AUTO_DOWN_INTERVAL;
++  duration = CLAMP (duration, AUTO_MIN_DURATION, AUTO_MAX_DURATION);
+ 
+-  g_debug ("Starting auto brightness transition from %.2f to %.2f, duration: %.2fms",
+-           self->transition.start, self->transition.target, self->transition.duration);
+-
+-  self->transition.is_auto = TRUE;
+-  self->transition.id = g_timeout_add (self->transition.interval, on_transition_step, self);
++  start_transition (self, target, duration, TRUE);
+ }
+ 
+ 
+@@ -184,7 +289,6 @@ transition_to_brightness (PhoshBrightnessManager *self, double target)
+  */
+ #define DIM_DURATION   1000 /* ms */
+ #define UNDIM_DURATION  500 /* ms */
+-#define DIM_INTERVAL     20 /* ms */
+ 
+ static void
+ transition_dimming (PhoshBrightnessManager *self, double target, gboolean dim)
+@@ -192,19 +296,10 @@ transition_dimming (PhoshBrightnessManager *self, double target, gboolean dim)
+   g_clear_handle_id (&self->transition.id, g_source_remove);
+ 
+   self->transition.target = target;
+-  self->transition.start = phosh_backlight_get_relative (self->backlight);
+-  if (G_APPROX_VALUE (self->transition.start, self->transition.target, FLT_EPSILON))
++  if (G_APPROX_VALUE (phosh_backlight_get_relative (self->backlight), target, FLT_EPSILON))
+     return;
+ 
+-  self->transition.is_auto = FALSE;
+-  self->transition.interval = DIM_INTERVAL;
+-  self->transition.duration = dim ? DIM_DURATION : UNDIM_DURATION;
+-  self->transition.elapsed = 0;
+-
+-  g_debug ("Starting dimming transition from %.2f to %.2f, duration: %.2fms",
+-           self->transition.start, self->transition.target, self->transition.duration);
+-
+-  self->transition.id = g_timeout_add (DIM_INTERVAL, on_transition_step, self);
++  start_transition (self, target, dim ? DIM_DURATION : UNDIM_DURATION, FALSE);
+ }
+ 
+ 
+@@ -507,7 +602,8 @@ on_backlight_brightness_changed (PhoshBrightnessManager *self,
+   g_assert (self->backlight == backlight);
+ 
+   /* Plinius: with auto brightness too the slider shows the brightness, not the offset */
+-  if (self->setting_brightness)
++  /* Plinius: the backlight is on its way to where the slider already is */
++  if (self->transition.id && self->transition.from_slider)
+     return;
+ 
+   value = phosh_backlight_get_relative (self->backlight);
+@@ -551,11 +647,7 @@ on_value_changed (PhoshBrightnessManager *self, GtkAdjustment *adjustment)
+   }
+ 
+   /* Plinius: any transition, dimming too: the user likely wants the new brightness right away */
+-  g_clear_handle_id (&self->transition.id, g_source_remove);
+-
+-  self->setting_brightness = TRUE;
+-  phosh_backlight_set_relative (self->backlight, new_brightness);
+-  self->setting_brightness = FALSE;
++  follow_brightness (self, new_brightness, TRUE);
+ }
+ 
+ 
+@@ -662,7 +754,11 @@ adjust_brightness (PhoshBrightnessManager *self, gboolean up)
+   levels = phosh_backlight_get_levels (self->backlight);
+   levels = MIN (MAX_KEYBOARD_LEVELS, levels);
+   step = 1.0 / levels;
+-  brightness = phosh_backlight_get_relative (self->backlight);
++  /* Plinius: on from where the last press is heading */
++  if (self->transition.id && self->transition.follow)
++    brightness = self->transition.target;
++  else
++    brightness = phosh_backlight_get_relative (self->backlight);
+ 
+   if (up)
+     brightness += step;
+@@ -671,8 +767,7 @@ adjust_brightness (PhoshBrightnessManager *self, gboolean up)
+ 
+   brightness = CLAMP (brightness, 0.0, 1.0);
+   /* Plinius: the keys win over a running transition */
+-  g_clear_handle_id (&self->transition.id, g_source_remove);
+-  phosh_backlight_set_relative (self->backlight, brightness);
++  follow_brightness (self, brightness, FALSE);
+ 
+   show_osd (self, brightness);
+ }

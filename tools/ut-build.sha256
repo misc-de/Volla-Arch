@@ -1,0 +1,16 @@
+# SHA-256 of every file of the Ubuntu Touch build an image is made from, as tools/ut-fetch.sh lays
+# them out (build/ut/<build>/, the Android images in android/). tools/ut-fetch.sh checks each file
+# before it uses it (also one that is already there), tools/boot-files.sh the three boot images
+# and image/mkimage.sh the images it is given; a file that differs stops the run. The boot images
+# whole, not only the kernel and ramdisks tools/boot-files.sha256 compares: their headers carry
+# the kernel command line, the DTB and the bootconfig.
+# A new UT build needs a new plinius-kmod and new lines in tools/boot-files.sha256 first, then the
+# build id and the lines here.
+# build 04112026
+0db769e5b634fb4dd4bccd6accbc02d5d642d306ea78c9aa5593d33b8966c71b  boot.img
+7afcc16778cee0f36b4b3be1eee26f6ebf4501898884de83dc9a025f61795cb6  vendor_boot.img
+7ac5e9a7f9a98164e7241c06b0c9948e3d0a25d366d5411d998b0de5f203b088  init_boot.img
+189ab643efa99090e30d38c2ad11614826445cd832d52a530cceaf6e457b954c  android/android-rootfs.img
+641c466bf3f69ca31729e11c6937f23465ee690faaf3e13010ce71000c6448e9  android/vendor.img
+d3f3f5ea343e0003ed7219d4d8731f8f6ca4903cb59ad30b96f1c72345cb861d  android/vendor_dlkm.img
+6abe41f21ef3ead138af6a37d18217912612383c4c40427e9567d53a4766862b  android/system_dlkm.img

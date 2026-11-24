@@ -1,0 +1,187 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 07:30:00 +0100
+Subject: [PATCH] emergency-menu: Tell how the call is going
+
+With gnome-calls-plinius, CallEmergencyContact answers when the dial went out.
+That can take a while if it doesn't, so wait for up to 200 s instead of 25 s
+and show "Calling…" with the keypad off in the meantime.
+
+EmergencyCallFailed tells that a call failed after the menu has closed: open the
+menu again with the error, so the next attempt is one tap away.
+
+The menu listened to the manager's dial-error without ever letting go: every
+menu opened before would have answered as well.
+---
+ src/dbus/org.gnome.Calls.EmergencyCalls.xml | 13 ++++++++
+ src/emergency-calls-manager.c               | 47 ++++++++++++++++++++++++++---
+ src/emergency-menu.c                        | 24 ++++++++++++---
+ 3 files changed, 76 insertions(+), 8 deletions(-)
+
+diff --git a/src/dbus/org.gnome.Calls.EmergencyCalls.xml b/src/dbus/org.gnome.Calls.EmergencyCalls.xml
+index ef37ee0f..2b676684 100644
+--- a/src/dbus/org.gnome.Calls.EmergencyCalls.xml
++++ b/src/dbus/org.gnome.Calls.EmergencyCalls.xml
+@@ -37,5 +37,18 @@
+         signal is meant as a hint (it might be emitted although the list of numbers is unchanged).
+       -->
+     <signal name="EmergencyNumbersChanged"/>
++
++     <!--
++        EmergencyCallFailed:
++        @id: The id that was called
++        @message: Why it failed, meant to be shown to the user
++
++        An emergency call that was being set up ended without ever reaching the other side, and
++        Calls gave up on trying again. The user has to know: they are waiting for help.
++      -->
++    <signal name="EmergencyCallFailed">
++      <arg name="id" type="s"/>
++      <arg name="message" type="s"/>
++    </signal>
+   </interface>
+ </node>
+diff --git a/src/emergency-calls-manager.c b/src/emergency-calls-manager.c
+index 8370c5ca..f2ca12c9 100644
+--- a/src/emergency-calls-manager.c
++++ b/src/emergency-calls-manager.c
+@@ -41,6 +41,12 @@
+  * calling `phosh_emergency_calls_manager_call` directly.
+  */
+ 
++/*
++ * Calls answers once the dial went out, and tries up to 3 times with up to a minute each if it
++ * doesn't. The default of 25 s would report a failure for a call that is still being set up.
++ */
++#define EMERGENCY_CALL_TIMEOUT_MS 200000
++
+ enum {
+   PROP_0,
+   PROP_EMERGENCY_CONTACTS,
+@@ -109,6 +115,17 @@ on_emergency_menu_done (PhoshEmergencyCallsManager *self)
+ }
+ 
+ 
++static void
++open_menu (PhoshEmergencyCallsManager *self)
++{
++  self->dialog = phosh_emergency_menu_new ();
++  g_signal_connect_swapped (self->dialog, "done",
++                            G_CALLBACK (on_emergency_menu_done), self);
++
++  gtk_widget_set_visible (GTK_WIDGET (self->dialog), TRUE);
++}
++
++
+ static void
+ on_emergency_menu_activated (GSimpleAction *action, GVariant *param, gpointer data)
+ {
+@@ -119,11 +136,28 @@ on_emergency_menu_activated (GSimpleAction *action, GVariant *param, gpointer da
+     return;
+   }
+ 
+-  self->dialog = phosh_emergency_menu_new ();
+-  g_signal_connect_swapped (self->dialog, "done",
+-                            G_CALLBACK (on_emergency_menu_done), self);
++  open_menu (self);
++}
+ 
+-  gtk_widget_set_visible (GTK_WIDGET (self->dialog), TRUE);
++
++/**
++ * on_emergency_call_failed:
++ *
++ * The call was on its way when the menu closed, and didn't work out in the end. The user has
++ * to know, and can try again right away.
++ */
++static void
++on_emergency_call_failed (PhoshEmergencyCallsManager *self, const char *id, const char *message)
++{
++  g_autoptr (GError) err = NULL;
++
++  g_warning ("Emergency call to %s failed: %s", id, message);
++
++  if (!self->dialog)
++    open_menu (self);
++
++  err = g_dbus_error_new_for_dbus_error ("org.gnome.Calls.Error.EmergencyCallFailed", message);
++  g_signal_emit (self, signals[DIAL_ERROR], 0, err);
+ }
+ 
+ 
+@@ -301,7 +335,12 @@ on_proxy_new_finish (GObject *source_object, GAsyncResult *res, gpointer user_da
+ 
+   g_return_if_fail (PHOSH_IS_EMERGENCY_CALLS_MANAGER (self));
+   self->dbus_proxy = proxy;
++  g_dbus_proxy_set_default_timeout (G_DBUS_PROXY (proxy), EMERGENCY_CALL_TIMEOUT_MS);
+ 
++  g_signal_connect_swapped (self->dbus_proxy,
++                            "emergency-call-failed",
++                            G_CALLBACK (on_emergency_call_failed),
++                            self);
+   g_signal_connect_swapped (self->dbus_proxy,
+                             "notify::g-name-owner",
+                             G_CALLBACK (on_name_owner_changed),
+diff --git a/src/emergency-menu.c b/src/emergency-menu.c
+index 9dd32b62..7401ef4e 100644
+--- a/src/emergency-menu.c
++++ b/src/emergency-menu.c
+@@ -89,6 +89,16 @@ on_emergency_menu_done (PhoshEmergencyMenu *self)
+ }
+ 
+ 
++/* A failing dial can take a while: show that something is going on, and don't dial twice */
++static void
++set_dialing (PhoshEmergencyMenu *self, gboolean dialing)
++{
++  gtk_widget_set_sensitive (GTK_WIDGET (self->emergency_carousel), !dialing);
++  phosh_system_modal_dialog_set_title (PHOSH_SYSTEM_MODAL_DIALOG (self),
++                                       dialing ? _("Calling…") : NULL);
++}
++
++
+ static void
+ on_dial_error (PhoshEmergencyMenu *self, GError *error)
+ {
+@@ -96,6 +106,8 @@ on_dial_error (PhoshEmergencyMenu *self, GError *error)
+   GtkWidget *error_label = gtk_label_new (NULL);
+   GtkWidget *ok_button = gtk_button_new_with_label (_("Ok"));
+ 
++  set_dialing (self, FALSE);
++
+   phosh_system_modal_dialog_add_button (error_dialog, ok_button, -1);
+   phosh_system_modal_dialog_set_title (error_dialog, _("Unable to place emergency call"));
+ 
+@@ -165,10 +177,12 @@ emergency_menu_constructed (GObject *object)
+   on_n_items_changed (self, NULL, emergency_contacts_list);
+ 
+   gtk_label_set_label (self->emergency_owner_name, g_get_real_name ());
+-  g_signal_connect_swapped (self->manager,
+-                            "dial-error",
+-                            G_CALLBACK (on_dial_error),
+-                            self);
++  /* The manager outlives the menu: a menu that's gone must not show a dialog */
++  g_signal_connect_object (self->manager,
++                           "dial-error",
++                           G_CALLBACK (on_dial_error),
++                           self,
++                           G_CONNECT_SWAPPED);
+ }
+ 
+ 
+@@ -185,6 +199,7 @@ emergency_menu_dispose (GObject *object)
+ static void
+ on_dialpad_dialed (PhoshEmergencyMenu *self, const char *number)
+ {
++  set_dialing (self, TRUE);
+   phosh_emergency_calls_manager_call (self->manager, number);
+ }
+ 
+@@ -197,6 +212,7 @@ on_dialpad_dialed (PhoshEmergencyMenu *self, const char *number)
+ static void
+ on_emergency_contacts_list_box_activated (PhoshEmergencyMenu *self, PhoshEmergencyContactRow* row, GtkListBox* list)
+ {
++  set_dialing (self, TRUE);
+   phosh_emergency_contact_row_call (row, self->manager);
+ }
+ 

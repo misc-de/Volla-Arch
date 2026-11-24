@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 22:09:56 +0100
+Subject: [PATCH 3/4] egl: import any dma-buf through the driver, report
+ dma-buf formats
+
+Mali's driver imports dma-bufs (EGL_EXT_image_dma_buf_import), Android's EGL
+only leaves the extension out of its string. Pass EGL_LINUX_DMA_BUF_EXT images
+that are not hybris_gbm buffers to the driver and answer
+eglQueryDmaBufFormatsEXT/ModifiersEXT with the linear gralloc formats, so that
+wlroots accepts dma-bufs of Wayland clients.
+---
+ hybris/egl/egl.c | 77 +++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 67 insertions(+), 10 deletions(-)
+
+diff --git a/hybris/egl/egl.c b/hybris/egl/egl.c
+index 4143a6e..5003f7b 100644
+--- a/hybris/egl/egl.c
++++ b/hybris/egl/egl.c
+@@ -385,15 +385,70 @@ const char * eglQueryString(EGLDisplay dpy, EGLint name)
+ 
+ 	const char *ret = ws_eglQueryString(dpy, name, _eglQueryString);
+ 
+-	// dma-buf import works for the buffers of hybris_gbm, if it is loaded
+-	if (ret && dpy != EGL_NO_DISPLAY && name == EGL_EXTENSIONS && _gbm_native_buffer()) {
++	// dma-buf import: see _my_eglCreateImageKHR() and _my_eglQueryDmaBufFormatsEXT()
++	if (ret && dpy != EGL_NO_DISPLAY && name == EGL_EXTENSIONS) {
+ 		static char extensions[4096];
+-		snprintf(extensions, sizeof(extensions), "%s EGL_EXT_image_dma_buf_import", ret);
++		snprintf(extensions, sizeof(extensions),
++			 "%s EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers", ret);
+ 		return extensions;
+ 	}
+ 	return ret;
+ }
+ 
++/*
++ * Formats for dma-buf import. The driver's own query is not reachable through
++ * Android's EGL, so report the formats that are known to work: those hybris_gbm
++ * allocates and Wayland clients of libhybris send (gralloc's 8888 and 565
++ * formats). Buffers are linear only; wlroots needs the list to accept client
++ * buffers in formats other than ARGB8888/XRGB8888.
++ */
++static const EGLint _dmabuf_formats[] = {
++	0x34325241, // DRM_FORMAT_ARGB8888
++	0x34325258, // DRM_FORMAT_XRGB8888
++	0x34324241, // DRM_FORMAT_ABGR8888
++	0x34324258, // DRM_FORMAT_XBGR8888
++	0x36314752, // DRM_FORMAT_RGB565
++};
++#define DMABUF_FORMAT_COUNT ((EGLint) (sizeof(_dmabuf_formats) / sizeof(_dmabuf_formats[0])))
++#define DRM_FORMAT_MOD_LINEAR 0
++
++static EGLBoolean _my_eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint *formats, EGLint *num_formats)
++{
++	(void) dpy;
++	if (!num_formats || max_formats < 0 || (max_formats > 0 && !formats)) {
++		__eglHybrisSetError(EGL_BAD_PARAMETER);
++		return EGL_FALSE;
++	}
++	if (max_formats == 0) {
++		*num_formats = DMABUF_FORMAT_COUNT;
++		return EGL_TRUE;
++	}
++	*num_formats = max_formats < DMABUF_FORMAT_COUNT ? max_formats : DMABUF_FORMAT_COUNT;
++	memcpy(formats, _dmabuf_formats, *num_formats * sizeof(EGLint));
++	return EGL_TRUE;
++}
++
++static EGLBoolean _my_eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
++		EGLuint64KHR *modifiers, EGLBoolean *external_only, EGLint *num_modifiers)
++{
++	(void) dpy;
++	EGLint i;
++	for (i = 0; i < DMABUF_FORMAT_COUNT && _dmabuf_formats[i] != format; i++)
++		;
++	if (i == DMABUF_FORMAT_COUNT || !num_modifiers || max_modifiers < 0 ||
++	    (max_modifiers > 0 && !modifiers)) {
++		__eglHybrisSetError(EGL_BAD_PARAMETER);
++		return EGL_FALSE;
++	}
++	*num_modifiers = 1;
++	if (max_modifiers > 0) {
++		modifiers[0] = DRM_FORMAT_MOD_LINEAR;
++		if (external_only)
++			external_only[0] = EGL_FALSE;
++	}
++	return EGL_TRUE;
++}
++
+ HYBRIS_IMPLEMENT_FUNCTION4(egl, EGLBoolean, eglGetConfigs, EGLDisplay, EGLConfig *, EGLint, EGLint *);
+ HYBRIS_IMPLEMENT_FUNCTION5(egl, EGLBoolean, eglChooseConfig, EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *);
+ HYBRIS_IMPLEMENT_FUNCTION4(egl, EGLBoolean, eglGetConfigAttrib, EGLDisplay, EGLConfig, EGLint, EGLint *);
+@@ -557,17 +612,17 @@ static EGLImageKHR _my_eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum
+ {
+ 	HYBRIS_DLSYSM(egl, &_eglCreateImageKHR, "eglCreateImageKHR");
+ 	struct _EGLDisplay *display = hybris_egl_display_get_mapping(dpy);
+-	// A dma-buf of hybris_gbm is imported as the native buffer behind it
++	// A dma-buf of hybris_gbm is imported as the native buffer behind it.
++	// Any other dma-buf (e.g. a Wayland client's) goes to the driver: Mali
++	// imports dma-bufs itself, Android's EGL only leaves the extension out.
+ 	if (target == EGL_LINUX_DMA_BUF_EXT) {
+ 		EGLClientBuffer native = hybris_dmabuf_native_buffer(attrib_list);
+-		if (!native) {
+-			__eglHybrisSetError(EGL_BAD_PARAMETER);
+-			return EGL_NO_IMAGE_KHR;
++		if (native) {
++			target = EGL_NATIVE_BUFFER_HYBRIS;
++			buffer = native;
++			attrib_list = NULL;
+ 		}
+ 		ctx = EGL_NO_CONTEXT;
+-		target = EGL_NATIVE_BUFFER_HYBRIS;
+-		buffer = native;
+-		attrib_list = NULL;
+ 	}
+ 
+ 	EGLContext newctx = ctx;
+@@ -634,6 +689,8 @@ static struct FuncNamePair _eglHybrisOverrideFunctions[] = {
+ 	OVERRIDE_MY(glEGLImageTargetTexture2DOES),
+ 	OVERRIDE_MY(glEGLImageTargetRenderbufferStorageOES),
+ 	OVERRIDE_MY(eglDestroyImageKHR),
++	OVERRIDE_MY(eglQueryDmaBufFormatsEXT),
++	OVERRIDE_MY(eglQueryDmaBufModifiersEXT),
+ 	OVERRIDE_SAMENAME(eglGetError),
+ 	OVERRIDE_SAMENAME(eglGetDisplay),
+ 	OVERRIDE_SAMENAME(eglGetPlatformDisplay),
+-- 
+2.55.0
+

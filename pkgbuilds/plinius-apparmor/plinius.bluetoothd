@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in. Starting profile in complain mode: it logs what the service does
+# beyond these rules; the rules are completed from those messages (tools/aa-denials.sh) before
+# the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# bluetoothd: Bluetooth from nearby devices (through bluebinder's HCI)
+profile plinius.bluetoothd flags=(complain, attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/dbus-strict>
+  capability net_admin, capability net_bind_service, capability net_raw,
+  network bluetooth,
+  network netlink raw,
+  /usr/lib/bluetooth/bluetoothd mr,
+  /etc/bluetooth/{,**} r,
+  /var/lib/bluetooth/{,**} rwk,
+  /dev/rfkill rw,
+  /dev/uhid rw,
+  /dev/uinput rw,
+  @{PROC}/sys/kernel/hostname r,
+}

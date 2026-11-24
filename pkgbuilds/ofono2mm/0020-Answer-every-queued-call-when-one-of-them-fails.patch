@@ -1,0 +1,36 @@
+From 0b9c7cf6c455262b384f9b83122cc437d131f08c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 07:47:58 +0100
+Subject: [PATCH] Answer every queued call when one of them fails
+
+dbus-next answers a call that fails (e.g. Properties.Get on an object that
+is gone) with an error and then raises the error again; its message reader
+catches it, the authorization queue of patch 0018 did not. The exception
+ended the queue's task, and every call queued behind it went unanswered:
+after a restart of ofono2mm Chatty asked for its old SMS and call objects
+first, its start timed out ("Error creating ModemManager") and its account
+showed as disconnected.
+---
+ main.py | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/main.py b/main.py
+index 9bc4900..04a51d7 100755
+--- a/main.py
++++ b/main.py
+@@ -202,7 +202,14 @@ class ModemManagerBus(MessageBus):
+                     return
+                 if allowed:
+                     self._authorized_calls.add((msg.sender, msg.serial))
+-                    self._process_message(msg)
++                    # dbus-next answers a failing call itself (an error reply, e.g. for an object
++                    # that is gone) and then raises the error again; its own reader catches that,
++                    # this task must too. Uncaught, it ended the task: every call queued behind
++                    # went unanswered, and Chatty's start after a restart of ofono2mm timed out.
++                    try:
++                        self._process_message(msg)
++                    except Exception as e:
++                        Logger.debug(f'{msg.interface}.{msg.member} on {msg.path} failed: {e}')
+                 else:
+                     Logger.info(f'{msg.interface}.{msg.member} from {sender} '
+                                 f'(uid {self._sender_uids.get(sender)}): not authorized ({action})')

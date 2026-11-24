@@ -1,0 +1,96 @@
+From f0464a6f20e55871f9890c2b64937a0660863b02 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 23:23:14 +0100
+Subject: [PATCH] fingerprint: wait for the HAL to be registered at start
+
+The fingerprint HAL runs in the Android container and is registered a few
+seconds after the container is up. biomd started right after the container
+found neither the AIDL nor the HIDL service and kept running without one
+(HardwareAvailable false) until it was restarted, so enrolling failed at
+once ("Failed to scan finger").
+
+Wait up to 60 seconds for either service to be listed by its service
+manager before creating the backend. Listing instead of getting the service
+keeps hwservicemanager from trying to start a missing HIDL service on every
+poll. biomd owns its bus name only after this, so its clients see the final
+state.
+---
+ src/fingerprint.c | 48 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/src/fingerprint.c b/src/fingerprint.c
+index dd7d040..6f7f78f 100644
+--- a/src/fingerprint.c
++++ b/src/fingerprint.c
+@@ -10,6 +10,8 @@
+ #include "fingerprint_hidl_backend.h"
+ #include "fingerprint_aidl_backend.h"
+ 
++#include <gbinder.h>
++
+ static GDBusNodeInfo *fingerprint_introspection_data = NULL;
+ 
+ typedef struct {
+@@ -1019,6 +1021,51 @@ fingerprint_remove_enrolled_finger(const gchar *finger_name)
+     return FALSE;
+ }
+ 
++/*
++ * The fingerprint HAL lives in the Android container, and Android's init
++ * registers it a few seconds after the container itself is up. biomd started
++ * right after the container would find no HAL and stay without one until it
++ * is restarted, so wait for either service first. This only lists the
++ * registered names: asking hwservicemanager for a missing HIDL service makes
++ * it try to start one each time.
++ */
++#define FP_HAL_WAIT_SECONDS 60
++#define FP_HAL_POLL_MS      500
++
++static gboolean
++fingerprint_service_listed(const gchar *device, const gchar *name)
++{
++    GBinderServiceManager *sm = gbinder_servicemanager_new(device);
++    gchar **names;
++    gboolean listed;
++
++    if (!sm)
++        return FALSE;
++
++    names = gbinder_servicemanager_list_sync(sm);
++    listed = names && g_strv_contains((const gchar * const *) names, name);
++    g_strfreev(names);
++    gbinder_servicemanager_unref(sm);
++    return listed;
++}
++
++static void
++fingerprint_wait_for_hal(void)
++{
++    gint64 deadline = g_get_monotonic_time() + FP_HAL_WAIT_SECONDS * G_TIME_SPAN_SECOND;
++
++    while (!fingerprint_service_listed("/dev/binder",
++                                       "android.hardware.biometrics.fingerprint.IFingerprint/default") &&
++           !fingerprint_service_listed("/dev/hwbinder",
++                                       "android.hardware.biometrics.fingerprint@2.1::IBiometricsFingerprint/default")) {
++        if (g_get_monotonic_time() >= deadline) {
++            g_debug("No fingerprint HAL registered after %d seconds", FP_HAL_WAIT_SECONDS);
++            return;
++        }
++        g_usleep(FP_HAL_POLL_MS * 1000);
++    }
++}
++
+ void
+ fingerprint_init(GDBusConnection *connection)
+ {
+@@ -1056,6 +1103,7 @@ fingerprint_init(GDBusConnection *connection)
+     };
+ 
+     /* prefer AIDL, fall back to HIDL */
++    fingerprint_wait_for_hal();
+     fingerprint_state->backend = fingerprint_aidl_backend_new(callbacks);
+ 
+     if (fingerprint_state->backend) {
+-- 
+2.56.0
+

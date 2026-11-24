@@ -1,0 +1,69 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-account
+pkgver=0.6
+pkgrel=2
+pkgdesc="Rename your own user account including home directory and all references, add local accounts (backends for GNOME Settings)"
+arch=(any)
+license=(MIT)
+# UI: Accounts > Local Accounts in gnome-control-center-plinius (Username on one's own page, Add in
+# the header bar)
+# Error messages of plinius-rename-user and plinius-add-user are English, translated in *.po (template
+# plinius-account.pot); GNOME Settings shows them in a toast.
+depends=(bash shadow procps-ng findutils grep sed util-linux polkit dconf gettext systemd)
+makedepends=(gettext)
+# Takes video, audio and radio from accounts without administrator rights that 0.6-1 added
+install=plinius-account.install
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-rename-user
+	plinius-add-user
+	rename-user-boot
+	dconf-rename
+	org.plinius.account.policy
+	60-plinius-account-linger.rules
+	plinius-account-rename.service
+	plinius-account-dconf.service
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('5129d9ef61b2e0d7a49fed0f3ee69e74a80ce8ae76a9c654a13f66fdd3699f03'
+	'f34905e7e7123c76dc88cab4ecc9340b5fa807186a927fb3276b4e09ca17298a'
+	'6b7afead06f606572155e4be70b06619af575c2fd193d2333c7f314eb3fbb1fa'
+	'6dfac53c201dc8b0131745d34db25e45d15213ae38b5d6780e280e6c3cbf0986'
+	'b3eb376dbc5b75abf2552b54793ed8adaa90bb4258b2025c670d2d4091e2aac3'
+	'4f104f8802cc573d4e1dcbaa5b307fd8f5e81b74dbb83071ce256c5014d9bbb5'
+	'70d81f2126dc64aa4766e9bea2e99a70d66dee690c6779ea699f4333b4d9f7fa'
+	'cad66b730ef9c2b5e75fd40f2225fba2da09c1141abcbaf6547262a1e1ecfe5d'
+	'26c77702fdc4a38fa2969505ae8a4f64abe17d1abcdbbdc220a90ef2c5c5d380'
+	'3220debf2e29c72976d7c06258f658353dcc618864bbe649aa3982444f6ea302'
+	'2758044f388adbd99624f1d4878d2d9a1f08d0e7482f677451fc88e06d91a7b5'
+	'0d1d47091c410980bff4093490eae5b9c2a1af1a43efe37deced78ca1dac5a44'
+	'4d5b0c2672cb4def6de70ff71923736cc10cdb61a4e13d3976fbe43d31147b47'
+	'c5235107076297460113dd636c1ef2af0655eda61e7de78d9e7408a25f0a8329'
+	'5b8d7ede7ee047d7914b93eabd54dde4a86202e7c7fbf8767ae5ca28bc292c42'
+	'4972c7cb79187d0fe22252e61f0349a05ab846f90796bb5ba56f72f0e0494796'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-rename-user plinius-add-user -t "$pkgdir/usr/bin"
+	install -Dm755 rename-user-boot dconf-rename -t "$pkgdir/usr/lib/plinius-account"
+	install -Dm644 org.plinius.account.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	# Lingering (services without a session) only for administrators
+	install -Dm644 60-plinius-account-linger.rules -t "$pkgdir/usr/share/polkit-1/rules.d"
+	install -Dm644 plinius-account-rename.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 plinius-account-dconf.service -t "$pkgdir/usr/lib/systemd/user"
+	# Both units do nothing without a pending request (ConditionPathExists), so always enabled
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants" \
+		"$pkgdir/usr/lib/systemd/user/default.target.wants"
+	ln -s ../plinius-account-rename.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	ln -s ../plinius-account-dconf.service "$pkgdir/usr/lib/systemd/user/default.target.wants/"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-account.mo"
+	done
+}

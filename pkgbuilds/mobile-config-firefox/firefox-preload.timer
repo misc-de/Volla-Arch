@@ -1,0 +1,9 @@
+[Unit]
+Description=Read Firefox into memory shortly after login
+
+[Timer]
+# After the session has settled; the boot itself has priority on the SD card
+OnActiveSec=45s
+
+[Install]
+WantedBy=graphical-session.target

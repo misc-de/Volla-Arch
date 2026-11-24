@@ -1,0 +1,12 @@
+# Before pacman removes a kernel release, a copy stays in /var/lib/plinius-kernel/kept while it is
+# installed in the boot partition, the fallback or on trial (plinius-kernel-install keep).
+[Trigger]
+Type = Path
+Operation = Upgrade
+Operation = Remove
+Target = usr/lib/plinius/kernel/*/boot.img
+
+[Action]
+Description = Keeping the kernel releases still in use...
+When = PreTransaction
+Exec = /usr/lib/plinius/kernel/plinius-kernel-install keep

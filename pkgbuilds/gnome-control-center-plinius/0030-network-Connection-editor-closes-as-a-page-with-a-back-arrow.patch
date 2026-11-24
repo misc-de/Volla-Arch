@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:15:06 +0100
+Subject: [PATCH 2/3] network: Connection editor closes as a page, with a back
+ arrow
+
+Plinius: since form dialogs open as pages (0027) the editor hangs without
+a parent, so close_editor() took it for a dialog that was never shown:
+Cancel, Add and Apply left the page open. A page is now told by the
+child it gave away.
+
+As a page, Cancel turns into a back arrow, as on every other page; the
+back swipe cancels as well. The header bar cannot show its own back
+button, it belongs to the first page of the editor's inner navigation.
+---
+ .../connection-editor/net-connection-editor.c | 29 +++++++++++++++++--
+ 1 file changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/panels/network/connection-editor/net-connection-editor.c b/panels/network/connection-editor/net-connection-editor.c
+index bab99386a..d2d0b6f66 100644
+--- a/panels/network/connection-editor/net-connection-editor.c
++++ b/panels/network/connection-editor/net-connection-editor.c
+@@ -173,14 +173,38 @@ eap_method_ca_cert_ignore_load (NMConnection *connection)
+ static void page_changed (NetConnectionEditor *self);
+ static void page_row_activated_cb (NetConnectionEditor *self, GtkListBoxRow *row);
+ 
+-/* Close the dialog if it is shown; a dialog that was never presented has nothing to close */
++/* Shown as a page of the window's navigation (cc-plinius-dialog-pages.c): the dialog itself has
++ * no parent then, its child moved into the page */
++static gboolean
++is_page (NetConnectionEditor *self)
++{
++    return gtk_widget_get_parent (GTK_WIDGET (self)) == NULL && adw_dialog_get_child (ADW_DIALOG (self)) == NULL;
++}
++
++/* Close the dialog if it is shown, as a sheet or as a page; a dialog that was never presented
++ * has nothing to close */
+ static void
+ close_editor (NetConnectionEditor *self)
+ {
+-    if (gtk_widget_get_parent (GTK_WIDGET (self)) != NULL)
++    if (gtk_widget_get_parent (GTK_WIDGET (self)) != NULL || is_page (self))
+         adw_dialog_force_close (ADW_DIALOG (self));
+ }
+ 
++/* As a page "Cancel" becomes a back arrow, as on every other page. The header bar shows none of
++ * its own: it belongs to the first page of the editor's own navigation. Leaving the page by the
++ * back swipe cancels as well (net_connection_editor_closed). */
++static void
++content_map_cb (NetConnectionEditor *self)
++{
++    if (!is_page (self))
++        return;
++
++    gtk_button_set_icon_name (self->cancel_button, "go-previous-symbolic");
++    gtk_widget_set_tooltip_text (GTK_WIDGET (self->cancel_button), g_dgettext ("libadwaita", "Back"));
++    gtk_accessible_update_property (GTK_ACCESSIBLE (self->cancel_button),
++                                    GTK_ACCESSIBLE_PROPERTY_LABEL, g_dgettext ("libadwaita", "Back"), -1);
++}
++
+ /* Title of the dialog and of its first page (the back button of the settings pages shows it) */
+ static void
+ set_editor_title (NetConnectionEditor *self, const gchar *title)
+@@ -326,6 +350,7 @@ net_connection_editor_init (NetConnectionEditor *self)
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
+     self->pages = g_ptr_array_new ();
++    g_signal_connect_object (self->toast_overlay, "map", G_CALLBACK (content_map_cb), self, G_CONNECT_SWAPPED);
+ }
+ 
+ static void
+-- 
+2.55.0
+

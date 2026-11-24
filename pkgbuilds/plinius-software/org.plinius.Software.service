@@ -1,0 +1,5 @@
+# D-Bus activation of plinius-software, so the update notification can open the Updates tab
+# (org.freedesktop.Application.ActivateAction "show-updates") even if the app is not running.
+[D-BUS Service]
+Name=org.plinius.Software
+Exec=/usr/bin/plinius-software --gapplication-service

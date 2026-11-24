@@ -1,0 +1,28 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-backlight-wake
+pkgver=0.5
+pkgrel=5
+pkgdesc="Sets the backlight again when the display is switched on (Plinius panel driver leaves it dark) and keeps the light sensor's screen colour (from phoc-plinius); display state hooks"
+arch=(aarch64 x86_64)
+license=(MIT)
+depends=(glibc)
+source=(plinius-backlight-wake.c
+	plinius-backlight-wake.service
+	LICENSE)
+sha256sums=('91d6444089457da870182121bfb28ce66fbd59f8ef2ffe7a3bb0721eebfcabf5'
+	'04fd0eaf6d773685ca305e3988331ba29ec39f3a88ffdb425c1151ef9035a028'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -o plinius-backlight-wake plinius-backlight-wake.c $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-backlight-wake -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-backlight-wake.service -t "$pkgdir/usr/lib/systemd/system"
+	# On from the start, also on the lock screen and without a session
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-backlight-wake.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+}

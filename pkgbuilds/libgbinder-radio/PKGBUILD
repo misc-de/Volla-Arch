@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=libgbinder-radio
+pkgver=1.6.7
+pkgrel=2
+pkgdesc="Android radio HAL (HIDL and AIDL) on top of libgbinder"
+arch=(aarch64 x86_64)
+url="https://github.com/mer-hybris/libgbinder-radio"
+license=(BSD-3-Clause)
+depends=(glib2 libglibutil libgbinder)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('a9c4247257c6ec05694182bf2adb48b8d57ca1f0ae20ff66d95778cd14732aaf')
+
+build() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib KEEP_SYMBOLS=1 release pkgconfig
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib DESTDIR="$pkgdir" install-dev
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

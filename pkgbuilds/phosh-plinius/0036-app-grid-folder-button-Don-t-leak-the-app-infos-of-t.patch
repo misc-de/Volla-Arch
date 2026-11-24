@@ -1,0 +1,46 @@
+From 4fa6fbd5a4b807a994ccd938c04e45c7a62e0210 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 17:52:53 +0100
+Subject: [PATCH 36/37] app-grid-folder-button: Don't leak the app infos of the
+ preview
+
+The loop took each app info twice from the model (once in the
+condition, once in the body) and dropped the references when it
+overwrote the variable, only the last one was released. Take each
+app info once and release it at the end of the iteration.
+
+Signed-off-by: misc-de <misc-de@users.noreply.github.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/app-grid-folder-button.c | 11 +++--------
+ 1 file changed, 3 insertions(+), 8 deletions(-)
+
+diff --git a/src/app-grid-folder-button.c b/src/app-grid-folder-button.c
+index 848de6d1..feed427a 100644
+--- a/src/app-grid-folder-button.c
++++ b/src/app-grid-folder-button.c
+@@ -89,21 +89,16 @@ static void
+ build_2x2_grid_icon (PhoshAppGridFolderButton *self)
+ {
+   GListModel *apps;
+-  g_autoptr (GAppInfo) app_info = NULL;
+ 
+   gtk_grid_remove_row (self->grid, 1);
+   gtk_grid_remove_row (self->grid, 0);
+ 
+   apps = G_LIST_MODEL (phosh_folder_info_get_app_infos (self->folder_info));
+ 
+-  for (int i = 0;
+-       i < 4 && (app_info = g_list_model_get_item (apps, i)) != NULL;
+-       i++) {
++  for (int i = 0; i < 4 && i < g_list_model_get_n_items (apps); i++) {
++    g_autoptr (GAppInfo) app_info = g_list_model_get_item (apps, i);
++    g_autoptr (GIcon) icon = phosh_app_grid_button_get_app_icon (app_info);
+     GtkWidget *image = NULL;
+-    g_autoptr (GIcon) icon = NULL;
+-    app_info = g_list_model_get_item (apps, i);
+-
+-    icon = phosh_app_grid_button_get_app_icon (app_info);
+ 
+     if (icon == NULL)
+       image = gtk_image_new_from_icon_name (PHOSH_APP_UNKNOWN_ICON, -1);

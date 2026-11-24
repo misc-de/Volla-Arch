@@ -1,0 +1,411 @@
+From c7820b328f7aa0744cec1e2bc43c4c65b5204bc6 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 15:53:53 +0100
+Subject: [PATCH] Add the CellBroadcast interface on top of oFono's
+ CellBroadcast
+
+Phosh shows warnings (EU-Alert/DE-Alert, ETWS) as a full-screen prompt
+and cellbroadcastd stores them, but both read them from ModemManager's
+org.freedesktop.ModemManager1.Modem.CellBroadcast, which oFono2MM did not
+offer: oFono received the messages and nobody showed them. cellbroadcastd
+could not set the channel list either.
+
+Export the interface for every modem:
+- SetChannels/Channels map to oFono's "Topics" (oFono stores them per SIM
+  and adds the ETWS channels itself). oFono offers CellBroadcast only once
+  the SIM is ready, so a list set before is applied then.
+- Every message oFono reports (IncomingBroadcastWithProperties,
+  IncomingBroadcast, EmergencyBroadcast) becomes a complete CBM object
+  with text, channel, message code and update number. oFono sends the
+  first two for the same message; only one CBM is created.
+- Nothing on a phone deletes CBMs and the network repeats alerts, so
+  only the latest 50 are kept.
+---
+ main.py                             |   1 +
+ ofono2mm/mm_cbm.py                  |  44 ++++++
+ ofono2mm/mm_modem.py                |  15 ++
+ ofono2mm/mm_modem_cell_broadcast.py | 232 ++++++++++++++++++++++++++++
+ ofono_modem.xml                     |   4 +
+ 5 files changed, 296 insertions(+)
+ create mode 100644 ofono2mm/mm_cbm.py
+ create mode 100644 ofono2mm/mm_modem_cell_broadcast.py
+
+diff --git a/main.py b/main.py
+index 73e4c8c..67ac745 100755
+--- a/main.py
++++ b/main.py
+@@ -161,6 +161,7 @@ class MMInterface(ServiceInterface):
+         await mm_modem_interface.init_mm_3gpp_ussd_interface()
+         await mm_modem_interface.init_mm_3gpp_profile_manager_interface()
+         await mm_modem_interface.init_mm_messaging_interface()
++        await mm_modem_interface.init_mm_cell_broadcast_interface()
+         await mm_modem_interface.init_mm_simple_interface()
+         await mm_modem_interface.init_mm_firmware_interface()
+         await mm_modem_interface.init_mm_time_interface()
+diff --git a/ofono2mm/mm_cbm.py b/ofono2mm/mm_cbm.py
+new file mode 100644
+index 0000000..247c738
+--- /dev/null
++++ b/ofono2mm/mm_cbm.py
+@@ -0,0 +1,44 @@
++from dbus_next.service import ServiceInterface, dbus_property
++from dbus_next.constants import PropertyAccess
++from dbus_next import Variant
++
++# MMCbmState
++MM_CBM_STATE_RECEIVED = 2
++
++
++class MMCbmInterface(ServiceInterface):
++    """
++    org.freedesktop.ModemManager1.Cbm: one cell broadcast message.
++
++    oFono reports a message only once all its pages arrived, so it is always complete.
++    """
++
++    def __init__(self, text, channel, message_code=0, update=0):
++        super().__init__('org.freedesktop.ModemManager1.Cbm')
++        self.props = {
++            'State': Variant('u', MM_CBM_STATE_RECEIVED),
++            'Text': Variant('s', text),
++            'Channel': Variant('u', channel),
++            'MessageCode': Variant('u', message_code),
++            'Update': Variant('u', update),
++        }
++
++    @dbus_property(access=PropertyAccess.READ)
++    def State(self) -> 'u':
++        return self.props['State'].value
++
++    @dbus_property(access=PropertyAccess.READ)
++    def Text(self) -> 's':
++        return self.props['Text'].value
++
++    @dbus_property(access=PropertyAccess.READ)
++    def Channel(self) -> 'u':
++        return self.props['Channel'].value
++
++    @dbus_property(access=PropertyAccess.READ)
++    def MessageCode(self) -> 'u':
++        return self.props['MessageCode'].value
++
++    @dbus_property(access=PropertyAccess.READ)
++    def Update(self) -> 'u':
++        return self.props['Update'].value
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index 47bbf47..f0d5de9 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -7,6 +7,7 @@ from ofono2mm.mm_modem_3gpp import MMModem3gppInterface
+ from ofono2mm.mm_modem_3gpp_ussd import MMModem3gppUssdInterface
+ from ofono2mm.mm_modem_3gpp_profile_manager import MMModem3gppProfileManagerInterface
+ from ofono2mm.mm_modem_messaging import MMModemMessagingInterface
++from ofono2mm.mm_modem_cell_broadcast import MMModemCellBroadcastInterface
+ from ofono2mm.mm_modem_simple import MMModemSimpleInterface
+ from ofono2mm.mm_modem_firmware import MMModemFirmwareInterface
+ from ofono2mm.mm_modem_cdma import MMModemCDMAInterface
+@@ -55,6 +56,7 @@ class MMModemInterface(ServiceInterface):
+         self.mm_cell_type = ModemManagerCellType.UNKNOWN
+         self.mm_modem3gpp_interface = None
+         self.mm_modem_messaging_interface = None
++        self.mm_modem_cell_broadcast_interface = None
+         self.mm_sim_interface = None
+         self.sim = Variant('o', f'/org/freedesktop/ModemManager1/SIM/{self.index}')
+         self.bearers = {}
+@@ -151,6 +153,9 @@ class MMModemInterface(ServiceInterface):
+         if self.mm_modem_messaging_interface is not None and iface == "org.ofono.MessageManager":
+             self.mm_modem_messaging_interface.set_props()
+             await self.mm_modem_messaging_interface.init_messages()
++        # oFono offers CellBroadcast only once the SIM is ready, mostly after the modem was exported
++        if self.mm_modem_cell_broadcast_interface is not None and iface == "org.ofono.CellBroadcast":
++            await self.mm_modem_cell_broadcast_interface.init_cell_broadcast()
+         if iface == "org.ofono.ConnectionManager":
+             for bearer in self.bearers.values():
+                 await self.set_bearer_context(bearer)
+@@ -167,6 +172,8 @@ class MMModemInterface(ServiceInterface):
+             self.ofono_interfaces.pop(iface)
+         if iface in self.ofono_interface_props:
+             self.ofono_interface_props.pop(iface)
++        if self.mm_modem_cell_broadcast_interface is not None and iface == "org.ofono.CellBroadcast":
++            self.mm_modem_cell_broadcast_interface.disconnect_ofono()
+ 
+         self.set_props()
+ 
+@@ -248,6 +255,11 @@ class MMModemInterface(ServiceInterface):
+             self.mm_modem_messaging_interface.set_props()
+             await self.mm_modem_messaging_interface.init_messages()
+ 
++    async def init_mm_cell_broadcast_interface(self):
++        self.mm_modem_cell_broadcast_interface = MMModemCellBroadcastInterface(self)
++        self.bus.export(f'/org/freedesktop/ModemManager1/Modem/{self.index}', self.mm_modem_cell_broadcast_interface)
++        await self.mm_modem_cell_broadcast_interface.init_cell_broadcast()
++
+     async def check_ofono_contexts(self):
+         global bearer_i
+         if not 'org.ofono.ConnectionManager' in self.ofono_interfaces:
+@@ -929,6 +941,9 @@ class MMModemInterface(ServiceInterface):
+                     self.mm_modem3gpp_interface.ofono_interface_changed(iface)(name, varval)
+                 if self.mm_sim_interface is not None:
+                     self.mm_sim_interface.ofono_interface_changed(iface)(name, varval)
++                if self.mm_modem_cell_broadcast_interface is not None and \
++                        iface == "org.ofono.CellBroadcast" and name == "Topics":
++                    self.mm_modem_cell_broadcast_interface.update_channels()
+ 
+         return ch
+ 
+diff --git a/ofono2mm/mm_modem_cell_broadcast.py b/ofono2mm/mm_modem_cell_broadcast.py
+new file mode 100644
+index 0000000..6b7fc03
+--- /dev/null
++++ b/ofono2mm/mm_modem_cell_broadcast.py
+@@ -0,0 +1,232 @@
++from dbus_next.service import ServiceInterface, method, dbus_property, signal
++from dbus_next.constants import PropertyAccess
++from dbus_next import Variant, DBusError
++
++from ofono2mm.mm_cbm import MMCbmInterface
++from ofono2mm.logger import Logger
++
++# CBM object paths are unique across all modems, like ModemManager's own
++cbm_i = 1
++
++# Keep this many messages per modem. ModemManager keeps them until a client deletes them,
++# but nothing on a phone deletes CBMs (Phosh relies on the chat app, cellbroadcastd stores
++# its own copy), and the network repeats alerts: without a limit the list only grows.
++MAX_CBMS = 50
++
++# ETWS warning types from oFono's EmergencyBroadcast, mapped to their message identifiers
++# (3GPP TS 23.041 9.4.1.2.2)
++ETWS_CHANNELS = {
++    'Earthquake': 4352,
++    'Tsunami': 4353,
++    'Earthquake+Tsunami': 4354,
++    'Test': 4355,
++    'Other': 4356,
++}
++
++
++def channels_to_topics(channels):
++    """Turns ModemManager's channel list [(start, end), ...] into oFono's "a-b,c" string."""
++    topics = []
++    for start, end in channels:
++        if end < start:
++            start, end = end, start
++        topics.append(f'{start}' if start == end else f'{start}-{end}')
++    return ','.join(topics)
++
++
++def topics_to_channels(topics):
++    """Turns oFono's "a-b,c" string into ModemManager's channel list [(start, end), ...]."""
++    channels = []
++    for entry in topics.split(','):
++        entry = entry.strip()
++        if not entry:
++            continue
++        try:
++            if '-' in entry:
++                start, end = entry.split('-', 1)
++                channels.append([int(start), int(end)])
++            else:
++                channels.append([int(entry), int(entry)])
++        except ValueError:
++            Logger.warning(f'cell broadcast: ignoring topic "{entry}"')
++    return channels
++
++
++class MMModemCellBroadcastInterface(ServiceInterface):
++    """
++    org.freedesktop.ModemManager1.Modem.CellBroadcast on top of org.ofono.CellBroadcast.
++
++    oFono assembles the pages and drops repeated messages; every message it reports becomes a
++    complete (RECEIVED) CBM object. The channel list maps to oFono's "Topics" property, which
++    oFono stores per SIM and hands to the modem together with the ETWS channels.
++    """
++
++    OFONO_IFACE = 'org.ofono.CellBroadcast'
++
++    def __init__(self, mm_modem):
++        super().__init__('org.freedesktop.ModemManager1.Modem.CellBroadcast')
++        self.mm_modem = mm_modem
++        self.bus = mm_modem.bus
++        self.cbms = {}
++        # Channels a client asked for before oFono offered CellBroadcast (it does so only once
++        # the SIM is ready); applied as soon as the interface appears
++        self.pending_channels = None
++        # IncomingBroadcastWithProperties comes right before IncomingBroadcast for the same
++        # message; the first carries the message code, so the second one is skipped
++        self.last_with_properties = None
++        self.ofono_cb = None
++        self.props = {
++            'CellBroadcasts': Variant('ao', []),
++            'Channels': Variant('a(uu)', []),
++        }
++
++    def ofono_iface(self):
++        return self.mm_modem.ofono_interfaces.get(self.OFONO_IFACE)
++
++    async def init_cell_broadcast(self):
++        """Connects to oFono's CellBroadcast; called again whenever oFono (re)adds it."""
++        ofono_cb = self.ofono_iface()
++        if ofono_cb is None:
++            return
++
++        # The interface proxies are cached: subscribing twice would report every message twice
++        if self.ofono_cb is not None:
++            self.disconnect_ofono()
++        self.ofono_cb = ofono_cb
++        ofono_cb.on_incoming_broadcast(self.on_incoming_broadcast)
++        ofono_cb.on_incoming_broadcast_with_properties(self.on_incoming_broadcast_with_properties)
++        ofono_cb.on_emergency_broadcast(self.on_emergency_broadcast)
++
++        if self.pending_channels is not None:
++            channels, self.pending_channels = self.pending_channels, None
++            try:
++                await self.set_ofono_topics(channels)
++            except DBusError as e:
++                Logger.warning(f'cell broadcast: setting the channels failed: {e}')
++        self.update_channels()
++
++    def disconnect_ofono(self):
++        if self.ofono_cb is None:
++            return
++        try:
++            self.ofono_cb.off_incoming_broadcast(self.on_incoming_broadcast)
++            self.ofono_cb.off_incoming_broadcast_with_properties(self.on_incoming_broadcast_with_properties)
++            self.ofono_cb.off_emergency_broadcast(self.on_emergency_broadcast)
++        except Exception:
++            pass
++        self.ofono_cb = None
++
++    def update_channels(self):
++        props = self.mm_modem.ofono_interface_props.get(self.OFONO_IFACE, {})
++        topics = props['Topics'].value if 'Topics' in props else ''
++        channels = topics_to_channels(topics)
++        if channels != self.props['Channels'].value:
++            self.props['Channels'] = Variant('a(uu)', channels)
++            self.emit_properties_changed({'Channels': channels})
++
++    async def set_ofono_topics(self, channels):
++        topics = channels_to_topics(channels)
++        Logger.debug(f'cell broadcast: topics {topics}')
++        await self.ofono_cb.call_set_property('Topics', Variant('s', topics))
++        # oFono confirms with PropertyChanged; keep our copy right away for Channels
++        props = self.mm_modem.ofono_interface_props.setdefault(self.OFONO_IFACE, {})
++        props['Topics'] = Variant('s', topics)
++
++    def add_cbm(self, text, channel, message_code=0, update=0):
++        global cbm_i
++        path = f'/org/freedesktop/ModemManager1/CBM/{cbm_i}'
++        cbm_i += 1
++
++        cbm = MMCbmInterface(text, channel, message_code, update)
++        self.bus.export(path, cbm)
++        self.cbms[path] = cbm
++        self.props['CellBroadcasts'].value.append(path)
++
++        while len(self.props['CellBroadcasts'].value) > MAX_CBMS:
++            self.remove_cbm(self.props['CellBroadcasts'].value[0], emit=False)
++
++        Logger.debug(f'cell broadcast: channel {channel} code {message_code} update {update} at {path}')
++        self.emit_properties_changed({'CellBroadcasts': self.props['CellBroadcasts'].value})
++        self.Added(path)
++
++    def remove_cbm(self, path, emit=True):
++        if path not in self.cbms:
++            return False
++        self.props['CellBroadcasts'].value.remove(path)
++        self.bus.unexport(path, self.cbms.pop(path))
++        if emit:
++            self.emit_properties_changed({'CellBroadcasts': self.props['CellBroadcasts'].value})
++        self.Deleted(path)
++        return True
++
++    def on_incoming_broadcast_with_properties(self, text, props):
++        channel = props['MessageIdentifier'].value if 'MessageIdentifier' in props else 0
++        code = props['MessageCode'].value if 'MessageCode' in props else 0
++        update = props['UpdateNumber'].value if 'UpdateNumber' in props else 0
++        self.last_with_properties = (text, channel)
++        self.add_cbm(text, channel, code, update)
++
++    def on_incoming_broadcast(self, text, channel):
++        if self.last_with_properties == (text, channel):
++            self.last_with_properties = None
++            return
++        self.add_cbm(text, channel)
++
++    def on_emergency_broadcast(self, text, props):
++        etws_type = props['EmergencyType'].value if 'EmergencyType' in props else 'Other'
++        channel = props['MessageIdentifier'].value if 'MessageIdentifier' in props \
++            else ETWS_CHANNELS.get(etws_type, 4356)
++        code = props['MessageCode'].value if 'MessageCode' in props else 0
++        update = props['UpdateNumber'].value if 'UpdateNumber' in props else 0
++        # An ETWS primary notification has no text, only the warning type
++        if not text:
++            text = f'{etws_type} warning'
++        self.add_cbm(text, channel, code, update)
++
++    @method()
++    async def List(self) -> 'ao':
++        return self.props['CellBroadcasts'].value
++
++    @method()
++    async def Delete(self, path: 'o'):
++        if not self.remove_cbm(path):
++            raise DBusError('org.freedesktop.ModemManager1.Error.Core.NotFound',
++                            f'No CBM at {path}')
++
++    @method()
++    async def SetChannels(self, channels: 'a(uu)'):
++        for start, end in channels:
++            # oFono accepts message identifiers up to 9999 only (CBS_MAX_TOPIC)
++            if max(start, end) > 9999:
++                raise DBusError('org.freedesktop.ModemManager1.Error.Core.InvalidArgs',
++                                f'Channel {max(start, end)} out of range')
++
++        if self.ofono_iface() is None:
++            # No SIM yet: remember the list for when oFono offers CellBroadcast
++            self.pending_channels = channels
++            return
++
++        if self.ofono_cb is None:
++            await self.init_cell_broadcast()
++        try:
++            await self.set_ofono_topics(channels)
++        except DBusError as e:
++            raise DBusError('org.freedesktop.ModemManager1.Error.Core.Failed',
++                            f'Setting the channels failed: {e.text}')
++        self.update_channels()
++
++    @signal()
++    def Added(self, path) -> 'o':
++        return path
++
++    @signal()
++    def Deleted(self, path) -> 'o':
++        return path
++
++    @dbus_property(access=PropertyAccess.READ)
++    def CellBroadcasts(self) -> 'ao':
++        return self.props['CellBroadcasts'].value
++
++    @dbus_property(access=PropertyAccess.READ)
++    def Channels(self) -> 'a(uu)':
++        return self.props['Channels'].value
+diff --git a/ofono_modem.xml b/ofono_modem.xml
+index 8c1b9e2..a10da9a 100644
+--- a/ofono_modem.xml
++++ b/ofono_modem.xml
+@@ -406,6 +406,10 @@
+ 			<arg name="message" type="s"/>
+ 			<arg name="channel" type="q"/>
+ 		</signal>
++		<signal name="IncomingBroadcastWithProperties">
++			<arg name="message" type="s"/>
++			<arg name="dict" type="a{sv}"/>
++		</signal>
+ 		<signal name="EmergencyBroadcast">
+ 			<arg name="message" type="s"/>
+ 			<arg name="dict" type="a{sv}"/>
+-- 
+2.56.0
+

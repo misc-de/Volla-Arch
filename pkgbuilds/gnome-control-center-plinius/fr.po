@@ -1,0 +1,4333 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-control-center\n"
+"PO-Revision-Date: 2026-10-27 15:00+0100\n"
+"Last-Translator: plinius-control-center\n"
+"Language-Team: none\n"
+"Language: fr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "This username is available."
+msgstr "Ce nom d’utilisateur est disponible."
+
+msgid "Lower case letters, numbers, hyphens and underscores, starting with a letter, at most 32 characters."
+msgstr "Lettres minuscules, chiffres, traits d’union et tirets bas, commençant par une lettre, 32 caractères au maximum."
+
+msgid "A group with this name already exists."
+msgstr "Un groupe portant ce nom existe déjà."
+
+msgid "A home folder with this name already exists."
+msgstr "Un dossier personnel portant ce nom existe déjà."
+
+msgid "Checking username…"
+msgstr "Vérification du nom d’utilisateur…"
+
+msgid "Renaming failed"
+msgstr "Échec du renommage"
+
+msgid "Restarting failed"
+msgstr "Échec du redémarrage"
+
+#, c-format
+msgid "On restart, %1$s will be renamed to %2$s. After that, you log in as %2$s."
+msgstr "Au redémarrage, %1$s sera renommé en %2$s. Vous vous connecterez ensuite en tant que %2$s."
+
+msgid "Undoing failed"
+msgstr "Échec de l’annulation"
+
+msgid "Change Username"
+msgstr "Modifier le nom d’utilisateur"
+
+msgid "_Cancel"
+msgstr "_Annuler"
+
+msgid "_Rename"
+msgstr "_Renommer"
+
+msgid "The name you log in with. Your home folder, groups, automatic login and references in your settings are renamed along with it. Password and PIN stay the same. The renaming happens at the next restart, before login."
+msgstr "Le nom avec lequel vous vous connectez. Votre dossier personnel, vos groupes, la connexion automatique et les références dans vos paramètres sont renommés en même temps. Le mot de passe et le code PIN restent inchangés. Le renommage a lieu au prochain redémarrage, avant la connexion."
+
+msgid "Current Username"
+msgstr "Nom d’utilisateur actuel"
+
+msgid "_New Username"
+msgstr "_Nouveau nom d’utilisateur"
+
+msgid "Scheduled for the Next Restart"
+msgstr "Prévu pour le prochain redémarrage"
+
+msgid "_Undo"
+msgstr "Ann_uler le renommage"
+
+msgid "Restart Now?"
+msgstr "Redémarrer maintenant ?"
+
+msgid "_Later"
+msgstr "Plus _tard"
+
+msgid "_Restart"
+msgstr "_Redémarrer"
+
+msgid "Notch"
+msgstr "Encoche"
+
+msgid "Top bar icons make room for the camera"
+msgstr "Les icônes de la barre supérieure laissent la place à la caméra"
+
+msgid "Automatic"
+msgstr "Automatique"
+
+msgid "None"
+msgstr "Aucune"
+
+msgid "Left"
+msgstr "Gauche"
+
+msgid "Center"
+msgstr "Centre"
+
+msgid "Right"
+msgstr "Droite"
+
+# Plinius: eSIM management (cc-esim-dialog.*, Mobile Network device page)
+msgid "eSIM"
+msgstr "eSIM"
+
+msgid "_eSIM"
+msgstr "_eSIM"
+
+msgid "_Manage eSIM"
+msgstr "_Gérer l’eSIM"
+
+msgid "Add, switch and delete profiles"
+msgstr "Ajouter, changer et supprimer des profils"
+
+msgid "eSIM Not Available"
+msgstr "eSIM indisponible"
+
+msgid "_Try Again"
+msgstr "_Réessayer"
+
+msgid "Profiles"
+msgstr "Profils"
+
+msgid "Only one profile can be active at a time."
+msgstr "Un seul profil peut être actif à la fois."
+
+msgid "There are no profiles on this eSIM yet."
+msgstr "Cette eSIM ne contient encore aucun profil."
+
+msgid "_Add Profile…"
+msgstr "_Ajouter un profil…"
+
+msgid "eSIM Chip"
+msgstr "Puce eSIM"
+
+msgid "EID"
+msgstr "EID"
+
+msgid "Copy EID"
+msgstr "Copier l’EID"
+
+msgid "EID copied"
+msgstr "EID copié"
+
+msgid "Free Memory"
+msgstr "Mémoire libre"
+
+msgid "Specification"
+msgstr "Spécification"
+
+msgid "Profile"
+msgstr "Profil"
+
+msgid "Label"
+msgstr "Libellé"
+
+msgid "Shown instead of the network's name."
+msgstr "Affiché à la place du nom du réseau."
+
+msgid "Provider"
+msgstr "Opérateur"
+
+msgid "Profile Name"
+msgstr "Nom du profil"
+
+msgid "ICCID"
+msgstr "ICCID"
+
+msgid "Type"
+msgstr "Type"
+
+msgid "Active"
+msgstr "Actif"
+
+msgid "_Active"
+msgstr "_Actif"
+
+msgid "Test profile"
+msgstr "Profil de test"
+
+msgid "Provisioning profile"
+msgstr "Profil de provisionnement"
+
+msgid "Operator profile"
+msgstr "Profil d’opérateur"
+
+msgid "_Delete Profile…"
+msgstr "_Supprimer le profil…"
+
+msgid "Delete Profile?"
+msgstr "Supprimer le profil ?"
+
+#, c-format
+msgid "“%s” will be removed from the eSIM for good. To use it again, you need a new activation code from the provider."
+msgstr "« %s » sera définitivement supprimé de l’eSIM. Pour l’utiliser à nouveau, il faut un nouveau code d’activation de l’opérateur."
+
+msgid "Profile deleted"
+msgstr "Profil supprimé"
+
+msgid "Add Profile"
+msgstr "Ajouter un profil"
+
+msgid "Enter the activation code from your provider. It starts with “LPA:1$”, the QR code from the provider contains the same text."
+msgstr "Saisissez le code d’activation de votre opérateur. Il commence par « LPA:1$ », le code QR de l’opérateur contient le même texte."
+
+msgid "Activation Code"
+msgstr "Code d’activation"
+
+msgid "Confirmation Code (if required)"
+msgstr "Code de confirmation (si nécessaire)"
+
+msgid "_Download Profile"
+msgstr "_Télécharger le profil"
+
+msgid "Downloading the profile. This can take a minute."
+msgstr "Téléchargement du profil. Cela peut prendre une minute."
+
+msgid "Profile added. Switch it on to use it."
+msgstr "Profil ajouté. Activez-le pour l’utiliser."
+
+msgid "Done. The mobile network may take a moment to appear."
+msgstr "Terminé. Le réseau mobile peut mettre un moment à apparaître."
+
+msgid "Reading the profiles failed"
+msgstr "Échec de la lecture des profils"
+
+msgid "Switching the profile failed"
+msgstr "Échec du changement de profil"
+
+msgid "Renaming the profile failed"
+msgstr "Échec du renommage du profil"
+
+msgid "Deleting the profile failed"
+msgstr "Échec de la suppression du profil"
+
+msgid "Downloading the profile failed"
+msgstr "Échec du téléchargement du profil"
+
+# Plinius: phone options on the Display page (cc-plinius-display.*), About
+msgid "Rotation"
+msgstr "Rotation"
+
+msgid "Rotation Speed"
+msgstr "Vitesse de rotation"
+
+msgid "How long the phone must be held turned before the screen follows"
+msgstr "Durée pendant laquelle le téléphone doit rester tourné avant que l’écran suive"
+
+msgid "Fast"
+msgstr "Rapide"
+
+msgid "Normal"
+msgstr "Normale"
+
+msgid "Slow"
+msgstr "Lente"
+
+msgid "Wake Up"
+msgstr "Réveil"
+
+msgid "The screen also comes on without the power button. Not while the phone is in a pocket."
+msgstr "L’écran s’allume aussi sans le bouton d’alimentation. Pas quand le téléphone est dans une poche."
+
+msgid "Double Tap"
+msgstr "Double appui"
+
+msgid "Tap the dark screen twice"
+msgstr "Touchez deux fois l’écran éteint"
+
+msgid "Tilt"
+msgstr "Inclinaison"
+
+msgid "Pick the phone up from lying flat"
+msgstr "Prenez le téléphone posé à plat"
+
+msgid "Brighten When Picked Up"
+msgstr "Éclaircir en le prenant"
+
+msgid "A dimmed screen gets bright again, a dark one stays off"
+msgstr "Un écran assombri redevient lumineux, un écran éteint reste éteint"
+
+msgid "App Overview"
+msgstr "Vue des applications"
+
+msgid "Search"
+msgstr "Recherche"
+
+msgid "Search field above the apps"
+msgstr "Champ de recherche au-dessus des applications"
+
+msgid "App Names"
+msgstr "Noms des applications"
+
+msgid "Names under the app icons"
+msgstr "Noms sous les icônes"
+
+msgid "Folders at the Bottom"
+msgstr "Dossiers en bas"
+
+msgid "Folders in one row at the bottom edge, scrolling sideways"
+msgstr "Dossiers sur une ligne en bas, défilement horizontal"
+
+msgid "Mobile Apps Button"
+msgstr "Bouton « Applications mobiles »"
+
+msgid "Button that shows only the apps made for phones"
+msgstr "Bouton qui n’affiche que les applications faites pour les téléphones"
+
+#, c-format
+msgid "%s + %s SD"
+msgstr "%s + %s SD"
+
+msgid "Done. The network may take a moment."
+msgstr "Terminé. Le réseau peut prendre un moment."
+
+# Plinius: calendar week in the Phosh top panel (phosh-plinius patch 0004)
+#, c-format
+msgid "Week %d"
+msgstr "Semaine %d"
+
+# Plinius: assistant button on the Power page (cc-plinius-buttons.*)
+msgid "Assistant Button"
+msgstr "Bouton d’assistant"
+
+msgid "“Custom” runs a program or script of your choice."
+msgstr "« Personnalisé » lance un programme ou un script de votre choix."
+
+msgid "Short Press"
+msgstr "Appui court"
+
+msgid "Double Press"
+msgstr "Double appui"
+
+msgid "Long Press"
+msgstr "Appui long"
+
+msgid "Nothing"
+msgstr "Rien"
+
+msgid "Torch"
+msgstr "Lampe torche"
+
+msgid "Screenshot"
+msgstr "Capture d’écran"
+
+msgid "Camera"
+msgstr "Appareil photo"
+
+msgid "Silent Mode"
+msgstr "Mode silencieux"
+
+msgid "Lock Screen"
+msgstr "Verrouiller l’écran"
+
+msgid "Custom"
+msgstr "Personnalisé"
+
+msgid "Command or Script Path"
+msgstr "Commande ou chemin du script"
+
+msgid "Choose a Program or Script"
+msgstr "Choisir un programme ou un script"
+
+# Plinius: NFC panel (cc-nfc-panel.*)
+msgid "Switching NFC failed"
+msgstr "Impossible de changer l’état du NFC"
+
+msgid "Reads NFC tags and talks to cards and terminals held to the back of the phone. It only looks for them while the screen is on."
+msgstr "Lit les étiquettes NFC et communique avec les cartes et terminaux tenus au dos du téléphone. La recherche n’a lieu que lorsque l’écran est allumé."
+
+# Plinius: unlock pattern (cc-pattern-dialog.*, users page; Phosh lock screen)
+msgid "Unlock Pattern"
+msgstr "Schéma de déverrouillage"
+
+msgid "On"
+msgstr "Activé"
+
+msgid "Off"
+msgstr "Désactivé"
+
+msgid "With an unlock pattern, the lock screen takes the pattern or a fingerprint instead of the PIN. Enter your PIN to continue."
+msgstr "Avec un schéma de déverrouillage, l’écran de verrouillage accepte le schéma ou une empreinte digitale à la place du code PIN. Saisissez votre code PIN pour continuer."
+
+msgid "PIN"
+msgstr "Code PIN"
+
+msgid "Continue"
+msgstr "Continuer"
+
+msgid "Wrong PIN. Try again."
+msgstr "Code PIN incorrect. Réessayez."
+
+msgid "Draw your current pattern."
+msgstr "Dessinez votre schéma actuel."
+
+msgid "Wrong pattern. Try again."
+msgstr "Schéma incorrect. Réessayez."
+
+msgid "Too many wrong tries. Try again later."
+msgstr "Trop d’essais incorrects. Réessayez plus tard."
+
+msgid "Use PIN Instead"
+msgstr "Utiliser le code PIN à la place"
+
+msgid "Draw an unlock pattern. Connect at least 6 points."
+msgstr "Dessinez un schéma de déverrouillage. Reliez au moins 6 points."
+
+msgid "Connect at least 6 points."
+msgstr "Reliez au moins 6 points."
+
+msgid "Draw the pattern again to confirm."
+msgstr "Dessinez à nouveau le schéma pour confirmer."
+
+msgid "The patterns do not match. Draw a new one."
+msgstr "Les schémas ne correspondent pas. Dessinez-en un nouveau."
+
+msgid "The pattern could not be saved."
+msgstr "Le schéma n’a pas pu être enregistré."
+
+msgid "The pattern could not be removed."
+msgstr "Le schéma n’a pas pu être supprimé."
+
+msgid "Remove Pattern"
+msgstr "Supprimer le schéma"
+
+msgid "Draw Pattern"
+msgstr "Dessinez le schéma"
+
+msgid "Wrong Pattern"
+msgstr "Schéma incorrect"
+
+msgid "Use PIN"
+msgstr "Utiliser le code PIN"
+
+msgid "Use Pattern"
+msgstr "Utiliser le schéma"
+
+# Plinius: test area of Graphics Tablets (pen or finger)
+msgid "Pen"
+msgstr "Stylet"
+
+msgid "Finger"
+msgstr "Doigt"
+
+msgid "Battery Condition"
+msgstr "État de la batterie"
+
+msgid "Health"
+msgstr "Santé"
+
+msgid "Capacity compared to when the battery was new"
+msgstr "Capacité par rapport à une batterie neuve"
+
+msgid "Full Charge"
+msgstr "Charge complète"
+
+msgid "Charge Cycles"
+msgstr "Cycles de charge"
+
+msgid "Temperature"
+msgstr "Température"
+
+msgid "Voltage"
+msgstr "Tension"
+
+msgid "Power"
+msgstr "Puissance"
+
+msgid "Battery Type"
+msgstr "Type de batterie"
+
+msgid "Charging"
+msgstr "En charge"
+
+msgid "Discharging"
+msgstr "En décharge"
+
+msgid "Fully charged"
+msgstr "Chargée"
+
+msgid "Charging paused"
+msgstr "Charge en pause"
+
+msgid "Lithium-ion"
+msgstr "Lithium-ion"
+
+msgid "Lithium polymer"
+msgstr "Lithium-polymère"
+
+msgid "Lithium iron phosphate"
+msgstr "Lithium-fer-phosphate"
+
+#, c-format
+msgid "%.1f of %.1f Wh"
+msgstr "%.1f sur %.1f Wh"
+
+#, c-format
+msgid "%.1f W, %s"
+msgstr "%.1f W, %s"
+
+msgid "Fast Charging"
+msgstr "Charge rapide"
+
+msgid "Charges faster with a suitable charger. The battery gets warmer."
+msgstr "Charge plus vite avec un chargeur adapté. La batterie chauffe davantage."
+
+#, c-format
+msgid "Charging stops at %u %% and starts again at %u %%"
+msgstr "La charge s’arrête à %u %% et reprend à %u %%"
+
+msgid "Always-On Display"
+msgstr "Affichage permanent"
+
+msgid "Time and notifications on the dark screen at low power, not during calls"
+msgstr "L’heure et les notifications sur l’écran éteint, à faible consommation, pas pendant les appels"
+
+msgid "Flip Cover"
+msgstr "Étui à rabat"
+
+msgid "Closing the cover turns the screen off, opening it turns the screen on"
+msgstr "Fermer l’étui éteint l’écran, l’ouvrir l’allume"
+
+msgid "_Close"
+msgstr "_Fermer"
+
+msgid "Encrypted"
+msgstr "Chiffré"
+
+msgid "The phone asks for the encryption password at every start. Without it, nobody can read the data."
+msgstr "Le téléphone demande le mot de passe de chiffrement à chaque démarrage. Sans lui, personne ne peut lire les données."
+
+msgid "Encryption at the Next Restart"
+msgstr "Chiffrement au prochain redémarrage"
+
+msgid "At the next start the phone asks for a new encryption password, then encrypts. This takes a while, keep the phone charging."
+msgstr "Au prochain démarrage, le téléphone demande un nouveau mot de passe de chiffrement, puis chiffre. Cela prend un moment ; laissez le téléphone en charge."
+
+msgid "Not Encrypted"
+msgstr "Non chiffré"
+
+msgid "Whoever has the phone in hand can read the data from its storage."
+msgstr "Quiconque a le téléphone en main peut lire les données de sa mémoire."
+
+msgid "Not Available"
+msgstr "Non disponible"
+
+msgid "This system does not start with the encryption support, so it cannot be encrypted."
+msgstr "Ce système ne démarre pas avec la prise en charge du chiffrement ; il ne peut donc pas être chiffré."
+
+msgid "Encryption Not Possible"
+msgstr "Chiffrement impossible"
+
+msgid "Encryption Failed"
+msgstr "Échec du chiffrement"
+
+msgid "Encrypt the Phone?"
+msgstr "Chiffrer le téléphone ?"
+
+msgid "At the next restart the phone asks twice for a new encryption password and then encrypts the system. Depending on the amount of data this takes some minutes; keep the phone charging and do not switch it off.\n\nFrom then on the password is asked at every start. It cannot be recovered: without it, the data is lost. It must differ from the screen lock PIN."
+msgstr "Au prochain redémarrage, le téléphone demande deux fois un nouveau mot de passe de chiffrement, puis chiffre le système. Selon la quantité de données, cela prend quelques minutes ; laissez le téléphone en charge et ne l’éteignez pas.\n\nEnsuite, le mot de passe est demandé à chaque démarrage. Il ne peut pas être récupéré : sans lui, les données sont perdues. Il doit être différent du code PIN de verrouillage de l’écran."
+
+msgid "_Encrypt at Restart"
+msgstr "_Chiffrer au redémarrage"
+
+msgid "Cancelling Failed"
+msgstr "Échec de l’annulation"
+
+msgid "The new passwords do not match."
+msgstr "Les nouveaux mots de passe ne correspondent pas."
+
+msgid "The current password is wrong."
+msgstr "Le mot de passe actuel est incorrect."
+
+msgid "Changing the password. This takes a few seconds, do not switch the phone off."
+msgstr "Modification du mot de passe. Cela prend quelques secondes, n’éteignez pas le téléphone."
+
+msgid "The new password is the screen lock PIN. Choose a different one, so that the PIN alone does not open the phone."
+msgstr "Le nouveau mot de passe est le code PIN de verrouillage de l’écran. Choisissez-en un autre, pour que le PIN seul n’ouvre pas le téléphone."
+
+msgid "Changing the password failed."
+msgstr "Impossible de modifier le mot de passe."
+
+msgid "Change Password"
+msgstr "Modifier le mot de passe"
+
+msgid "C_hange"
+msgstr "_Modifier"
+
+msgid "The password is asked at every start, on the keyboard shown there. It must differ from the screen lock PIN."
+msgstr "Le mot de passe est demandé à chaque démarrage, sur le clavier qui s’y affiche. Il doit être différent du code PIN de verrouillage de l’écran."
+
+msgid "Current Password"
+msgstr "Mot de passe actuel"
+
+msgid "New Password"
+msgstr "Nouveau mot de passe"
+
+msgid "Repeat New Password"
+msgstr "Répéter le nouveau mot de passe"
+
+msgid "_Encrypt…"
+msgstr "_Chiffrer…"
+
+msgid "_Cancel Encryption"
+msgstr "_Annuler le chiffrement"
+
+msgid "Change _Password…"
+msgstr "Modifier le mot de _passe…"
+
+msgid "Encryption"
+msgstr "Chiffrement"
+
+msgid "_Encryption"
+msgstr "_Chiffrement"
+
+msgid "Password at startup for the data on the phone"
+msgstr "Mot de passe au démarrage pour les données du téléphone"
+
+msgid "The new password is the encryption password. Choose a different one, so that the PIN alone does not open the phone."
+msgstr "Le nouveau mot de passe est le mot de passe de chiffrement. Choisissez-en un autre, pour que le PIN seul n’ouvre pas le téléphone."
+
+msgid "Custom Color"
+msgstr "Couleur personnalisée"
+
+msgid "_Select"
+msgstr "_Sélectionner"
+
+# Device Security (cc-plinius-security.c)
+msgid "Screen Lock"
+msgstr "Verrouillage de l’écran"
+
+msgid "Unlock pattern of at least 6 points."
+msgstr "Schéma de déverrouillage d’au moins 6 points."
+
+msgid "The PIN is not rated yet. Set it again to rate it."
+msgstr "Le code PIN n’est pas encore évalué. Définissez-le à nouveau pour l’évaluer."
+
+msgid "PIN of at least 6 digits."
+msgstr "Code PIN d’au moins 6 chiffres."
+
+msgid "The PIN is shorter than 6 digits. Choose a longer one."
+msgstr "Le code PIN fait moins de 6 chiffres. Choisissez-en un plus long."
+
+msgid "Wrong tries do not make the lock screen wait, a short PIN can be guessed by trying."
+msgstr "Les essais erronés n’imposent aucune attente, un code PIN court peut être deviné en essayant."
+
+msgid "Not available: plinius-crypt is not installed. Whoever has the phone in hand can read its data."
+msgstr "Indisponible : plinius-crypt n’est pas installé. Quiconque a le téléphone en main peut lire ses données."
+
+msgid "Not encrypted. Whoever has the phone in hand can read its data."
+msgstr "Non chiffré. Quiconque a le téléphone en main peut lire ses données."
+
+msgid "Encryption at the next restart. Until then the data can be read."
+msgstr "Chiffrement au prochain redémarrage. D’ici là, les données sont lisibles."
+
+msgid "Not encrypted, and this system cannot be encrypted: it does not start with the encryption support."
+msgstr "Non chiffré, et ce système ne peut pas l’être : il ne démarre pas avec la prise en charge du chiffrement."
+
+msgid "Encrypted. The password is not rated yet. Change it once to rate it."
+msgstr "Chiffré. Le mot de passe n’est pas encore évalué. Changez-le une fois pour l’évaluer."
+
+msgid "Encrypted with a strong password."
+msgstr "Chiffré avec un mot de passe robuste."
+
+msgid "Encrypted, but the password could be found with enough computing power. Choose 12 or more mixed characters or 5 random words."
+msgstr "Chiffré, mais le mot de passe pourrait être trouvé avec assez de puissance de calcul. Choisissez 12 caractères variés ou plus, ou 5 mots au hasard."
+
+msgid "Encrypted, but the password is a dictionary word or close to one. Change the password."
+msgstr "Chiffré, mais le mot de passe est un mot du dictionnaire ou presque. Changez le mot de passe."
+
+msgid "Encrypted, but the password is too short or too simple. Change the password."
+msgstr "Chiffré, mais le mot de passe est trop court ou trop simple. Changez le mot de passe."
+
+msgid "Boot Chain"
+msgstr "Chaîne de démarrage"
+
+msgid "Tampering detected: %s changed since the last accepted state."
+msgstr "Manipulation détectée : %s modifié depuis le dernier état accepté."
+
+msgid "Bootloader, kernel and ramdisk are unchanged since the last accepted state."
+msgstr "Le chargeur d’amorçage, le noyau et le ramdisk sont inchangés depuis le dernier état accepté."
+
+msgid "Not checked at this start yet."
+msgstr "Pas encore vérifié lors de ce démarrage."
+
+msgid "Bootloader"
+msgstr "Chargeur d’amorçage"
+
+msgid "Unlocked, so that this system can start. Whoever has the phone in hand can start a different system; the encryption keeps the data safe, the boot chain check notices changes."
+msgstr "Déverrouillé pour que ce système puisse démarrer. Quiconque a le téléphone en main peut démarrer un autre système ; le chiffrement protège les données, la vérification de la chaîne de démarrage repère les modifications."
+
+msgid "Software Sources"
+msgstr "Sources de logiciels"
+
+msgid "The package settings cannot be read."
+msgstr "Les paramètres des paquets ne peuvent pas être lus."
+
+msgid "Packages without a valid signature are accepted (SigLevel in /etc/pacman.conf)."
+msgstr "Les paquets sans signature valide sont acceptés (SigLevel dans /etc/pacman.conf)."
+
+msgid "Updates are only installed with a valid signature."
+msgstr "Les mises à jour ne sont installées qu’avec une signature valide."
+
+msgid "Not checked yet. The list is loaded once a day."
+msgstr "Pas encore vérifié. La liste est chargée une fois par jour."
+
+msgid "No known vulnerabilities in the installed packages."
+msgstr "Aucune vulnérabilité connue dans les paquets installés."
+
+msgid "%u known vulnerability in installed packages"
+msgid_plural "%u known vulnerabilities in installed packages"
+msgstr[0] "%u vulnérabilité connue dans les paquets installés"
+msgstr[1] "%u vulnérabilités connues dans les paquets installés"
+
+msgid "%u affects this system"
+msgid_plural "%u affect this system"
+msgstr[0] "%u concerne ce système"
+msgstr[1] "%u concernent ce système"
+
+msgid "%u not assessed"
+msgid_plural "%u not assessed"
+msgstr[0] "%u non évaluée"
+msgstr[1] "%u non évaluées"
+
+msgid "Not assessed"
+msgstr "Non évaluée"
+
+msgid "Affects this system"
+msgstr "Concerne ce système"
+
+msgid "Mitigated"
+msgstr "Atténuée"
+
+msgid "Fixed here"
+msgstr "Corrigée ici"
+
+msgid "Does not affect this system"
+msgstr "Ne concerne pas ce système"
+
+msgid "Nobody has checked yet whether and how this issue affects this system."
+msgstr "Personne n’a encore vérifié si et comment ce problème concerne ce système."
+
+msgid "Fix"
+msgstr "Correctif"
+
+msgid "Fixed in %s; an update is due."
+msgstr "Corrigé dans %s ; une mise à jour est nécessaire."
+
+msgid "Affected since %s, no fixed version known."
+msgstr "Concerné depuis %s, aucune version corrigée connue."
+
+msgid "No fixed version known."
+msgstr "Aucune version corrigée connue."
+
+msgid "CVE Record"
+msgstr "Fiche CVE"
+
+msgid "Arch Linux Security Tracker"
+msgstr "Arch Linux Security Tracker"
+
+msgid "Affect This System"
+msgstr "Concernent ce système"
+
+msgid "Assessed: the issue affects this system, or would without a mitigation."
+msgstr "Évalué : le problème concerne ce système, ou le ferait sans atténuation."
+
+msgid "Not Assessed"
+msgstr "Non évaluées"
+
+msgid "Listed by the tracker for an installed version, not checked for this system yet."
+msgstr "Signalé par le tracker pour une version installée, pas encore vérifié pour ce système."
+
+msgid "Do Not Affect This System"
+msgstr "Ne concernent pas ce système"
+
+msgid "Assessed: the affected part is not used here or the fix is in place."
+msgstr "Évalué : la partie concernée n’est pas utilisée ici ou le correctif est en place."
+
+msgid "Known issues of the installed packages from the Arch Linux security tracker, with our assessment of whether they affect this system."
+msgstr "Problèmes connus des paquets installés selon l’Arch Linux Security Tracker, avec notre évaluation de leur impact sur ce système."
+
+msgid "Last Checked"
+msgstr "Dernière vérification"
+
+msgid "%s, list of the tracker from %s"
+msgstr "%s, liste du tracker du %s"
+
+msgid "%s. Last download failed: %s"
+msgstr "%s. Le dernier téléchargement a échoué : %s"
+
+msgid "Not yet. The list is loaded once a day while online."
+msgstr "Pas encore. La liste est chargée une fois par jour en ligne."
+
+msgid "%s, own build"
+msgstr "%s, compilation propre"
+
+msgid "%s, from the phone maker"
+msgstr "%s, du fabricant du téléphone"
+
+msgid "Kernel"
+msgstr "Noyau"
+
+msgid "15 min"
+msgstr "15 min"
+
+msgid "30 min"
+msgstr "30 min"
+
+msgid "1 h"
+msgstr "1 h"
+
+msgid "Day"
+msgstr "Jour"
+
+msgid "Week"
+msgstr "Semaine"
+
+msgid "Service"
+msgstr "Service"
+
+msgid "Android Container"
+msgstr "Conteneur Android"
+
+msgid "Vendor services of the phone"
+msgstr "Services du fabricant du téléphone"
+
+msgid "Program"
+msgstr "Programme"
+
+msgid "%u time"
+msgid_plural "%u times"
+msgstr[0] "%u fois"
+msgstr[1] "%u fois"
+
+msgid "%s, last %s"
+msgstr "%s, dernière %s"
+
+msgid "%u connection"
+msgid_plural "%u connections"
+msgstr[0] "%u connexion"
+msgstr[1] "%u connexions"
+
+msgid "%u destination"
+msgid_plural "%u destinations"
+msgstr[0] "%u destination"
+msgstr[1] "%u destinations"
+
+msgid "Connections are not recorded: the recording service is not running."
+msgstr "Les connexions ne sont pas enregistrées : le service d’enregistrement ne fonctionne pas."
+
+msgid "No connections in this time."
+msgstr "Aucune connexion sur cette période."
+
+msgid "Internet"
+msgstr "Internet"
+
+msgid "Local Network"
+msgstr "Réseau local"
+
+msgid "Devices in the same network, e.g. the router for name lookups, printers, the phone operator's own network."
+msgstr "Appareils du même réseau, p. ex. le routeur pour la résolution de noms, les imprimantes, le réseau propre de l’opérateur."
+
+msgid "Not recorded: the recording service is not running."
+msgstr "Non enregistré : le service d’enregistrement ne fonctionne pas."
+
+msgid "%u app"
+msgid_plural "%u apps"
+msgstr[0] "%u app"
+msgstr[1] "%u apps"
+
+msgid "Last hour, internet: %s · %s · %s"
+msgstr "Dernière heure, Internet : %s · %s · %s"
+
+msgid "At Risk"
+msgstr "À risque"
+
+msgid "Some of the checks below leave the phone's data open. The red rows say what to change."
+msgstr "Certaines vérifications ci-dessous laissent les données du téléphone exposées. Les lignes rouges indiquent quoi changer."
+
+msgid "Needs Attention"
+msgstr "Demande de l’attention"
+
+msgid "Nothing is open, but some of the checks below could be better."
+msgstr "Rien n’est exposé, mais certaines vérifications ci-dessous pourraient être meilleures."
+
+msgid "Protected"
+msgstr "Protégé"
+
+msgid "All checks below are fine."
+msgstr "Toutes les vérifications ci-dessous sont correctes."
+
+msgid "Checks"
+msgstr "Vérifications"
+
+msgid "Network and Software"
+msgstr "Réseau et logiciels"
+
+msgid "Connections"
+msgstr "Connexions"
+
+msgid "Known Vulnerabilities"
+msgstr "Vulnérabilités connues"
+
+msgid "Device Security"
+msgstr "Sécurité de l’appareil"
+
+msgid "Which app connected where. Recorded on this phone only, for a week."
+msgstr "Quelle app s’est connectée où. Enregistré uniquement sur ce téléphone, pendant une semaine."
+
+msgid "Screen lock, encryption, connections and known vulnerabilities"
+msgstr "Verrouillage de l’écran, chiffrement, connexions et vulnérabilités connues"
+
+msgid "Animation"
+msgstr "Animation"
+
+msgid "Moving effects over the background, paused while an app is open"
+msgstr "Effets animés sur le fond d'écran, en pause tant qu'une application est ouverte"
+
+msgid "Effect"
+msgstr "Effet"
+
+msgid "Snow"
+msgstr "Neige"
+
+msgid "Dust in the Light"
+msgstr "Poussière dans la lumière"
+
+msgid "Fireflies"
+msgstr "Lucioles"
+
+msgid "Rain"
+msgstr "Pluie"
+
+msgid "Rolling Balls"
+msgstr "Billes qui roulent"
+
+msgid "Water"
+msgstr "Eau"
+
+msgid "Amount"
+msgstr "Quantité"
+
+msgid "Low"
+msgstr "Faible"
+
+msgid "Medium"
+msgstr "Moyenne"
+
+msgid "High"
+msgstr "Élevée"
+
+#: cc-plinius-display.c
+msgid "Home Screen"
+msgstr "Écran d’accueil"
+
+#: cc-plinius-display.c
+msgid "Search from the Notch"
+msgstr "Recherche depuis l’encoche"
+
+#: cc-plinius-display.c
+msgid "Tap the camera notch to search apps, settings, contacts and more"
+msgstr "Touchez l’encoche de la caméra pour rechercher applications, paramètres, contacts et plus"
+
+#: cc-plinius-display.c
+msgid "Search in the App Overview"
+msgstr "Recherche dans la vue des applications"
+
+#: cc-face-dialog.c
+msgid "Face Unlock"
+msgstr "Déverrouillage par le visage"
+
+# Plinius: fingerprint row and page (patch 0069: cc-user-page.c, cc-fingerprint-dialog.c)
+msgid "Fingerprint"
+msgstr "Empreinte digitale"
+
+#: cc-face-dialog.c
+msgid "The phone recognizes your face with the front camera, computed on its own AI unit. Nothing leaves the phone, and only a description of the face is stored, no pictures."
+msgstr "Le téléphone reconnaît votre visage avec la caméra frontale, grâce à sa propre unité d’IA. Rien ne quitte le téléphone, et seule une description du visage est enregistrée, aucune image."
+
+#: cc-face-dialog.c
+msgid "Face"
+msgstr "Visage"
+
+#: cc-face-dialog.c
+msgid "Set Up"
+msgstr "Configurer"
+
+#: cc-face-dialog.c
+msgid "Set Up Again"
+msgstr "Reconfigurer"
+
+#: cc-face-dialog.c
+msgid "Set up"
+msgstr "Configuré"
+
+#: cc-face-dialog.c
+msgid "Not set up"
+msgstr "Non configuré"
+
+#: cc-face-dialog.c
+msgid "Not Set Up"
+msgstr "Non configuré"
+
+#: cc-face-dialog.c
+msgid "Setting Up"
+msgstr "Configuration"
+
+#: cc-face-dialog.c
+msgid "Cancel"
+msgstr "Annuler"
+
+#: cc-face-dialog.c
+msgid "Cancelled"
+msgstr "Annulé"
+
+#: cc-face-dialog.c
+msgid "Try It"
+msgstr "Essayer"
+
+#: cc-face-dialog.c
+msgid "Try"
+msgstr "Tester"
+
+#: cc-face-dialog.c
+msgid "Unlock the Screen"
+msgstr "Déverrouiller l’écran"
+
+#: cc-face-dialog.c
+msgid "A good photo or video of you may unlock it too: the checks against photos are still to come"
+msgstr "Une bonne photo ou vidéo de vous peut aussi déverrouiller : les contrôles contre les photos sont encore à venir"
+
+#: cc-face-dialog.c
+msgid "Strictness"
+msgstr "Exigence"
+
+#: cc-face-dialog.c
+msgid "Strict"
+msgstr "Stricte"
+
+#: cc-face-dialog.c
+msgid "Balanced"
+msgstr "Équilibrée"
+
+#: cc-face-dialog.c
+msgid "Strict asks for the PIN more often, Balanced lets a similar face through more often"
+msgstr "Stricte demande plus souvent le code PIN, Équilibrée laisse plus souvent passer un visage ressemblant"
+
+#: cc-face-dialog.c
+msgid "After a restart and after several failed tries the PIN is needed. The face never replaces the PIN for administrator rights, the keyring or the encryption password."
+msgstr "Après un redémarrage et après plusieurs échecs, le code PIN est nécessaire. Le visage ne remplace jamais le code PIN pour les droits d’administrateur, le trousseau ou le mot de passe de chiffrement."
+
+#: cc-face-dialog.c
+msgid "Remove Face"
+msgstr "Supprimer le visage"
+
+#: cc-face-dialog.c
+msgid "Remove Face?"
+msgstr "Supprimer le visage ?"
+
+#: cc-face-dialog.c
+msgid "Face unlock stops working until the face is set up again."
+msgstr "Le déverrouillage par le visage ne fonctionnera plus tant que le visage n’aura pas été reconfiguré."
+
+#: cc-face-dialog.c
+msgid "Remove"
+msgstr "Supprimer"
+
+#: cc-face-dialog.c
+msgid "Not authorized"
+msgstr "Non autorisé"
+
+#: cc-face-dialog.c
+msgid "The camera is busy, try again in a moment"
+msgstr "La caméra est occupée, réessayez dans un instant"
+
+#: cc-face-dialog.c
+msgid "Look straight at the phone"
+msgstr "Regardez le téléphone bien en face"
+
+#: cc-face-dialog.c
+msgid "Hold the phone a little closer"
+msgstr "Rapprochez un peu le téléphone"
+
+#: cc-face-dialog.c
+msgid "Hold the phone upright"
+msgstr "Tenez le téléphone droit"
+
+#: cc-face-dialog.c
+msgid "More light, please"
+msgstr "Plus de lumière, s’il vous plaît"
+
+#: cc-face-dialog.c
+msgid "Keep looking at the phone"
+msgstr "Continuez à regarder le téléphone"
+
+#. TRANSLATORS: a hint how to hold the phone, then how far enrolling is
+#: cc-face-dialog.c
+#, c-format
+msgid "%s – %u %%"
+msgstr "%s – %u %%"
+
+#: cc-face-dialog.c
+msgid "Not set up: the camera did not see the face clearly enough"
+msgstr "Non configuré : la caméra n’a pas vu le visage assez nettement"
+
+#: cc-face-dialog.c
+msgid "Enter your PIN, then look at the phone"
+msgstr "Saisissez votre code PIN, puis regardez le téléphone"
+
+#: cc-face-dialog.c
+msgid "Look at the phone"
+msgstr "Regardez le téléphone"
+
+#. TRANSLATORS: %d is how alike the face is to the stored one, in percent
+#: cc-face-dialog.c
+#, c-format
+msgid "Recognized (%d %% alike)"
+msgstr "Reconnu (ressemblance %d %%)"
+
+#. TRANSLATORS: %d is how alike the face is to the stored one, in percent
+#: cc-face-dialog.c
+#, c-format
+msgid "Not recognized (%d %% alike)"
+msgstr "Non reconnu (ressemblance %d %%)"
+
+#: cc-plinius-hardware.c
+msgid "Hardware"
+msgstr "Matériel"
+
+#: cc-plinius-hardware.c
+msgid "_Hardware"
+msgstr "_Matériel"
+
+#: cc-plinius-hardware.c
+msgid "Chips and firmware versions"
+msgstr "Puces et versions des micrologiciels"
+
+#: cc-plinius-hardware.c
+msgid "Components"
+msgstr "Composants"
+
+#: cc-plinius-hardware.c
+msgid "Boot and Security"
+msgstr "Démarrage et sécurité"
+
+#: cc-plinius-hardware.c
+msgid "Firmware that starts before Linux"
+msgstr "Micrologiciels qui démarrent avant Linux"
+
+#: cc-plinius-hardware.c
+msgid "Radios"
+msgstr "Radios"
+
+#: cc-plinius-hardware.c
+msgid "Android Base"
+msgstr "Base Android"
+
+#: cc-plinius-hardware.c
+msgid "Vendor drivers that Linux uses through the Android container"
+msgstr "Pilotes du fabricant que Linux utilise via le conteneur Android"
+
+#: cc-plinius-hardware.c
+msgid "System on Chip"
+msgstr "Système sur puce"
+
+#: cc-plinius-hardware.c
+msgid "Graphics"
+msgstr "Processeur graphique"
+
+#: cc-plinius-hardware.c
+msgid "Storage"
+msgstr "Stockage"
+
+#: cc-plinius-hardware.c
+msgid "Wi-Fi and Bluetooth"
+msgstr "Wi-Fi et Bluetooth"
+
+#: cc-plinius-hardware.c
+msgid "Touchscreen"
+msgstr "Écran tactile"
+
+#: cc-plinius-hardware.c
+msgid "NFC"
+msgstr "NFC"
+
+#: cc-plinius-hardware.c
+msgid "Wireless Charging"
+msgstr "Recharge sans fil"
+
+#: cc-plinius-hardware.c
+msgid "Audio"
+msgstr "Audio"
+
+#: cc-plinius-hardware.c
+msgid "Preloader"
+msgstr "Preloader"
+
+#: cc-plinius-hardware.c
+msgid "Trusted Firmware-A"
+msgstr "Trusted Firmware-A"
+
+#: cc-plinius-hardware.c
+msgid "Trusted OS"
+msgstr "Système d’exploitation de confiance"
+
+#: cc-plinius-hardware.c
+msgid "Hypervisor"
+msgstr "Hyperviseur"
+
+#: cc-plinius-hardware.c
+msgid "Power Management"
+msgstr "Gestion de l’énergie"
+
+#: cc-plinius-hardware.c
+msgid "Verified Boot"
+msgstr "Démarrage vérifié"
+
+#: cc-plinius-hardware.c
+msgid "Modem"
+msgstr "Modem"
+
+#: cc-plinius-hardware.c
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+#: cc-plinius-hardware.c
+msgid "Bluetooth"
+msgstr "Bluetooth"
+
+#: cc-plinius-hardware.c
+msgid "Vendor"
+msgstr "Fabricant"
+
+#: cc-plinius-hardware.c
+msgid "MediaTek Software"
+msgstr "Logiciel MediaTek"
+
+#: cc-plinius-hardware.c
+msgid "Vendor Kernel Modules"
+msgstr "Modules noyau du fabricant"
+
+#: cc-plinius-hardware.c
+msgid "Graphics Driver"
+msgstr "Pilote graphique"
+
+#: cc-plinius-hardware.c
+msgid "Audio Parameters"
+msgstr "Paramètres audio"
+
+#: cc-plinius-hardware.c
+msgid "Android System"
+msgstr "Système Android"
+
+#. TRANSLATORS: firmware version of a chip, e.g. "Firmware 17"
+#: cc-plinius-hardware.c
+#, c-format
+msgid "Firmware %s"
+msgstr "Micrologiciel %s"
+
+#: cc-plinius-hardware.c
+msgid "Bootloader unlocked"
+msgstr "Chargeur d’amorçage déverrouillé"
+
+#: cc-plinius-hardware.c
+msgid "Bootloader locked"
+msgstr "Chargeur d’amorçage verrouillé"
+
+#. TRANSLATORS: active A/B slot of the system partitions, e.g. "Slot b"
+#: cc-plinius-hardware.c
+#, c-format
+msgid "Slot %s"
+msgstr "Emplacement %s"
+
+#. TRANSLATORS: Android security patch level, followed by a date (YYYY-MM-DD)
+#: cc-plinius-hardware.c
+#, c-format
+msgid "Security patch %s"
+msgstr "Correctif de sécurité %s"
+
+#: cc-plinius-hardware.c
+msgid "Not collected yet"
+msgstr "Pas encore collecté"
+
+#: cc-plinius-hardware.c
+msgid "The versions are read once after the phone starts."
+msgstr "Les versions sont lues une fois après le démarrage du téléphone."
+
+#: cc-plinius-hardware.c
+msgid "_Copy"
+msgstr "_Copier"
+
+#: cc-plinius-hardware.c
+msgid "Copied to clipboard"
+msgstr "Copié dans le presse-papiers"
+
+#: cc-plinius-beacondb.c
+msgid "Contribute to beaconDB"
+msgstr "Contribuer à beaconDB"
+
+#: cc-plinius-beacondb.c
+msgid "Sends the addresses and signal strengths of nearby Wi-Fi networks with the GPS position to the open beaconDB project, only over Wi-Fi. Never network names, hidden networks or networks whose name ends in _nomap."
+msgstr "Envoie les adresses et la puissance du signal des réseaux Wi-Fi à proximité avec la position GPS au projet ouvert beaconDB, uniquement en Wi-Fi. Jamais les noms de réseau, les réseaux masqués ni les réseaux dont le nom se termine par _nomap."
+
+#: cc-plinius-beacondb.c
+msgid "Contributions"
+msgstr "Contributions"
+
+#: cc-plinius-beacondb.c
+#, c-format
+msgid "Sent: %s, waiting: %s"
+msgstr "Envoyées : %s, en attente : %s"
+
+#: cc-plinius-dictate.c
+msgid "Speech to Text"
+msgstr "Saisie vocale"
+
+#: cc-plinius-dictate.c
+msgid "Microphone Key"
+msgstr "Touche microphone"
+
+#: cc-plinius-dictate.c
+msgid "A microphone key next to the space bar of the on-screen keyboard types what you say into the text field. Speech is recognized on the phone; nothing is stored or sent. Needs about 1 GB of memory while you dictate."
+msgstr "Une touche microphone à côté de la barre d’espace du clavier virtuel écrit ce que vous dites dans le champ de texte. La parole est reconnue sur le téléphone ; rien n’est enregistré ni envoyé. Nécessite environ 1 Go de mémoire pendant la dictée."
+
+#: cc-plinius-dictate.c
+msgid "Update the system in Software first, then try again."
+msgstr "Mettez d’abord le système à jour dans Logiciels, puis réessayez."
+
+#: cc-plinius-dictate.c
+msgid "Another software installation is running. Try again when it is done."
+msgstr "Une autre installation de logiciels est en cours. Réessayez lorsqu’elle sera terminée."
+
+#: cc-plinius-dictate.c
+msgid "Check the internet connection and try again."
+msgstr "Vérifiez la connexion Internet et réessayez."
+
+#: cc-plinius-dictate.c
+#, c-format
+msgid "%s of %s"
+msgstr "%s sur %s"
+
+#: cc-plinius-dictate.c
+msgid "Downloading Speech Model…"
+msgstr "Téléchargement du modèle vocal…"
+
+#: cc-plinius-dictate.c
+msgid "Installing Speech Model…"
+msgstr "Installation du modèle vocal…"
+
+#: cc-plinius-dictate.c
+msgid "Speech Model Not Installed"
+msgstr "Modèle vocal non installé"
+
+#: cc-plinius-dictate.c
+msgid "Preparing Download…"
+msgstr "Préparation du téléchargement…"
+
+#: cc-plinius-dictate.c
+msgid "Speech Model Not Available"
+msgstr "Modèle vocal indisponible"
+
+#: cc-plinius-dictate.c
+#, c-format
+msgid "Speech to text needs a speech model that is downloaded now (%s, about 640 MB once installed). Wi-Fi is best for this. The model recognizes 25 languages and works without an internet connection."
+msgstr "La saisie vocale nécessite un modèle vocal qui va maintenant être téléchargé (%s, environ 640 Mo une fois installé). Le Wi-Fi est préférable. Le modèle reconnaît 25 langues et fonctionne sans connexion Internet."
+
+#: cc-plinius-dictate.c
+msgid "Download Speech Model?"
+msgstr "Télécharger le modèle vocal ?"
+
+#: cc-plinius-dictate.c
+msgid "_Download"
+msgstr "_Télécharger"
+
+#: cc-plinius-dictate.c
+msgid "Speech Model Not Removed"
+msgstr "Modèle vocal non supprimé"
+
+#: cc-plinius-dictate.c
+msgid "Removing Speech Model…"
+msgstr "Suppression du modèle vocal…"
+
+#: cc-plinius-dictate.c
+msgid "Remove Speech Model?"
+msgstr "Supprimer le modèle vocal ?"
+
+#: cc-plinius-dictate.c
+msgid "This frees about 640 MB. Switching speech to text on again downloads the model again."
+msgstr "Cela libère environ 640 Mo. Si vous réactivez la saisie vocale, le modèle sera de nouveau téléchargé."
+
+#: cc-plinius-dictate.c
+msgid "_Remove"
+msgstr "_Supprimer"
+
+#: cc-plinius-dictate.c
+msgid "Remove Speech Model"
+msgstr "Supprimer le modèle vocal"
+
+#: cc-plinius-pinguard.c
+msgid "Wait After Wrong PINs"
+msgstr "Attente après des codes PIN erronés"
+
+#: cc-plinius-pinguard.c
+msgid "After 5 wrong PINs, every further try has to wait longer: 30 seconds, 1 minute, 5 and 15 minutes, then 1 hour."
+msgstr "Après 5 codes PIN erronés, chaque nouvel essai doit attendre plus longtemps : 30 secondes, 1 minute, 5 et 15 minutes, puis 1 heure."
+
+#: cc-streaming-panel.c
+msgid "Resolution"
+msgstr "Résolution"
+
+#: cc-streaming-panel.c
+msgid "Bitrate (kbit/s)"
+msgstr "Débit (kbit/s)"
+
+#: cc-streaming-panel.c
+msgid "Frame Rate (fps)"
+msgstr "Fréquence d’images (i/s)"
+
+#: cc-streaming-panel.c
+msgid "Sound"
+msgstr "Son"
+
+#: cc-streaming-panel.c
+msgid "Send the phone's sound to the TV, too"
+msgstr "Envoyer aussi le son du téléphone au téléviseur"
+
+#: cc-streaming-panel.c
+msgid "Video Encoder"
+msgstr "Encodeur vidéo"
+
+#: cc-streaming-panel.c
+#, c-format
+msgid "%s (not available)"
+msgstr "%s (non disponible)"
+
+#: cc-streaming-panel.c
+msgid "Schwupp does not answer"
+msgstr "Schwupp ne répond pas"
+
+#: cc-streaming-panel.c
+msgid "Mirroring"
+msgstr "Recopie"
+
+#: cc-streaming-panel.c
+msgid "How the screen gets to this TV"
+msgstr "Comment l’écran arrive sur ce téléviseur"
+
+#: cc-streaming-panel.c
+msgid "Picture and Sound"
+msgstr "Image et son"
+
+#: cc-streaming-panel.c
+msgid "Video Playback"
+msgstr "Lecture vidéo"
+
+#: cc-streaming-panel.c
+msgid "This TV refused videos, they are no longer offered to it"
+msgstr "Ce téléviseur a refusé les vidéos, elles ne lui sont plus proposées"
+
+#: cc-streaming-panel.c
+msgid "Try Again"
+msgstr "Réessayer"
+
+#: cc-streaming-panel.c
+msgid "Use the Defaults"
+msgstr "Utiliser les valeurs par défaut"
+
+#: cc-streaming-panel.c
+msgid "Forget This TV"
+msgstr "Oublier ce téléviseur"
+
+#: cc-streaming-panel.c
+#, c-format
+msgid "%s · not found right now"
+msgstr "%s · introuvable pour l’instant"
+
+#: cc-streaming-panel.c
+msgid "Streaming"
+msgstr "Streaming"
+
+#: cc-streaming-panel.c
+msgid "Defaults"
+msgstr "Valeurs par défaut"
+
+#: cc-streaming-panel.c
+msgid "Mirror the screen with the Cast quick setting. These values apply to every TV without own ones."
+msgstr "La recopie de l’écran se lance avec le réglage rapide « Cast ». Ces valeurs s’appliquent à chaque téléviseur sans valeurs propres."
+
+#: cc-streaming-panel.c
+msgid "TVs"
+msgstr "Téléviseurs"
+
+#: cc-streaming-panel.c
+msgid "Own values per TV. Speakers have none."
+msgstr "Valeurs propres à chaque téléviseur. Les enceintes n’en ont pas."
+
+#: cc-streaming-panel.c
+msgid "Searching for TVs…"
+msgstr "Recherche de téléviseurs…"
+
+#: cc-streaming-panel.c
+msgid "TVs in the same network show up here"
+msgstr "Les téléviseurs du même réseau apparaissent ici"
+
+#: cc-usb-panel.c
+msgid "File Sharing"
+msgstr "Partage de fichiers"
+
+#: cc-usb-panel.c
+msgid "The computer sees the files of your home folder (MTP)"
+msgstr "L’ordinateur voit les fichiers de votre dossier personnel (MTP)"
+
+#: cc-usb-panel.c
+msgid "Network"
+msgstr "Réseau"
+
+#: cc-usb-panel.c
+msgid "A network between the phone and the computer (NCM)"
+msgstr "Un réseau entre le téléphone et l’ordinateur (NCM)"
+
+#: cc-usb-panel.c
+msgid "Internet for the Computer"
+msgstr "Internet pour l’ordinateur"
+
+#: cc-usb-panel.c
+msgid "The computer goes online through the phone, includes Network"
+msgstr "L’ordinateur se connecte à Internet via le téléphone, Réseau inclus"
+
+#: cc-usb-panel.c
+msgid "Webcam"
+msgstr "Webcam"
+
+#: cc-usb-panel.c
+msgid "The computer gets a picture of the phone's camera"
+msgstr "L’ordinateur reçoit l’image de la caméra du téléphone"
+
+#: cc-usb-panel.c
+msgid "The USB service is not running"
+msgstr "Le service USB ne fonctionne pas"
+
+#: cc-usb-panel.c
+msgid "Connected to a computer"
+msgstr "Connecté à un ordinateur"
+
+#: cc-usb-panel.c
+msgid "No computer connected, only charging"
+msgstr "Aucun ordinateur connecté, recharge uniquement"
+
+#: cc-usb-panel.c
+msgid "Computer"
+msgstr "Ordinateur"
+
+#: cc-usb-panel.c
+msgid "Use USB For"
+msgstr "Utiliser l’USB pour"
+
+#: cc-usb-panel.c
+msgid "Only while a computer is connected and the phone is unlocked. Unplugging switches everything off, so nothing is shared with the next computer by itself."
+msgstr "Uniquement quand un ordinateur est connecté et le téléphone déverrouillé. Débrancher désactive tout, rien n’est donc partagé d’office avec l’ordinateur suivant."
+
+#: cc-usb-panel.c
+msgid "When Plugging In"
+msgstr "Au branchement"
+
+#: cc-usb-panel.c
+msgid "Network Right Away"
+msgstr "Réseau immédiatement"
+
+#: cc-usb-panel.c
+msgid "Network with every computer, also while the phone is locked. Meant for development."
+msgstr "Réseau avec chaque ordinateur, même téléphone verrouillé. Prévu pour le développement."
+
+#: cc-plinius-osk-style.c
+msgid "On-Screen Keyboard"
+msgstr "Clavier virtuel"
+
+#: cc-plinius-osk-style.c
+msgid "Glass"
+msgstr "Verre"
+
+#: cc-plinius-osk-style.c
+msgid "Original"
+msgstr "Original"
+
+#: cc-plinius-osk-style.c
+msgid "Style"
+msgstr "Style"
+
+#: cc-plinius-osk-style.c
+msgid "Glass keys over the blurred wallpaper, as when the phone starts, or the original dark keys"
+msgstr "Touches en verre sur le fond d'écran flouté, comme au démarrage du téléphone, ou les touches sombres d'origine"
+
+#: cc-plinius-ssh.c
+msgid "Allowed Networks"
+msgstr "Réseaux autorisés"
+
+#: cc-plinius-ssh.c
+msgid "Where logins over SSH are taken from. They need a key; allowing a network asks for the PIN."
+msgstr "D’où les connexions SSH sont acceptées. Elles nécessitent une clé ; autoriser un réseau demande le code PIN."
+
+#: cc-plinius-ssh.c
+msgid "USB Network"
+msgstr "Réseau USB"
+
+#: cc-plinius-ssh.c
+msgid "A computer on the USB cable, with Network on in the USB settings"
+msgstr "Un ordinateur sur le câble USB, avec « Réseau » activé dans les réglages USB"
+
+#: cc-plinius-ssh.c
+msgid "Local Networks"
+msgstr "Réseaux locaux"
+
+#: cc-plinius-ssh.c
+msgid "Wi-Fi, hotspot and Ethernet, from local addresses only"
+msgstr "Wi-Fi, point d’accès et Ethernet, uniquement depuis des adresses locales"
+
+#: cc-plinius-ssh.c
+msgid "All Networks"
+msgstr "Tous les réseaux"
+
+#: cc-plinius-ssh.c
+msgid "Also mobile data, VPN and the internet"
+msgstr "Aussi les données mobiles, le VPN et Internet"
+
+#: cc-desktop-vnc-panel.c
+msgid "USB"
+msgstr "USB"
+
+#: cc-desktop-vnc-panel.c
+msgid "Hotspot"
+msgstr "Point d’accès"
+
+#: cc-desktop-vnc-panel.c
+msgid "Ethernet"
+msgstr "Ethernet"
+
+#: cc-desktop-vnc-panel.c
+msgid "Connected: %s"
+msgstr "Connecté : %s"
+
+#: cc-desktop-vnc-panel.c
+msgid "Waiting for a connection"
+msgstr "En attente d’une connexion"
+
+#: cc-desktop-vnc-panel.c
+msgid "port"
+msgstr "port"
+
+#: cc-desktop-vnc-panel.c
+msgid "Not connected to an allowed network"
+msgstr "Pas connecté à un réseau autorisé"
+
+#: cc-desktop-vnc-panel.c
+msgid "Desktop over VNC"
+msgstr "Bureau via VNC"
+
+#: cc-desktop-vnc-panel.c
+msgid "A VNC viewer on another computer gets a desktop with this phone's apps"
+msgstr "Un client VNC sur un autre ordinateur obtient un bureau avec les applis de ce téléphone"
+
+#: cc-desktop-vnc-panel.c
+msgid "Status"
+msgstr "État"
+
+#: cc-desktop-vnc-panel.c
+msgid "Disconnect"
+msgstr "Déconnecter"
+
+#: cc-desktop-vnc-panel.c
+msgid "Address"
+msgstr "Adresse"
+
+#: cc-desktop-vnc-panel.c
+msgid "Where connections are taken from. Never mobile data or the internet; allowing a network asks for the PIN."
+msgstr "D’où les connexions sont acceptées. Jamais depuis les données mobiles ou Internet ; autoriser un réseau demande le code PIN."
+
+#: cc-plinius-swap.c
+msgid "RAM %s, swap %s"
+msgstr "RAM %s, swap %s"
+
+#: cc-plinius-swap.c
+msgid "%s of %s in use"
+msgstr "%s sur %s utilisés"
+
+#: cc-plinius-swap.c
+msgid "%s of %s, takes %s of RAM"
+msgstr "%s sur %s, occupe %s de RAM"
+
+#: cc-plinius-swap.c
+msgid "Moving, this can take a while"
+msgstr "Déplacement en cours, cela peut prendre un moment"
+
+#: cc-plinius-swap.c
+msgid "Swap is empty"
+msgstr "La swap est vide"
+
+#: cc-plinius-swap.c
+msgid "Not enough free memory: %s in swap, room for %s"
+msgstr "Mémoire libre insuffisante : %s en swap, place pour %s"
+
+#: cc-plinius-swap.c
+msgid "Brings %s back into RAM"
+msgstr "Ramène %s dans la RAM"
+
+#: cc-plinius-swap.c
+msgid "In GiB, %s free on the storage"
+msgstr "En Gio, %s libres sur le stockage"
+
+#: cc-plinius-swap.c
+msgid "Not enough free memory for what is in swap. Close some apps and try again."
+msgstr "Pas assez de mémoire libre pour le contenu de la swap. Fermez des applications et réessayez."
+
+#: cc-plinius-swap.c
+msgid "Not enough free storage for a swap file of this size."
+msgstr "Pas assez de stockage libre pour un fichier d’échange de cette taille."
+
+#: cc-plinius-swap.c
+msgid "No swap file possible: it would be outside the encryption or on an image file."
+msgstr "Fichier d’échange impossible : il serait hors du chiffrement ou sur un fichier image."
+
+#: cc-plinius-swap.c
+msgid "Could not change swap."
+msgstr "Impossible de modifier la swap."
+
+#: cc-plinius-swap.c
+msgid "Memory"
+msgstr "Mémoire"
+
+#: cc-plinius-swap.c
+msgid "RAM"
+msgstr "RAM"
+
+#: cc-plinius-swap.c
+msgid "Cache, given back when needed"
+msgstr "Cache, libéré au besoin"
+
+#: cc-plinius-swap.c
+msgid "Free"
+msgstr "Libre"
+
+#: cc-plinius-swap.c
+msgid "Swap"
+msgstr "Swap"
+
+#: cc-plinius-swap.c
+msgid "Compressed in RAM (zram)"
+msgstr "Compressée en RAM (zram)"
+
+#: cc-plinius-swap.c
+msgid "Swap File"
+msgstr "Fichier d’échange"
+
+#: cc-plinius-swap.c
+msgid "Move Swap to RAM"
+msgstr "Déplacer la swap vers la RAM"
+
+#: cc-plinius-swap.c
+msgid "Move"
+msgstr "Déplacer"
+
+#: cc-plinius-swap.c
+msgid "Settings"
+msgstr "Réglages"
+
+#: cc-plinius-swap.c
+msgid "On the storage, used once the compressed RAM is full"
+msgstr "Sur le stockage, utilisé lorsque la RAM compressée est pleine"
+
+#: cc-plinius-swap.c
+msgid "Size"
+msgstr "Taille"
+
+#: cc-plinius-swap.c
+msgid "Apply"
+msgstr "Appliquer"
+
+#: cc-plinius-swap.c
+msgid "Threshold (Swappiness)"
+msgstr "Seuil (swappiness)"
+
+#: cc-plinius-swap.c
+msgid "The lower, the later memory moves to swap. 1: only when memory runs short, 60: Linux default, 100: Android default"
+msgstr "Plus la valeur est basse, plus la mémoire passe tard en swap. 1 : seulement en cas de manque de mémoire, 60 : valeur par défaut de Linux, 100 : valeur par défaut d’Android"
+
+#: cc-plinius-swap.c
+msgid "Largest Processes"
+msgstr "Processus les plus gros"
+
+#: cc-plinius-swap.c
+msgid "Memory and Swap"
+msgstr "Mémoire et swap"
+
+#: cc-plinius-swap.c
+msgid "_Memory and Swap"
+msgstr "_Mémoire et swap"
+
+#: cc-plinius-swap.c
+msgid "What RAM and swap hold, swap file and threshold"
+msgstr "Occupation de la RAM et de la swap, fichier d’échange et seuil"
+
+msgid "Phone"
+msgstr "Téléphone"
+
+msgid "Apps"
+msgstr "Applications"
+
+msgid "Security"
+msgstr "Sécurité"
+
+msgid "System"
+msgstr "Système"
+
+msgid "Network & VPN"
+msgstr "Réseau et VPN"
+
+msgid "Battery"
+msgstr "Batterie"
+
+msgid "Display"
+msgstr "Affichage"
+
+msgid "Keyboard & Buttons"
+msgstr "Clavier et boutons"
+
+msgid "Your Account"
+msgstr "Votre compte"
+
+msgid "Your name, picture and username"
+msgstr "Votre nom, votre image et votre nom d’utilisateur"
+
+msgid "Local Accounts"
+msgstr "Comptes locaux"
+
+msgid "Your account and the other accounts on this phone"
+msgstr "Votre compte et les autres comptes sur ce téléphone"
+
+msgid "Users;Add User;Other Accounts;"
+msgstr "Utilisateurs;Ajouter un utilisateur;Autres comptes;"
+
+msgid "Other Accounts"
+msgstr "Autres comptes"
+
+msgid "Brightness;Dim;Blank;Screen Off;Timeout;"
+msgstr "Luminosité;Atténuer;Éteindre;Écran éteint;Délai;"
+
+msgid "Brightness and Screen Off"
+msgstr "Luminosité et extinction de l’écran"
+
+msgid "Lock & Unlock"
+msgstr "Verrouillage et déverrouillage"
+
+msgid "Unlock"
+msgstr "Déverrouillage"
+
+msgid "Remote Access"
+msgstr "Accès à distance"
+
+msgid "Privacy"
+msgstr "Confidentialité"
+
+msgid "Location, cameras, diagnostics and file history"
+msgstr "Localisation, caméras, diagnostics et historique des fichiers"
+
+msgid "_Location"
+msgstr "_Localisation"
+
+msgid "Location"
+msgstr "Localisation"
+
+# plinius-software pages (cc-plinius-software.c)
+#: cc-plinius-software.c:97
+msgid "For phones"
+msgstr "Pour téléphones"
+
+#: cc-plinius-software.c:97
+msgid "The app fits the screen."
+msgstr "L’application s’adapte à l’écran."
+
+#: cc-plinius-software.c:98
+msgid "With limitations"
+msgstr "Avec restrictions"
+
+#: cc-plinius-software.c:98
+msgid "Some windows are wider than the screen and are scaled down."
+msgstr "Certaines fenêtres sont plus larges que l’écran et sont réduites."
+
+#: cc-plinius-software.c:100
+msgid "For large screens"
+msgstr "Pour grands écrans"
+
+#: cc-plinius-software.c:100
+msgid "According to the app, it needs more space than the screen offers."
+msgstr "Selon l’application, elle a besoin de plus d’espace que l’écran n’en offre."
+
+#: cc-plinius-software.c:101
+msgid "Apps for large screens"
+msgstr "Applications pour grands écrans"
+
+#: cc-plinius-software.c:102
+msgid "Not specified"
+msgstr "Non indiqué"
+
+#: cc-plinius-software.c:102
+msgid "The app does not state a screen size. It may or may not fit the phone."
+msgstr "L’application n’indique pas de taille d’écran. Elle peut convenir ou non au téléphone."
+
+#: cc-plinius-software.c:103
+msgid "Apps not approved for mobile"
+msgstr "Applications non validées pour mobile"
+
+#: cc-plinius-software.c:107
+msgid "With the mobile tweaks from mobile-config-firefox"
+msgstr "Avec les réglages mobiles de mobile-config-firefox"
+
+#: cc-plinius-software.c:118
+msgid "Recommended"
+msgstr "Recommandées"
+
+#: cc-plinius-software.c:119
+msgid "Communication & Internet"
+msgstr "Communication et Internet"
+
+#: cc-plinius-software.c:120
+msgid "Music & Video"
+msgstr "Musique et vidéo"
+
+#: cc-plinius-software.c:121
+msgid "Office & Documents"
+msgstr "Bureautique et documents"
+
+#: cc-plinius-software.c:122
+msgid "Photos & Graphics"
+msgstr "Photos et graphisme"
+
+#: cc-plinius-software.c:123
+msgid "Learning & Science"
+msgstr "Éducation et sciences"
+
+#: cc-plinius-software.c:124
+msgid "Games"
+msgstr "Jeux"
+
+#: cc-plinius-software.c:125
+msgid "Utilities"
+msgstr "Utilitaires"
+
+#: cc-plinius-software.c:127
+msgid "All Apps"
+msgstr "Toutes les applications"
+
+#: cc-plinius-software.c:1028
+msgid "Fetching package lists"
+msgstr "Récupération des listes de paquets"
+
+#: cc-plinius-software.c:1029
+msgid "Downloading packages"
+msgstr "Téléchargement des paquets"
+
+#: cc-plinius-software.c:1030
+msgid "Checking packages"
+msgstr "Vérification des paquets"
+
+#: cc-plinius-software.c:1031
+msgid "Installing packages"
+msgstr "Installation des paquets"
+
+#: cc-plinius-software.c:1032
+msgid "Removing packages"
+msgstr "Suppression des paquets"
+
+#: cc-plinius-software.c:1033
+msgid "Finishing up"
+msgstr "Finalisation"
+
+#: cc-plinius-software.c:1034
+msgid "Updating Flatpak apps"
+msgstr "Mise à jour des applications Flatpak"
+
+#: cc-plinius-software.c:1035
+msgid "Loading the Flathub catalog"
+msgstr "Chargement du catalogue Flathub"
+
+#: cc-plinius-software.c:1239
+msgid "Done"
+msgstr "Terminé"
+
+#. Translators: "Step 2 of 4: Downloading packages"
+#: cc-plinius-software.c:1278
+msgid "Step {current} of {total}: {title}"
+msgstr "Étape {current} sur {total} : {title}"
+
+#: cc-plinius-software.c:1291
+msgid "{done} of {total}"
+msgstr "{done} sur {total}"
+
+#: cc-plinius-software.c:1325
+msgid "Another operation is running"
+msgstr "Une autre opération est en cours"
+
+#: cc-plinius-software.c:1325
+msgid "Wait until it has finished and try again."
+msgstr "Attendez qu’elle se termine, puis réessayez."
+
+#: cc-plinius-software.c:1330
+msgid "Update the system first"
+msgstr "Mettez d’abord le système à jour"
+
+#: cc-plinius-software.c:1331
+msgid "The app belongs to a newer state than the installed system."
+msgstr "L’application appartient à une version plus récente que le système installé."
+
+#: cc-plinius-software.c:1332
+msgid "Go to Updates"
+msgstr "Aller aux mises à jour"
+
+#: cc-plinius-software.c:1346
+msgid "Please wait until the operation has finished"
+msgstr "Veuillez patienter jusqu’à la fin de l’opération"
+
+#: cc-plinius-software.c:1347
+msgid "OK"
+msgstr "OK"
+
+#: cc-plinius-software.c:1443
+msgid "Preparing…"
+msgstr "Préparation…"
+
+#: cc-plinius-software.c:1461 cc-plinius-software.c:2111
+#: cc-plinius-software.c:2588
+msgid "Details"
+msgstr "Détails"
+
+#: cc-plinius-software.c:1499
+msgid "Could not start"
+msgstr "Impossible de démarrer"
+
+#: cc-plinius-software.c:1569
+msgid "{name} is installed"
+msgstr "{name} est installé"
+
+#: cc-plinius-software.c:1575 cc-plinius-software.c:2068
+msgid "Open"
+msgstr "Ouvrir"
+
+#: cc-plinius-software.c:1577
+msgid "{name} needs packages that are still being tested with the Plinius adaptations. It can be installed once they are approved."
+msgstr "{name} a besoin de paquets encore en test avec les adaptations Plinius. L’installation sera possible dès leur validation."
+
+#: cc-plinius-software.c:1581
+msgid "Waiting for approval"
+msgstr "En attente de validation"
+
+#: cc-plinius-software.c:1583
+msgid "Installation failed"
+msgstr "Échec de l’installation"
+
+#: cc-plinius-software.c:1583 cc-plinius-software.c:1612
+#: cc-plinius-software.c:2225 cc-plinius-software.c:2243
+#: cc-plinius-software.c:2848
+msgid "See “Details” for more information"
+msgstr "Voir « Détails » pour plus d’informations"
+
+#: cc-plinius-software.c:1592
+msgid "Installing {name}"
+msgstr "Installation de {name}"
+
+#: cc-plinius-software.c:1608
+msgid "{name} has been removed"
+msgstr "{name} a été supprimé"
+
+#: cc-plinius-software.c:1612
+msgid "Removal failed"
+msgstr "Échec de la suppression"
+
+#: cc-plinius-software.c:1649
+msgid "Removing {name}"
+msgstr "Suppression de {name}"
+
+#: cc-plinius-software.c:1659
+msgid "Remove {name}?"
+msgstr "Supprimer {name} ?"
+
+#: cc-plinius-software.c:1660
+msgid "The app and dependencies that are no longer needed will be removed. Your files and settings are kept."
+msgstr "L’application et les dépendances devenues inutiles seront supprimées. Vos fichiers et paramètres sont conservés."
+
+#: cc-plinius-software.c:1796
+msgid "{n} app"
+msgid_plural "{n} apps"
+msgstr[0] "{n} application"
+msgstr[1] "{n} applications"
+
+#: cc-plinius-software.c:2000
+msgid "Image not available"
+msgstr "Image non disponible"
+
+#: cc-plinius-software.c:2060
+msgid "Install"
+msgstr "Installer"
+
+#: cc-plinius-software.c:2082 cc-plinius-software.c:2581
+msgid "Part of the system (Phosh, phone) and cannot be removed."
+msgstr "Fait partie du système (Phosh, téléphone) et ne peut pas être supprimée."
+
+#: cc-plinius-software.c:2115 cc-plinius-software.c:2532
+msgid "Source"
+msgstr "Source"
+
+#: cc-plinius-software.c:2119 cc-plinius-software.c:2537
+#: cc-plinius-software.c:2589
+msgid "Package"
+msgstr "Paquet"
+
+#: cc-plinius-software.c:2124
+msgid "Website"
+msgstr "Site web"
+
+#: cc-plinius-software.c:2182
+msgid "No Results"
+msgstr "Aucun résultat"
+
+#: cc-plinius-software.c:2184
+msgid "No App Catalog"
+msgstr "Aucun catalogue d’applications"
+
+#: cc-plinius-software.c:2185
+msgid "The catalog could not be loaded. Is the package archlinux-appstream-data missing?"
+msgstr "Le catalogue n’a pas pu être chargé. Le paquet archlinux-appstream-data est-il manquant ?"
+
+#: cc-plinius-software.c:2221
+msgid "Flathub is on"
+msgstr "Flathub est activé"
+
+#: cc-plinius-software.c:2222
+msgid "Apps from Flathub appear under “Explore” marked “Flathub”. The app grid shows their launchers after you log in again."
+msgstr "Les applications de Flathub apparaissent dans « Explorer » avec la mention « Flathub ». La grille d’applications affiche leurs lanceurs après la prochaine connexion."
+
+#: cc-plinius-software.c:2225
+msgid "Could not turn on Flathub"
+msgstr "Impossible d’activer Flathub"
+
+#: cc-plinius-software.c:2239
+msgid "Flathub is off"
+msgstr "Flathub est désactivé"
+
+#: cc-plinius-software.c:2241
+msgid "Apps from Flathub are still installed"
+msgstr "Des applications de Flathub sont encore installées"
+
+#: cc-plinius-software.c:2241
+msgid "Remove them under “Installed” first."
+msgstr "Supprimez-les d’abord dans « Installées »."
+
+#: cc-plinius-software.c:2243
+msgid "Could not turn off Flathub"
+msgstr "Impossible de désactiver Flathub"
+
+#: cc-plinius-software.c:2257
+msgid "Turning on Flathub"
+msgstr "Activation de Flathub"
+
+#: cc-plinius-software.c:2268
+msgid "Turn On Flathub?"
+msgstr "Activer Flathub ?"
+
+#: cc-plinius-software.c:2269
+msgid ""
+"Flathub is an app store for Flatpak apps, independent of system updates. The apps run in a sandbox and bring their own runtimes, so the first app downloads a few hundred MB.\n"
+"\n"
+"On the Plinius, Flatpak apps do not yet have graphics acceleration via libhybris; they render in software and run slower."
+msgstr ""
+"Flathub est une boutique d’applications Flatpak, indépendante des mises à jour du système. Les applications s’exécutent dans un bac à sable et apportent leurs propres environnements d’exécution : la première application télécharge donc quelques centaines de Mo.\n"
+"\n"
+"Sur le Plinius, les applications Flatpak n’ont pas encore d’accélération graphique via libhybris ; elles utilisent le rendu logiciel et sont plus lentes."
+
+#: cc-plinius-software.c:2275
+msgid "Turn On"
+msgstr "Activer"
+
+#: cc-plinius-software.c:2283
+msgid "Turning off Flathub"
+msgstr "Désactivation de Flathub"
+
+#: cc-plinius-software.c:2306
+msgid "Also show under “Explore”"
+msgstr "Afficher aussi dans « Explorer »"
+
+#: cc-plinius-software.c:2324
+msgid "Flatpak apps, independent of system updates"
+msgstr "Applications Flatpak, indépendantes des mises à jour du système"
+
+#: cc-plinius-software.c:2389
+msgid "Explore"
+msgstr "Explorer"
+
+#: cc-plinius-software.c:2394
+msgid "Installed"
+msgstr "Installées"
+
+#: cc-plinius-software.c:2709
+msgid "waiting for approval"
+msgstr "en attente de validation"
+
+#: cc-plinius-software.c:2731
+msgid "Waiting for approval: {packages}"
+msgstr "En attente de validation : {packages}"
+
+#: cc-plinius-software.c:2733 cc-plinius-software.c:2841
+msgid "These packages are still being tested with the Plinius adaptations. All updates continue once they are approved."
+msgstr "Ces paquets sont encore testés avec les adaptations du Plinius. Toutes les mises à jour reprendront une fois validées."
+
+#: cc-plinius-software.c:2736 cc-plinius-software.c:2761
+msgid "Last checked: {when}"
+msgstr "Dernière recherche : {when}"
+
+#: cc-plinius-software.c:2740 cc-plinius-software.c:2840
+msgid "Update waiting for approval"
+msgstr "Mise à jour en attente de validation"
+
+#: cc-plinius-software.c:2742
+msgid "No connection to the server? You can still update."
+msgstr "Pas de connexion au serveur ? La mise à jour reste possible."
+
+#: cc-plinius-software.c:2744
+msgid "Last successful check: {when}"
+msgstr "Dernière recherche réussie : {when}"
+
+#: cc-plinius-software.c:2748
+msgid "Check failed"
+msgstr "Échec de la recherche"
+
+#: cc-plinius-software.c:2751
+msgid "{n} update available"
+msgid_plural "{n} updates available"
+msgstr[0] "{n} mise à jour disponible"
+msgstr[1] "{n} mises à jour disponibles"
+
+#: cc-plinius-software.c:2753
+msgid "The whole system is always updated at once."
+msgstr "Le système entier est toujours mis à jour en une seule fois."
+
+#: cc-plinius-software.c:2755
+msgid "Checked: {when}"
+msgstr "Recherche : {when}"
+
+#: cc-plinius-software.c:2763
+msgid "The system is up to date"
+msgstr "Le système est à jour"
+
+#: cc-plinius-software.c:2802 cc-plinius-software.c:2899
+msgid "Checking for updates…"
+msgstr "Recherche de mises à jour…"
+
+#: cc-plinius-software.c:2831
+msgid "The system has been updated"
+msgstr "Le système a été mis à jour"
+
+#: cc-plinius-software.c:2831
+msgid "Restart the phone to run the new versions."
+msgstr "Redémarrez le téléphone pour utiliser les nouvelles versions."
+
+#: cc-plinius-software.c:2832
+msgid "Restart Phone"
+msgstr "Redémarrer le téléphone"
+
+#: cc-plinius-software.c:2836
+msgid "The system is already up to date"
+msgstr "Le système est déjà à jour"
+
+#: cc-plinius-software.c:2838
+msgid "The Flatpak apps have been updated"
+msgstr "Les applications Flatpak ont été mises à jour"
+
+#: cc-plinius-software.c:2844
+msgid "Battery too low"
+msgstr "Batterie trop faible"
+
+#: cc-plinius-software.c:2845
+msgid "Connect the charger or charge the phone to at least 10 %, then update. An update interrupted by an empty battery can leave the system unable to start."
+msgstr "Branchez le chargeur ou chargez le téléphone à au moins 10 %, puis mettez à jour. Une mise à jour interrompue par une batterie vide peut empêcher le système de démarrer."
+
+#: cc-plinius-software.c:2848
+msgid "Update failed"
+msgstr "Échec de la mise à jour"
+
+#: cc-plinius-software.c
+msgid "Update stopped"
+msgstr "Mise à jour interrompue"
+
+#: cc-plinius-software.c
+msgid "The update server's package list does not match its signed state. Nothing was installed. Try again later; if it stays like this, the server may not be trustworthy."
+msgstr "La liste des paquets du serveur de mises à jour ne correspond pas à son état signé. Rien n’a été installé. Réessayez plus tard ; si cela persiste, le serveur n’est peut-être pas digne de confiance."
+
+#: cc-plinius-software.c:2861
+msgid "Updating the system"
+msgstr "Mise à jour du système"
+
+#: cc-plinius-software.c:2902
+msgid "Update Now"
+msgstr "Mettre à jour"
+
+#: cc-plinius-software.c:2905
+msgid "Check Again"
+msgstr "Vérifier à nouveau"
+
+#: cc-plinius-software.c:2910
+msgid "Packages"
+msgstr "Paquets"
+
+#: cc-plinius-software.c:2906
+msgid "Everything that is running already uses the new versions."
+msgstr "Tout ce qui est en cours d’exécution utilise déjà les nouvelles versions."
+
+#: cc-plinius-software.c
+msgid "Phosh has been restarted. Restart {apps} to use their new versions. Unsaved changes in them are lost."
+msgstr "Phosh a été redémarré. Redémarrez {apps} pour utiliser leurs nouvelles versions. Les modifications non enregistrées seront perdues."
+
+#: cc-plinius-software.c
+msgid "Phosh has been restarted. Everything that is running now uses the new versions."
+msgstr "Phosh a été redémarré. Tout ce qui est en cours d’exécution utilise maintenant les nouvelles versions."
+
+#: cc-plinius-software.c
+msgid "The apps have been restarted. Everything that is running now uses the new versions."
+msgstr "Les apps ont été redémarrées. Tout ce qui est en cours d’exécution utilise maintenant les nouvelles versions."
+
+#: cc-plinius-software.c:2910
+msgid "Restart {apps} to use the new versions. Unsaved changes in them are lost."
+msgstr "Redémarrez {apps} pour utiliser les nouvelles versions. Les modifications non enregistrées seront perdues."
+
+#: cc-plinius-software.c:2914
+msgid "Restart Apps"
+msgstr "Redémarrer les apps"
+
+#: cc-plinius-software.c:2918
+msgid "Restart Phosh to use the new versions. The phone locks; open apps stay open."
+msgstr "Redémarrez Phosh pour utiliser les nouvelles versions. Le téléphone se verrouille ; les apps ouvertes restent ouvertes."
+
+#: cc-plinius-software.c:2922
+msgid "{apps} also restart. Unsaved changes in them are lost."
+msgstr "{apps} redémarrent aussi. Les modifications non enregistrées seront perdues."
+
+#: cc-plinius-software.c:2928
+msgid "Restart Phosh"
+msgstr "Redémarrer Phosh"
+
+#: cc-plinius-software.c
+msgid "Restart Apps?"
+msgstr "Redémarrer les apps ?"
+
+#: cc-plinius-software.c
+msgid "{apps} close and open again. Unsaved changes in them are lost."
+msgstr "{apps} se ferment et se rouvrent. Les modifications non enregistrées seront perdues."
+
+#: cc-plinius-software.c
+msgid "Restart Phosh?"
+msgstr "Redémarrer Phosh ?"
+
+#: cc-plinius-software.c
+msgid "Phosh restarts and the phone locks. Open apps stay open."
+msgstr "Phosh redémarre et le téléphone se verrouille. Les apps ouvertes restent ouvertes."
+
+#: cc-plinius-software.c
+msgid "Restart Phone?"
+msgstr "Redémarrer le téléphone ?"
+
+#: cc-plinius-software.c
+msgid "All apps close. Unsaved changes in them are lost."
+msgstr "Toutes les apps se ferment. Les modifications non enregistrées seront perdues."
+
+#: cc-plinius-panorama.c
+msgid "360° Photos"
+msgstr "Photos 360°"
+
+#: cc-plinius-panorama.c
+msgid "Own Pictures"
+msgstr "Images personnelles"
+
+#: cc-plinius-panorama.c
+msgid "Wallpapers (Light/Dark)"
+msgstr "Fonds d’écran (clair/sombre)"
+
+
+# Taskbar of the desktop over VNC (Remote Access), open apps in the overview (Appearance)
+#: cc-desktop-vnc-panel.c
+msgid "Taskbar"
+msgstr "Barre des tâches"
+
+#: cc-desktop-vnc-panel.c
+msgid "Apps button and open windows, at the top or bottom edge"
+msgstr "Bouton des applications et fenêtres ouvertes, en haut ou en bas"
+
+#: cc-desktop-vnc-panel.c cc-plinius-display.c
+msgid "Top"
+msgstr "En haut"
+
+#: cc-desktop-vnc-panel.c cc-plinius-display.c
+msgid "Bottom"
+msgstr "En bas"
+
+#: cc-plinius-display.c
+msgid "Open Apps at the Bottom"
+msgstr "Applications ouvertes en bas"
+
+#: cc-plinius-display.c
+msgid "The cards of the open apps below the app icons"
+msgstr "Les cartes des applications ouvertes sous les icônes"
+
+#: cc-wwan-network-dialog.c
+msgid "Your SIM must not use this network"
+msgstr "Votre SIM n’a pas le droit d’utiliser ce réseau"
+
+#: cc-wwan-network-dialog.c
+msgid "Connected now"
+msgstr "Connecté maintenant"
+
+#: cc-wwan-network-dialog.c
+msgid "Network of your SIM, registration possible"
+msgstr "Réseau de votre SIM, connexion possible"
+
+#: cc-wwan-network-dialog.c
+#, c-format
+msgid "Satellite (%s): works if the provider accepts this phone"
+msgstr "Satellite (%s) : fonctionne si l’opérateur accepte ce téléphone"
+
+#: cc-wwan-network-dialog.c
+msgid "Satellite: works if the provider accepts this phone"
+msgstr "Satellite : fonctionne si l’opérateur accepte ce téléphone"
+
+#: cc-wwan-network-dialog.c
+msgid "Other network in your country, usually refuses your SIM"
+msgstr "Autre réseau de votre pays, refuse généralement votre SIM"
+
+#: cc-wwan-network-dialog.c
+msgid "Network abroad, works if roaming is part of your contract"
+msgstr "Réseau à l’étranger, fonctionne si l’itinérance fait partie de votre forfait"
+
+#: cc-plinius-security.c
+msgid "%u known vulnerability"
+msgid_plural "%u known vulnerabilities"
+msgstr[0] "%u vulnérabilité connue"
+msgstr[1] "%u vulnérabilités connues"
+
+msgid "%u in installed packages, %u in the kernel"
+msgstr "%u dans les paquets installés, %u dans le noyau"
+
+#: cc-plinius-security.c
+msgid "fixed in %s"
+msgstr "corrigée dans %s"
+
+#: cc-plinius-security.c
+msgid "no fix yet"
+msgstr "pas encore de correctif"
+
+#: cc-plinius-security.c
+msgid "Known issues of the running kernel from the Linux kernel CNA, limited to the code its configuration builds. Only a newer kernel from the phone maker fixes them."
+msgstr "Problèmes connus du noyau en cours d’exécution, d’après la CNA du noyau Linux, limités au code compilé par sa configuration. Seul un noyau plus récent du fabricant du téléphone les corrige."
+
+#: cc-plinius-security.c
+msgid "Not loaded yet: %s"
+msgstr "Pas encore chargée : %s"
+
+#: cc-plinius-security.c
+msgid "Kernel List"
+msgstr "Liste du noyau"
+
+#: cc-plinius-security.c
+msgid "%s, from the Linux kernel CNA"
+msgstr "%s, de la CNA du noyau Linux"
+
+#: cc-plinius-security.c
+#, c-format
+msgid "%u in the own-build kernel %s"
+msgstr "%u dans le noyau compilé maison %s"
+
+#: cc-plinius-security.c
+#, c-format
+msgid "%u in kernel %s"
+msgstr "%u dans le noyau %s"
+
+#: cc-plinius-security.c
+msgid "Known Issues"
+msgstr "Problèmes connus"
+
+#: cc-plinius-security.c
+msgid "%u with a CVSS score of 7 or more; %u more with a lower or no score"
+msgstr "%u avec un score CVSS de 7 ou plus ; %u autres avec un score inférieur ou sans score"
+
+#: cc-plinius-security.c
+msgid "Issues with a High Rating"
+msgstr "Vulnérabilités de gravité élevée"
+
+#: cc-wwan-sim-lock-dialog.c
+msgid "Current PIN"
+msgstr "Code PIN actuel"
+
+#: cc-plinius-security.c
+msgid "Vendor System"
+msgstr "Système du fabricant"
+
+#: cc-plinius-security.c
+msgid "Security patch level %s, firmware and drivers from the phone maker"
+msgstr "Niveau de correctif de sécurité %s, micrologiciel et pilotes du fabricant du téléphone"
+
+#: cc-plinius-security.c
+msgid "Known issues of the running kernel from the Linux kernel CNA, limited to the code its configuration builds. A newer Plinius kernel fixes them."
+msgstr "Problèmes connus du noyau en cours d’exécution, d’après la CNA du noyau Linux, limités au code compilé par sa configuration. Un noyau Plinius plus récent les corrige."
+
+#: cc-plinius-security.c
+msgid "%s, own build of %s"
+msgstr "%s, compilation propre du %s"
+
+#: cc-plinius-security.c
+msgid "Ramdisk"
+msgstr "Ramdisk"
+
+#: cc-plinius-security.c
+msgid "Vendor Ramdisk"
+msgstr "Ramdisk du fabricant"
+
+#: cc-plinius-security.c
+msgid "Device Tree"
+msgstr "Arborescence matérielle"
+
+#: cc-plinius-security.c
+msgid "Boot Verification Data"
+msgstr "Données de vérification du démarrage"
+
+#: cc-plinius-security.c
+msgid "Boot menu entry “%s”"
+msgstr "Entrée du menu de démarrage « %s »"
+
+#: cc-plinius-security.c
+msgid "Boot menu card: %s"
+msgstr "Carte du menu de démarrage : %s"
+
+#: cc-plinius-security.c
+msgid "Not accepted: not authorized."
+msgstr "Non accepté : non autorisé."
+
+#: cc-plinius-security.c
+msgid "Not accepted: %s"
+msgstr "Non accepté : %s"
+
+#: cc-plinius-security.c
+msgid "Takes the current state as the accepted one and ends the alarm. Asks for your PIN."
+msgstr "Prend l’état actuel comme état accepté et arrête l’alarme. Demande votre code PIN."
+
+#: cc-plinius-security.c
+msgid "Tampering Detected"
+msgstr "Manipulation détectée"
+
+#: cc-plinius-security.c
+msgid "At this start, parts of the start system differ from the last accepted state. The phone has already started with them."
+msgstr "À ce démarrage, des parties du système de démarrage diffèrent du dernier état accepté. Le téléphone a déjà démarré avec elles."
+
+#: cc-plinius-security.c
+msgid "No Changes"
+msgstr "Aucune modification"
+
+#: cc-plinius-security.c
+msgid "Changed Parts"
+msgstr "Parties modifiées"
+
+#: cc-plinius-security.c
+msgid "What to Do"
+msgstr "Que faire ?"
+
+#: cc-plinius-security.c
+msgid "You Changed It"
+msgstr "Vous l’avez modifié"
+
+#: cc-plinius-security.c
+msgid "A kernel or ramdisk update, a new boot menu entry or an update of Volla OS that you installed yourself explains the change. Then accept it below."
+msgstr "Une mise à jour du noyau ou du ramdisk, une nouvelle entrée du menu de démarrage ou une mise à jour de Volla OS que vous avez installée vous-même explique la modification. Acceptez-la alors ci-dessous."
+
+#: cc-plinius-security.c
+msgid "You Did Not"
+msgstr "Vous ne l’avez pas modifié"
+
+#: cc-plinius-security.c
+msgid "Someone may have had the phone and may know your encryption password. Do not accept the change and enter no more passwords: restore the start system from a backup, then change the encryption password."
+msgstr "Quelqu’un a peut-être eu le téléphone et connaît votre mot de passe de chiffrement. N’acceptez pas la modification et ne saisissez plus de mot de passe : restaurez le système de démarrage depuis une sauvegarde, puis changez le mot de passe de chiffrement."
+
+#: cc-plinius-security.c
+msgid "_Accept Changes"
+msgstr "_Accepter les modifications"
+
+#: cc-nfc-panel.c
+msgid "No card chosen yet"
+msgstr "Aucune carte choisie"
+
+#: cc-nfc-panel.c
+msgid "No contacts with a name"
+msgstr "Aucun contact avec un nom"
+
+#: cc-nfc-panel.c
+msgid "Loading contacts…"
+msgstr "Chargement des contacts…"
+
+#: cc-nfc-panel.c
+msgid "The contact that goes out when you share your card from the quick settings. Usually your own entry in Contacts."
+msgstr "Le contact envoyé lorsque vous partagez votre carte depuis les réglages rapides. En général votre propre fiche dans Contacts."
+
+#: cc-nfc-panel.c
+msgid "Contact"
+msgstr "Contact"
+
+#: cc-nfc-panel.c
+msgid "Shared Details"
+msgstr "Informations partagées"
+
+#: cc-nfc-panel.c
+msgid "The name always goes out. Anyone who reads the card gets these details."
+msgstr "Le nom est toujours envoyé. Toute personne qui lit la carte reçoit ces informations."
+
+#: cc-nfc-panel.c
+msgid "NFC and the QR code stop by themselves after this time, or when the card was read over NFC."
+msgstr "Le NFC et le code QR s’arrêtent d’eux-mêmes après ce délai ou dès que la carte a été lue par NFC."
+
+#: cc-nfc-panel.c
+msgid "Seconds to Share or Receive"
+msgstr "Secondes pour partager ou recevoir"
+
+#: cc-nfc-panel.c
+msgid "Contact Card"
+msgstr "Carte de visite"
+
+#: cc-nfc-panel.c
+msgid "Choose Contact"
+msgstr "Choisir un contact"
+
+#: cc-nfc-panel.c
+msgid "Give your contact card to another phone over NFC or a QR code, and take in cards over NFC or Bluetooth, from the quick setting “My Card”."
+msgstr "Donnez votre carte de visite à un autre téléphone par NFC ou par un code QR, et recevez des cartes par NFC ou Bluetooth, avec le réglage rapide « Ma carte »."
+
+#: cc-nfc-panel.c
+msgid "Phone Numbers"
+msgstr "Numéros de téléphone"
+
+#: cc-nfc-panel.c
+msgid "Email Addresses"
+msgstr "Adresses e-mail"
+
+#: cc-nfc-panel.c
+msgid "Organization and Job Title"
+msgstr "Organisation et fonction"
+
+#: cc-nfc-panel.c
+msgid "Addresses"
+msgstr "Adresses"
+
+#: cc-nfc-panel.c
+msgid "Websites"
+msgstr "Sites web"
+
+#: cc-nfc-panel.c
+msgid "Birthday"
+msgstr "Anniversaire"
+
+#: cc-nfc-panel.c
+msgid "Notes"
+msgstr "Notes"
+
+#: cc-nfc-panel.c
+msgid "Photo"
+msgstr "Photo"
+
+#: cc-nfc-panel.c
+msgid "Only over NFC, never in the QR code"
+msgstr "Uniquement par NFC, jamais dans le code QR"
+
+msgid "WPA3 Personal"
+msgstr "WPA3 personnel"
+
+msgid "Other Security"
+msgstr "Autres types de sécurité"
+
+msgid "WEP, LEAP or Enterprise (802.1X)"
+msgstr "WEP, LEAP ou entreprise (802.1X)"
+
+msgid "Left empty, a random password is made up."
+msgstr "Laissé vide, un mot de passe aléatoire est créé."
+
+# cc-plinius-battery-usage.c
+
+msgid "Shell"
+msgstr "Shell"
+
+msgid "Compositor"
+msgstr "Compositeur"
+
+msgid "System Log"
+msgstr "Journal système"
+
+msgid "Linux Kernel"
+msgstr "Noyau Linux"
+
+msgid "Android Services"
+msgstr "Services Android"
+
+msgid "Ended Programs"
+msgstr "Programmes terminés"
+
+#, c-format
+msgid "%u s"
+msgstr "%u s"
+
+#, c-format
+msgid "%u min"
+msgstr "%u min"
+
+#, c-format
+msgid "%u h %u min"
+msgstr "%u h %u min"
+
+#, c-format
+msgid "< 0.1 %"
+msgstr "< 0,1 %"
+
+#, c-format
+msgid "%s of a charge"
+msgstr "%s d’une charge"
+
+#, c-format
+msgid "%s, %s with the screen off"
+msgstr "%s, dont %s écran éteint"
+
+#, c-format
+msgid "Measured over %s unplugged"
+msgstr "Mesuré sur %s sans chargeur"
+
+msgid "Not unplugged in this time"
+msgstr "Toujours branché pendant cette période"
+
+msgid "Last 24 Hours"
+msgstr "Dernières 24 heures"
+
+msgid "Last 7 Days"
+msgstr "7 derniers jours"
+
+msgid "Nothing Recorded Yet"
+msgstr "Rien d’enregistré pour l’instant"
+
+msgid "The record starts with the phone, usage shows here within a minute."
+msgstr "L’enregistrement démarre avec le téléphone, la consommation apparaît ici en moins d’une minute."
+
+msgid "Screen On"
+msgstr "Écran allumé"
+
+msgid "Battery Used"
+msgstr "Batterie utilisée"
+
+msgid "Processor"
+msgstr "Processeur"
+
+msgid "Estimated, all apps and services together"
+msgstr "Estimé, toutes les applications et tous les services"
+
+msgid "Share of the processor's energy"
+msgstr "Part de l’énergie du processeur"
+
+msgid "Estimated from the time each program ran at each processor speed and the processor's power at that speed. The screen, the radios and the graphics are not part of the app values, so together they come to less than the battery used."
+msgstr "Estimé à partir du temps d’exécution de chaque programme à chaque vitesse du processeur et de la puissance du processeur à cette vitesse. L’écran, les radios et le graphisme ne font pas partie des valeurs des applications, leur total est donc inférieur à la batterie utilisée."
+
+msgid "Battery Usage"
+msgstr "Utilisation de la batterie"
+
+msgid "Battery _Usage"
+msgstr "_Utilisation de la batterie"
+
+msgid "Which apps use the most energy"
+msgstr "Les applications qui consomment le plus"
+
+msgid "Battery _Condition"
+msgstr "État de la _batterie"
+
+msgid "Health, charge cycles, temperature"
+msgstr "Santé, cycles de charge, température"
+
+#, c-format
+msgid "%s with the screen off"
+msgstr "%s écran éteint"
+
+# DNS Filter (cc-plinius-dnsfilter.c)
+msgid "Ads, tracking, metrics, telemetry, phishing, malware; rarely breaks anything"
+msgstr "Publicités, pistage, mesures, télémétrie, hameçonnage, logiciels malveillants ; casse rarement quelque chose"
+
+msgid "The basics, for a phone that must never miss anything"
+msgstr "L'essentiel, pour un téléphone auquel rien ne doit manquer"
+
+msgid "Stricter; now and then a site needs an exception"
+msgstr "Plus stricte ; de temps en temps un site a besoin d'une exception"
+
+msgid "Aggressive; expect exceptions"
+msgstr "Agressive ; prévoyez des exceptions"
+
+msgid "Malware, phishing, scams and command and control servers"
+msgstr "Logiciels malveillants, hameçonnage, arnaques et serveurs de commande"
+
+msgid "Encrypted DNS and VPN services apps could use to get past the filter"
+msgstr "DNS chiffré et services VPN qui permettraient aux applications de contourner le filtre"
+
+msgid "Ads and tracking, made not to break anything"
+msgstr "Publicités et pistage, conçue pour ne rien casser"
+
+msgid "Ads, tracking, malware and more"
+msgstr "Publicités, pistage, logiciels malveillants et plus"
+
+msgid "Ads and tracking, put together from several lists"
+msgstr "Publicités et pistage, rassemblés à partir de plusieurs listes"
+
+msgid "Ads and malware, in hosts format"
+msgstr "Publicités et logiciels malveillants, au format hosts"
+
+#, c-format
+msgid "%.1f ms"
+msgstr "%.1f ms"
+
+#, c-format
+msgid "%u ms"
+msgstr "%u ms"
+
+#, c-format
+msgid "%s (%.0f %%)"
+msgstr "%s (%.0f %%)"
+
+#, c-format
+msgid "%e %b, %R"
+msgstr "%e %b, %R"
+
+msgid "This phone"
+msgstr "Ce téléphone"
+
+#, c-format
+msgid "%s (Hotspot)"
+msgstr "%s (point d'accès)"
+
+#, c-format
+msgid "%s (USB)"
+msgstr "%s (USB)"
+
+msgid "Allowed by your rule"
+msgstr "Autorisé par votre règle"
+
+#, c-format
+msgid "Allowed by %s"
+msgstr "Autorisé par %s"
+
+msgid "Needed by the phone"
+msgstr "Nécessaire au téléphone"
+
+#, c-format
+msgid "Blocked by %s"
+msgstr "Bloqué par %s"
+
+msgid "Blocked by your rule"
+msgstr "Bloqué par votre règle"
+
+msgid "Not filtered"
+msgstr "Non filtré"
+
+msgid "No answer"
+msgstr "Pas de réponse"
+
+msgid "Blocked: own encrypted DNS of the browser"
+msgstr "Bloqué : DNS chiffré propre au navigateur"
+
+#, c-format
+msgid "%s, via %s"
+msgstr "%s, via %s"
+
+msgid "Block"
+msgstr "Bloquer"
+
+msgid "Unblock"
+msgstr "Débloquer"
+
+msgid "Remove Exception"
+msgstr "Supprimer l'exception"
+
+msgid "Queries per hour, the blocked part highlighted"
+msgstr "Requêtes par heure, la part bloquée mise en évidence"
+
+msgid "Paused"
+msgstr "En pause"
+
+msgid "No Network"
+msgstr "Pas de réseau"
+
+msgid "Not Working"
+msgstr "Ne fonctionne pas"
+
+#, c-format
+msgid "Paused until %s"
+msgstr "En pause jusqu'à %s"
+
+msgid "The filter could not start, the phone uses the network's DNS"
+msgstr "Le filtre n'a pas pu démarrer, le téléphone utilise le DNS du réseau"
+
+msgid "Lets everything through for a while"
+msgstr "Laisse tout passer pendant un moment"
+
+#, c-format
+msgid "%u list, %s rules"
+msgid_plural "%u lists, %s rules"
+msgstr[0] "%u liste, %s règles"
+msgstr[1] "%u listes, %s règles"
+
+#, c-format
+msgid "%u rule"
+msgid_plural "%u rules"
+msgstr[0] "%u règle"
+msgstr[1] "%u règles"
+
+msgid "Your servers"
+msgstr "Vos serveurs"
+
+msgid "From the network"
+msgstr "Du réseau"
+
+msgid "_Block Ads and Trackers"
+msgstr "_Bloquer publicités et pisteurs"
+
+msgid "For every connection, the hotspot and USB devices included"
+msgstr "Pour chaque connexion, point d'accès et appareils USB compris"
+
+msgid "Pause"
+msgstr "Mettre en pause"
+
+msgid "For 1 Minute"
+msgstr "1 minute"
+
+msgid "For 10 Minutes"
+msgstr "10 minutes"
+
+msgid "For 1 Hour"
+msgstr "1 heure"
+
+msgid "For 8 Hours"
+msgstr "8 heures"
+
+msgid "Resume"
+msgstr "Reprendre"
+
+msgid "Queries"
+msgstr "Requêtes"
+
+msgid "Blocked"
+msgstr "Bloquées"
+
+msgid "Average Response Time"
+msgstr "Temps de réponse moyen"
+
+msgid "_Query Log"
+msgstr "_Journal des requêtes"
+
+msgid "Every name asked; tap one to block or unblock it"
+msgstr "Chaque nom demandé ; touchez-le pour le bloquer ou le débloquer"
+
+msgid "_Statistics"
+msgstr "_Statistiques"
+
+msgid "Block_lists"
+msgstr "_Listes de blocage"
+
+msgid "_Own Rules"
+msgstr "_Règles personnelles"
+
+msgid "_DNS Servers"
+msgstr "Serveurs _DNS"
+
+msgid "S_ettings"
+msgstr "_Paramètres"
+
+msgid "DNS Filter"
+msgstr "Filtre DNS"
+
+#, c-format
+msgid "%s · %s · %s"
+msgstr "%s · %s · %s"
+
+msgid "Answer: "
+msgstr "Réponse : "
+
+msgid "Server: "
+msgstr "Serveur : "
+
+msgid "from the cache"
+msgstr "depuis le cache"
+
+msgid "Response time: "
+msgstr "Temps de réponse : "
+
+msgid "Search names"
+msgstr "Rechercher des noms"
+
+msgid "All"
+msgstr "Toutes"
+
+msgid "Allowed"
+msgstr "Autorisées"
+
+msgid "No queries yet"
+msgstr "Pas encore de requêtes"
+
+msgid "Show Older Queries"
+msgstr "Afficher les requêtes plus anciennes"
+
+msgid "Query Log"
+msgstr "Journal des requêtes"
+
+#, c-format
+msgid "%s answer, %s"
+msgid_plural "%s answers, %s"
+msgstr[0] "%s réponse, %s"
+msgstr[1] "%s réponses, %s"
+
+msgid "Clear Statistics?"
+msgstr "Effacer les statistiques ?"
+
+msgid "All counts are lost."
+msgstr "Tous les comptages seront perdus."
+
+msgid "_Clear"
+msgstr "_Effacer"
+
+msgid "24 Hours"
+msgstr "24 heures"
+
+msgid "7 Days"
+msgstr "7 jours"
+
+msgid "30 Days"
+msgstr "30 jours"
+
+msgid "Answered from the Cache"
+msgstr "Répondues depuis le cache"
+
+msgid "Rules of the Lists"
+msgstr "Règles des listes"
+
+msgid "Most Asked"
+msgstr "Les plus demandés"
+
+msgid "Most Blocked"
+msgstr "Les plus bloqués"
+
+msgid "Devices"
+msgstr "Appareils"
+
+msgid "DNS Servers"
+msgstr "Serveurs DNS"
+
+msgid "Clear Statistics"
+msgstr "Effacer les statistiques"
+
+msgid "Statistics"
+msgstr "Statistiques"
+
+msgid "Remove List"
+msgstr "Supprimer la liste"
+
+msgid "Downloading…"
+msgstr "Téléchargement…"
+
+#, c-format
+msgid "Not updated: %s"
+msgstr "Non mise à jour : %s"
+
+#, c-format
+msgid "%s rule, updated %s"
+msgid_plural "%s rules, updated %s"
+msgstr[0] "%s règle, mise à jour %s"
+msgstr[1] "%s règles, mise à jour %s"
+
+msgid "Not downloaded yet"
+msgstr "Pas encore téléchargée"
+
+msgid "No lists. Add one to block anything."
+msgstr "Aucune liste. Ajoutez-en une pour bloquer quoi que ce soit."
+
+msgid "Subscribed Lists"
+msgstr "Listes abonnées"
+
+msgid "Add List"
+msgstr "Ajouter une liste"
+
+msgid "Updates"
+msgstr "Mises à jour"
+
+msgid "Never"
+msgstr "Jamais"
+
+msgid "Every 6 Hours"
+msgstr "Toutes les 6 heures"
+
+msgid "Every 12 Hours"
+msgstr "Toutes les 12 heures"
+
+msgid "Daily"
+msgstr "Tous les jours"
+
+msgid "Every 3 Days"
+msgstr "Tous les 3 jours"
+
+msgid "Weekly"
+msgstr "Toutes les semaines"
+
+msgid "Update Lists"
+msgstr "Mettre à jour les listes"
+
+msgid "Also on Mobile Data"
+msgstr "Aussi en données mobiles"
+
+msgid "Otherwise lists are updated on Wi-Fi only; a new list comes right away"
+msgstr "Sinon, les listes ne sont mises à jour qu'en Wi-Fi ; une nouvelle liste arrive tout de suite"
+
+msgid "Blocklists"
+msgstr "Listes de blocage"
+
+msgid "Subscribed"
+msgstr "Abonnée"
+
+msgid "Add"
+msgstr "Ajouter"
+
+msgid "Suggested Lists"
+msgstr "Listes suggérées"
+
+msgid "Other List"
+msgstr "Autre liste"
+
+msgid "Name"
+msgstr "Nom"
+
+msgid "Web Address"
+msgstr "Adresse web"
+
+msgid "Lists in hosts format, as plain domains or in the Adblock syntax of DNS blocklists. Rules for web pages (element hiding) are skipped."
+msgstr "Listes au format hosts, en simples domaines ou dans la syntaxe Adblock des listes de blocage DNS. Les règles pour les pages web (masquage d'éléments) sont ignorées."
+
+msgid "Allowed, with subdomains"
+msgstr "Autorisé, avec sous-domaines"
+
+msgid "Allowed, this name only"
+msgstr "Autorisé, ce nom seulement"
+
+msgid "Blocked, with subdomains"
+msgstr "Bloqué, avec sous-domaines"
+
+msgid "Blocked, this name only"
+msgstr "Bloqué, ce nom seulement"
+
+msgid "Remove Rule"
+msgstr "Supprimer la règle"
+
+msgid "No rules yet. Add one here, or block and unblock names right in the query log."
+msgstr "Pas encore de règles. Ajoutez-en une ici, ou bloquez et débloquez des noms directement dans le journal des requêtes."
+
+msgid "New Rule"
+msgstr "Nouvelle règle"
+
+msgid "Allow"
+msgstr "Autoriser"
+
+msgid "Domain"
+msgstr "Domaine"
+
+msgid "Include Subdomains"
+msgstr "Inclure les sous-domaines"
+
+msgid "Add Rule"
+msgstr "Ajouter la règle"
+
+msgid "Your Rules"
+msgstr "Vos règles"
+
+msgid "Your rules come before the lists: an allowed domain is never blocked by a list."
+msgstr "Vos règles passent avant les listes : un domaine autorisé n'est jamais bloqué par une liste."
+
+msgid "Own Rules"
+msgstr "Règles personnelles"
+
+msgid "DNS over TLS"
+msgstr "DNS sur TLS"
+
+msgid "DNS over HTTPS"
+msgstr "DNS sur HTTPS"
+
+msgid "Plain DNS"
+msgstr "DNS non chiffré"
+
+#, c-format
+msgid "Answers in %u ms"
+msgstr "Répond en %u ms"
+
+#, c-format
+msgid "Does not work: %s"
+msgstr "Ne fonctionne pas : %s"
+
+msgid "Testing…"
+msgstr "Test en cours…"
+
+msgid "No network right now"
+msgstr "Pas de réseau pour le moment"
+
+msgid "Test"
+msgstr "Tester"
+
+msgid "Remove Server"
+msgstr "Supprimer le serveur"
+
+msgid "Add Server"
+msgstr "Ajouter un serveur"
+
+#, c-format
+msgid "%s, %s"
+msgstr "%s, %s"
+
+msgid "From the Network"
+msgstr "Du réseau"
+
+msgid "Your Servers"
+msgstr "Vos serveurs"
+
+msgid "Encrypted with DNS over TLS or HTTPS, or plain"
+msgstr "Chiffrés avec DNS sur TLS ou HTTPS, ou non chiffrés"
+
+msgid "Suggestions"
+msgstr "Suggestions"
+
+msgid "Local Names from the Network"
+msgstr "Noms locaux par le réseau"
+
+msgid "Names of the home network (like router.lan) and of a VPN go to the network's server"
+msgstr "Les noms du réseau domestique (comme router.lan) et d'un VPN vont au serveur du réseau"
+
+msgid "Write a server as an address (9.9.9.9), as tls://name for DNS over TLS or as https://name/dns-query for DNS over HTTPS. On the login page of a public Wi-Fi the network's server is used until you are signed in."
+msgstr "Saisissez un serveur sous forme d'adresse (9.9.9.9), de tls://nom pour DNS sur TLS ou de https://nom/dns-query pour DNS sur HTTPS. Sur la page de connexion d'un Wi-Fi public, le serveur du réseau est utilisé jusqu'à ce que vous soyez connecté."
+
+msgid "Clear Query Log?"
+msgstr "Effacer le journal des requêtes ?"
+
+msgid "All recorded queries are deleted."
+msgstr "Toutes les requêtes enregistrées sont supprimées."
+
+msgid "Does Not Exist"
+msgstr "N'existe pas"
+
+msgid "Refused"
+msgstr "Refusé"
+
+msgid "1,000 Queries"
+msgstr "1 000 requêtes"
+
+msgid "5,000 Queries"
+msgstr "5 000 requêtes"
+
+msgid "20,000 Queries"
+msgstr "20 000 requêtes"
+
+msgid "1 Day"
+msgstr "1 jour"
+
+msgid "90 Days"
+msgstr "90 jours"
+
+msgid "Blocking"
+msgstr "Blocage"
+
+msgid "Answer for Blocked Names"
+msgstr "Réponse pour les noms bloqués"
+
+msgid "0.0.0.0 works best for apps"
+msgstr "0.0.0.0 fonctionne le mieux avec les applications"
+
+msgid "What Is Filtered"
+msgstr "Ce qui est filtré"
+
+msgid "Hotspot and USB Devices"
+msgstr "Appareils du point d'accès et USB"
+
+msgid "Devices that use the phone's hotspot or its USB connection"
+msgstr "Appareils qui utilisent le point d'accès ou la connexion USB du téléphone"
+
+msgid "Apps with a Fixed DNS Server"
+msgstr "Applications avec un serveur DNS fixe"
+
+msgid "Questions to another server (like 8.8.8.8) are answered by the filter"
+msgstr "Le filtre répond aux requêtes vers un autre serveur (comme 8.8.8.8)"
+
+msgid "Refuse DNS over TLS"
+msgstr "Refuser DNS sur TLS"
+
+msgid "Apps and devices then use plain DNS, which the filter sees"
+msgstr "Les applications et appareils utilisent alors un DNS non chiffré, que le filtre voit"
+
+msgid "Keep after Restart"
+msgstr "Conserver après redémarrage"
+
+msgid "Otherwise the log is only kept in memory"
+msgstr "Sinon, le journal n'est conservé qu'en mémoire"
+
+msgid "Keep the Last"
+msgstr "Conserver les dernières"
+
+msgid "Clear Query Log"
+msgstr "Effacer le journal des requêtes"
+
+msgid "Keep For"
+msgstr "Conserver pendant"
+
+msgid "DNS _Filter"
+msgstr "_Filtre DNS"
+
+msgid "Filter ads, trackers and malware"
+msgstr "Filtre les publicités, pisteurs et logiciels malveillants"
+
+#, c-format
+msgid "Android app %s"
+msgstr "Application Android %s"
+
+msgid "Android"
+msgstr "Android"
+
+msgid "Session"
+msgstr "Session"
+
+msgid "%u query"
+msgid_plural "%u queries"
+msgstr[0] "%u requête"
+msgstr[1] "%u requêtes"
+
+msgid "Partially blocked"
+msgstr "Bloqué en partie"
+
+#. Translators: an app on a name's page: time of its last query · how often it asked
+#, c-format
+msgid "%s · %s"
+msgstr "%s · %s"
+
+#: cc-plinius-webapps.c
+msgid "Close"
+msgstr "Fermer"
+
+#: cc-plinius-webapps.c
+msgid "Could Not Change the Web App"
+msgstr "Impossible de modifier l’application web"
+
+#: cc-plinius-webapps.c
+msgid "Show among the apps"
+msgstr "Afficher parmi les applications"
+
+#: cc-plinius-webapps.c
+msgid "No icon found on the website"
+msgstr "Aucune icône trouvée sur le site web"
+
+#: cc-plinius-webapps.c
+msgid "Looking for the website's icon…"
+msgstr "Recherche de l’icône du site web…"
+
+#: cc-plinius-webapps.c
+msgid "This file is not an image"
+msgstr "Ce fichier n’est pas une image"
+
+#: cc-plinius-webapps.c
+msgid "Images"
+msgstr "Images"
+
+#: cc-plinius-webapps.c
+msgid "Choose an Icon"
+msgstr "Choisir une icône"
+
+#: cc-plinius-webapps.c
+msgid "Could Not Save the Web App"
+msgstr "Impossible d’enregistrer l’application web"
+
+#: cc-plinius-webapps.c
+msgid "Could Not Delete the Web App"
+msgstr "Impossible de supprimer l’application web"
+
+#: cc-plinius-webapps.c
+msgid "“%s” Is Open"
+msgstr "« %s » est ouverte"
+
+#: cc-plinius-webapps.c
+msgid "Close the web app first, then delete it."
+msgstr "Fermez d’abord l’application web, puis supprimez-la."
+
+#: cc-plinius-webapps.c
+msgid "Delete Web App?"
+msgstr "Supprimer l’application web ?"
+
+#: cc-plinius-webapps.c
+msgid "“%s” is removed with its profile: logins, cookies and all other data the website stored on this phone."
+msgstr "« %s » est supprimée avec son profil : identifiants, cookies et toutes les autres données que le site web a enregistrées sur ce téléphone."
+
+#: cc-plinius-webapps.c
+msgid "Delete"
+msgstr "Supprimer"
+
+#: cc-plinius-webapps.c
+msgid "From Website"
+msgstr "Depuis le site web"
+
+#: cc-plinius-webapps.c
+msgid "Choose Image…"
+msgstr "Choisir une image…"
+
+#: cc-plinius-webapps.c
+msgid "Each web app has its own browser profile: logins and data stay apart from the browser and from other web apps."
+msgstr "Chaque application web a son propre profil de navigateur : identifiants et données restent séparés du navigateur et des autres applications web."
+
+#: cc-plinius-webapps.c
+msgid "Frameless"
+msgstr "Sans cadre"
+
+#: cc-plinius-webapps.c
+msgid "Without address bar, tabs and menu"
+msgstr "Sans barre d’adresse, onglets ni menu"
+
+#: cc-plinius-webapps.c
+msgid "When Closing"
+msgstr "À la fermeture"
+
+#: cc-plinius-webapps.c
+msgid "Delete Cache"
+msgstr "Supprimer le cache"
+
+#: cc-plinius-webapps.c
+msgid "Pages and images stored for a faster start"
+msgstr "Pages et images enregistrées pour un démarrage plus rapide"
+
+#: cc-plinius-webapps.c
+msgid "Delete Cookies"
+msgstr "Supprimer les cookies"
+
+#: cc-plinius-webapps.c
+msgid "Also other site data; signing in again each time"
+msgstr "Aussi les autres données du site ; reconnexion à chaque fois"
+
+#: cc-plinius-webapps.c
+msgid "Save"
+msgstr "Enregistrer"
+
+#: cc-plinius-webapps.c
+msgid "Add Web App"
+msgstr "Ajouter une application web"
+
+#: cc-plinius-webapps.c
+msgid "Websites as apps of their own, each with its own browser profile. Switched on, a web app has an icon among the apps."
+msgstr "Des sites web comme applications à part entière, chacun avec son propre profil de navigateur. Activée, une application web a une icône parmi les applications."
+
+#: cc-plinius-webapps.c
+msgid "Web apps need Firefox or Chromium."
+msgstr "Les applications web nécessitent Firefox ou Chromium."
+
+#: cc-plinius-webapps.c
+msgid "No web apps yet"
+msgstr "Aucune application web pour l’instant"
+
+#: cc-plinius-webapps.c
+msgid "Web Apps"
+msgstr "Applications web"
+
+#: cc-plinius-webapps.c
+msgid "Browser"
+msgstr "Navigateur"
+
+# Device Security › Access Control (cc-plinius-security.c)
+msgid "Access Control"
+msgstr "Contrôle d’accès"
+
+msgid "SELinux enforces its policy."
+msgstr "SELinux applique sa politique."
+
+msgid "SELinux is on but only logs."
+msgstr "SELinux est actif mais ne fait que journaliser."
+
+msgid "No access control. A program that is taken over can reach everything its user can."
+msgstr "Aucun contrôle d’accès. Un programme compromis peut atteindre tout ce que peut atteindre son utilisateur."
+
+msgid "AppArmor is on, but no program is confined yet."
+msgstr "AppArmor est actif, mais aucun programme n’est encore confiné."
+
+msgid "Access control limits each confined program to what it needs, also when it runs as root: a service taken over through the network cannot read your data or reach other services."
+msgstr "Le contrôle d’accès limite chaque programme confiné à ce dont il a besoin, même lorsqu’il s’exécute en root : un service compromis par le réseau ne peut ni lire vos données ni atteindre d’autres services."
+
+msgid "SELinux, enforcing"
+msgstr "SELinux, en mode strict"
+
+msgid "SELinux, only logging"
+msgstr "SELinux, journalisation seule"
+
+msgid "AppArmor"
+msgstr "AppArmor"
+
+msgid "In the Kernel"
+msgstr "Dans le noyau"
+
+msgid "“Logging only”: the profile records what the service does and blocks nothing yet, until its rules are complete."
+msgstr "« Journalisation seule » : le profil enregistre ce que fait le service et ne bloque encore rien, jusqu’à ce que ses règles soient complètes."
+
+msgid "Not loaded"
+msgstr "Non chargé"
+
+msgid "Enforced"
+msgstr "Appliqué"
+
+msgid "Logging only"
+msgstr "Journalisation seule"
+
+msgid "AppArmor confines %u service; more only log what they do."
+msgid_plural "AppArmor confines %u services; more only log what they do."
+msgstr[0] "AppArmor confine %u service ; d’autres ne font que journaliser ce qu’ils font."
+msgstr[1] "AppArmor confine %u services ; d’autres ne font que journaliser ce qu’ils font."
+
+msgid "AppArmor watches %u service without blocking it yet."
+msgid_plural "AppArmor watches %u services without blocking them yet."
+msgstr[0] "AppArmor surveille %u service sans encore le bloquer."
+msgstr[1] "AppArmor surveille %u services sans encore les bloquer."
+
+msgid "AppArmor confines %u service of the network and the radio."
+msgid_plural "AppArmor confines %u services of the network and the radio."
+msgstr[0] "AppArmor confine %u service du réseau et de la radio."
+msgstr[1] "AppArmor confine %u services du réseau et de la radio."
+
+msgid "No matching names"
+msgstr "Aucun nom correspondant"
+
+msgid "No queries in the log"
+msgstr "Aucune requête dans le journal"
+
+msgid "The log starts anew with each restart; “Keep after Restart” in Settings keeps it"
+msgstr "Le journal recommence à chaque redémarrage ; « Conserver après redémarrage » dans les Réglages le garde"
+
+msgid "Last 30 Days"
+msgstr "30 derniers jours"
+
+msgid "Beta Updates"
+msgstr "Mises à jour bêta"
+
+msgid "New Plinius versions before their release"
+msgstr "Les nouvelles versions de Plinius avant leur publication"
+
+msgid "Turn On Beta Updates?"
+msgstr "Activer les mises à jour bêta ?"
+
+msgid "Beta updates bring new versions of the Plinius packages before they are released for everyone. They are tested on fewer phones and can contain errors.\n\nPackages of Arch Linux ARM are not affected. If you turn beta off later, the beta versions stay installed until the release catches up."
+msgstr "Les mises à jour bêta apportent les nouvelles versions des paquets Plinius avant leur publication pour tous. Elles sont testées sur moins de téléphones et peuvent contenir des erreurs.\n\nLes paquets d’Arch Linux ARM ne sont pas concernés. Si vous désactivez la bêta plus tard, les versions bêta restent installées jusqu’à ce que la publication les rattrape."
+
+msgid "Turning on beta updates"
+msgstr "Activation des mises à jour bêta"
+
+msgid "Turning off beta updates"
+msgstr "Désactivation des mises à jour bêta"
+
+msgid "Beta updates are on"
+msgstr "Les mises à jour bêta sont activées"
+
+msgid "The next update brings the beta versions."
+msgstr "La prochaine mise à jour apporte les versions bêta."
+
+msgid "Beta updates are off"
+msgstr "Les mises à jour bêta sont désactivées"
+
+msgid "Packages from beta stay installed until the release has the same or a newer version."
+msgstr "Les paquets de la bêta restent installés jusqu’à ce que la publication ait la même version ou une plus récente."
+
+msgid "Could not change the update channel"
+msgstr "Impossible de changer le canal de mise à jour"
+
+msgid "Block Globally"
+msgstr "Bloquer partout"
+
+msgid "Block for App"
+msgstr "Bloquer pour l’app"
+
+msgid "Unblock for App"
+msgstr "Débloquer pour l’app"
+
+msgid "Allowed for this app"
+msgstr "Autorisé pour cette app"
+
+msgid "Blocked for this app"
+msgstr "Bloqué pour cette app"
+
+#. Translators: an own rule for one app: "Blocked, with subdomains · only Firefox"
+#, c-format
+msgid "%s · only %s"
+msgstr "%s · uniquement %s"
+
+msgid "Identify As"
+msgstr "S’identifier comme"
+
+msgid "How the browser presents itself to websites"
+msgstr "Comment le navigateur se présente aux sites web"
+
+msgid "Browser Default"
+msgstr "Par défaut du navigateur"
+
+msgid "Mobile (Android)"
+msgstr "Mobile (Android)"
+
+msgid "Mobile (iPhone)"
+msgstr "Mobile (iPhone)"
+
+msgid "Desktop (Windows)"
+msgstr "Ordinateur (Windows)"
+
+msgid "Desktop (macOS)"
+msgstr "Ordinateur (macOS)"
+
+msgid "Desktop (Linux)"
+msgstr "Ordinateur (Linux)"
+
+msgid "Protected Content"
+msgstr "Contenu protégé"
+
+msgid "Play DRM Videos"
+msgstr "Lire les vidéos DRM"
+
+msgid "For streaming services such as Netflix and Prime Video in Firefox"
+msgstr "Pour les services de streaming comme Netflix et Prime Video dans Firefox"
+
+#. Translators: {version} is the Widevine version, e.g. 4.10.3112.0
+msgid "Widevine {version} from Google"
+msgstr "Widevine {version} de Google"
+
+msgid "Not downloaded yet, tries again later"
+msgstr "Pas encore téléchargé, nouvel essai plus tard"
+
+msgid "Downloading from Google…"
+msgstr "Téléchargement depuis Google…"
+
+msgid "Removing…"
+msgstr "Suppression…"
+
+msgid "Turn On Protected Content?"
+msgstr "Activer le contenu protégé ?"
+
+msgid "Streaming services such as Netflix and Prime Video only play with Widevine, a closed-source module from Google. It may not be passed on, so the phone downloads it from Google itself (about 150 MB).\n\nOn Linux, services play at most in HD (720p). Firefox uses the module after a restart."
+msgstr "Les services de streaming comme Netflix et Prime Video ne fonctionnent qu’avec Widevine, un module propriétaire de Google. Il ne peut pas être redistribué : le téléphone le télécharge donc lui-même depuis Google (environ 150 Mo).\n\nSous Linux, les services sont lus au mieux en HD (720p). Firefox utilise le module après un redémarrage."
+
+msgid "Loading the FuriHub catalog"
+msgstr "Chargement du catalogue FuriHub"
+
+msgid "FuriHub needs Flathub"
+msgstr "FuriHub a besoin de Flathub"
+
+msgid "FuriHub’s apps take their runtimes from Flathub. Turn off FuriHub first."
+msgstr "Les applications de FuriHub prennent leurs environnements d’exécution sur Flathub. Désactivez d’abord FuriHub."
+
+msgid "FuriHub is on"
+msgstr "FuriHub est activé"
+
+msgid "Apps from FuriHub appear under “Explore” marked “FuriHub”. The app grid shows their launchers after you log in again."
+msgstr "Les applications de FuriHub apparaissent dans « Explorer » avec la mention « FuriHub ». La grille d’applications affiche leurs lanceurs après la prochaine connexion."
+
+msgid "Could not turn on FuriHub"
+msgstr "Impossible d’activer FuriHub"
+
+msgid "FuriHub is off"
+msgstr "FuriHub est désactivé"
+
+msgid "Apps from FuriHub are still installed"
+msgstr "Des applications de FuriHub sont encore installées"
+
+msgid "Could not turn off FuriHub"
+msgstr "Impossible de désactiver FuriHub"
+
+msgid "Turning on FuriHub"
+msgstr "Activation de FuriHub"
+
+msgid "Turn On FuriHub?"
+msgstr "Activer FuriHub ?"
+
+msgid "FuriHub is a Flatpak app store of the FuriLabs user community, with apps made for Linux phones. Its apps take their runtimes from Flathub, so Flathub is turned on as well.\n\nThe apps are written for FuriOS; some rely on its services, such as the camera, and may not work on the Plinius."
+msgstr "FuriHub est une boutique d’applications Flatpak de la communauté FuriLabs, avec des applications faites pour les téléphones Linux. Ses applications prennent leurs environnements d’exécution sur Flathub, Flathub est donc activé aussi.\n\nLes applications sont écrites pour FuriOS ; certaines dépendent de ses services, comme l’appareil photo, et peuvent ne pas fonctionner sur le Plinius."
+
+msgid "Turning off FuriHub"
+msgstr "Désactivation de FuriHub"
+
+msgid "Phone apps from the FuriLabs community, needs Flathub"
+msgstr "Applications pour téléphones de la communauté FuriLabs, nécessite Flathub"
+
+#, c-format
+msgid "Forget “%s”?"
+msgstr "Oublier « %s » ?"
+
+msgid "Its password and settings will be deleted from this device."
+msgstr "Son mot de passe et ses paramètres seront supprimés de cet appareil."
+
+msgid "Turn off the airplane mode switch to use Wi-Fi"
+msgstr "Désactivez l’interrupteur du mode avion pour utiliser le Wi-Fi"
+
+msgid "WPA3 Enterprise"
+msgstr "WPA3 entreprise"
+
+msgid "Turn off airplane mode in the quick settings to use Wi-Fi"
+msgstr "Désactivez le mode avion dans les réglages rapides pour utiliser le Wi-Fi"
+
+msgid "Power the Connected Device"
+msgstr "Alimenter l'appareil connecté"
+
+msgid "Nothing connected"
+msgstr "Rien n'est connecté"
+
+msgid "The phone supplies power to the connected device"
+msgstr "Le téléphone alimente l'appareil connecté"
+
+msgid "The connected device takes its power from the phone"
+msgstr "L'appareil connecté est alimenté par le téléphone"
+
+msgid "This phone takes power from the cable"
+msgstr "Ce téléphone est alimenté par le câble"
+
+msgid "Only with devices that support USB Power Delivery"
+msgstr "Uniquement avec les appareils compatibles USB Power Delivery"
+
+msgid "Charge This Phone"
+msgstr "Recharger ce téléphone"
+
+msgid "Powering applies to every device that supports USB Power Delivery and agrees, also while the phone is locked. Others keep charging the phone. At 10 % battery the phone stops powering."
+msgstr "L'alimentation s'applique à tout appareil compatible USB Power Delivery qui l'accepte, même lorsque le téléphone est verrouillé. Les autres continuent de recharger le téléphone. À 10 % de batterie, le téléphone cesse d’alimenter."
+
+msgid "Power Supply"
+msgstr "Alimentation"
+
+msgid "Video"
+msgstr "Vidéo"
+
+msgid "Default Pictures"
+msgstr "Images par défaut"
+
+#, c-format
+msgid "Remove “%s”?"
+msgstr "Supprimer « %s » ?"
+
+msgid "Only the copy made for backgrounds is deleted."
+msgstr "Seule la copie faite pour les arrière-plans est supprimée."
+
+msgid "Dark"
+msgstr "Sombre"
+
+msgid "Light"
+msgstr "Clair"
+
+msgid "Default"
+msgstr "Par défaut"
+
+msgid "Color"
+msgstr "Couleur"
+
+msgid "Own Picture"
+msgstr "Image personnelle"
+
+msgid "Default Picture"
+msgstr "Image par défaut"
+
+msgid "360° Photo"
+msgstr "Photo 360°"
+
+msgid "Background Color"
+msgstr "Couleur d’arrière-plan"
+
+msgid "Shown when no background is selected"
+msgstr "Visible quand aucun arrière-plan n’est sélectionné"
+
+msgid "Black"
+msgstr "Noir"
+
+msgid "Arch Blue"
+msgstr "Bleu Arch"
+
+msgid "Midnight Blue"
+msgstr "Bleu nuit"
+
+msgid "Deep Teal"
+msgstr "Bleu canard"
+
+msgid "Forest Green"
+msgstr "Vert forêt"
+
+msgid "Plum"
+msgstr "Prune"
+
+msgid "Burgundy"
+msgstr "Bordeaux"
+
+msgid "Mocha"
+msgstr "Moka"
+
+msgid "Slate Gray"
+msgstr "Gris ardoise"
+
+msgid "MMS"
+msgstr "MMS"
+
+msgid "Add Pictures and Videos"
+msgstr "Ajouter des images et des vidéos"
+
+msgid "Add Pictures"
+msgstr "Ajouter des images"
+
+msgid "Nothing added yet"
+msgstr "Rien n'a encore été ajouté"
+
+#: cc-plinius-webapps.c
+msgid "Close the web app first, then change Identify As."
+msgstr "Fermez d’abord l’application web, puis modifiez « S’identifier comme »."
+
+#: cc-plinius-webapps.c
+msgid "Could Not Reset the Website Data"
+msgstr "Impossible de réinitialiser les données du site web"
+
+#: cc-plinius-webapps.c
+msgid "Close the web app first, then reset its website data."
+msgstr "Fermez d’abord l’application web, puis réinitialisez les données du site web."
+
+#: cc-plinius-webapps.c
+msgid "Reset Website Data?"
+msgstr "Réinitialiser les données du site web ?"
+
+#: cc-plinius-webapps.c
+msgid "“%s” forgets what the website stored on this phone, except cookies: you stay signed in. This helps when the website keeps failing, for example after Identify As changed."
+msgstr "« %s » oublie ce que le site web a enregistré sur ce téléphone, sauf les cookies : vous restez connecté. Cela aide quand le site web échoue sans cesse, par exemple après un changement de « S’identifier comme »."
+
+#: cc-plinius-webapps.c
+msgid "Reset"
+msgstr "Réinitialiser"
+
+#: cc-plinius-webapps.c
+msgid "Reset Website Data"
+msgstr "Réinitialiser les données du site web"
+
+msgid "Test Page Not Printed"
+msgstr "Page de test non imprimée"
+
+msgid "The printer could not be set up or reached. Check that it is switched on and on the same network."
+msgstr "L'imprimante n'a pas pu être configurée ou jointe. Vérifiez qu'elle est allumée et sur le même réseau."
+
+msgid "No Printer Options"
+msgstr "Aucune option d’imprimante"
+
+msgid "The printer did not answer. Its options appear once it has been set up, for example by printing a test page."
+msgstr "L’imprimante n’a pas répondu. Ses options apparaissent une fois qu’elle est configurée, par exemple après l’impression d’une page de test."
+
+msgid "Contacts"
+msgstr "Contacts"
+
+msgid "Which devices may read them"
+msgstr "Quels appareils peuvent les lire"
+
+msgid "Which Bluetooth devices may read them"
+msgstr "Quels appareils Bluetooth peuvent les lire"
+
+msgid "Devices switched on here may read your contacts over Bluetooth, a car for example to show who is calling. A device that is not listed asks first. Changes apply when the device connects again."
+msgstr "Les appareils activés ici peuvent lire vos contacts via Bluetooth, par exemple une voiture pour afficher qui appelle. Un appareil qui n’est pas listé demande d’abord. Les modifications s’appliquent à la prochaine connexion de l’appareil."
+
+msgid "No device has asked for the contacts yet"
+msgstr "Aucun appareil n’a encore demandé les contacts"
+
+msgid "The server could not be verified"
+msgstr "Le serveur n’a pas pu être vérifié"
+
+msgid "Server Not Verified"
+msgstr "Serveur non vérifié"
+
+msgid "The identity of the eSIM server could not be confirmed. Someone on this network could read or change what the phone exchanges with it. The eSIM still checks the profile itself. Continue anyway?"
+msgstr "L’identité du serveur eSIM n’a pas pu être confirmée. Quelqu’un sur ce réseau pourrait lire ou modifier ce que le téléphone échange avec lui. L’eSIM vérifie quand même le profil elle-même. Continuer quand même ?"
+
+msgid "Continue _Unverified"
+msgstr "Continuer _sans vérification"
+
+
+msgid "Sounds and Vibration"
+msgstr "Sons et vibration"
+
+msgid "Calls"
+msgstr "Appels"
+
+msgid "Messages"
+msgstr "Messages"
+
+msgid "Email"
+msgstr "E-mail"
+
+msgid "Other Notifications"
+msgstr "Autres notifications"
+
+msgid "Alarms"
+msgstr "Alarmes"
+
+msgid "Ringing"
+msgstr "Sonnerie"
+
+msgid "Calling"
+msgstr "Appel en cours"
+
+msgid "Alarm Clock"
+msgstr "Sonnerie de réveil"
+
+msgid "New Message"
+msgstr "Nouveau message"
+
+msgid "Message"
+msgstr "Message"
+
+msgid "Bell"
+msgstr "Cloche"
+
+msgid "Complete"
+msgstr "Terminé"
+
+msgid "Information"
+msgstr "Information"
+
+msgid "Warning"
+msgstr "Avertissement"
+
+msgid "Attention"
+msgstr "Attention"
+
+msgid "Login"
+msgstr "Connexion"
+
+msgid "Short"
+msgstr "Court"
+
+msgid "Long"
+msgstr "Long"
+
+msgid "Double"
+msgstr "Double"
+
+msgid "Triple"
+msgstr "Triple"
+
+msgid "Heartbeat"
+msgstr "Battement de cœur"
+
+msgid "Rising"
+msgstr "Croissant"
+
+msgid "Continuous"
+msgstr "Continu"
+
+msgid "No Sound"
+msgstr "Aucun son"
+
+msgid "Default Vibration"
+msgstr "Vibration par défaut"
+
+msgid "No Vibration"
+msgstr "Pas de vibration"
+
+#, c-format
+msgid "%s, %d %%"
+msgstr "%s, %d %%"
+
+msgid "Sound Not Supported"
+msgstr "Son non pris en charge"
+
+msgid "The phone plays ringtones and notification sounds in the Ogg Vorbis or WAV format. Convert the file to one of them first."
+msgstr "Le téléphone lit les sonneries et les sons de notification au format Ogg Vorbis ou WAV. Convertissez d’abord le fichier dans l’un de ces formats."
+
+msgid "Sound Not Added"
+msgstr "Son non ajouté"
+
+msgid "Ogg Vorbis or WAV"
+msgstr "Ogg Vorbis ou WAV"
+
+msgid "Choose a Sound"
+msgstr "Choisir un son"
+
+msgid "System Sounds"
+msgstr "Sons du système"
+
+msgid "Own Sounds"
+msgstr "Sons personnels"
+
+msgid "_Add Sound…"
+msgstr "_Ajouter un son…"
+
+msgid "Ogg Vorbis or WAV. The file is copied, so it stays when the original is deleted."
+msgstr "Ogg Vorbis ou WAV. Le fichier est copié et reste donc disponible si l’original est supprimé."
+
+msgid "Vibration"
+msgstr "Vibration"
+
+msgid "Rhythm"
+msgstr "Rythme"
+
+msgid "Strength"
+msgstr "Intensité"
+
+msgid "_Test"
+msgstr "_Tester"
+
+msgid "Rings for a few seconds, as the phone will."
+msgstr "Sonne quelques secondes, comme le fera le téléphone."
+
+msgid "_Reset to Default"
+msgstr "_Rétablir par défaut"
+
+msgid "Stop"
+msgstr "Arrêter"
+
+msgid "_Stop"
+msgstr "_Arrêter"
+
+msgid "Keyboard"
+msgstr "Clavier"
+
+msgid "Alert Sound"
+msgstr "Son d’alerte"
+
+msgid "Short Tap"
+msgstr "Tapotement court"
+
+msgid "Tap"
+msgstr "Tapotement"
+
+msgid "Long Tap"
+msgstr "Tapotement long"
+
+msgid "Tick"
+msgstr "Tic"
+
+#. TRANSLATORS: %u is a number, %s a time ("14:02") or a date and time
+#: cc-plinius-appaccess.c:98
+#, c-format
+msgid "%u attempt blocked, last %s"
+msgid_plural "%u attempts blocked, last %s"
+msgstr[0] "%u tentative bloquée, dernière %s"
+msgstr[1] "%u tentatives bloquées, dernière %s"
+
+#. TRANSLATORS: %u is a number, %s a time ("14:02") or a date and time
+#: cc-plinius-appaccess.c:107
+#, c-format
+msgid "Used %u time, last %s"
+msgid_plural "Used %u times, last %s"
+msgstr[0] "Utilisé %u fois, dernière %s"
+msgstr[1] "Utilisé %u fois, dernière %s"
+
+#: cc-plinius-appaccess.c:111
+msgid "No blocked attempts"
+msgstr "Aucune tentative bloquée"
+
+#. TRANSLATORS: %u is a number
+#: cc-plinius-appaccess.c:156
+#, c-format
+msgid "%u connection in the last 24 hours"
+msgid_plural "%u connections in the last 24 hours"
+msgstr[0] "%u connexion au cours des dernières 24 heures"
+msgstr[1] "%u connexions au cours des dernières 24 heures"
+
+#: cc-plinius-appaccess.c:170
+msgid "No connections in the last 24 hours"
+msgstr "Aucune connexion au cours des dernières 24 heures"
+
+#: cc-plinius-appaccess.c:111
+msgid "Not used yet"
+msgstr "Pas encore utilisé"
+
+#: cc-plinius-appaccess.c:236
+msgid "USB Camera"
+msgstr "Caméra USB"
+
+#: cc-plinius-appaccess.c:430
+msgid "Microphone"
+msgstr "Microphone"
+
+#: cc-plinius-appaccess.c:236
+msgid "Security Key"
+msgstr "Clé de sécurité"
+
+#: cc-plinius-appaccess.c:237
+msgid "Ask"
+msgstr "Demander"
+
+#: cc-plinius-appaccess.c:237
+msgid "Don't Allow"
+msgstr "Ne pas autoriser"
+
+#: cc-plinius-appaccess.c:245
+msgid "Access"
+msgstr "Accès"
+
+#: cc-plinius-appaccess.c:247
+msgid "With “Ask”, the app is blocked when it tries, and a notification asks whether to allow it."
+msgstr "Avec « Demander », l’application est bloquée lorsqu’elle essaie, et une notification demande s’il faut l’autoriser."
+
+#: 0093-network-Delete-below-the-pages-of-a-known-Wi-Fi-network.patch
+msgid "Delete…"
+msgstr "Supprimer…"
+
+msgid "Delete Network?"
+msgstr "Supprimer le réseau ?"
+
+msgid "_Delete"
+msgstr "_Supprimer"
+
+#: cc-feedback-panel.c
+msgid "Edit Sound"
+msgstr "Modifier le son"
+
+msgid "Sound Not Renamed"
+msgstr "Son non renommé"
+
+msgid "Sound Not Deleted"
+msgstr "Son non supprimé"
+
+msgid "Rename or Delete"
+msgstr "Renommer ou supprimer"
+
+msgid "Add a Sound of Your Own"
+msgstr "Ajouter un son personnel"
+
+#: cc-plinius-epo.c
+msgid "Faster GPS Fix"
+msgstr "Localisation GPS plus rapide"
+
+#: cc-plinius-epo.c
+msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. Nothing about the phone is sent."
+msgstr "Télécharge toutes les 6 heures les prévisions d’orbite des satellites depuis MediaTek, environ 80 Ko. Le GPS trouve alors la position en quelques secondes au lieu d’une minute environ. Aucune donnée du téléphone n’est envoyée."
+
+#: cc-plinius-epo.c
+msgid "Last Download"
+msgstr "Dernier téléchargement"
+
+#. Translators: date and time of the last download of the orbit files, strftime format
+#: cc-plinius-epo.c
+#, no-c-format
+msgid "%x, %H:%M"
+msgstr "%x, %H:%M"
+
+#: cc-wwan-apn-dialog.c
+msgid "Delete Access Point?"
+msgstr "Supprimer le point d’accès ?"
+
+#: cc-wwan-apn-dialog.c
+#, c-format
+msgid "The access point “%s” will be removed from this phone."
+msgstr "Le point d’accès « %s » sera supprimé de ce téléphone."
+
+#: cc-wwan-apn-dialog.c
+msgid "Mobile data uses it and stops until another one is chosen."
+msgstr "Les données mobiles l’utilisent et s’arrêtent jusqu’au choix d’un autre."
+
+#: cc-wwan-apn-dialog.c
+msgid "It stays in the list as a suggestion of the provider."
+msgstr "Il reste dans la liste comme suggestion de l’opérateur."
+
+#: cc-wwan-apn-dialog.c
+msgid "Could Not Delete Access Point"
+msgstr "Impossible de supprimer le point d’accès"
+
+#: cc-wwan-apn-dialog.c
+msgid "New Access Point"
+msgstr "Nouveau point d’accès"
+
+#: cc-plinius-selftest.c
+msgid "System Services"
+msgstr "Services système"
+
+#: cc-plinius-selftest.c
+msgid "A service of the system did not start."
+msgstr "Un service du système n’a pas démarré."
+
+#: cc-plinius-selftest.c
+msgid "Session Services"
+msgstr "Services de la session"
+
+#: cc-plinius-selftest.c
+msgid "A service of your session did not start."
+msgstr "Un service de votre session n’a pas démarré."
+
+#: cc-plinius-selftest.c
+msgid "The Android container is not running. Without it there is no modem, Bluetooth, camera or sensors."
+msgstr "Le conteneur Android ne fonctionne pas. Sans lui, pas de modem, de Bluetooth, d’appareil photo ni de capteurs."
+
+#: cc-plinius-selftest.c
+msgid "The display does not run on the graphics chip, or not at all."
+msgstr "L’affichage ne fonctionne pas sur la puce graphique, ou pas du tout."
+
+#: cc-plinius-selftest.c
+msgid "The speaker and microphone of the phone are missing."
+msgstr "Le haut-parleur et le micro du téléphone sont absents."
+
+#: cc-plinius-selftest.c
+msgid "No modem: no calls, messages or mobile data."
+msgstr "Pas de modem : ni appels, ni messages, ni données mobiles."
+
+#: cc-plinius-selftest.c
+msgid "The Wi-Fi adapter is missing."
+msgstr "L’adaptateur Wi-Fi est absent."
+
+#: cc-plinius-selftest.c
+msgid "The Bluetooth adapter is missing."
+msgstr "L’adaptateur Bluetooth est absent."
+
+#: cc-plinius-selftest.c
+msgid "Working"
+msgstr "Fonctionne"
+
+#: cc-plinius-selftest.c
+msgid "Not checked: nobody was logged in."
+msgstr "Non vérifié : personne n’était connecté."
+
+#: cc-plinius-selftest.c
+#, c-format
+msgid "Not started: %s"
+msgstr "Non démarré : %s"
+
+#: cc-plinius-selftest.c
+msgid "Not checked: not authorized"
+msgstr "Non vérifié : non autorisé"
+
+#: cc-plinius-selftest.c
+msgid "The self-test could not run"
+msgstr "L’autotest n’a pas pu s’exécuter"
+
+#: cc-plinius-selftest.c
+msgid "Checking…"
+msgstr "Vérification…"
+
+#: cc-plinius-selftest.c
+msgid "The update was taken back. Restart the phone to load the earlier versions."
+msgstr "La mise à jour a été annulée. Redémarrez le téléphone pour charger les versions précédentes."
+
+#: cc-plinius-selftest.c
+msgid "Not taken back: not authorized."
+msgstr "Non annulée : non autorisé."
+
+#: cc-plinius-selftest.c
+#, c-format
+msgid "Not taken back: the rollback stopped with status %d."
+msgstr "Non annulée : l’annulation s’est arrêtée avec le statut %d."
+
+#: cc-plinius-selftest.c
+#, c-format
+msgid "Not taken back: %s"
+msgstr "Non annulée : %s"
+
+#: cc-plinius-selftest.c
+msgid "Take Back the Last Update?"
+msgstr "Annuler la dernière mise à jour ?"
+
+#: cc-plinius-selftest.c
+msgid "_Take Back"
+msgstr "_Annuler la mise à jour"
+
+#: cc-plinius-selftest.c
+msgid "There is no update to take back."
+msgstr "Il n’y a pas de mise à jour à annuler."
+
+#: cc-plinius-selftest.c
+msgid "The last update could not be read."
+msgstr "La dernière mise à jour n’a pas pu être lue."
+
+#: cc-plinius-selftest.c
+msgid "Last Update"
+msgstr "Dernière mise à jour"
+
+#: cc-plinius-selftest.c
+msgid "_Take Back Update"
+msgstr "_Annuler la mise à jour"
+
+#: cc-plinius-selftest.c
+msgid "Taking back the update… Do not switch off the phone."
+msgstr "Annulation de la mise à jour… N’éteignez pas le téléphone."
+
+#: cc-plinius-selftest.c
+msgid "Looking for the last update…"
+msgstr "Recherche de la dernière mise à jour…"
+
+#: cc-plinius-selftest.c
+msgid "Problem Found"
+msgstr "Problème trouvé"
+
+#: cc-plinius-selftest.c
+msgid "Everything Works"
+msgstr "Tout fonctionne"
+
+#: cc-plinius-selftest.c
+msgid "All checks after the start were fine."
+msgstr "Toutes les vérifications après le démarrage étaient bonnes."
+
+#: cc-plinius-selftest.c
+msgid "Not Checked Yet"
+msgstr "Pas encore vérifié"
+
+#: cc-plinius-selftest.c
+msgid "The self-test runs a few minutes after the phone starts."
+msgstr "L’autotest s’exécute quelques minutes après le démarrage du téléphone."
+
+#: cc-plinius-selftest.c
+msgid "Check _Again"
+msgstr "_Vérifier à nouveau"
+
+#: cc-plinius-selftest.c
+msgid "Self-Test"
+msgstr "Autotest"
+
+#: cc-plinius-selftest.c
+msgid "_Self-Test"
+msgstr "_Autotest"
+
+#: cc-plinius-selftest.c
+msgid "Whether the phone's parts work after the start"
+msgstr "Si les composants du téléphone fonctionnent après le démarrage"
+
+#: cc-plinius-selftest.c
+msgid "One check failed."
+msgid_plural "%u checks failed."
+msgstr[0] "%u vérification a échoué."
+msgstr[1] "%u vérifications ont échoué."
+
+#: cc-plinius-selftest.c
+#, c-format
+msgid "The update of %s goes back: one package returns to its earlier version. Restart the phone afterwards."
+msgid_plural "The update of %s goes back: %u packages return to their earlier versions. Restart the phone afterwards."
+msgstr[0] "La mise à jour du %s est annulée : %u paquet revient à sa version précédente. Redémarrez ensuite le téléphone."
+msgstr[1] "La mise à jour du %s est annulée : %u paquets reviennent à leurs versions précédentes. Redémarrez ensuite le téléphone."
+
+#: cc-plinius-selftest.c
+#, c-format
+msgid "The update of %s changed one package. Its earlier version is still on the phone. If the problem began with this update, take it back. Asks for your PIN."
+msgid_plural "The update of %s changed %u packages. Their earlier versions are still on the phone. If the problem began with this update, take it back. Asks for your PIN."
+msgstr[0] "La mise à jour du %s a modifié %u paquet. Sa version précédente est encore sur le téléphone. Si le problème a commencé avec cette mise à jour, annulez-la. Demande votre code PIN."
+msgstr[1] "La mise à jour du %s a modifié %u paquets. Leurs versions précédentes sont encore sur le téléphone. Si le problème a commencé avec cette mise à jour, annulez-la. Demande votre code PIN."
+
+#: cc-plinius-selftest.c
+#, c-format
+msgid "The update of %s cannot be taken back: the earlier version of one package is no longer on the phone."
+msgid_plural "The update of %s cannot be taken back: the earlier versions of %u packages are no longer on the phone."
+msgstr[0] "La mise à jour du %s ne peut pas être annulée : la version précédente de %u paquet n’est plus sur le téléphone."
+msgstr[1] "La mise à jour du %s ne peut pas être annulée : les versions précédentes de %u paquets ne sont plus sur le téléphone."

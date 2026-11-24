@@ -1,0 +1,255 @@
+Plinius: device facts, scale steps and notch for the phone.
+
+- About: processor name from the device package (ARM's /proc/cpuinfo has no model name),
+  installed RAM from the device tree instead of MemTotal, no "vm-other" virtualization row,
+  disk capacity from the largest LUN of a UFS drive (udisks reports the 4 MB boot LUN).
+- Display: the built-in panel offers 100-200 % of a base scale from the device package
+  (Plinius: 200 % = scale 3) instead of 100-300 % in nine steps; new "Notch" row for
+  phosh-plinius (org.plinius.display).
+- No "Multitasking" panel: workspaces and hot corners are GNOME Shell features.
+
+The helpers (cc-plinius-device.*) live as separate files in the package directory and are
+copied to panels/common/ in prepare().
+
+diff --git a/panels/common/meson.build b/panels/common/meson.build
+index 67a047be3..b25191566 100644
+--- a/panels/common/meson.build
++++ b/panels/common/meson.build
+@@ -82,6 +82,7 @@ sources = common_sources + files(
+   'cc-timelike-editor.c',
+   'cc-timelike-editor-layout.c',
+   'cc-permission-infobar.c',
++  'cc-plinius-device.c',
+   'cc-split-row.c',
+   'cc-texture-utils.c',
+   'cc-content-row.c',
+diff --git a/panels/display/cc-display-config.c b/panels/display/cc-display-config.c
+index 88df162d0..4a6109731 100644
+--- a/panels/display/cc-display-config.c
++++ b/panels/display/cc-display-config.c
+@@ -18,6 +18,7 @@
+  */
+ 
+ #include "cc-display-config.h"
++#include "cc-plinius-device.h"
+ #include <gio/gio.h>
+ #include <math.h>
+ 
+@@ -1243,6 +1244,21 @@ cc_display_monitor_new (GVariant *variant, CcDisplayConfig *config)
+         }
+     }
+ 
++    /* Plinius: fewer scale steps on the built-in panel (100-200 % of its base scale) */
++    if (self->builtin) {
++        GList *l;
++
++        for (l = self->modes; l != NULL; l = l->next) {
++            CcDisplayMode *mode = l->data;
++            GArray *scales = cc_plinius_device_get_scales (mode->width, mode->height);
++
++            if (scales != NULL) {
++                g_array_unref (mode->supported_scales);
++                mode->supported_scales = scales;
++            }
++        }
++    }
++
+     return self;
+ }
+ 
+diff --git a/panels/display/cc-display-settings.blp b/panels/display/cc-display-settings.blp
+index 436fc7b07..02a9e029b 100644
+--- a/panels/display/cc-display-settings.blp
++++ b/panels/display/cc-display-settings.blp
+@@ -109,5 +109,11 @@ template $CcDisplaySettings: Box {
+       use-underline: true;
+       notify::selected-item => $on_scale_selection_changed_cb(template);
+     }
++
++    // Plinius: title, choices and binding in cc_plinius_device_setup_notch_row ()
++    Adw.ComboRow notch_row {
++      width-request: 100;
++      visible: false;
++    }
+   }
+ }
+diff --git a/panels/display/cc-display-settings.c b/panels/display/cc-display-settings.c
+index f63732bb3..1acf7a008 100644
+--- a/panels/display/cc-display-settings.c
++++ b/panels/display/cc-display-settings.c
+@@ -23,6 +23,7 @@
+ #include "cc-display-config-manager.h"
+ #include "cc-display-config.h"
+ #include "cc-display-panel.h"
++#include "cc-plinius-device.h"
+ #include <float.h>
+ #include <gio/gio.h>
+ #include <glib/gi18n.h>
+@@ -65,6 +66,8 @@ struct _CcDisplaySettings {
+     GtkWidget *scale_combo_row;
+     AdwSwitchRow *hdr_row;
+     AdwSwitchRow *underscanning_row;
++    AdwComboRow *notch_row;
++    gboolean has_notch_setting;
+ };
+ 
+ typedef struct _CcDisplaySettings CcDisplaySettings;
+@@ -366,6 +369,7 @@ cc_display_settings_rebuild_ui (CcDisplaySettings *self)
+         gtk_widget_set_visible (self->scale_buttons_row, FALSE);
+         gtk_widget_set_visible (GTK_WIDGET (self->hdr_row), FALSE);
+         gtk_widget_set_visible (GTK_WIDGET (self->underscanning_row), FALSE);
++        gtk_widget_set_visible (GTK_WIDGET (self->notch_row), FALSE);
+ 
+         return G_SOURCE_REMOVE;
+     }
+@@ -563,8 +567,11 @@ cc_display_settings_rebuild_ui (CcDisplaySettings *self)
+         AdwToggle *scale_toggle;
+         gboolean is_selected;
+ 
+-        /* ComboRow */
+-        scale_str = make_scale_string (scale);
++        /* ComboRow; Plinius: built-in panel steps relative to its base scale */
++        if (cc_display_monitor_is_builtin (self->selected_output))
++            scale_str = cc_plinius_device_make_scale_string (scale);
++        if (scale_str == NULL)
++            scale_str = make_scale_string (scale);
+         selected_scale = cc_display_monitor_get_scale (self->selected_output);
+         is_selected = cc_display_same_scale (scale, selected_scale);
+ 
+@@ -598,6 +605,9 @@ cc_display_settings_rebuild_ui (CcDisplaySettings *self)
+                                 && !cc_display_config_is_cloning (self->config));
+     adw_switch_row_set_active (self->underscanning_row, cc_display_monitor_get_underscanning (self->selected_output));
+ 
++    gtk_widget_set_visible (GTK_WIDGET (self->notch_row),
++                            self->has_notch_setting && cc_display_monitor_is_builtin (self->selected_output));
++
+     self->updating = TRUE;
+     g_object_thaw_notify ((GObject *) self->enabled_row);
+     g_object_thaw_notify ((GObject *) self->orientation_row);
+@@ -895,6 +905,7 @@ cc_display_settings_class_init (CcDisplaySettingsClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, scale_toggle_group);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, scale_buttons_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, scale_combo_row);
++    gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, notch_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, hdr_row);
+     gtk_widget_class_bind_template_child (widget_class, CcDisplaySettings, underscanning_row);
+ 
+@@ -921,6 +932,8 @@ cc_display_settings_init (CcDisplaySettings *self)
+     g_settings_bind (self->touchscreen_settings, "orientation-lock", self->auto_orientation_row, "active",
+                      G_SETTINGS_BIND_DEFAULT | G_SETTINGS_BIND_INVERT_BOOLEAN);
+ 
++    self->has_notch_setting = cc_plinius_device_setup_notch_row (self->notch_row);
++
+     self->orientation_list = G_LIST_MODEL (gtk_string_list_new (NULL));
+     self->refresh_rate_list = g_list_store_new (CC_TYPE_DISPLAY_MODE);
+     self->resolution_list = g_list_store_new (CC_TYPE_DISPLAY_MODE);
+diff --git a/panels/system/about/cc-about-page.c b/panels/system/about/cc-about-page.c
+index 3f006ada0..fb6fd304f 100644
+--- a/panels/system/about/cc-about-page.c
++++ b/panels/system/about/cc-about-page.c
+@@ -23,6 +23,7 @@
+ #include <config.h>
+ 
+ #include "cc-about-page.h"
++#include "cc-plinius-device.h"
+ #include "cc-hostname-entry.h"
+ #include "cc-hostname.h"
+ #include "info-cleanup.h"
+@@ -411,6 +412,31 @@ get_os_type (void)
+         return g_strdup_printf (_("32-bit"));
+ }
+ 
++/*
++ * Plinius: UFS storage appears as one drive with several LUNs (two 4 MB boot LUNs and the
++ * user area) and udisks reports the size of the first LUN; use the drive's largest LUN.
++ */
++static guint64
++get_drive_size (GList *objects, GDBusObject *drive_object, UDisksDrive *drive)
++{
++    const char *drive_path = g_dbus_object_get_object_path (drive_object);
++    guint64 size = udisks_drive_get_size (drive);
++    GList *l;
++
++    for (l = objects; l != NULL; l = l->next) {
++        UDisksObject *object = UDISKS_OBJECT (l->data);
++        UDisksBlock *block = udisks_object_peek_block (object);
++
++        if (block == NULL || udisks_object_peek_partition (object) != NULL)
++            continue;
++
++        if (g_strcmp0 (udisks_block_get_drive (block), drive_path) == 0)
++            size = MAX (size, udisks_block_get_size (block));
++    }
++
++    return size;
++}
++
+ char *
+ get_primary_disk_info (void)
+ {
+@@ -441,7 +467,7 @@ get_primary_disk_info (void)
+             continue;
+         }
+ 
+-        total_size += udisks_drive_get_size (drive);
++        total_size += get_drive_size (objects, G_DBUS_OBJECT (l->data), drive);
+     }
+ 
+     if (total_size > 0)
+@@ -535,9 +561,15 @@ get_cpu_info ()
+     const glibtop_sysinfo *info;
+     GHashTableIter iter;
+     gpointer key, value;
++    char *soc;
+     int i;
+     int j;
+ 
++    /* Plinius: the SoC name from the device package */
++    soc = cc_plinius_device_get_processor ();
++    if (soc != NULL)
++        return soc;
++
+     counts = g_hash_table_new (g_str_hash, g_str_equal);
+     info = glibtop_get_sysinfo ();
+ 
+@@ -604,7 +636,7 @@ set_virtualization_label (CcAboutPage *self, const char *virt)
+     const char *display_name;
+     guint i;
+ 
+-    if (virt == NULL || *virt == '\0') {
++    if (virt == NULL || *virt == '\0' || cc_plinius_device_is_virtualization_hidden (virt)) {
+         gtk_widget_set_visible (GTK_WIDGET (self->virtualization_row), FALSE);
+ 
+         return;
+@@ -713,8 +745,9 @@ get_ram_size_dmi (void)
+ 
+     client = g_udev_client_new (subsystems);
+     dmi = g_udev_client_query_by_sysfs_path (client, "/sys/devices/virtual/dmi/id");
++    /* Plinius: no DMI on ARM, the device tree has the installed RAM */
+     if (!dmi)
+-        return 0;
++        return cc_plinius_device_get_installed_ram ();
+     num_ram = g_udev_device_get_property_as_uint64 (dmi, "MEMORY_ARRAY_NUM_DEVICES");
+     for (i = 0; i < num_ram; i++) {
+         g_autofree char *prop = NULL;
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index d9cabffa8..b833ac9f4 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -41,7 +41,6 @@ extern GType cc_date_time_panel_get_type (void);
+ extern GType cc_display_panel_get_type (void);
+ extern GType cc_keyboard_panel_get_type (void);
+ extern GType cc_mouse_panel_get_type (void);
+-extern GType cc_multitasking_panel_get_type (void);
+ #ifdef BUILD_NETWORK
+ extern GType cc_network_panel_get_type (void);
+ extern GType cc_wifi_panel_get_type (void);
+@@ -94,7 +93,7 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("display", cc_display_panel_get_type, NULL),
+     PANEL_TYPE ("keyboard", cc_keyboard_panel_get_type, NULL),
+     PANEL_TYPE ("mouse", cc_mouse_panel_get_type, NULL),
+-    PANEL_TYPE ("multitasking", cc_multitasking_panel_get_type, NULL),
++    /* Plinius: no "Multitasking", its workspaces and hot corners are GNOME Shell features */
+ #ifdef BUILD_NETWORK
+     PANEL_TYPE ("network", cc_network_panel_get_type, NULL),
+     PANEL_TYPE ("wifi", cc_wifi_panel_get_type, cc_wifi_panel_static_init_func),

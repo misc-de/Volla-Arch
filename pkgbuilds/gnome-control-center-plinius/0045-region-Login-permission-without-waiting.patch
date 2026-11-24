@@ -1,0 +1,65 @@
+From 2c1ff55a0b509144cc18c9286cce144b9eacbb60 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:12:32 +0100
+Subject: [PATCH] region: Login permission without waiting
+
+Plinius: the Region & Language page waited for a polkit check
+(60-180 ms on the phone) before it opened. The permission now comes
+asynchronously; the Login Screen group stays hidden until
+set_login_button_visibility() has decided, which on a phone with one
+user keeps it hidden.
+---
+ panels/system/region/cc-region-page.c | 23 +++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/panels/system/region/cc-region-page.c b/panels/system/region/cc-region-page.c
+index 74023955d..7a9c6a617 100644
+--- a/panels/system/region/cc-region-page.c
++++ b/panels/system/region/cc-region-page.c
+@@ -641,15 +641,26 @@ localed_proxy_ready (GObject *source, GAsyncResult *res, gpointer data)
+     on_localed_properties_changed (self->localed, NULL, NULL, self);
+ }
+ 
++/*
++ * Plinius: a polkit check takes 60-180 ms on the phone, and the page waited for it before it
++ * opened. The login group stays hidden until the answer is there and set_login_button_visibility()
++ * decides; with one user who may set the system language (the phone), it stays hidden anyway.
++ */
+ static void
+-setup_login_permission (CcRegionPage *self)
++login_permission_ready_cb (GObject *source_object, GAsyncResult *result, gpointer user_data)
+ {
++    CcRegionPage *self;
+     g_autoptr(GDBusConnection) bus = NULL;
+     g_autoptr(GError) error = NULL;
++    GPermission *permission = polkit_permission_new_finish (result, &error);
+     gboolean can_acquire;
+     gboolean loaded;
+ 
+-    self->permission = polkit_permission_new_sync ("org.freedesktop.locale1.set-locale", NULL, NULL, &error);
++    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        return;
++
++    self = CC_REGION_PAGE (user_data);
++    self->permission = permission;
+     if (self->permission == NULL) {
+         g_warning ("Could not get 'org.freedesktop.locale1.set-locale' permission: %s", error->message);
+         return;
+@@ -672,6 +683,14 @@ setup_login_permission (CcRegionPage *self)
+     gtk_widget_set_sensitive (self->login_group, can_acquire);
+ }
+ 
++static void
++setup_login_permission (CcRegionPage *self)
++{
++    gtk_widget_set_visible (self->login_group, FALSE);
++    polkit_permission_new ("org.freedesktop.locale1.set-locale", NULL, self->cancellable, login_permission_ready_cb,
++                           self);
++}
++
+ static void
+ session_proxy_ready (GObject *source, GAsyncResult *res, gpointer data)
+ {
+-- 
+2.55.0
+

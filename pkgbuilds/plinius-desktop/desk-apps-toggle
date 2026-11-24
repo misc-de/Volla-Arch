@@ -1,0 +1,13 @@
+#!/bin/bash
+# The bar's app button: shows or hides the menu that waits hidden for the whole session
+# (desk-apps.py --resident), in milliseconds instead of starting Python and GTK on each click.
+# Without it (not started yet, or gone) the menu starts as a program of its own.
+set -euo pipefail
+
+pidfile=${XDG_RUNTIME_DIR:-/tmp}/plinius-desk-apps.resident
+if pid=$(cat "$pidfile" 2>/dev/null) && [[ $pid =~ ^[0-9]+$ ]] &&
+	tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -q -- 'desk-apps.py --resident' &&
+	kill -USR1 "$pid" 2>/dev/null; then
+	exit 0
+fi
+exec "${DESK_APPS:-/usr/lib/plinius-desktop/desk-apps.py}"

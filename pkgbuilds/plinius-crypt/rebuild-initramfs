@@ -1,0 +1,62 @@
+#!/bin/bash
+# Rebuilds the initramfs when something changed that the install hook plinius-crypt takes into
+# it: the background and the look of the password prompt (started by background-install and
+# look-install), the system language or the keyboard layout (started by
+# plinius-crypt-locale.path). Runs as plinius-crypt-initramfs.service.
+# A system that starts through the phone's Halium ramdisk (tools/crypt-ramdisk.sh) has no
+# initramfs of its own: there halium-rebuild renews the prompt's part of that ramdisk instead.
+set -euo pipefail
+
+# At most one build in this many seconds. background-install and look-install run without a
+# password in the active session (org.plinius.crypt.background.policy), and on the phone each
+# build writes vendor_boot and init_boot: a program changing the wallpaper over and over would
+# otherwise have the boot partitions rewritten as often. Changes in between wait and go into
+# the next build together.
+min_interval=300
+last_build=/var/lib/plinius-crypt/last-rebuild
+
+# What the install hook reads; keep in sync with install and plinius-crypt-locale.path
+inputs=(/etc/locale.conf /etc/vconsole.conf /etc/X11/xorg.conf.d/00-keyboard.conf
+	/var/lib/plinius-crypt/glass-background.bin /var/lib/plinius-crypt/look)
+
+# stamp: one checksum over the contents of all inputs (a missing file counts as empty)
+stamp() {
+	local f
+	for f in "${inputs[@]}"; do
+		printf '%s\n' "$f"
+		cat "$f" 2>/dev/null || true
+	done | sha256sum
+}
+
+# build: the initramfs this system starts with
+build() {
+	# The phone's Halium system: it mounts the data partition on /userdata
+	if [[ -f /var/lib/plinius-crypt/halium/target ]] || findmnt -n /userdata > /dev/null; then
+		/usr/lib/plinius-crypt/halium-rebuild
+	else
+		mkinitcpio -P
+	fi
+}
+
+# Debounce: one change in the settings writes several files in a row (GNOME Settings sets the
+# language, then the keyboard; systemd-localed writes 00-keyboard.conf and vconsole.conf).
+# Starting the service again while it runs adds nothing, so later changes would be lost:
+# wait for the files to settle first, and build again if they changed during the build.
+sleep 3
+for _ in 1 2 3; do
+	if [[ -e $last_build ]]; then
+		left=$(($(stat -c %Y "$last_build") + min_interval - $(date +%s)))
+		# A stamp in the future (the clock was set back) waits no longer than the interval
+		((left <= min_interval)) || left=$min_interval
+		if ((left > 0)); then
+			echo "rebuild-initramfs: last build less than $min_interval s ago, waiting $left s" >&2
+			sleep "$left"
+		fi
+	fi
+	before=$(stamp)
+	build
+	mkdir -p "${last_build%/*}"
+	touch "$last_build"
+	[[ $(stamp) == "$before" ]] && exit 0
+	echo "rebuild-initramfs: settings changed during the build, building again" >&2
+done

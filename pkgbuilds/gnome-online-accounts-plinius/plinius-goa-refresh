@@ -1,0 +1,273 @@
+#!/usr/bin/python3
+"""Make evolution-data-server (EDS) load what an online account offers.
+
+EDS looks up an account's calendars and address books once, when its service starts. On the phone
+that is before the network is up (the session starts first, gnome-calls and folks pull EDS in). The
+name of the server does not resolve, EDS notes the error and never tries again, not even once the
+network is there. The account is then connected and no app sees any of its data.
+
+It also asks for the password only once. Its request (the signal CredentialsRequired) is meant for a
+prompt of a mail or calendar app, which this phone does not run, and without an answer the account
+stays at "rejected" although the server would accept the password. So we answer it with the password
+of the online account. The keyring opens through a dialog after the start: until then we wait, as
+reading the password would put up that dialog a second time.
+
+    plinius-goa-refresh --discover   called when the network comes up: repeat the lookup for all
+                                     online accounts, with retries
+    plinius-goa-refresh ACCOUNT_ID   called by the Refresh button: repeat the lookup for one account
+                                     and fetch the contents of its calendars and address books too
+
+Exit status 0 when everything was reached, 1 otherwise.
+"""
+import os
+import sys
+import threading
+import time
+
+import gi
+
+gi.require_version("EDataServer", "1.2")
+gi.require_version("EBook", "1.2")
+gi.require_version("ECal", "2.0")
+gi.require_version("Goa", "1.0")
+from gi.repository import EBook, ECal, EDataServer, Gio, GLib, Goa  # noqa: E402
+
+# The app waits for us, so we must end even when a server does not answer
+TIME_LIMIT = 120
+# Do not wait until a backend reports "connected" (guint32 -1): calendars are disconnected between two
+# syncs, so that a client would wait for its whole timeout, measured 20 s for each calendar
+NO_WAIT = 0xFFFFFFFF
+# A refresh returns at once and reports no end. The backend works while a client is open and quits
+# without one; a refresh of 9 sources was over after about 6 s
+FETCH_SECONDS = 8
+# The lookup reports no end: it counts as finished when nothing new appeared for this long
+SETTLE_SECONDS = 3
+SETTLE_LIMIT = 20
+# --discover: the network may need a moment more after NetworkManager reports it
+DISCOVER_ATTEMPTS = 3
+DISCOVER_RETRY_SECONDS = 10
+# --discover: how long to wait for the keyring. Sleep does not count, this is time the phone is awake
+KEYRING_WAIT_SECONDS = 30 * 60
+KEYRING_POLL_SECONDS = 5
+
+CLIENTS = (
+    (EDataServer.SOURCE_EXTENSION_ADDRESS_BOOK, None),
+    (EDataServer.SOURCE_EXTENSION_CALENDAR, ECal.ClientSourceType.EVENTS),
+    (EDataServer.SOURCE_EXTENSION_TASK_LIST, ECal.ClientSourceType.TASKS),
+    (EDataServer.SOURCE_EXTENSION_MEMO_LIST, ECal.ClientSourceType.MEMOS),
+)
+
+
+def log(message):
+    print(message, file=sys.stderr, flush=True)
+
+
+def account_sources(registry, account_id=None):
+    """The collection sources of the online accounts, or of one of them."""
+    sources = []
+    for source in registry.list_sources(EDataServer.SOURCE_EXTENSION_GOA):
+        if not source.has_extension(EDataServer.SOURCE_EXTENSION_COLLECTION):
+            continue
+        goa = source.get_extension(EDataServer.SOURCE_EXTENSION_GOA)
+        if account_id is None or goa.get_account_id() == account_id:
+            sources.append(source)
+    return sources
+
+
+def children(registry, source):
+    return [s for s in registry.list_sources(None) if s.get_parent() == source.get_uid()]
+
+
+def last_error(source):
+    """The error EDS got on its last attempt for this source, if any."""
+    try:
+        ok, reason, _pem, _flags, error = source.get_last_credentials_required_arguments_sync(None)
+    except GLib.Error as e:
+        return e.message
+    if ok and reason != EDataServer.SourceCredentialsReason.UNKNOWN:
+        return error.message if error else reason.value_nick
+    return None
+
+
+def credentials_missing(source):
+    """Whether EDS waits for a password or the last one it had did not work."""
+    try:
+        ok, reason, _pem, _flags, _error = source.get_last_credentials_required_arguments_sync(None)
+    except GLib.Error:
+        return False
+    return ok and reason in (
+        EDataServer.SourceCredentialsReason.REQUIRED,
+        EDataServer.SourceCredentialsReason.REJECTED,
+    )
+
+
+def keyring_locked():
+    """Whether the default keyring is closed. An unknown state counts as open, GOA then reports it."""
+    try:
+        reply = Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync(
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets/aliases/default",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            GLib.Variant("(ss)", ("org.freedesktop.Secret.Collection", "Locked")),
+            GLib.VariantType("(v)"),
+            Gio.DBusCallFlags.NONE,
+            5000,
+            None,
+        )
+    except GLib.Error:
+        return False
+    return reply.unpack()[0]
+
+
+def wait_for_keyring():
+    """Wait until the dialog after the start has opened the keyring, or give up after a while."""
+    deadline = time.monotonic() + KEYRING_WAIT_SECONDS
+    while keyring_locked():
+        if time.monotonic() >= deadline:
+            log("The keyring stayed closed")
+            return
+        time.sleep(KEYRING_POLL_SECONDS)
+
+
+def account_password(account_id):
+    """The password of an online account. None while the keyring is closed or if it has none (OAuth)."""
+    if keyring_locked():
+        return None
+    try:
+        for account in Goa.Client.new_sync(None).get_accounts():
+            if account.get_account().props.id == account_id:
+                password_based = account.get_password_based()
+                return password_based.call_get_password_sync("password", None) if password_based else None
+    except GLib.Error as e:
+        log(f"Could not read the password: {e.message}")
+    return None
+
+
+def give_password(source):
+    """Answer the request of EDS with the password of the online account. Returns whether it got one."""
+    password = account_password(source.get_extension(EDataServer.SOURCE_EXTENSION_GOA).get_account_id())
+    if password is None:
+        return False
+    credentials = EDataServer.NamedParameters.new()
+    credentials.set(EDataServer.SOURCE_CREDENTIAL_PASSWORD, password)
+    try:
+        source.invoke_authenticate_sync(credentials, None)
+    except GLib.Error as e:
+        log(f"Could not pass on the password: {e.message}")
+        return False
+    return True
+
+
+def lookup(registry, source):
+    """Repeat the lookup and wait until it has finished."""
+    registry.refresh_backend_sync(source.get_uid(), None)
+    known = len(children(registry, source))
+    still_since = time.monotonic()
+    deadline = still_since + SETTLE_LIMIT
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        count = len(children(registry, source))
+        if count != known:
+            known, still_since = count, time.monotonic()
+        # An error may still be the one of the last attempt: this one clears it when it succeeds. A
+        # missing password does not clear by waiting.
+        elif time.monotonic() - still_since >= SETTLE_SECONDS and (
+            last_error(source) is None or credentials_missing(source)
+        ):
+            break
+
+
+def discover(registry, source):
+    """Repeat the lookup, with the password if EDS lacks it. Returns an error message or None."""
+    if credentials_missing(source):
+        give_password(source)
+    lookup(registry, source)
+    # EDS may ask only now. A second "rejected" is the server's answer to the password: stop there, as
+    # further attempts would count as guessing on the server.
+    if credentials_missing(source) and give_password(source):
+        lookup(registry, source)
+    return last_error(source)
+
+
+def fetch(source, clients):
+    """Start fetching one calendar or address book, adding its client to clients, which the caller
+    keeps while the backend works. Returns an error message or None."""
+    for extension, kind in CLIENTS:
+        if not source.has_extension(extension):
+            continue
+        try:
+            if kind is None:
+                client = EBook.BookClient.connect_sync(source, NO_WAIT, None)
+            else:
+                client = ECal.Client.connect_sync(source, kind, NO_WAIT, None)
+            clients.append(client)
+            if client.check_refresh_supported():
+                client.refresh_sync(None)
+        except GLib.Error as e:
+            return e.message
+    return None
+
+
+def discover_all(registry):
+    """Called when the network comes up. Retries while EDS still reports an error."""
+    failed = False
+    for source in account_sources(registry):
+        for attempt in range(DISCOVER_ATTEMPTS):
+            if attempt:
+                time.sleep(DISCOVER_RETRY_SECONDS)
+            error = discover(registry, source)
+            # Waiting does not change the answer about a password
+            if error is None or credentials_missing(source):
+                break
+        if error is not None:
+            log(f"{source.get_display_name()}: {error}")
+            failed = True
+    return not failed
+
+
+def refresh_account(registry, account_id):
+    """Called by the Refresh button."""
+    sources = account_sources(registry, account_id)
+    if not sources:
+        # No calendars or contacts in this account, or they are switched off: nothing to fetch
+        return True
+    failed = False
+    clients = []
+    for source in sources:
+        error = discover(registry, source)
+        if error is not None:
+            log(f"{source.get_display_name()}: {error}")
+            failed = True
+        # Also after an error: the calendars and address books known so far have their own connection
+        for child in children(registry, source):
+            if not child.get_enabled():
+                continue
+            error = fetch(child, clients)
+            if error is not None:
+                log(f"{child.get_display_name()}: {error}")
+                failed = True
+    if clients:
+        time.sleep(FETCH_SECONDS)
+    return not failed
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1].startswith("-") and sys.argv[1] != "--discover":
+        print(__doc__, file=sys.stderr)
+        return 2
+    # Before the time limit: waiting for the user to open the keyring is not a server that hangs
+    if sys.argv[1] == "--discover":
+        wait_for_keyring()
+    # os._exit: the calls above block and cannot be interrupted any other way
+    timer = threading.Timer(TIME_LIMIT, lambda: (log("Time limit reached"), os._exit(1)))
+    timer.daemon = True
+    timer.start()
+    registry = EDataServer.SourceRegistry.new_sync(None)
+    if sys.argv[1] == "--discover":
+        return 0 if discover_all(registry) else 1
+    return 0 if refresh_account(registry, sys.argv[1]) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,256 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 03 Nov 2026 14:00:00 +0100
+Subject: [PATCH] Announce each modem once, and only when it is complete
+
+dbus-next sends InterfacesAdded/InterfacesRemoved from the exported
+object's own path; GDBusObjectManagerClient (libmm-glib) only takes them
+from the ObjectManager's path. A modem exported after ModemManager1 was
+requested (after a restart of ofono2mm) never reached NetworkManager.
+
+Sending each interface from the manager's path is not enough: the client
+creates the object with the first interface that arrives, and
+NetworkManager drops a modem object without the Modem interface for good.
+And for an object a client knows already, InterfacesAdded makes GLib
+replace the interface proxies: NetworkManager kept the old ones, missed
+every state change and left a registered modem "failed".
+
+So a client learns about each modem exactly once, complete:
+- ModemManager1 is requested once all modems oFono listed are exported
+  (a second caller waits for an export that is running); clients get
+  them from GetManagedObjects, which lists complete modems only.
+- A modem that becomes complete later is announced in one
+  InterfacesAdded from /org/freedesktop/ModemManager1 with all its
+  interfaces, and listed from then on.
+
+dbus-next also took EAGAIN from send() for a broken connection and
+disconnected (BlockingIOError at boot); it now waits for the socket.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ main.py | 140 +++++++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 123 insertions(+), 17 deletions(-)
+
+diff --git a/main.py b/main.py
+index 67ac745..fbd5aaf 100755
+--- a/main.py
++++ b/main.py
+@@ -4,7 +4,7 @@ from dbus_next.aio import MessageBus
+ from dbus_next.service import (ServiceInterface,
+                                method, dbus_property)
+ from dbus_next.constants import PropertyAccess
+-from dbus_next import DBusError, BusType
++from dbus_next import DBusError, BusType, Message
+ 
+ import asyncio
+ from argparse import ArgumentParser
+@@ -15,21 +15,117 @@ from ofono2mm.utils import async_locked
+ 
+ has_bus = False
+ 
++class _SendWaitsForSocket:
++    # dbus-next writes to a non-blocking socket, but takes EAGAIN from send() for a broken
++    # connection: it disconnects, and ofono2mm ended with "BlockingIOError: Resource temporarily
++    # unavailable" when the daemon's queue was full at boot. Report EAGAIN as nothing sent:
++    # the writer then waits for the socket to be writable and sends the rest. Only send() is
++    # wrapped; sendmsg() is for passing file descriptors, which this bus never negotiates.
++    def __init__(self, sock):
++        self._sock = sock
++
++    def send(self, data):
++        try:
++            return self._sock.send(data)
++        except BlockingIOError:
++            return 0
++
++    def __getattr__(self, name):
++        return getattr(self._sock, name)
++
+ class ModemManagerBus(MessageBus):
++    MANAGER_PATH = '/org/freedesktop/ModemManager1'
++    MODEM_PREFIX = MANAGER_PATH + '/Modem/'
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        self._writer.sock = _SendWaitsForSocket(self._writer.sock)
++        # Modems whose interfaces are all exported (see modem_ready)
++        self._ready_modems = set()
++        # Set once ModemManager1 is owned: from then on a new modem is announced by a signal
++        self.announce_modems = False
++
+     # ModemManager's ObjectManager only lists modems; SIMs, bearers, calls and SMS are plain
+     # objects next to it. dbus-next lists every object below the path, and libmm-glib takes
+     # each of them for a modem: clients that track the first one (Phosh) may get a SIM and
+-    # then see no modem at all. Answer GetManagedObjects with the modems only.
++    # then see no modem at all. Answer GetManagedObjects with the modems only, and only with
++    # those that are complete: a modem still being exported reached NetworkManager without
++    # Modem.Simple, and mobile data failed ("cannot access the Simple mobile broadband modem
++    # interface").
+     def _default_get_managed_objects_handler(self, msg, send_reply):
+         exports = self._path_exports
+         self._path_exports = {path: interfaces for path, interfaces in exports.items()
+-                              if path.startswith('/org/freedesktop/ModemManager1/Modem/')}
++                              if path in self._ready_modems}
+         try:
+             # Collects the objects synchronously, only property values may arrive later
+             super()._default_get_managed_objects_handler(msg, send_reply)
+         finally:
+             self._path_exports = exports
+ 
++    # dbus-next sends InterfacesAdded/InterfacesRemoved from the exported object's own path, but
++    # GDBusObjectManagerClient (libmm-glib) only takes them from the ObjectManager's path: a modem
++    # exported after ModemManager1 was requested (after a restart of ofono2mm, often the one with
++    # the SIM) never reached NetworkManager, and mobile data was gone until the next boot.
++    # Sending each interface from the manager's path is not enough either: the client creates
++    # the object with the first interface that arrives, and NetworkManager drops a modem object
++    # without the Modem interface for good ("doesn't have the Modem interface, ignoring").
++    # And a client must learn about a modem exactly once: for an object it knows already,
++    # InterfacesAdded makes GLib replace each interface proxy, while NetworkManager keeps
++    # listening on the old ones. It then missed every state change of the modem and kept it
++    # "failed", without mobile data, while the modem was registered.
++    # So a modem is announced once, with all its interfaces, when it is complete (modem_ready).
++    # Modems complete before ModemManager1 is owned only reach clients by GetManagedObjects,
++    # later ones only by the signal: it is listed from the moment the signal is queued. Later
++    # changes to a complete modem go out one interface at a time; other objects are announced
++    # nowhere, as in ModemManager.
++    def modem_ready(self, path):
++        if path in self._ready_modems or path not in self._path_exports:
++            return
++        if not self.announce_modems or self._disconnected:
++            self._ready_modems.add(path)
++            return
++
++        interfaces = list(self._path_exports[path])
++        body = {interface.name: None for interface in interfaces}
++
++        def get_properties_callback(interface, result, user_data, e):
++            if e is not None:
++                Logger.error(f'InterfacesAdded for {interface.name} lacks properties: {e}')
++            body[interface.name] = result if result is not None else {}
++            if all(value is not None for value in body.values()) and path in self._path_exports:
++                self._ready_modems.add(path)
++                self._send_object_manager_signal('InterfacesAdded', 'oa{sa{sv}}', [path, body])
++
++        for interface in interfaces:
++            ServiceInterface._get_all_property_values(interface, get_properties_callback)
++
++    def _send_object_manager_signal(self, member, signature, body):
++        if self._disconnected:
++            return
++        self.send(Message.new_signal(path=self.MANAGER_PATH,
++                                     interface='org.freedesktop.DBus.ObjectManager',
++                                     member=member, signature=signature, body=body))
++
++    def _emit_interface_added(self, path, interface):
++        if path not in self._ready_modems or self._disconnected:
++            return
++
++        def get_properties_callback(interface, result, user_data, e):
++            if e is not None:
++                Logger.error(f'InterfacesAdded for {interface.name} lacks properties: {e}')
++            self._send_object_manager_signal('InterfacesAdded', 'oa{sa{sv}}',
++                                             [path, {interface.name: result or {}}])
++
++        ServiceInterface._get_all_property_values(interface, get_properties_callback)
++
++    def _emit_interface_removed(self, path, removed_interfaces):
++        if path not in self._ready_modems:
++            return
++        if path not in self._path_exports:
++            # Gone with its last interface: announced again only once it is complete
++            self._ready_modems.discard(path)
++        self._send_object_manager_signal('InterfacesRemoved', 'oas', [path, removed_interfaces])
++
+ class MMInterface(ServiceInterface):
+     def __init__(self, loop, bus):
+         super().__init__('org.freedesktop.ModemManager1')
+@@ -40,7 +136,8 @@ class MMInterface(ServiceInterface):
+         self.mm_modem_interfaces = []
+         self.mm_modem_objects = []
+         self.i = 0
+-        self.exported_paths = set()
++        # oFono modem path -> task exporting it
++        self.modem_exports = {}
+         self.loop.create_task(self.check_ofono_presence())
+ 
+     @dbus_property(access=PropertyAccess.READ)
+@@ -81,7 +178,7 @@ class MMInterface(ServiceInterface):
+         self.mm_modem_intefaces = []
+         # Reset before the first await: oFono's ModemAdded may already be on its way
+         self.i = 0
+-        self.exported_paths = set()
++        self.modem_exports = {}
+ 
+         if not self.ofono_manager_interface:
+             return
+@@ -100,22 +197,23 @@ class MMInterface(ServiceInterface):
+             if not self.ofono_modem_list:
+                 await asyncio.sleep(0.5)
+ 
++        # Waits for every modem, also for one whose export ModemAdded started already
+         for modem in self.ofono_modem_list:
+             await self.export_new_modem(modem[0], modem[1])
+ 
+         await self.request_bus_name()
+ 
+     async def request_bus_name(self):
+-        # Once any modem is exported. ModemAdded can come before the reply to GetModems: then
+-        # its export claims the modems, the loop above skips them and finds no exported modem,
+-        # so the export itself has to request the name as well (at boot ModemManager1 never
+-        # came up and systemd stopped it after the start timeout)
++        # Once all modems that oFono listed are complete: clients then get both of them from
++        # GetManagedObjects. Requested after the first modem, the second one was still being
++        # exported and reached NetworkManager without Modem.Simple, or not at all.
+         global has_bus
+ 
+         if has_bus or len(self.mm_modem_objects) == 0:
+             return
+         has_bus = True
+         await self.bus.request_name('org.freedesktop.ModemManager1')
++        self.bus.announce_modems = True
+ 
+     def dbus_name_owner_changed(self, name, old_owner, new_owner):
+         if name == "org.ofono":
+@@ -134,13 +232,20 @@ class MMInterface(ServiceInterface):
+         # ModemAdded can arrive while the modems from GetModems are still being exported, even for
+         # one of them. Claim the modem and its index before the first await, so that no modem is
+         # exported twice and no two modems share an index (the second export of
+-        # ModemManager1/SIM/<index> raised and ModemManager1 was never requested).
+-        if path in self.exported_paths:
+-            return
+-        self.exported_paths.add(path)
+-        index = self.i
+-        self.i += 1
++        # ModemManager1/SIM/<index> raised and ModemManager1 was never requested). A second
++        # caller waits for the export that is running.
++        export = self.modem_exports.get(path)
++        if export is None:
++            index = self.i
++            self.i += 1
++            export = self.loop.create_task(self.export_modem(path, mprops, index))
++            self.modem_exports[path] = export
++        try:
++            await asyncio.shield(export)
++        except Exception as e:
++            Logger.error(f'Exporting modem {path} failed: {e}')
+ 
++    async def export_modem(self, path, mprops, index):
+         mm_modem_interface = MMModemInterface(self.loop, index, self.bus, self.ofono_client, path)
+         mm_modem_interface.ofono_props = mprops
+         ofono_modem = self.ofono_client["ofono_modem"][path]['org.ofono.Modem']
+@@ -171,12 +276,13 @@ class MMInterface(ServiceInterface):
+         await mm_modem_interface.init_mm_signal_interface()
+         await mm_modem_interface.init_mm_location_interface()
+         await mm_modem_interface.init_mm_voice_interface()
++        # Only now clients learn about the modem, with all its interfaces at once
++        self.bus.modem_ready(f'/org/freedesktop/ModemManager1/Modem/{index}')
+         self.mm_modem_interfaces.append(mm_modem_interface)
+         self.mm_modem_objects.append(f'/org/freedesktop/ModemManager1/Modem/{index}')
+-        await self.request_bus_name()
+ 
+     def ofono_modem_removed(self, path):
+-        self.exported_paths.discard(path)
++        self.modem_exports.pop(path, None)
+         for mm_object in self.mm_modem_objects:
+             try:
+                 if mm_object.modem_name == path:

@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 15:27:09 +0100
+Subject: [PATCH] output: A shown OSK stays on top of a fullscreen view
+
+Over a fullscreen view the top layer, and with it the OSK, was only
+drawn while that view had an input method enabled. Apps that never
+enable one, like games through SDL or DOSBox, get the OSK unfolded by
+hand or over D-Bus: it was mapped, yet stayed behind the view and only
+came up while the screen was touched.
+
+Reveal the shell while the OSK is mapped. Stevia unmaps its surface
+when folded, so nothing shows over a fullscreen video otherwise.
+---
+ src/output.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/output.c b/src/output.c
+index 9ffac0a..abcc3eb 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -2600,6 +2600,15 @@ should_reveal_shell (PhocOutput *self)
+     }
+   }
+ 
++  /* Is the OSK shown over our fullscreen view? Apps that never enable an input method (games
++   * through SDL, DOSBox) get it unfolded by hand or over D-Bus; it stayed hidden behind them and
++   * only came up while the screen was touched. Stevia unmaps its surface when folded. */
++  if (phoc_view_is_mapped (self->fullscreen_view)) {
++    PhocLayerSurface *osk = phoc_layer_shell_find_osk (self);
++    if (osk && phoc_layer_surface_get_mapped (osk))
++      return true;
++  }
++
+   /* Is some draggable surface unfolded, being dragged or animated? */
+   wl_list_for_each (layer_surface, &self->layer_surfaces, link) {
+     PhocDraggableLayerSurface *draggable;

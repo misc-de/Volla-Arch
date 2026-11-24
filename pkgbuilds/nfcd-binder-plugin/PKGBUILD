@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=nfcd-binder-plugin
+pkgver=1.2.2
+pkgrel=2
+pkgdesc="nfcd plugin for the Android NFC HAL over binder (HIDL and AIDL)"
+arch=(aarch64 x86_64)
+url="https://github.com/mer-hybris/nfcd-binder-plugin"
+license=(BSD-3-Clause)
+depends=(nfcd libgbinder libncicore libnciplugin)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('e8713bd5f307096a5322fda236c12281bf4f9d804c303a55b95faab753c171ef')
+
+build() {
+	cd "$pkgname-$pkgver"
+	make KEEP_SYMBOLS=1 release
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make PLUGIN_DIR=usr/lib/nfcd/plugins DESTDIR="$pkgdir" install
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

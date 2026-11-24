@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:15:33 +0100
+Subject: [PATCH 3/3] network: WireGuard settings on the editor's first page
+
+Plinius: the settings of a WireGuard connection (name, interface, keys,
+peers) stand on the editor's first page, above the rows for Details,
+IPv4 and IPv6, instead of behind a row "WireGuard" of their own. Their
+margins come from the first page's clamp.
+---
+ .../connection-editor/connection-editor.blp   | 26 +++++++++++++------
+ .../connection-editor/net-connection-editor.c | 12 +++++++++
+ .../connection-editor/wireguard-page.blp      |  5 +---
+ 3 files changed, 31 insertions(+), 12 deletions(-)
+
+diff --git a/panels/network/connection-editor/connection-editor.blp b/panels/network/connection-editor/connection-editor.blp
+index e9c3ad1e2..5b7ecf369 100644
+--- a/panels/network/connection-editor/connection-editor.blp
++++ b/panels/network/connection-editor/connection-editor.blp
+@@ -42,7 +42,8 @@ template $NetConnectionEditor: Adw.Dialog {
+ 
+             Adw.Spinner spinner {}
+ 
+-            // The settings pages, each row opens one (net-connection-editor.c)
++            // The settings pages, each row opens one (net-connection-editor.c); the WireGuard
++            // settings stand right here, above the rows
+             ScrolledWindow pages_box {
+               hscrollbar-policy: never;
+ 
+@@ -52,14 +53,23 @@ template $NetConnectionEditor: Adw.Dialog {
+                 margin-top: 12;
+                 margin-bottom: 12;
+ 
+-                ListBox pages_list {
+-                  valign: start;
+-                  selection-mode: none;
+-                  row-activated => $page_row_activated_cb(template);
++                Box {
++                  orientation: vertical;
++                  spacing: 12;
++
++                  Adw.Bin inline_page {
++                    visible: false;
++                  }
++
++                  ListBox pages_list {
++                    valign: start;
++                    selection-mode: none;
++                    row-activated => $page_row_activated_cb(template);
+ 
+-                  styles [
+-                    "boxed-list",
+-                  ]
++                    styles [
++                      "boxed-list",
++                    ]
++                  }
+                 }
+               }
+             }
+diff --git a/panels/network/connection-editor/net-connection-editor.c b/panels/network/connection-editor/net-connection-editor.c
+index d2d0b6f66..b4628eceb 100644
+--- a/panels/network/connection-editor/net-connection-editor.c
++++ b/panels/network/connection-editor/net-connection-editor.c
+@@ -59,6 +59,7 @@ struct _NetConnectionEditor {
+     AdwNavigationPage *main_page;
+     GtkWidget *pages_box;
+     GtkListBox *pages_list;
++    AdwBin *inline_page;
+     AdwToastOverlay *toast_overlay;
+     GtkStack *toplevel_stack;
+ 
+@@ -397,6 +398,7 @@ net_connection_editor_class_init (NetConnectionEditorClass *class)
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, navigation_view);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, pages_box);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, pages_list);
++    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, inline_page);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toast_overlay);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toplevel_stack);
+ 
+@@ -618,6 +620,16 @@ page_initialized (NetConnectionEditor *self, GError *error, CEPage *page)
+     }
+     g_ptr_array_insert (self->pages, i, page);
+ 
++    /* WireGuard: interface, key and peers are what the connection is about, a row that opens
++     * them would only be one step more; they stand on the first page */
++    if (CE_IS_PAGE_WIREGUARD (page)) {
++        adw_bin_set_child (self->inline_page, GTK_WIDGET (page));
++        gtk_widget_set_visible (GTK_WIDGET (self->inline_page), TRUE);
++        self->initializing_pages = g_slist_remove (self->initializing_pages, page);
++        recheck_initialization (self);
++        return;
++    }
++
+     navigation_page = new_navigation_page (page);
+     row = adw_action_row_new ();
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), ce_page_get_title (page));
+diff --git a/panels/network/connection-editor/wireguard-page.blp b/panels/network/connection-editor/wireguard-page.blp
+index ba38e6948..62c61ba0f 100644
+--- a/panels/network/connection-editor/wireguard-page.blp
++++ b/panels/network/connection-editor/wireguard-page.blp
+@@ -7,11 +7,8 @@ template $CEPageWireguard: Box {
+     propagate-natural-width: true;
+ 
+     Viewport {
++      // Plinius: on the editor's first page, whose clamp brings the margins
+       Grid main_box {
+-        margin-start: 24;
+-        margin-end: 24;
+-        margin-top: 24;
+-        margin-bottom: 24;
+         orientation: vertical;
+         row-spacing: 6;
+         column-spacing: 6;
+-- 
+2.55.0
+

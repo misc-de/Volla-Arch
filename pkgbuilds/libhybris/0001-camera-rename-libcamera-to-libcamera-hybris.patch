@@ -1,0 +1,97 @@
+From cadeea4d2f3c6d8a7954cbd69cc78015ed4a0913 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 26 Oct 2026 20:04:35 +0100
+Subject: [PATCH] camera: rename libcamera to libcamera-hybris
+
+The library and its pkg-config file clash with libcamera
+(https://libcamera.org), which distributions ship as libcamera.so and
+libcamera.pc. Rename to libcamera-hybris, as FuriOS already does downstream.
+---
+ hybris/camera/Makefile.am                          | 14 +++++++-------
+ .../{libcamera.pc.in => libcamera-hybris.pc.in}    |  2 +-
+ hybris/configure.ac                                |  2 +-
+ hybris/tests/Makefile.am                           |  4 ++--
+ 4 files changed, 11 insertions(+), 11 deletions(-)
+ rename hybris/camera/{libcamera.pc.in => libcamera-hybris.pc.in} (78%)
+
+diff --git a/hybris/camera/Makefile.am b/hybris/camera/Makefile.am
+index 63aec2e..a4148ae 100644
+--- a/hybris/camera/Makefile.am
++++ b/hybris/camera/Makefile.am
+@@ -1,17 +1,17 @@
+ lib_LTLIBRARIES = \
+-	libcamera.la
++	libcamera-hybris.la
+ 
+-libcamera_la_SOURCES = camera.c
+-libcamera_la_CFLAGS = -I$(top_srcdir)/include $(ANDROID_HEADERS_CFLAGS)
++libcamera_hybris_la_SOURCES = camera.c
++libcamera_hybris_la_CFLAGS = -I$(top_srcdir)/include $(ANDROID_HEADERS_CFLAGS)
+ if WANT_TRACE
+-libcamera_la_CFLAGS += -DDEBUG
++libcamera_hybris_la_CFLAGS += -DDEBUG
+ endif
+ if WANT_DEBUG
+-libcamera_la_CFLAGS += -ggdb -O0
++libcamera_hybris_la_CFLAGS += -ggdb -O0
+ endif
+-libcamera_la_LDFLAGS = \
++libcamera_hybris_la_LDFLAGS = \
+ 	$(top_builddir)/common/libhybris-common.la \
+ 	-version-info "1":"0":"0"
+ 
+ pkgconfigdir = $(libdir)/pkgconfig
+-pkgconfig_DATA = libcamera.pc
++pkgconfig_DATA = libcamera-hybris.pc
+diff --git a/hybris/camera/libcamera.pc.in b/hybris/camera/libcamera-hybris.pc.in
+similarity index 78%
+rename from hybris/camera/libcamera.pc.in
+rename to hybris/camera/libcamera-hybris.pc.in
+index be38931..3b1c2d2 100644
+--- a/hybris/camera/libcamera.pc.in
++++ b/hybris/camera/libcamera-hybris.pc.in
+@@ -6,5 +6,5 @@ includedir=@includedir@
+ Name: hybris-camera
+ Description: libhybris camera library
+ Version: @VERSION@
+-Libs: -L${libdir} -lhybris-common -lcamera
++Libs: -L${libdir} -lhybris-common -lcamera-hybris
+ Cflags: -I${includedir}
+diff --git a/hybris/configure.ac b/hybris/configure.ac
+index 1f7a09e..4e77090 100644
+--- a/hybris/configure.ac
++++ b/hybris/configure.ac
+@@ -297,7 +297,7 @@ AC_CONFIG_FILES([
+ 	properties/Makefile
+ 	properties/libandroid-properties.pc
+ 	camera/Makefile
+-	camera/libcamera.pc
++	camera/libcamera-hybris.pc
+ 	common/Makefile
+ 	common/jb/Makefile
+ 	common/stub/Makefile
+diff --git a/hybris/tests/Makefile.am b/hybris/tests/Makefile.am
+index a637dcc..fa39dd9 100644
+--- a/hybris/tests/Makefile.am
++++ b/hybris/tests/Makefile.am
+@@ -272,7 +272,7 @@ test_camera_LDADD = \
+ 	$(top_builddir)/common/libhybris-common.la \
+ 	$(libegl) \
+ 	$(libglesv2) \
+-	$(top_builddir)/camera/libcamera.la \
++	$(top_builddir)/camera/libcamera-hybris.la \
+ 	$(top_builddir)/input/libis.la \
+ 	$(WAYLAND_EGL_LIBS) \
+ 	$(WAYLAND_CLIENT_LIBS)
+@@ -313,7 +313,7 @@ test_recorder_LDADD = \
+ 	$(libegl) \
+ 	$(libglesv2) \
+ 	$(top_builddir)/media/libmedia.la \
+-	$(top_builddir)/camera/libcamera.la \
++	$(top_builddir)/camera/libcamera-hybris.la \
+ 	$(top_builddir)/input/libis.la \
+ 	$(top_builddir)/sf/libsf.la
+ 
+-- 
+2.55.0
+

@@ -1,0 +1,107 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-desktop
+pkgver=0.1
+pkgrel=18
+pkgdesc="A desktop on another computer's screen over VNC or on a TV, in the phone's own session: Phosh stays on the phone"
+arch=(any)
+license=(MIT)
+# phoc makes the screen on request (0024), wayvnc checks the login through plinius-pinguard.
+# The switches are in gnome-control-center-plinius (the panel Desktop over VNC).
+# The desktop on a TV (0.1-17): plinius-desktop-cast.service makes the same screen without a VNC
+# server; Schwupp starts it from the cast quick setting and shares the screen with the TV. VNC
+# and TV show one desktop, the first session to end ends it for both (phoc has one virtual
+# screen). The screen's name moved to $XDG_RUNTIME_DIR/plinius-desktop-screen, which outlives
+# the VNC session's runtime directory.
+depends=(bash glib2 gtk-layer-shell gtk3 iptables libpulse networkmanager openssl
+	'phoc-plinius>=0.59.0-7' python python-cairo python-gobject systemd upower waybar
+	'wayvnc-plinius>=0.10.2-1' wlr-randr wtype)
+makedepends=(gettext)
+backup=(etc/plinius-desktop.conf)
+install=plinius-desktop.install
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-desktop-session
+	plinius-desktop-keys
+	plinius-desktop-set
+	desk_common.py
+	desk-apps.py
+	desk-apps-toggle
+	desk-battery.py
+	desk-network.py
+	desk-settings.py
+	battery-status.sh
+	wifi-status.sh
+	fullscreen.sh
+	waybar.jsonc
+	waybar.css
+	plinius-desktop.socket
+	plinius-desktop.service
+	plinius-desktop-cast.service
+	plinius-desktop-firewall.service
+	plinius-desktop.conf
+	org.plinius.desktop.policy
+	50-plinius-desktop.gschema.override
+	org.plinius.desktop.gschema.xml
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('d246532765610b3ce4295299043fead40a67b9aa472075b992551fead0343ed3'
+	'8392839d0aaace5ca82c2d6b71f26dbdd7318096ce5fc870148fd6eed2adf3fb'
+	'017fd376a229af469e731f2cbb80db1e461f3bf404a19ea2b67996a731c8c599'
+	'2be535554ffc6427689efa69a79a7ef4a7deabb1af266073aa3ccdf4f6ccc494'
+	'daff96d3774b35fcfed31be51257d420ed233dc7528b1077dfd8d7cd95a50d8a'
+	'f77faa29335da93200775b8b346d7690d0e5c090f5e20344f1eecd9dad261148'
+	'f51b896e7a87b53054608acd8ce864655673723e395b5f4b0d33d9c9477b2ffe'
+	'113f40d258415566d78d21e70969a541db72f98185ceffbd5dfafcc35d0be893'
+	'e548ef760b4063c4b0a2703a8d4942bbf90f715de8f6134f3eacf26347b9f141'
+	'2a97408cd8063649acf4d1d45972c9127faf2858b3fddd5c4c432a436c797c74'
+	'a7792f55649196882becc9549d61399b63610ba9ab32a2045033d1c5008e8f48'
+	'9c374a21768435ca00e572fc3614077616006a5b3bd28dfedd725df93a6767fe'
+	'036ab92b800c69ed0198afb5d3f6e91aae3399abf7f6514408f389dd109586de'
+	'9d43938f882c55e39c3a26c744fd0af2b3e319aaabf826bc27a00518b54efc89'
+	'633df96e0a957c567b31c86cb0aade2b822d60fae8f620c1c007c7969bdbcc56'
+	'3709e9f56c6de363e5eb0d35666b52bf1203733409b5818a9ea1eddea04299d5'
+	'3f89344e2a0c7480fb9919f8f78d8f26a1a62b50a1614274bc24d48f9063c4f2'
+	'34cb1db108b6f4a2fef4dabdc775b101f6069033f62ae06e9ddfb39e18436af0'
+	'421257ac2f9833ca652e11db676cddfb6b8fdf55b314cfc19761fbbb54afd4bf'
+	'1cb5235f7c8b567e7ee840e665a5ff72b095f041a13bea34f5b5c08f04d4fddd'
+	'6419a67730bad7a9d88a51a572b38e153b72a182dbc4dcb626fcfba8948bb662'
+	'b49933a18d391cf055451138277b10bc30a1023fe71fd6d450b895d251a5aee4'
+	'824b81be2ebaceceb910a76dec610bc3a5562d629fc96bbe36282eb2fc1ab291'
+	'0ccd219032de1b5b5f06fddd69f0f005bc54c8ec1c32d2b344168dc9648dbeff'
+	'07e406ff2a6c05f1a39ebe9c132ff5c2ca30910e2f063037a55d6323a3347aaf'
+	'1c0afb52fe77a4aa07893007808b85e1f6893370610ac698e518e492493e8ec4'
+	'b2dcd3d2482c7579c6d9af97843e7a69a9f4d06278a40f059b1b6fb29650c77e'
+	'9067a93184fa5d7bde438c7dc17cd34b3c0f397f882d43ec8b4bc4cefab3b4e5'
+	'45ce115361ac02bc6437bec3e6c3e91a825778fc7888c9239915b4a97385add4'
+	'4cdc6f3a6e1f8c3a0cfc8b9cf0cbab9cf6a8130b82f90a5217fb64c2f94ece25'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	local lib=$pkgdir/usr/lib/plinius-desktop
+	install -Dm755 -t "$lib" plinius-desktop-session plinius-desktop-keys plinius-desktop-set \
+		desk-apps.py desk-apps-toggle desk-battery.py desk-network.py desk-settings.py \
+		battery-status.sh wifi-status.sh fullscreen.sh
+	install -Dm644 -t "$lib" desk_common.py
+	install -Dm644 -t "$pkgdir/usr/share/plinius-desktop" waybar.jsonc waybar.css
+	install -Dm644 -t "$pkgdir/usr/lib/systemd/user" plinius-desktop.socket plinius-desktop.service \
+		plinius-desktop-cast.service
+	install -Dm644 -t "$pkgdir/usr/lib/systemd/system" plinius-desktop-firewall.service
+	# Enabled by the package: without it, a reboot would leave the port without firewall rules
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-desktop-firewall.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 plinius-desktop.conf "$pkgdir/etc/plinius-desktop.conf"
+	install -Dm644 -t "$pkgdir/usr/share/polkit-1/actions" org.plinius.desktop.policy
+	# The bar's edge (org.plinius.desktop), set in GNOME Settings › Remote Access
+	install -Dm644 -t "$pkgdir/usr/share/glib-2.0/schemas" 50-plinius-desktop.gschema.override \
+		org.plinius.desktop.gschema.xml
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-desktop.mo"
+	done
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

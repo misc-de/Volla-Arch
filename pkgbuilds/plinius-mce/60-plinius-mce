@@ -1,0 +1,6 @@
+#!/bin/sh
+# Display state hook (plinius-backlight-wake): hands "on"/"off" to plinius-mce, which tells ofono
+# (com.nokia.mce). Over D-Bus: the hook runs in plinius-backlight-wake's sandbox, /run is read-only
+# there. plinius-mce may not run yet; then it reads the state at its start.
+busctl call com.nokia.mce /org/plinius/Mce org.plinius.Mce SetDisplay s "$1" 2>/dev/null
+exit 0

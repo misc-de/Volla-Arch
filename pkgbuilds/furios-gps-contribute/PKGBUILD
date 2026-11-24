@@ -1,0 +1,43 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=furios-gps-contribute
+pkgver=0.1.0
+pkgrel=3
+pkgdesc="Contribute Wi-Fi observations with a GPS fix to beaconDB - off until switched on"
+arch=(any)
+url="https://github.com/misc-de/furios_gps"
+license=(MIT)
+# Why on the Plinius: the switch "Contribute to beaconDB" on GNOME Settings' Location page
+# (gnome-control-center-plinius 0048) runs "furios-gps-contribute on|off". Nothing is collected or
+# sent until then. On, a user service pairs nearby Wi-Fi networks (nmcli) with a fresh GPS fix from
+# geoclue and sends them to beaconDB, over Wi-Fi only. geoclue gets its fixes from
+# gnss-nmea-bridge and never asks beaconDB itself (91-gps-only.conf).
+# Only the contribution tool: furios-gps-firefox (Firefox waits for the fix) is FuriOS's, the
+# Plinius Firefox has its own settings (mobile-config-firefox).
+depends=(geoclue networkmanager python python-gobject systemd)
+makedepends=(git)
+# No tag yet: the commit of version 0.1.0 (VERSION in the tool); a commit hash cannot move
+_commit=d5c407d2f9239e4594aa0ccdeb48c479cfa0204a
+source=("git+$url.git#commit=$_commit"
+	# Fresh fixes while another app keeps geoclue running (to be sent upstream)
+	0001-wait-past-geoclue-s-cached-location-for-a-fresh-fix.patch
+	# 120 s for a cold start, the pause after failed fixes at most 20 min and cut short
+	# when the networks change (to be sent upstream)
+	0002-furios-gps-contribute-give-a-cold-start-time-and-do-.patch)
+sha256sums=('SKIP'
+	'83a92c48fbc3195625b944207018c5e29f184c8bf628929cc03b1fa3f08189ea'
+	'b9762dfa46ff389e32ba758e6fed6a139800c4319d5560e2e9ecf428ca1208ca')
+
+prepare() {
+	cd furios_gps
+	patch -Np1 -i "$srcdir/0001-wait-past-geoclue-s-cached-location-for-a-fresh-fix.patch"
+	patch -Np1 -i "$srcdir/0002-furios-gps-contribute-give-a-cold-start-time-and-do-.patch"
+}
+
+package() {
+	cd furios_gps
+	install -Dm755 tools/furios-gps-contribute -t "$pkgdir/usr/bin"
+	install -Dm644 systemd/furios-gps-contribute.service -t "$pkgdir/usr/lib/systemd/user"
+	install -Dm644 README.md NOTICE -t "$pkgdir/usr/share/doc/$pkgname"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

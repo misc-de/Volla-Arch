@@ -1,0 +1,35 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-dictate
+pkgver=0.2
+pkgrel=4
+pkgdesc="Speech to text for the on-screen keyboard: session service on sherpa-onnx, on the phone only"
+arch=(aarch64 x86_64)  # x86_64 for the KVM preview
+license=(MIT)
+# The C API structs grew in sherpa-onnx 2.0 without a soname change: built against 2.x only
+depends=(glib2 glibc pipewire 'sherpa-onnx>=2.0.1')
+# The model (about 640 MB) is not in the image: GNOME Settings (Keyboard > Speech to Text)
+# installs it through plinius-software when dictation is switched on
+optdepends=('plinius-dictate-models: the speech model, required to dictate')
+makedepends=(gcc pkgconf)
+source=(plinius-dictated.c
+	org.plinius.Dictate1.service
+	org.plinius.dictate.gschema.xml
+	LICENSE)
+sha256sums=('SKIP'
+	'SKIP'
+	'SKIP'
+	'SKIP')
+
+build() {
+	# sherpa-onnx.pc adds an rpath and libraries we do not use; link the C API directly
+	gcc $CPPFLAGS $CFLAGS -Wall -o plinius-dictated plinius-dictated.c \
+		$(pkg-config --cflags --libs gio-unix-2.0) -lsherpa-onnx-c-api -lm $LDFLAGS
+}
+
+package() {
+	install -Dm755 plinius-dictated -t "$pkgdir/usr/lib/plinius-dictate"
+	install -Dm644 org.plinius.Dictate1.service -t "$pkgdir/usr/share/dbus-1/services"
+	install -Dm644 org.plinius.dictate.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

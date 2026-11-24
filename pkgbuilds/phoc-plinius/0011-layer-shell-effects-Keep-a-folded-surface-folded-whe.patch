@@ -1,0 +1,60 @@
+From bfdf7337e1266d3e9eb1bbd4900814c25433618d Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 15:28:56 +0100
+Subject: [PATCH] layer-shell-effects: Keep a folded surface folded when it
+ grows
+
+Phosh maps its top panel with the height of the top bar and resizes it to
+the full screen once the monitor is configured. phoc then slid the panel
+in from margin 0, so the quick settings showed over the lock screen right
+after start-up. A folded surface that is neither animated nor dragged now
+takes the new folded margin right away. The client still gets the events
+that end a slide: Phosh makes the top panel's background transparent only
+on them, without them the lock screen stayed black.
+---
+ src/layer-shell-effects.c | 25 +++++++++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/src/layer-shell-effects.c b/src/layer-shell-effects.c
+index 515f635..3770f0d 100644
+--- a/src/layer-shell-effects.c
++++ b/src/layer-shell-effects.c
+@@ -138,6 +138,8 @@ static PhocLayerShellEffects     *phoc_layer_shell_effects_from_resource     (st
+ static PhocDraggableLayerSurface *phoc_draggable_layer_surface_from_resource (struct wl_resource *resource);
+ static PhocAlphaLayerSurface     *phoc_alpha_layer_surface_from_resource     (struct wl_resource *resource);
+ static PhocStackedLayerSurface   *phoc_stacked_layer_surface_from_resource   (struct wl_resource *resource);
++static void                       apply_margin                               (PhocDraggableLayerSurface *drag_surface,
++                                                                              double                     margin);
+ 
+ static void
+ resource_handle_destroy(struct wl_client *client,
+@@ -649,8 +651,27 @@ draggable_layer_surface_handle_commit (struct wl_listener *listener, void *data)
+ 
+   /* Update animation end in case it's ongoing to compensate for size changes */
+   if (changed && drag_surface->drag.anim_dir == ANIM_DIR_IN) {
+-    drag_surface->drag.anim_end = drag_surface->current.folded;
+-    phoc_draggable_layer_surface_slide (drag_surface, ANIM_DIR_IN);
++    if (drag_surface->state == PHOC_DRAGGABLE_SURFACE_STATE_NONE &&
++        drag_surface->drag.last_state == ZPHOC_DRAGGABLE_LAYER_SURFACE_V1_DRAG_END_STATE_FOLDED) {
++      PhocOutput *output = phoc_layer_surface_get_output (layer_surface);
++
++      /* Plinius: a folded surface that grows (Phosh's top panel right after start-up)
++       * stays folded. Sliding it in from its old margin would show the whole surface,
++       * e.g. the quick settings over the lock screen. Tell the client as the end of a
++       * slide would: Phosh fades the top panel's background out only on these events. */
++      apply_margin (drag_surface, drag_surface->current.folded);
++      zphoc_draggable_layer_surface_v1_send_dragged (drag_surface->resource,
++                                                     drag_surface->current.folded);
++      zphoc_draggable_layer_surface_v1_send_drag_end (drag_surface->resource,
++                                                      drag_surface->drag.last_state);
++      if (output) {
++        phoc_layer_shell_arrange (output);
++        phoc_output_damage_whole (output);
++      }
++    } else {
++      drag_surface->drag.anim_end = drag_surface->current.folded;
++      phoc_draggable_layer_surface_slide (drag_surface, ANIM_DIR_IN);
++    }
+   }
+ 
+   /* TODO: cancel related gestures on drag mode changes */

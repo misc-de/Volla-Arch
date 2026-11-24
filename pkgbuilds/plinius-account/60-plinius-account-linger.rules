@@ -1,0 +1,13 @@
+// plinius-account: lingering only for administrators (attack review 2026-11-18, L14).
+//
+// With "loginctl enable-linger" a user's services keep running without a session, also while
+// another account is in front of the phone. systemd lets every user switch it on for itself
+// (org.freedesktop.login1.set-self-linger, allow_any=yes). An account without administrator
+// rights (not in wheel) now needs an administrator's PIN for it. Members of wheel, the phone's
+// first user among them, are not affected. Switching it off ("disable-linger" goes through the
+// same action) also asks; nothing on the phone turns lingering on for such an account.
+polkit.addRule(function(action, subject) {
+	if (action.id == "org.freedesktop.login1.set-self-linger" && !subject.isInGroup("wheel")) {
+		return polkit.Result.AUTH_ADMIN;
+	}
+});

@@ -1,0 +1,20 @@
+# pacman install script of plinius-apparmor: loads the profiles at once. A service enters its
+# profile at its next start (systemd's AppArmorProfile=), so nothing running changes now.
+
+post_install() {
+	systemctl daemon-reload 2>/dev/null || true
+	/usr/lib/plinius-apparmor/plinius-apparmor-load || true
+}
+
+post_upgrade() {
+	post_install
+}
+
+pre_remove() {
+	# Unload the profiles; services already in one keep it until they restart
+	local p
+	for p in /usr/share/plinius-apparmor/profiles/*; do
+		[ -f "$p" ] && apparmor_parser --remove "$p" 2>/dev/null
+	done
+	return 0
+}

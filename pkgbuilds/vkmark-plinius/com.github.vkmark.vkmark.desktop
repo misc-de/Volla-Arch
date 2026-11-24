@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Vulkan Benchmark
+Name[de]=Vulkan-Benchmark
+Comment=Measure the graphics performance with Vulkan
+Comment[de]=Grafikleistung mit Vulkan messen
+Exec=vkmark --winsys wayland --fullscreen --winsys-options wayland-overlay=true
+Icon=com.github.vkmark.vkmark
+Terminal=false
+Categories=System;Monitor;
+Keywords=GPU;Vulkan;Benchmark;3D;
+X-Purism-FormFactor=Workstation;Mobile;

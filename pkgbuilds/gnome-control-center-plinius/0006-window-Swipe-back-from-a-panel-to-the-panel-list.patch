@@ -1,0 +1,65 @@
+From 9c53efdae60c6a3e79dcd49037f6d440e85610ad Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:51:28 +0100
+Subject: [PATCH] window: Swipe back from a panel to the panel list
+
+Plinius: on a phone (one column) a swipe to the right on a panel goes
+back to the panel list. libadwaita already swipes back between the pages
+inside a panel, but the panel's navigation view takes the swipe even on
+its first page, so the split view never got it. Swipes that something
+inside claims (subpages, sliders, switches) are left alone.
+---
+ shell/cc-window.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/shell/cc-window.c b/shell/cc-window.c
+index d66e37168..1e9ba56ef 100644
+--- a/shell/cc-window.c
++++ b/shell/cc-window.c
+@@ -774,11 +774,43 @@ cc_window_class_init (CcWindowClass *klass)
+     g_type_ensure (CC_TYPE_PANEL_LIST);
+ }
+ 
++/*
++ * Plinius: swipe back from a panel to the panel list on a phone (one column). libadwaita swipes
++ * back between the pages inside a panel, but the panel's own navigation view takes the swipe
++ * even on its first page, so the split view never gets it. A swipe to the right that nothing
++ * inside claimed goes back to the list.
++ */
++#define SWIPE_BACK_DISTANCE 80
++
++static void
++on_content_drag_end (CcWindow *self, double offset_x, double offset_y, GtkGestureDrag *gesture)
++{
++    AdwNavigationPage *page = adw_navigation_view_get_visible_page (self->navigation);
++
++    if (!adw_navigation_split_view_get_collapsed (self->split_view) ||
++        !adw_navigation_split_view_get_show_content (self->split_view))
++        return;
++    /* A subpage is open: going back there is libadwaita's own swipe */
++    if (page && adw_navigation_view_get_previous_page (self->navigation, page))
++        return;
++    if (offset_x < SWIPE_BACK_DISTANCE || offset_x < 2 * ABS (offset_y))
++        return;
++
++    adw_navigation_split_view_set_show_content (self->split_view, FALSE);
++}
++
+ static void
+ cc_window_init (CcWindow *self)
+ {
++    GtkGesture *swipe_back;
++
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
++    swipe_back = gtk_gesture_drag_new ();
++    gtk_gesture_single_set_touch_only (GTK_GESTURE_SINGLE (swipe_back), TRUE);
++    g_signal_connect_object (swipe_back, "drag-end", G_CALLBACK (on_content_drag_end), self, G_CONNECT_SWAPPED);
++    gtk_widget_add_controller (GTK_WIDGET (self->navigation), GTK_EVENT_CONTROLLER (swipe_back));
++
+     self->settings = g_settings_new ("org.gnome.Settings");
+     self->previous_panels = g_queue_new ();
+     self->previous_list_view = cc_panel_list_get_view (self->panel_list);
+-- 
+2.55.0
+

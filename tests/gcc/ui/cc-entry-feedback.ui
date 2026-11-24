@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- panels/system/users/cc-entry-feedback.blp of the pinned gnome-control-center as GtkBuilder
+     XML, written by hand (tests/gcc: the host has no blueprint-compiler; test_gcc_blp_ui_match.py
+     checks it against the .blp of the prepared tree) -->
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <template class="CcEntryFeedback" parent="GtkBox">
+    <property name="spacing">6</property>
+    <property name="margin-top">12</property>
+    <child>
+      <object class="GtkImage" id="image"/>
+    </child>
+    <child>
+      <object class="GtkLabel" id="label">
+        <property name="wrap">true</property>
+        <property name="wrap-mode">word-char</property>
+        <property name="hexpand">true</property>
+        <property name="xalign">0.0</property>
+        <style>
+          <class name="caption"/>
+        </style>
+      </object>
+    </child>
+  </template>
+</interface>

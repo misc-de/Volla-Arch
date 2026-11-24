@@ -1,0 +1,250 @@
+From 6f14cde12cdaeae3975134c70213b29c84ac8f78 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 20:04:55 +0100
+Subject: [PATCH] fingerprint: aidl: fix the parcelable wire format
+
+Every non-nullable AIDL parcelable - an argument, a return value, a field
+of another parcelable or an array element - is preceded by an int32 1
+(the non-null marker) before its size. The AIDL backend wrote and read
+HardwareAuthToken, its Timestamp, GatekeeperEnrollResponse,
+GatekeeperVerifyResponse and SensorProps[] without that marker, so
+
+ - ISession::enroll received a token shifted by four bytes and the HAL
+   refused it,
+ - the gatekeeper responses were read one field off (the size ended up
+   in statusCode), so no password handle was stored and no token minted,
+ - getSensorProps returned 1 instead of the real sensor id.
+
+Use gbinder_writer_start_parcelable()/finish_parcelable() and
+gbinder_reader_start_parcelable()/finish_parcelable() (libgbinder >=
+1.1.48), which write and check the marker and the size themselves.
+---
+ src/fingerprint_binder_aidl.c | 131 +++++++++++++++++++++-------------
+ 1 file changed, 82 insertions(+), 49 deletions(-)
+
+diff --git a/src/fingerprint_binder_aidl.c b/src/fingerprint_binder_aidl.c
+index 17ec17a..c2b5298 100644
+--- a/src/fingerprint_binder_aidl.c
++++ b/src/fingerprint_binder_aidl.c
+@@ -254,65 +254,72 @@ fingerprint_aidl_call_void(GBinderClient* client, guint32 code, GBinderLocalRequ
+ }
+ 
+ /*
+- * HardwareAuthToken on the wire:
++ * HardwareAuthToken on the wire. Every non-nullable parcelable - an argument, a
++ * return value, a field of another parcelable or an array element - is
++ * preceded by an int32 1 (the non-null marker) and opens with its size, that
++ * size field included. gbinder_writer_start_parcelable() and
++ * gbinder_reader_start_parcelable() handle both, so the layout below is only
++ * the payload:
+  *
+- *   int32  parcelable size (this field included)
+  *   int64  challenge
+  *   int64  userId
+  *   int64  authenticatorId
+  *   int32  authenticatorType
+- *   Timestamp { int32 parcelable size; int64 milliSeconds; }
++ *   Timestamp { int64 milliSeconds; }   (a parcelable of its own)
+  *   byte[] mac
+  */
+-#define TIMESTAMP_PARCELABLE_SIZE 12
+-
+ static void
+ fingerprint_aidl_write_auth_token(GBinderWriter* writer, const AidlHardwareAuthToken* hat)
+ {
+     static const AidlHardwareAuthToken empty = { 0, 0, 0, 0, 0, { 0 }, 0, FALSE };
+-    gsize mac_len;
+-    gint32 size;
++    GBinderWriter token, timestamp;
+ 
+     if (!hat)
+         hat = &empty;
+ 
+-    mac_len = hat->mac_len;
+-
+-    /* 4 size + 8 challenge + 8 user + 8 authenticator + 4 type + 12 timestamp
+-     * + 4 mac count + the padded mac itself */
+-    size = (gint32)(48 + ((mac_len + 3) & ~(gsize)3));
+-
+-    gbinder_writer_append_int32(writer, size);
+-    gbinder_writer_append_int64(writer, hat->challenge);
+-    gbinder_writer_append_int64(writer, hat->user_id);
+-    gbinder_writer_append_int64(writer, hat->authenticator_id);
+-    gbinder_writer_append_int32(writer, hat->authenticator_type);
++    gbinder_writer_start_parcelable(writer, &token);
++    gbinder_writer_append_int64(&token, hat->challenge);
++    gbinder_writer_append_int64(&token, hat->user_id);
++    gbinder_writer_append_int64(&token, hat->authenticator_id);
++    gbinder_writer_append_int32(&token, hat->authenticator_type);
+ 
+-    gbinder_writer_append_int32(writer, TIMESTAMP_PARCELABLE_SIZE);
+-    gbinder_writer_append_int64(writer, hat->timestamp_ms);
++    gbinder_writer_start_parcelable(&token, &timestamp);
++    gbinder_writer_append_int64(&timestamp, hat->timestamp_ms);
++    gbinder_writer_finish_parcelable(&timestamp);
+ 
+-    fingerprint_aidl_append_byte_array(writer, hat->mac, mac_len);
++    fingerprint_aidl_append_byte_array(&token, hat->mac, hat->mac_len);
++    gbinder_writer_finish_parcelable(&token);
+ }
+ 
+ static gboolean
+ fingerprint_aidl_read_auth_token(GBinderReader* reader, AidlHardwareAuthToken* hat)
+ {
+-    gint32 parcelable_size = 0, timestamp_size = 0;
++    GBinderReader token, timestamp;
++    gboolean non_null = FALSE, ok;
+     const void* mac;
+     gsize mac_len = 0;
+ 
+     memset(hat, 0, sizeof(*hat));
+ 
+-    if (!gbinder_reader_read_int32(reader, &parcelable_size) ||
+-        !gbinder_reader_read_int64(reader, &hat->challenge) ||
+-        !gbinder_reader_read_int64(reader, &hat->user_id) ||
+-        !gbinder_reader_read_int64(reader, &hat->authenticator_id) ||
+-        !gbinder_reader_read_int32(reader, &hat->authenticator_type) ||
+-        !gbinder_reader_read_int32(reader, &timestamp_size) ||
+-        !gbinder_reader_read_int64(reader, &hat->timestamp_ms))
++    if (!gbinder_reader_start_parcelable(reader, &token, &non_null))
+         return FALSE;
+ 
+-    mac = gbinder_reader_read_byte_array(reader, &mac_len);
++    ok = non_null &&
++        gbinder_reader_read_int64(&token, &hat->challenge) &&
++        gbinder_reader_read_int64(&token, &hat->user_id) &&
++        gbinder_reader_read_int64(&token, &hat->authenticator_id) &&
++        gbinder_reader_read_int32(&token, &hat->authenticator_type);
++
++    if (ok) {
++        ok = gbinder_reader_start_parcelable(&token, &timestamp, &non_null);
++        if (ok) {
++            ok = non_null && gbinder_reader_read_int64(&timestamp, &hat->timestamp_ms);
++            gbinder_reader_finish_parcelable(&timestamp);
++        }
++    }
++
++    mac = ok ? gbinder_reader_read_byte_array(&token, &mac_len) : NULL;
++    gbinder_reader_finish_parcelable(&token);
+     if (!mac)
+         return FALSE;
+ 
+@@ -430,9 +437,9 @@ fingerprint_aidl_gatekeeper_enroll(BiomFingerprintAidl* self, guint32 uid, const
+     GBinderReader reader;
+     int status = GBINDER_STATUS_FAILED;
+     gboolean success = FALSE;
+-    gint32 parcelable_size = 0, status_code = 0, timeout_ms = 0;
++    gint32 status_code = 0, timeout_ms = 0;
+     gint64 secure_user_id = 0;
+-    const void* data;
++    const void* data = NULL;
+     gsize len = 0;
+ 
+     if (!self->gatekeeper_client)
+@@ -453,12 +460,18 @@ fingerprint_aidl_gatekeeper_enroll(BiomFingerprintAidl* self, guint32 uid, const
+     if (fingerprint_aidl_reply_ok(reply, status, &reader, "IGatekeeper::enroll")) {
+         /* GatekeeperEnrollResponse { int statusCode; int timeoutMs;
+          *                            long secureUserId; byte[] data; } */
+-        if (gbinder_reader_read_int32(&reader, &parcelable_size) &&
+-            gbinder_reader_read_int32(&reader, &status_code) &&
+-            gbinder_reader_read_int32(&reader, &timeout_ms) &&
+-            gbinder_reader_read_int64(&reader, &secure_user_id) &&
+-            (data = gbinder_reader_read_byte_array(&reader, &len)) != NULL &&
+-            len > 0) {
++        GBinderReader response;
++        gboolean non_null = FALSE, ok;
++
++        ok = gbinder_reader_start_parcelable(&reader, &response, &non_null) && non_null &&
++            gbinder_reader_read_int32(&response, &status_code) &&
++            gbinder_reader_read_int32(&response, &timeout_ms) &&
++            gbinder_reader_read_int64(&response, &secure_user_id) &&
++            (data = gbinder_reader_read_byte_array(&response, &len)) != NULL &&
++            len > 0;
++        gbinder_reader_finish_parcelable(&response);
++
++        if (ok) {
+ 
+             if (status_code == GK_AIDL_STATUS_OK || status_code == GK_AIDL_STATUS_REENROLL)
+                 success = fingerprint_aidl_gatekeeper_save_handle(uid, data, (guint32)len);
+@@ -487,7 +500,7 @@ fingerprint_aidl_gatekeeper_verify(BiomFingerprintAidl* self, guint32 uid, guint
+     GBinderReader reader;
+     int status = GBINDER_STATUS_FAILED;
+     gboolean success = FALSE;
+-    gint32 parcelable_size = 0, status_code = 0, timeout_ms = 0;
++    gint32 status_code = 0, timeout_ms = 0;
+ 
+     if (!self->gatekeeper_client)
+         return FALSE;
+@@ -505,14 +518,22 @@ fingerprint_aidl_gatekeeper_verify(BiomFingerprintAidl* self, guint32 uid, guint
+                                                req, &status);
+ 
+     if (fingerprint_aidl_reply_ok(reply, status, &reader, "IGatekeeper::verify")) {
+-        /* GatekeeperVerifyResponse { int statusCode; int timeoutMs;
+-         *                            HardwareAuthToken hardwareAuthToken; } */
+-        if (gbinder_reader_read_int32(&reader, &parcelable_size) &&
+-            gbinder_reader_read_int32(&reader, &status_code) &&
+-            gbinder_reader_read_int32(&reader, &timeout_ms)) {
++        /*
++         * GatekeeperVerifyResponse { int statusCode; int timeoutMs;
++         *                            HardwareAuthToken hardwareAuthToken; }
++         *
++         * The token arrives structured, so it goes straight into the shape
++         * ISession::enroll wants - no hw_auth_token_t in sight.
++         */
++        GBinderReader response;
++        gboolean non_null = FALSE;
++
++        if (gbinder_reader_start_parcelable(&reader, &response, &non_null) && non_null &&
++            gbinder_reader_read_int32(&response, &status_code) &&
++            gbinder_reader_read_int32(&response, &timeout_ms)) {
+ 
+             if (status_code == GK_AIDL_STATUS_OK || status_code == GK_AIDL_STATUS_REENROLL) {
+-                success = fingerprint_aidl_read_auth_token(&reader, auth_token);
++                success = fingerprint_aidl_read_auth_token(&response, auth_token);
+                 if (!success)
+                     g_warning("IGatekeeper::verify returned an unreadable HardwareAuthToken");
+             } else {
+@@ -522,6 +543,7 @@ fingerprint_aidl_gatekeeper_verify(BiomFingerprintAidl* self, guint32 uid, guint
+         } else {
+             g_warning("IGatekeeper::verify reply was malformed");
+         }
++        gbinder_reader_finish_parcelable(&response);
+     }
+ 
+     gbinder_remote_reply_unref(reply);
+@@ -753,17 +775,28 @@ fingerprint_aidl_get_sensor_id(BiomFingerprintAidl* self)
+     GBinderReader reader;
+     int status = GBINDER_STATUS_FAILED;
+     gint32 sensor_id = 0;
+-    gint32 count = 0, props_size = 0, common_size = 0;
++    gint32 count = 0;
+ 
+     req = gbinder_client_new_request2(self->fingerprint_client, FP_GET_SENSOR_PROPS);
+     reply = gbinder_client_transact_sync_reply(self->fingerprint_client,
+                                                 FP_GET_SENSOR_PROPS, req, &status);
+ 
+     if (fingerprint_aidl_reply_ok(reply, status, &reader, "IFingerprint::getSensorProps")) {
++        /* SensorProps[]: count, then each element a parcelable whose first field
++         * is the CommonProps parcelable, whose first field is the sensor id */
++        GBinderReader props, common;
++        gboolean props_ok = FALSE, common_ok = FALSE, ok = FALSE;
++
+         if (gbinder_reader_read_int32(&reader, &count) && count > 0 &&
+-            gbinder_reader_read_int32(&reader, &props_size) &&
+-            gbinder_reader_read_int32(&reader, &common_size) &&
+-            gbinder_reader_read_int32(&reader, &sensor_id)) {
++            gbinder_reader_start_parcelable(&reader, &props, &props_ok)) {
++            if (props_ok && gbinder_reader_start_parcelable(&props, &common, &common_ok)) {
++                ok = common_ok && gbinder_reader_read_int32(&common, &sensor_id);
++                gbinder_reader_finish_parcelable(&common);
++            }
++            gbinder_reader_finish_parcelable(&props);
++        }
++
++        if (ok) {
+             g_debug("IFingerprint::getSensorProps reported %d sensor(s), first id %d",
+                     count, sensor_id);
+         } else {
+-- 
+2.56.0
+

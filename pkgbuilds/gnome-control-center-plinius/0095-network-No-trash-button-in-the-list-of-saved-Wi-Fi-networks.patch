@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 08:00:00 +0100
+Subject: [PATCH] network: No trash button in the list of saved Wi-Fi networks
+
+Plinius: Wi-Fi > Saved Networks lists the networks with their options
+button only. A network is deleted on its own pages ("Delete" below them,
+0093), where its name and settings are seen first; the trash button
+next to the options button was easy to hit by mistake. The confirmation
+for it (0076) goes with it.
+---
+diff --git a/panels/network/net-device-wifi.c b/panels/network/net-device-wifi.c
+index f8263c9b2..529a570a7 100644
+--- a/panels/network/net-device-wifi.c
++++ b/panels/network/net-device-wifi.c
+@@ -703,96 +703,6 @@ net_device_wifi_get_property (GObject *object, guint prop_id, GValue *value, GPa
+     }
+ }
+ 
+-static void
+-really_forgotten (GObject *source_object, GAsyncResult *res, gpointer user_data)
+-{
+-    g_autoptr(NetDeviceWifi) self = NET_DEVICE_WIFI (user_data);
+-    g_autoptr(GError) error = NULL;
+-
+-    cc_wifi_connection_list_thaw (self->saved_networks_list);
+-
+-    if (!nm_remote_connection_delete_finish (NM_REMOTE_CONNECTION (source_object), res, &error))
+-        g_warning ("failed to delete connection %s: %s", nm_object_get_path (NM_OBJECT (source_object)),
+-                   error->message);
+-}
+-
+-static void
+-really_forget (gpointer data)
+-{
+-    CcWifiConnectionRow *row = CC_WIFI_CONNECTION_ROW (data);
+-    NMRemoteConnection *connection;
+-    NetDeviceWifi *self;
+-
+-    self = NET_DEVICE_WIFI (g_object_get_data (G_OBJECT (row), "net"));
+-
+-    connection = NM_REMOTE_CONNECTION (cc_wifi_connection_row_get_connection (row));
+-
+-    nm_remote_connection_delete_async (connection, self->cancellable, really_forgotten, g_object_ref (self));
+-}
+-
+-/* Whether a saved network other than @row is still listed */
+-static gboolean
+-other_rows_shown (CcWifiConnectionList *list, GtkWidget *row)
+-{
+-    GtkWidget *child;
+-
+-    for (child = gtk_widget_get_first_child (GTK_WIDGET (cc_wifi_connection_list_get_list_box (list))); child;
+-         child = gtk_widget_get_next_sibling (child)) {
+-        if (child != row && CC_IS_WIFI_CONNECTION_ROW (child) && gtk_widget_get_visible (child))
+-            return TRUE;
+-    }
+-
+-    return FALSE;
+-}
+-
+-/* Plinius: confirmed in the alert below, the network goes at once (no toast to undo it) */
+-static void
+-forget_confirmed_cb (NetDeviceWifi *self, const char *response, AdwAlertDialog *dialog)
+-{
+-    CcWifiConnectionRow *row = g_object_get_data (G_OBJECT (dialog), "row");
+-
+-    if (!row || !cc_wifi_connection_row_get_connection (row))
+-        return;
+-
+-    cc_wifi_connection_list_freeze (self->saved_networks_list);
+-
+-    gtk_widget_set_visible (GTK_WIDGET (row), FALSE);
+-    g_object_set_data (G_OBJECT (row), "net", self);
+-    /* thawed when NetworkManager answers: then the list is built anew */
+-    really_forget (row);
+-
+-    if (!other_rows_shown (self->saved_networks_list, GTK_WIDGET (row)))
+-        gtk_stack_set_visible_child_name (self->saved_networks_stack, "no-saved-networks-page");
+-}
+-
+-/* Plinius: the trash button asks first; one tap was enough to lose a network and its password */
+-static void
+-forget_selected (NetDeviceWifi *self, CcWifiConnectionRow *row, CcWifiConnectionList *list)
+-{
+-    NMConnection *connection = cc_wifi_connection_row_get_connection (row);
+-    g_autofree gchar *heading = NULL;
+-    AdwDialog *dialog;
+-
+-    if (!connection)
+-        return;
+-
+-    /* Translators: "%s" is the name of the saved Wi-Fi network */
+-    heading = g_strdup_printf (g_dgettext ("plinius-control-center", "Forget “%s”?"),
+-                               nm_connection_get_id (connection));
+-    dialog = adw_alert_dialog_new (heading,
+-                                   g_dgettext ("plinius-control-center",
+-                                               "Its password and settings will be deleted from this device."));
+-    adw_alert_dialog_add_responses (ADW_ALERT_DIALOG (dialog), "cancel", _("_Cancel"), "forget", _("_Forget"), NULL);
+-    adw_alert_dialog_set_response_appearance (ADW_ALERT_DIALOG (dialog), "forget", ADW_RESPONSE_DESTRUCTIVE);
+-    adw_alert_dialog_set_default_response (ADW_ALERT_DIALOG (dialog), "cancel");
+-    adw_alert_dialog_set_close_response (ADW_ALERT_DIALOG (dialog), "cancel");
+-
+-    /* the list may be built anew while the alert is open: the row stays alive for the answer */
+-    g_object_set_data_full (G_OBJECT (dialog), "row", g_object_ref (row), g_object_unref);
+-    g_signal_connect_object (dialog, "response::forget", G_CALLBACK (forget_confirmed_cb), self, G_CONNECT_SWAPPED);
+-    adw_dialog_present (dialog, GTK_WIDGET (row));
+-}
+-
+ static gint
+ history_sort (gconstpointer a, gconstpointer b, gpointer data)
+ {
+@@ -1056,8 +966,9 @@ net_device_wifi_new (CcPanel *panel, NMClient *client, NMDevice *device)
+     g_signal_connect_object (list, "show-qr-code", G_CALLBACK (show_qr_code_for_row), self, G_CONNECT_SWAPPED);
+     g_signal_connect_object (client, "notify", G_CALLBACK (nm_client_on_permission_change), self, G_CONNECT_SWAPPED);
+ 
+-    /* Set up the Saved Networks list */
+-    list = cc_wifi_connection_list_new (self->client, NM_DEVICE_WIFI (device), FALSE, FALSE, FALSE, TRUE, FALSE);
++    /* Set up the Saved Networks list; Plinius: without the trash button, a network is deleted on
++     * its own pages (Delete below them), where its settings are seen first */
++    list = cc_wifi_connection_list_new (self->client, NM_DEVICE_WIFI (device), FALSE, FALSE, FALSE, FALSE, FALSE);
+     self->saved_networks_list = g_object_ref_sink (list);
+     adw_preferences_group_add (self->saved_networks_box, GTK_WIDGET (list));
+ 
+@@ -1065,7 +976,6 @@ net_device_wifi_new (CcPanel *panel, NMClient *client, NMDevice *device)
+     gtk_list_box_set_sort_func (listbox, (GtkListBoxSortFunc) history_sort, NULL, NULL);
+ 
+     g_signal_connect_object (list, "configure", G_CALLBACK (show_details_for_row), self, G_CONNECT_SWAPPED);
+-    g_signal_connect_object (list, "forget", G_CALLBACK (forget_selected), self, G_CONNECT_SWAPPED);
+     g_signal_connect_object (list, "show_qr_code", G_CALLBACK (show_qr_code_for_row), self, G_CONNECT_SWAPPED);
+ 
+     nm_client_on_permission_change (self);

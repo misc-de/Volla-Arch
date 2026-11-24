@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 14:03:01 +0100
+Subject: [PATCH] lockscreen: Keypad and pattern pad use the room of the screen
+
+Plinius: keypad (80 px buttons) and pattern pad (270 px) had fixed sizes
+and filled only half the width of a phone at a scale below 3. Both now
+grow with the lock screen: at most 55 % of its height and its width less
+24 px each side; keypad buttons from 80 to 120 px with the digit growing
+along, the pattern pad from 270 to 480 px.
+
+With a fingerprint sensor under the display the unlock page ends 5 mm
+above it; the unlock button sat right on top of the sensor's target.
+---
+ src/lockscreen.c | 81 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index dbb9516a..7841b109 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -57,6 +57,22 @@
+ 
+ #define LOCKSCREEN_SMALL_DISPLAY 700
+ 
++/*
++ * Keypad and pattern pad grow with the lock screen (e.g. a phone at a lower scale): at most this
++ * share of its height, its width less the side margins, between the sizes below. The keypad's
++ * minimum is its size from the stylesheet (48 px digit plus 16 px padding each side).
++ */
++#define UNLOCK_SIDE_MARGIN   24
++#define UNLOCK_HEIGHT_SHARE  0.55
++#define KEYPAD_BUTTON_MIN    80
++#define KEYPAD_BUTTON_MAX    120
++/* PIN entry, submit button and the spacing around them, above and below the keypad */
++#define KEYPAD_EXTRA_HEIGHT  150
++#define PATTERN_PAD_MIN      270
++#define PATTERN_PAD_MAX      480
++/* Keypad, unlock button and pattern pad end this far above a fingerprint sensor under the display */
++#define UNLOCK_SENSOR_GAP_MM 5
++
+ /*
+  * Unlock pattern (plinius-pattern): the pattern pad answers the password prompt with this marker
+  * and the pattern; pam_plinius_pattern in /etc/pam.d/phosh checks it. Only shown when the user
+@@ -142,6 +158,8 @@ typedef struct {
+   GtkWidget          *pattern_pad;
+   gboolean            pattern_mode;
+   guint               pattern_status_id;
++  /* Button and digit size of the keypad, set from the lock screen's size */
++  GtkCssProvider     *keypad_css;
+   GtkWidget          *btn_submit;
+   GtkWidget          *btn_keyboard;
+   guint               idle_timer;
+@@ -975,6 +993,21 @@ update_slide_hint (PhoshLockscreen *self)
+   }
+ 
+   gtk_widget_set_margin_bottom (priv->box_slide_hint, margin);
++
++  /*
++   * The unlock page keeps clear of the sensor as well, whether its target shows or not: the
++   * finger goes there any time, and the unlock button sat right above it
++   */
++  margin = 0;
++  if (priv->udfps_top > 0 && monitor && monitor->logical.width > 0 &&
++      monitor->transform == PHOSH_MONITOR_TRANSFORM_NORMAL) {
++    double ratio = (double) monitor->width / monitor->logical.width;
++    int gap = monitor->height_mm > 0 ?
++      ceil (UNLOCK_SENSOR_GAP_MM * monitor->height / (double) monitor->height_mm / ratio) : 40;
++
++    margin = ceil ((monitor->height - priv->udfps_top) / ratio) + gap;
++  }
++  gtk_widget_set_margin_bottom (GTK_WIDGET (priv->box_unlock), margin);
+ }
+ 
+ 
+@@ -1316,6 +1349,7 @@ phosh_lockscreen_dispose (GObject *object)
+   g_clear_object (&priv->biomd);
+   g_clear_object (&priv->notification_settings);
+   g_clear_handle_id (&priv->pattern_status_id, g_source_remove);
++  g_clear_object (&priv->keypad_css);
+   g_clear_handle_id (&priv->idle_timer, g_source_remove);
+   g_clear_object (&priv->calls_manager);
+   g_clear_pointer (&priv->active, g_free);
+@@ -1327,6 +1361,52 @@ phosh_lockscreen_dispose (GObject *object)
+ }
+ 
+ 
++/* Give each keypad button (and its digit) the size from keypad_css */
++static void
++add_keypad_css (GtkWidget *widget, gpointer user_data)
++{
++  GtkStyleProvider *css = GTK_STYLE_PROVIDER (user_data);
++
++  gtk_style_context_add_provider (gtk_widget_get_style_context (widget), css,
++                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
++  if (GTK_IS_CONTAINER (widget))
++    gtk_container_forall (GTK_CONTAINER (widget), add_keypad_css, css);
++}
++
++
++/* Size keypad and pattern pad to the room the lock screen has */
++static void
++fit_unlock_controls (PhoshLockscreen *self, int width, int height)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  int room_width = width - 2 * UNLOCK_SIDE_MARGIN;
++  int room_height = height * UNLOCK_HEIGHT_SHARE;
++  int button, pad;
++  g_autofree char *css = NULL;
++
++  if (width <= 0 || height <= 0)
++    return;
++
++  /* Three columns and four rows of buttons, 6 px apart (keypad.ui) */
++  button = MIN ((room_width - 2 * 6) / 3, (room_height - KEYPAD_EXTRA_HEIGHT - 3 * 6) / 4);
++  button = CLAMP (button, KEYPAD_BUTTON_MIN, KEYPAD_BUTTON_MAX);
++  /* The digit grows with the button: 200 % of 16 px at the minimum size (stylesheet) */
++  css = g_strdup_printf ("button { min-width: %dpx; min-height: %dpx; padding: 0; }"
++                         " label.digit { font-size: %dpx; }",
++                         button, button, 32 * button / KEYPAD_BUTTON_MIN);
++  if (priv->keypad_css == NULL) {
++    priv->keypad_css = gtk_css_provider_new ();
++    gtk_container_forall (GTK_CONTAINER (priv->keypad), add_keypad_css, priv->keypad_css);
++  }
++  gtk_css_provider_load_from_data (priv->keypad_css, css, -1, NULL);
++
++  if (priv->pattern_pad) {
++    pad = CLAMP (MIN (room_width, room_height), PATTERN_PAD_MIN, PATTERN_PAD_MAX);
++    gtk_widget_set_size_request (priv->pattern_pad, pad, pad);
++  }
++}
++
++
+ static void
+ phosh_lockscreen_configured (PhoshLayerSurface *layer_surface)
+ {
+@@ -1345,6 +1425,7 @@ phosh_lockscreen_configured (PhoshLayerSurface *layer_surface)
+ 
+   gtk_widget_set_margin_top (GTK_WIDGET (priv->box_unlock), margin);
+   update_slide_hint (self);
++  fit_unlock_controls (self, phosh_layer_surface_get_configured_width (layer_surface), height);
+ 
+   PHOSH_LAYER_SURFACE_CLASS (phosh_lockscreen_parent_class)->configured (layer_surface);
+ }

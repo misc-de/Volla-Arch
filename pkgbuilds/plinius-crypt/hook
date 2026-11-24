@@ -1,0 +1,318 @@
+#!/usr/bin/ash
+# mkinitcpio runtime hook: full-disk encryption of the root filesystem
+# (docs/ROADMAP.md, encryption section). Runs in busybox ash.
+#  - Root is LUKS2: ask for the password via unl0kr and open it; an interrupted
+#    encryption is resumed on the way.
+#  - Root is unencrypted and /var/lib/plinius-crypt/request exists (set by
+#    plinius-encrypt): offer to set a new password or to continue without encryption
+#    (withdraws the request); with a password, encrypt offline before mounting.
+#  - Otherwise: do nothing, the system boots without a prompt.
+# Progress, results and errors are shown full screen by plinius-progress; without a display
+# only the console messages remain.
+
+PLINIUS_CRYPT_NAME=plinius-root
+PLINIUS_CRYPT_REQUEST=var/lib/plinius-crypt/request
+# Room for the LUKS2 header at the start; the filesystem is shrunk by this amount first
+PLINIUS_CRYPT_HEADER_MIB=32
+PLINIUS_CRYPT_MNT=/plinius-crypt
+# New password: this many attempts, then the system boots unencrypted (the request stays)
+PLINIUS_CRYPT_ROUNDS=5
+# Exit code of the command run by with_progress (a pipeline only returns the last one's)
+PLINIUS_CRYPT_RC=/run/plinius-crypt/rc
+# Rates a new password (plinius-security), if the install hook found it
+PLINIUS_PWRATE=/usr/lib/plinius-security/plinius-pwrate
+# cryptsetup options for the progress view: one JSON line per second on stdout
+PLINIUS_CRYPT_PROGRESS="--progress-json --progress-frequency 1"
+
+# Translations of the prompts for the system language, chosen when the initramfs is built
+# (install/plinius-crypt): one line per message, English text TAB translation
+PLINIUS_CRYPT_L10N=/etc/plinius-crypt.l10n
+
+# Translated text for message $1, or $1 itself if there is no translation
+tr_msg() {
+    local t
+    t=$(awk -F '\t' -v k="$1" '$1 == k { print $2; exit }' "$PLINIUS_CRYPT_L10N" 2>/dev/null)
+    printf '%s' "${t:-$1}"
+}
+
+# Prompt on the console in case unl0kr does not run (no display, no input device)
+console_pass() {
+    local pass
+    printf '%s: ' "$1" > /dev/console
+    stty -echo < /dev/console 2>/dev/null
+    read -r pass < /dev/console
+    stty echo < /dev/console 2>/dev/null
+    printf '\n' > /dev/console
+    [ -n "$pass" ] && printf '%s' "$pass"
+}
+
+# Ask for a password with prompt $1 via unl0kr, falling back to the console; prints it on stdout.
+# Optional $2: hint shown above the prompt, e.g. why the password is asked again.
+# Optional $3: note shown below the prompt, right above the field (already translated; not logged).
+ask_pass() {
+    # Log the prompt to the console (test scripts wait for it, image/test-crypt.sh). To stderr:
+    # ask_pass runs in $(...), stdout carries only the password.
+    # The log keeps the English text; the user sees the translation.
+    local text
+    [ -n "$2" ] && msg ":: plinius-crypt: $2" >&2
+    msg ":: plinius-crypt: $1" >&2
+    text=$(tr_msg "$1")
+    [ -n "$2" ] && text="$(tr_msg "$2")
+
+$text"
+    [ -n "$3" ] && text="$text
+$3"
+    # All texts of unl0kr in the system language: message, placeholder of the password field and
+    # the confirmation of its shutdown button. That title stays short: unl0kr's dialog is 400 px
+    # wide with a header of fixed height, a second line would be cut off.
+    unl0kr -n -m "$text" -p "$(tr_msg "Enter password...")" \
+        --shutdown-title "$(tr_msg "Switch off?")" \
+        --shutdown-yes "$(tr_msg "Yes")" --shutdown-no "$(tr_msg "No")" \
+        2>/dev/null && return 0
+    # Without a pause the caller's loop would spin
+    sleep 1
+    console_pass "$text"
+}
+
+# Set the hint for the next ask_pass in the calling function's local "hint" (ash scopes locals
+# dynamically). A function rather than an assignment so that xgettext finds the texts.
+set_hint() {
+    hint=$1
+}
+
+# Show title $1 and explanation $2 full screen until the user taps the button, at most
+# $3 seconds; icon $4 (warning, ok). Texts in English, translated here. Always succeeds:
+# without a display the console message is all there is.
+show_message() {
+    msg ":: plinius-crypt: $1"
+    plinius-progress -i "$4" -t "$(tr_msg "$1")" -m "$(tr_msg "$2")" \
+        -b "$(tr_msg "Continue")" -T "$3" 2>/dev/null || :
+}
+
+# Run command "$@" (stdin passed through) and show the cryptsetup progress it prints as JSON
+# on stdout full screen under title $1. Returns the command's exit code. If the view cannot
+# start, the progress lines are discarded so the command never blocks on a full pipe.
+with_progress() {
+    local title rc
+    title=$(tr_msg "$1")
+    shift
+    { "$@"; echo $? > "$PLINIUS_CRYPT_RC"; } |
+        { plinius-progress -p -t "$title" \
+            -m "$(tr_msg "This takes a few minutes. Do not switch off the device.")" \
+            -r "$(tr_msg "about %s min left")" 2>/dev/null || cat > /dev/null; }
+    read -r rc < "$PLINIUS_CRYPT_RC"
+    return "${rc:-1}"
+}
+
+# Size of block device $1 in bytes
+device_bytes() {
+    local name
+    name=$(basename "$(readlink -f "$1")")
+    echo $(( $(cat "/sys/class/block/$name/size") * 512 ))
+}
+
+# rate_password PASSWORD FILE: only the rating of PASSWORD (no secret), for GNOME Settings
+# (Device Security). /run is carried over into the system, where plinius-crypt-strength.service
+# keeps it in /var/lib/plinius-crypt: /run/plinius-crypt/strength (a new password) always,
+# /run/plinius-crypt/strength-unlock (the password just typed to unlock) only if no rating is
+# kept yet, e.g. on a device encrypted by a ramdisk without plinius-pwrate. The rating here has
+# no dictionary check (no cracklib), so it never replaces one made in the system.
+rate_password() {
+    [ -x "$PLINIUS_PWRATE" ] || return 0
+    printf '%s\n' "$1" | "$PLINIUS_PWRATE" > "$2" 2>/dev/null || rm -f "$2"
+}
+
+# Unlock LUKS device $1 (resuming an interrupted reencryption first); retries until the
+# password is right and sets root= to the mapper device
+open_luks() {
+    local dev=$1 hint="" pass
+    while :; do
+        pass=$(ask_pass "Password to unlock" "$hint") || continue
+        set_hint "Wrong password."
+        printf '%s' "$pass" | cryptsetup open --test-passphrase --key-file - "$dev" || continue
+        if cryptsetup luksDump "$dev" | grep -q reencrypt; then
+            msg ":: Resuming the interrupted encryption. Do not power off."
+            # shellcheck disable=SC2086
+            if ! printf '%s' "$pass" | with_progress "Resuming the encryption" \
+                cryptsetup reencrypt --resume-only $PLINIUS_CRYPT_PROGRESS --key-file - "$dev"; then
+                set_hint "The encryption could not be resumed."
+                continue
+            fi
+        fi
+        if printf '%s' "$pass" | cryptsetup open --key-file - "$dev" "$PLINIUS_CRYPT_NAME"; then
+            root=/dev/mapper/$PLINIUS_CRYPT_NAME
+            rate_password "$pass" /run/plinius-crypt/strength-unlock
+            return 0
+        fi
+    done
+}
+
+# True if the unencrypted root $1 carries the encryption request from plinius-encrypt
+encrypt_requested() {
+    local dev=$1 found=1
+    mkdir -p "$PLINIUS_CRYPT_MNT"
+    mount -o ro "$dev" "$PLINIUS_CRYPT_MNT" 2>/dev/null || return 1
+    [ -e "$PLINIUS_CRYPT_MNT/$PLINIUS_CRYPT_REQUEST" ] && found=0
+    umount "$PLINIUS_CRYPT_MNT"
+    return $found
+}
+
+# True if the request on device $1 comes from the image of a freshly installed device: it says
+# "fresh" (Plinius Boot writes it at the installation). A request from plinius-encrypt never does.
+request_fresh() {
+    local dev=$1 found=1
+    mkdir -p "$PLINIUS_CRYPT_MNT"
+    mount -o ro "$dev" "$PLINIUS_CRYPT_MNT" 2>/dev/null || return 1
+    grep -qx fresh "$PLINIUS_CRYPT_MNT/$PLINIUS_CRYPT_REQUEST" 2>/dev/null && found=0
+    umount "$PLINIUS_CRYPT_MNT"
+    return $found
+}
+
+# Remove the encryption request from the root filesystem on device $1
+remove_request() {
+    mount "$1" "$PLINIUS_CRYPT_MNT" && rm -f "$PLINIUS_CRYPT_MNT/$PLINIUS_CRYPT_REQUEST"
+    umount "$PLINIUS_CRYPT_MNT"
+}
+
+# Offer the choice between setting a password and continuing without encryption.
+# Returns 0 for "set password", 2 for "without encryption" (the request on $1 is then removed)
+# and 1 if the choice cannot be shown (no display: go on with the console prompt).
+choose_encryption() {
+    local rc
+    msg ":: plinius-crypt: Encrypt the device?"
+    plinius-progress -t "$(tr_msg "Encrypt the device?")"         -m "$(tr_msg "Encryption was requested for this device. You choose a password that is asked at every start and should differ from the screen lock PIN. Encrypting then takes a few minutes.")" \
+        -b "$(tr_msg "Set password")" -B "$(tr_msg "Continue without encryption")" 2>/dev/null
+    rc=$?
+    case $rc in
+        0) return 0 ;;
+        2)
+            msg ":: plinius-crypt: Continue without encryption"
+            remove_request "$1"
+            return 2
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# Shrink the filesystem on $1 by the header size and encrypt it in place, password on stdin.
+# With $2 = fresh (a request from the image on a freshly installed device) only the part in use is
+# encrypted: the filesystem shrinks to its smallest size, the rest of the device is discarded and
+# left out (cryptsetup --device-size), and the filesystem grows again once the device is open
+# (grow_fresh). Seconds instead of minutes on a device that holds little more than the system;
+# what was there before behind the filesystem is discarded, not encrypted (docs/SICHERHEIT.md).
+# Measured in a VM on 08.11.: the opened device spans the whole partition, the files stay intact.
+# Runs inside with_progress: stdout carries only cryptsetup's progress, all else goes to stderr.
+encrypt_device() {
+    local dev=$1 fresh=$2 newk size rc
+    e2fsck -f -p "$dev" < /dev/null >&2
+    rc=$?
+    [ $rc -le 1 ] || { err "e2fsck reported errors ($rc), not encrypting" >&2; return 1; }
+    if [ "$fresh" = fresh ]; then
+        # "The filesystem on X is now N (4k) blocks long." -> bytes
+        size=$(resize2fs -M "$dev" < /dev/null 2>&1 |
+            sed -n 's/.* is now \([0-9]*\) (\([0-9]*\)k) blocks long.*/\1 \2/p')
+        [ -n "$size" ] || { err "resize2fs -M failed, not encrypting" >&2; return 1; }
+        size=$(( ${size% *} * ${size#* } * 1024 ))
+        msg ":: Encrypting the first $((size / 1048576)) MiB in use" >&2
+        blkdiscard -o "$size" "$dev" >&2 || msg ":: The rest of the device could not be discarded" >&2
+        # shellcheck disable=SC2086
+        cryptsetup reencrypt --encrypt --type luks2 \
+            --reduce-device-size "${PLINIUS_CRYPT_HEADER_MIB}M" \
+            --device-size $((size + PLINIUS_CRYPT_HEADER_MIB * 1048576)) $PLINIUS_CRYPT_PROGRESS \
+            --batch-mode --key-file - "$dev"
+        return
+    fi
+    newk=$(( $(device_bytes "$dev") / 1024 - PLINIUS_CRYPT_HEADER_MIB * 1024 ))
+    resize2fs "$dev" "${newk}K" < /dev/null >&2 || return 1
+    # shellcheck disable=SC2086
+    cryptsetup reencrypt --encrypt --type luks2 \
+        --reduce-device-size "${PLINIUS_CRYPT_HEADER_MIB}M" $PLINIUS_CRYPT_PROGRESS \
+        --batch-mode --key-file - "$dev"
+}
+
+# After a fresh encryption (encrypt_device): grow the filesystem on the opened device $1 over all of
+# it again. Should that fail, the system still starts, with a smaller data partition.
+grow_fresh() {
+    resize2fs "$1" < /dev/null > /dev/null 2>&1 || err "the file system could not grow to the whole device"
+}
+
+# Offer encryption and, if chosen, ask for a new password twice and encrypt $1 in place; on
+# success root= points to the opened mapper device and the request is removed. Shows the
+# outcome on screen. Fails if the device stays unencrypted.
+encrypt_now() {
+    local dev=$1 pass pass2 rounds=0 hint="" fresh=""
+    request_fresh "$dev" && fresh=fresh
+    choose_encryption "$dev"
+    [ $? -eq 2 ] && return 1
+    while :; do
+        rounds=$((rounds + 1))
+        if [ $rounds -gt $PLINIUS_CRYPT_ROUNDS ]; then
+            err "No new password, the system boots unencrypted"
+            show_message "Encryption not set up" \
+                "No matching password was entered. The system starts unencrypted and asks again at the next start." \
+                120 warning
+            return 1
+        fi
+        pass=$(ask_pass "Set up encryption: new password" "$hint" \
+            "$(tr_msg "Leave empty to go back.")")
+        if [ -z "$pass" ]; then
+            # An empty password leads back to the choice; choosing "set password" there
+            # starts afresh (without a display this round still counts)
+            choose_encryption "$dev"
+            case $? in
+                0) rounds=0 ;;
+                2) return 1 ;;
+            esac
+            hint=""
+            continue
+        fi
+        pass2=$(ask_pass "Repeat new password")
+        [ "$pass" = "$pass2" ] && break
+        set_hint "The passwords do not match. Please enter them again."
+    done
+
+    msg ":: Encrypting $dev. Depending on its size this takes a few minutes. Do not power off."
+    if ! printf '%s' "$pass" | with_progress "Encrypting the device" encrypt_device "$dev" "$fresh"; then
+        err "Encryption failed"
+        # A LUKS header already in place means reencryption is in progress; it resumes
+        # at the next unlock (run_hook). Otherwise the system boots unencrypted.
+        if cryptsetup isLuks "$dev"; then
+            show_message "Encryption interrupted" \
+                "Enter the password to continue the encryption." 120 warning
+        else
+            show_message "Encryption failed" \
+                "Your data are unchanged and the system starts unencrypted. Encryption is tried again at the next start." \
+                120 warning
+        fi
+        return 1
+    fi
+    printf '%s' "$pass" | cryptsetup open --key-file - "$dev" "$PLINIUS_CRYPT_NAME" || return 1
+    root=/dev/mapper/$PLINIUS_CRYPT_NAME
+    [ -z "$fresh" ] || grow_fresh "$root"
+    rate_password "$pass" /run/plinius-crypt/strength
+
+    remove_request "$root"
+    msg ":: Encryption complete."
+    show_message "Encryption complete" \
+        "The device is now encrypted. From now on it asks for this password at every start." \
+        10 ok
+}
+
+# Entry point called by the busybox init of mkinitcpio
+run_hook() {
+    local dev
+    # Marker for the running system (mkinitcpio carries /run over): plinius-encrypt only
+    # files a request if this initramfs really runs the hook
+    mkdir -p /run/plinius-crypt
+    modprobe -a -q dm-crypt >/dev/null 2>&1
+    dev=$(resolve_device "$root") || return 0
+
+    if cryptsetup isLuks "$dev"; then
+        open_luks "$dev"
+    elif encrypt_requested "$dev"; then
+        # On failure with the LUKS header already written, the encryption resumes on unlock
+        encrypt_now "$dev" || { cryptsetup isLuks "$dev" && open_luks "$dev"; }
+    fi
+}
+
+# vim: set ft=sh ts=4 sw=4 et:

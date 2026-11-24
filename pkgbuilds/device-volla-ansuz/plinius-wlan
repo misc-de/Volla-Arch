@@ -1,0 +1,53 @@
+#!/bin/sh
+# Switches WLAN on. The Android container provides the calibration data (NVRAM): its
+# wlan_assistant hands it to the driver through /dev/wmtWifi and then sets
+# vendor.mtk.nvram.ready. Linux loads the driver and powers WLAN on, as UT's device-hacks do.
+# 'C' then 'P' runs the driver in its concurrent mode: wlan0 (client), p2p0 and ap0, the hotspot
+# interface Android uses as well. wlan0 itself cannot switch to AP mode (no free P2P role).
+# Usage: plinius-wlan   (plinius-wlan.service)
+set -eu
+
+MODULES=/android/vendor_dlkm/lib/modules
+
+# Waits up to $2 seconds for Android property $1 to become $3 (checks 5 times a second)
+wait_prop() {
+	i=0
+	while [ "$(getprop "$1")" != "$3" ]; do
+		i=$((i + 1))
+		[ "$i" -le $(($2 * 5)) ] || return 1
+		sleep 0.2
+	done
+}
+
+wait_prop vendor.service.nvram_init 120 Ready || { echo "NVRAM daemon not ready" >&2; exit 1; }
+
+# The vendor modules are not in /lib/modules; the rest of the dependencies load at boot
+for m in cfg80211 mac80211 wlan_drv_gen4m_6878; do
+	grep -q "^$m " /proc/modules || insmod "$MODULES/$m.ko"
+done
+
+# wlan_assistant gives up if the driver was not there when it tried: start it once more. When it
+# is still waiting it hands the NVRAM over within 0.5 s of the driver load (13 boots, 2026-10-30);
+# after a late NVRAM daemon it never does, and every second here also holds up Bluetooth (the
+# chip calibrates only once both have registered)
+if ! wait_prop vendor.mtk.nvram.ready 3 1; then
+	setprop ctl.restart wlan_assistant
+	wait_prop vendor.mtk.nvram.ready 30 1 || { echo "NVRAM not handed to the driver" >&2; exit 1; }
+fi
+
+# 'C' only sets the concurrent flag, 'P' powers on with it (a separate write each)
+echo C > /dev/wmtWifi
+echo P > /dev/wmtWifi
+
+# Driver log down to events, states, warnings and errors: the info level wrote about 4 lines a
+# second (packet statistics) into the journal
+echo 0xff:0x0f 2>/dev/null > /proc/net/wlan/dbgLevel || true
+
+# NetworkManager already saw wlan0 while the chip was calibrating (the driver registers it for the
+# calibration and takes it down again): wpa_supplicant failed to bring it up and NetworkManager
+# only tries once more after a fixed 10 s. That cost 7-9 s in every boot (6 boots, 2026-11-11).
+# Handing the device over again makes it acquire the supplicant interface at once. Runtime only
+# (no --permanent); nothing happens when NetworkManager has not seen wlan0 yet or already has it.
+case "$(nmcli -g GENERAL.STATE device show wlan0 2>/dev/null || true)" in
+"20 "*) nmcli device set wlan0 managed no && nmcli device set wlan0 managed yes || true ;;
+esac

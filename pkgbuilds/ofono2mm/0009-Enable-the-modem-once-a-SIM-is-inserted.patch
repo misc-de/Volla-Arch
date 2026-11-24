@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 08:20:00 +0100
+Subject: [PATCH] Enable the modem once a SIM is inserted
+
+With an empty slot the modem is "failed" (sim-missing). After a SIM
+was inserted it went to "disabled" and stayed offline: ModemManager
+probes the modem again on a SIM change and NetworkManager enables the
+new modem object, but NetworkManager does not enable a modem that
+leaves "failed". The connection added in GNOME Settings hung in
+"prepare".
+
+On this transition ask NetworkManager whether mobile broadband is on
+(no flight mode) and set the modem online then.
+---
+ ofono2mm/mm_modem.py | 32 +++++++++++++++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index 75bcca2..6021c23 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -1,7 +1,7 @@
+ from dbus_next.service import (ServiceInterface,
+                                method, dbus_property, signal)
+ from dbus_next.constants import PropertyAccess
+-from dbus_next import Variant, DBusError, BusType
++from dbus_next import Variant, DBusError, BusType, Message, MessageType
+ 
+ from ofono2mm.mm_modem_3gpp import MMModem3gppInterface
+ from ofono2mm.mm_modem_3gpp_ussd import MMModem3gppUssdInterface
+@@ -533,6 +533,12 @@ class MMModemInterface(ServiceInterface):
+ 
+         if old_state != self.props['State'].value:
+             Logger.info("Modem state: %s", ModemManagerState.to_string(self.props['State'].value))
++            # A SIM was inserted into an empty slot. ModemManager probes the modem again then and
++            # NetworkManager enables the new modem object; this one stays, NetworkManager never
++            # enables a modem coming from "failed", so the modem would stay offline.
++            if old_state == ModemManagerState.FAILED and \
++                    self.props['State'].value == ModemManagerState.DISABLED:
++                self.loop.create_task(self.enable_after_sim_inserted())
+ 
+         self.set_sim_state()
+         self.set_access_technology()
+@@ -604,6 +610,30 @@ class MMModemInterface(ServiceInterface):
+ 
+         self.set_props()
+ 
++    async def enable_after_sim_inserted(self):
++        # As NetworkManager would: only while mobile broadband is switched on there (no flight
++        # mode). Without NetworkManager the modem stays disabled, as with ModemManager.
++        try:
++            reply = await self.bus.call(Message(destination='org.freedesktop.NetworkManager',
++                                                path='/org/freedesktop/NetworkManager',
++                                                interface='org.freedesktop.DBus.Properties',
++                                                member='Get', signature='ss',
++                                                body=['org.freedesktop.NetworkManager',
++                                                      'WwanEnabled']))
++        except Exception as e:
++            Logger.error("SIM inserted, mobile broadband state unknown: %s", e)
++            return
++        if reply.message_type != MessageType.METHOD_RETURN or not reply.body[0].value:
++            return
++
++        # Same as Enable(); the @method() wrapper of dbus-next does not return the coroutine
++        Logger.info("SIM inserted, enabling the modem")
++        try:
++            await self.ofono_modem.call_set_property('Online', Variant('b', True))
++        except Exception as e:
++            Logger.error("Enabling the modem failed: %s", e)
++        self.set_props()
++
+     @method()
+     def ListBearers(self) -> 'ao':
+         return self.props['Bearers'].value

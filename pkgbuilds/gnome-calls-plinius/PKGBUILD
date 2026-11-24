@@ -1,0 +1,59 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=gnome-calls-plinius
+pkgver=51.1
+pkgrel=8
+pkgdesc="GNOME Calls that doesn't lose an emergency call and dials through the SIM slot with a SIM, the last one used"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview and tests
+url="https://gitlab.gnome.org/GNOME/calls"
+license=(GPL-3.0-or-later)
+# As Arch's gnome-calls
+depends=(
+	callaudiod dconf evolution-data-server feedbackd folks glib2 glibc gom gsound gstreamer gtk4
+	hicolor-icon-theme libadwaita libgcc libgee libmm-glib libpeas-2 libsecret
+	mobile-broadband-provider-info sofia-sip
+)
+makedepends=(appstream git glib2-devel meson python-docutils vala)
+provides=("gnome-calls=$pkgver")
+conflicts=(gnome-calls)
+# Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
+_commit=d3a2a2242fef42f2e210c564e0220857e575f40c
+source=(
+	"git+https://gitlab.gnome.org/GNOME/calls.git#commit=$_commit"
+	"git+https://gitlab.gnome.org/World/Phosh/libcall-ui.git#commit=3a2044f8e7c45387954ed35d22c6b6309e6751d6"
+	0001-mm-origin-Don-t-lose-an-emergency-call.patch
+	0002-mm-Offer-only-SIM-slots-with-a-SIM-and-name-them.patch
+	0003-new-call-box-Remember-the-origin-dialed-from.patch
+	0004-new-call-box-The-dial-pad-grows-with-the-page-in-its.patch
+)
+sha256sums=('SKIP'
+            'SKIP'
+            '887762be389d3dc456819f503a75f9883fa5dd111f435289d7c11617da615ff6'
+            'dd741e28cca3d0cfe33a4c12965f6c06be8bdd4372d6650434061212b5acc762'
+            'b73fdc69abb0a84d7d720344f4edf4d5a9e44fb74b172965e4b639b02dd7a2b9'
+            'f60a79bf19e1ab7d9cabd9ed4af0de9cf802c9af254f08d929fcb1552f1220eb')
+
+prepare() {
+	# With another call up an emergency call was dropped without a word, success was reported
+	# before anything was dialed, and a call that failed to connect was just gone: docs/NOTRUF.md
+	patch -d calls -Np1 -i "$srcdir/0001-mm-origin-Don-t-lose-an-emergency-call.patch"
+	# With two SIM slots both showed as "binder", and when the empty one came first every call
+	# failed with NotAvailable: only slots with a SIM are offered, named "SIM 1 · <operator>"
+	patch -d calls -Np1 -i "$srcdir/0002-mm-Offer-only-SIM-slots-with-a-SIM-and-name-them.patch"
+	# The SIM (or account) dialed from last is selected again and used for the next call
+	patch -d calls -Np1 -i "$srcdir/0003-new-call-box-Remember-the-origin-dialed-from.patch"
+	# At a lower scale the dial pad kept small buttons at the top of the page: sized like the lock
+	# screen's keypad from the room there, and centered
+	patch -d calls -Np1 -i "$srcdir/0004-new-call-box-The-dial-pad-grows-with-the-page-in-its.patch"
+}
+
+build() {
+	# Inject the libcall-ui subproject
+	export MESON_PACKAGE_CACHE_DIR="$srcdir"
+	arch-meson calls build -D gtk_doc=false -D tests=false
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+}

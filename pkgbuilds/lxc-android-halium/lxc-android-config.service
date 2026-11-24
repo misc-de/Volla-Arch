@@ -1,0 +1,25 @@
+# Start of the Android container (Halium), adapted from UT's lxc-android-config.service.
+# UT replaces systemd-udev-trigger.service and lets ueventd in the container do the coldplug,
+# to trigger only once. On Arch that unit belongs to systemd, so the normal trigger stays
+# and the container starts after it; ueventd triggers again, which only costs time.
+[Unit]
+Description=LXC Android Config and Container Initialization
+DefaultDependencies=no
+Wants=systemd-udevd.service
+After=systemd-udev-trigger.service
+Before=sysinit.target
+
+Requires=mount-android-system.service mount-halium-overlay.service mount-android-partitions.service lxc-android-config-mount-apexes.service
+After=mount-android-system.service mount-halium-overlay.service mount-android-partitions.service lxc-android-config-mount-apexes.service
+
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=exec
+# Passed on from lxc-start to Android's init, whose second stage does not reset it
+UMask=0000
+ExecStart=/usr/libexec/lxc-android-config/start-android-container
+ExecStartPost=/usr/lib/lxc-android-config/lxc-android-ready
+ExecStop=/usr/bin/lxc-stop -n android -k
+# Started by a link in sysinit.target.wants from the package (as on UT); to switch it off, mask it

@@ -1,0 +1,52 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-appaccess\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-15 07:00+0100\n"
+"PO-Revision-Date: 2026-11-15 07:00+0100\n"
+"Last-Translator: plinius-appaccess\n"
+"Language-Team: none\n"
+"Language: it\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. TRANSLATORS: %s is the name of an app
+#: plinius-appaccess-agent.c:58
+#, c-format
+msgid "%s wants to use a camera"
+msgstr "%s vuole usare una fotocamera"
+
+#. TRANSLATORS: %s is the name of an app
+#: plinius-appaccess-agent.c:61
+#, c-format
+msgid "%s wants to use a security key"
+msgstr "%s vuole usare una chiave di sicurezza"
+
+#. TRANSLATORS: %s is the name of an app
+#, c-format
+msgid "%s wants to use the microphone"
+msgstr "%s vuole usare il microfono"
+
+#. TRANSLATORS: %s is the name of an app
+#: plinius-appaccess-agent.c:63
+#, c-format
+msgid "%s wants to use the network"
+msgstr "%s vuole usare la rete"
+
+#: plinius-appaccess-agent.c:77
+msgid "Allow Once"
+msgstr "Consenti una volta"
+
+#: plinius-appaccess-agent.c:77
+msgid "Always Allow"
+msgstr "Consenti sempre"
+
+#: plinius-appaccess-agent.c:77
+msgid "Don't Allow"
+msgstr "Non consentire"
+
+#: plinius-appaccess-agent.c:107
+msgid "Access was blocked. If you allow it, try again in the app."
+msgstr "L’accesso è stato bloccato. Se lo consenti, riprova nell’app."

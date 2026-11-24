@@ -1,0 +1,98 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-usb
+pkgver=0.4
+pkgrel=7
+pkgdesc="USB functions of the Volla Phone Plinius for a computer: file sharing, network, internet and webcam, chosen in the quick settings; whether the phone charges or powers the connected device; which port is active when a pogo accessory is attached"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# dnsmasq: DNS for the computer while it gets internet; iptables-legacy: its NAT (the GKI
+# kernel has no nf_tables). systemd-networkd: address and DHCP of usb0.
+depends=(glib2 libgudev systemd dnsmasq iptables)
+makedepends=(gettext gstreamer)
+# Webcam: uvcsink and intervideo* (bad), jpegenc/videoflip/capssetter (good), videoconvert and
+# videoscale (base), pipewiresrc; the cameras come from camera-hal-bridge
+optdepends=('umtp-responder: File Sharing (MTP)'
+	'gst-plugins-bad-libs: Webcam'
+	'gst-plugins-good: Webcam'
+	'gst-plugins-base: Webcam'
+	'gst-plugin-pipewire: Webcam'
+	'camera-hal-bridge: Webcam')
+# The NCM gadget and usb0's network file were part of the device package up to 0.5-38
+conflicts=('device-volla-ansuz<0.5-39')
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-usb.c
+	plinius-usb-prompt.c
+	plinius-usb-webcam.c
+	pogo-port.h
+	test-pogo-port.c
+	plinius-usb.service
+	plinius-usb-prompt.service
+	plinius-usb-webcam.service
+	org.plinius.Usb.conf
+	40-plinius-usb.network
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('e8764c6db138e2e4f25f527bdb44e4e191c29f6ce7b57c1c4536eae206f5d4ba'
+	'b56fc3de4b827e355115330638113419fd7a30ed81f8a84d012a7892ae2f50c5'
+	'90a522ba774c2b61d4e298c441079a590e0fe796aeac760753139790a609956f'
+	'885fd4a589b37ac009cf7bbeb6b7dc7fe0026161ba6fb316da41015688f8ba70'
+	'8cf945f40418b96afa81002b9898ed1ab0da2f6894a79e2a9c4586d21cff2844'
+	'295008dd233ce752eda07ef9c36bb25f462ec7689803d9d65eaeed98850178a1'
+	'a7b8b9c3ff3b89f6c1c77387dc94f16ed9061541180c37d7b0e8b43c7a5d74fc'
+	'3e0fe2ceb49369e07dc3035e3dc2fe3f5308e4650b2051677d414c5a13a03a30'
+	'd852c3bb8e8016112d910d989ff7ba8d0471721502364f6cbc3ac0101e164e69'
+	'af3bbea03248680330939c6b20f4b5e0ac88e5146440c9f04ab42779bb1445e5'
+	'2cb94619ab88d45ff62627450401d122d0100926088359d1c64fa46ade2a4226'
+	'9f04465f6a27920001bcfdfb45f6b8b5fb259fe01eda9daa6322379c0fcdadbf'
+	'53acb885d11f900ce5b364b15a0abec6e4c27430b74d0b2fcf514c0aa6ffed01'
+	'cbfaf9832d80c8db9b33609b49b72798a67cb61163487ecc7eb968c5b4c526e5'
+	'e32f6aca81af2604221d4aad6b1894a2cb2bb6c103efcd6adbdd8f08f7e5e4e3'
+	'66c13e0d28e46e5718403495094bb84c1e93077813a75081cd77e4b066004a95'
+	'f5bc680eef1cfb69b8ec536d6debaf0509c702f01e53e0b2dbc381a79248056e'
+	'd432e52c904aeff3d5b275a97f808ed6bb32fa0a3532b58788d3b9c86a29d106'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-usb plinius-usb.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 gudev-1.0) $LDFLAGS
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-usb-prompt plinius-usb-prompt.c \
+		$(pkg-config --cflags --libs gio-unix-2.0) $LDFLAGS
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-usb-webcam plinius-usb-webcam.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 gstreamer-1.0) $LDFLAGS
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+check() {
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -o test-pogo-port test-pogo-port.c $LDFLAGS
+	./test-pogo-port
+}
+
+package() {
+	install -Dm755 plinius-usb plinius-usb-prompt plinius-usb-webcam -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-usb.service -t "$pkgdir/usr/lib/systemd/system"
+	# Enabled by the package: it is the SSH access over USB too
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-usb.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	# The question about the port, in the session of whoever is signed in
+	install -Dm644 plinius-usb-prompt.service -t "$pkgdir/usr/lib/systemd/user"
+	install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../plinius-usb-prompt.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	# The webcam's stream, in the session too: the cameras are in the user's PipeWire
+	install -Dm644 plinius-usb-webcam.service -t "$pkgdir/usr/lib/systemd/user"
+	ln -s ../plinius-usb-webcam.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	install -Dm644 org.plinius.Usb.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 40-plinius-usb.network -t "$pkgdir/usr/lib/systemd/network"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-usb.mo"
+	done
+}

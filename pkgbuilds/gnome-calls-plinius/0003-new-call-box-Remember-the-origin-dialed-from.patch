@@ -1,0 +1,196 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 07 Nov 2026 17:10:00 +0100
+Subject: [PATCH 3/3] new-call-box: Remember the origin dialed from
+
+With more than one origin the selection started at the first one every
+time, and dialing from the dial pad ignored it anyway: with
+auto-use-default-origins (the default) the first suitable origin was taken.
+
+Store the origin dialed from in the new key last-origin-id and select it
+again at start and whenever origins come and go. Dial through the selected
+origin if it can call the target, otherwise as before.
+---
+ data/org.gnome.Calls.gschema.xml |  6 +++
+ src/calls-new-call-box.c         | 76 ++++++++++++++++++++++++++++++--
+ 2 files changed, 79 insertions(+), 3 deletions(-)
+
+diff --git a/data/org.gnome.Calls.gschema.xml b/data/org.gnome.Calls.gschema.xml
+index 0f6793c..0636ce6 100644
+--- a/data/org.gnome.Calls.gschema.xml
++++ b/data/org.gnome.Calls.gschema.xml
+@@ -8,6 +8,12 @@
+       <description>Whether calls should automatically use the default origin</description>
+     </key>
+ 
++    <key name="last-origin-id" type="s">
++      <default>''</default>
++      <summary>The origin last dialed from</summary>
++      <description>Selected again for the next call, e.g. the SIM slot</description>
++    </key>
++
+     <key name="country-code" type="s">
+       <default>''</default>
+       <summary>The country code as reported by the modem</summary>
+diff --git a/src/calls-new-call-box.c b/src/calls-new-call-box.c
+index d6d3c64..3b214f7 100644
+--- a/src/calls-new-call-box.c
++++ b/src/calls-new-call-box.c
+@@ -58,6 +58,9 @@ struct _CallsNewCallBox {
+   GList        *dial_queue;
+ 
+   gboolean      numeric_input_only;
++
++  /* Remembers the origin last dialed from (key last-origin-id) */
++  GSettings    *settings;
+ };
+ 
+ G_DEFINE_TYPE (CallsNewCallBox, calls_new_call_box, ADW_TYPE_BIN);
+@@ -80,6 +83,52 @@ get_selected_origin (CallsNewCallBox *self)
+ }
+ 
+ 
++/*
++ * With more than one origin (two SIM slots, a VoIP account) the selection used
++ * to start at the first one every time. Remember the one dialed from and
++ * select it again, also when origins come and go.
++ */
++static void
++remember_selected_origin (CallsNewCallBox *self)
++{
++  CallsOrigin *origin = get_selected_origin (self);
++  g_autofree char *id = NULL;
++
++  if (!origin)
++    return;
++
++  id = calls_origin_get_id (origin);
++  if (STR_IS_NULL_OR_EMPTY (id))
++    return;
++
++  g_settings_set_string (self->settings, "last-origin-id", id);
++}
++
++
++static void
++select_remembered_origin (CallsNewCallBox *self)
++{
++  GListModel *model = adw_combo_row_get_model (self->origin_list);
++  g_autofree char *last_id = g_settings_get_string (self->settings, "last-origin-id");
++  guint n_items;
++
++  if (!model || STR_IS_NULL_OR_EMPTY (last_id))
++    return;
++
++  n_items = g_list_model_get_n_items (model);
++  for (guint i = 0; i < n_items; i++) {
++    g_autoptr (CallsOrigin) origin = g_list_model_get_item (model, i);
++    g_autofree char *id = calls_origin_get_id (origin);
++
++    if (g_strcmp0 (id, last_id) == 0) {
++      if (adw_combo_row_get_selected (self->origin_list) != i)
++        adw_combo_row_set_selected (self->origin_list, i);
++      return;
++    }
++  }
++}
++
++
+ static CallsOrigin *
+ get_origin (CallsNewCallBox *self,
+             const char      *target)
+@@ -94,6 +143,8 @@ get_origin (CallsNewCallBox *self,
+   if (auto_use_def_origin) {
+     guint n_items;
+ 
++    CallsOrigin *selected = get_selected_origin (self);
++
+     model = calls_manager_get_suitable_origins (calls_manager_get_default (),
+                                                 target);
+     n_items = g_list_model_get_n_items (model);
+@@ -101,6 +152,15 @@ get_origin (CallsNewCallBox *self,
+     if (n_items == 0)
+       return NULL;
+ 
++    /* The selected origin (the one dialed from last) first, if it can call the target */
++    if (selected &&
++        calls_find_in_model (model, selected, NULL) &&
++        (!CALLS_IS_ACCOUNT (selected) ||
++         calls_account_get_state (CALLS_ACCOUNT (selected)) == CALLS_ACCOUNT_STATE_ONLINE)) {
++      g_debug ("Using the selected origin for call to '%s'", target);
++      return g_object_ref (selected);
++    }
++
+     for (guint i = 0; i < n_items; i++) {
+       g_autoptr (CallsOrigin) origin = g_list_model_get_item (model, i);
+       g_autofree char *origin_name = NULL;
+@@ -129,8 +189,10 @@ address_activate_cb (CallsNewCallBox *self)
+   CallsOrigin *origin = get_selected_origin (self);
+   const char *address = gtk_editable_get_text (GTK_EDITABLE (self->address_entry));
+ 
+-  if (origin && !STR_IS_NULL_OR_EMPTY (address))
++  if (origin && !STR_IS_NULL_OR_EMPTY (address)) {
++    remember_selected_origin (self);
+     calls_origin_dial (origin, address);
++  }
+ }
+ 
+ 
+@@ -222,9 +284,10 @@ dial_result_clicked_cb (CallsNewCallBox *self)
+   CallsOrigin *origin = get_selected_origin (self);
+   const char *address = gtk_editable_get_text (GTK_EDITABLE (self->address_entry));
+ 
+-  if (origin && address && *address != '\0')
++  if (origin && address && *address != '\0') {
++    remember_selected_origin (self);
+     calls_origin_dial (origin, address);
+-  else
++  } else
+     g_warning ("No suitable origin found. How was this even clicked?");
+ }
+ 
+@@ -240,6 +303,7 @@ dial_queued_cb (gchar           *target,
+   origin = get_origin (self,
+                        target);
+   if (origin) {
++    remember_selected_origin (self);
+     calls_origin_dial (origin, target);
+     self->dial_queue = g_list_remove (self->dial_queue, target);
+   } else {
+@@ -285,6 +349,8 @@ origin_count_changed_cb (CallsNewCallBox *self)
+   gtk_widget_set_visible (GTK_WIDGET (self->origin_list_box), n_items > 1);
+   gtk_widget_set_sensitive (GTK_WIDGET (self->dialpad), n_items > 0);
+ 
++  select_remembered_origin (self);
++
+   if (n_items)
+     dial_queued (self);
+ 
+@@ -326,6 +392,8 @@ calls_new_call_box_init (CallsNewCallBox *self)
+ 
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
++  self->settings = g_settings_new ("org.gnome.Calls");
++
+   origins = calls_manager_get_origins (calls_manager_get_default ());
+   adw_combo_row_set_model (self->origin_list, origins);
+   get_origin_name = gtk_property_expression_new (CALLS_TYPE_ORIGIN,
+@@ -354,6 +422,7 @@ calls_new_call_box_dispose (GObject *object)
+   GtkWidget *child = self->child;
+ 
+   clear_dial_queue (self);
++  g_clear_object (&self->settings);
+ 
+   g_clear_pointer (&child, gtk_widget_unparent);
+ 
+@@ -420,6 +489,7 @@ calls_new_call_box_dial (CallsNewCallBox *self,
+     return;
+   }
+ 
++  remember_selected_origin (self);
+   calls_origin_dial (origin, target);
+ }
+ 
+-- 
+2.56.0
+

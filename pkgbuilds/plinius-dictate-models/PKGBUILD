@@ -1,0 +1,31 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-dictate-models
+pkgver=1
+pkgrel=1
+pkgdesc="Speech models for dictation on the Plinius: NeMo Parakeet TDT 0.6B v3 (int8) and Silero VAD v5"
+arch=(any)
+url="https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models"
+# Parakeet TDT 0.6B v3 by NVIDIA: CC-BY-4.0 (25 European languages, punctuation and
+# capitalization); Silero VAD: MIT. Both as converted to ONNX by the sherpa-onnx project.
+license=(CC-BY-4.0 MIT)
+# Separate from plinius-dictate: about 640 MB that only change with a new model
+_rel=https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models
+_parakeet=sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8
+source=("$_rel/$_parakeet.tar.bz2"
+	"$_rel/silero_vad_v5.onnx"
+	"silero-vad-LICENSE::https://raw.githubusercontent.com/snakers4/silero-vad/v5.1.2/LICENSE")
+noextract=(silero_vad_v5.onnx)
+sha256sums=('5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf'
+	'6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396'
+	'2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b')
+# Nothing to strip; the ONNX files hardly compress
+options=(!strip !debug)
+
+package() {
+	local dir="$pkgdir/usr/share/plinius-dictate"
+	install -Dm644 "$_parakeet"/{encoder,decoder,joiner}.int8.onnx "$_parakeet/tokens.txt" \
+		-t "$dir/parakeet-tdt-0.6b-v3-int8"
+	install -Dm644 silero_vad_v5.onnx -t "$dir"
+	install -Dm644 silero-vad-LICENSE "$pkgdir/usr/share/licenses/$pkgname/silero-vad"
+}

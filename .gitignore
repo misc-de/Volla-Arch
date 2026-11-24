@@ -1,0 +1,30 @@
+# Build artifacts and device data
+/.claude/
+/.ruff_cache/
+/build/
+/docs/
+/TODO.md
+/site/
+/downloads/
+/backup/
+*.img
+*.img.*
+*.tar.gz
+*.tar.xz
+*.pkg.tar.*
+__pycache__/
+
+# Converted with tools/face-models.sh, too large for the repository
+/pkgbuilds/plinius-face/*.tflite
+
+# Bare git clones that makepkg keeps as source cache next to a PKGBUILD
+/pkgbuilds/gnome-control-center-plinius/gnome-control-center/
+/pkgbuilds/gnome-control-center-plinius/libgnome-volume-control/
+/pkgbuilds/gnome-control-center-plinius/libgxdp/
+/pkgbuilds/phosh-plinius/guidog-gvc/
+/pkgbuilds/phosh-plinius/libcall-ui/
+/pkgbuilds/phosh-plinius/phosh/
+/pkgbuilds/phoc-plinius/gvdb/
+/pkgbuilds/phoc-plinius/phoc/
+/pkgbuilds/phoc-plinius/wlroots/
+.coverage

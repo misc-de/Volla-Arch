@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:05:00 +0100
+Subject: [PATCH] Subscribe to an interface's changes before reading its
+ properties
+
+The PropertyChanged subscription came after the GetProperties reply.
+A change oFono signalled in between was lost: at boot oFono read the
+SIM while the SimManager was being added, "Present" stayed false here
+and the modem "failed" (sim-missing) although the SIM was ready in
+oFono. Mobile data and calls stayed off until ofono2mm restarted.
+
+Subscribe first. Signals that arrive before the reply are dropped, the
+reply already holds their values.
+---
+ ofono2mm/mm_modem.py | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index 6021c23..47bbf47 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -109,6 +109,14 @@ class MMModemInterface(ServiceInterface):
+             iface: self.ofono_proxy[iface]
+         })
+ 
++        # Subscribe before reading the properties: a change oFono signalled while GetProperties
++        # was on its way got lost otherwise. At boot oFono reads the SIM right then, "Present"
++        # stayed false here and the slot "sim-missing" while the SIM worked in oFono.
++        try:
++            self.ofono_interfaces[iface].on_property_changed(self.ofono_interface_changed(iface))
++        except AttributeError:
++            pass
++
+         try:
+             # GetProperties on these asks the network (supplementary services). Without a network
+             # the RIL may never answer, and the binder plugin holds back every SIM request of the
+@@ -124,8 +132,6 @@ class MMModemInterface(ServiceInterface):
+                 self.mm_modem3gpp_interface.ofono_interface_props = self.ofono_interface_props.copy()
+             if self.mm_sim_interface is not None:
+                 self.mm_sim_interface.ofono_interface_props = self.ofono_interface_props.copy()
+-
+-            self.ofono_interfaces[iface].on_property_changed(self.ofono_interface_changed(iface))
+         except DBusError:
+             self.ofono_interface_props.update({
+                 iface: {}
+@@ -135,8 +141,6 @@ class MMModemInterface(ServiceInterface):
+                 self.mm_modem3gpp_interface.ofono_interface_props = self.ofono_interface_props.copy()
+             if self.mm_sim_interface is not None:
+                 self.mm_sim_interface.ofono_interface_props = self.ofono_interface_props.copy()
+-
+-            self.ofono_interfaces[iface].on_property_changed(self.ofono_interface_changed(iface))
+         except AttributeError:
+             pass
+ 

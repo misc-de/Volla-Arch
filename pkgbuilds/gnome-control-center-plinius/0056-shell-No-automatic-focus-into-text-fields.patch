@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 15:10:00 +0100
+Subject: [PATCH] shell: No automatic focus into text fields
+
+Plinius: cc-plinius-text-focus.c (a file of its own) keeps focus moves that
+nobody asked for out of text fields, so opening a page with a spin row
+does not open the on-screen keyboard. It changes a class of GTK, so it
+runs from "startup", when GTK is initialized.
+---
+--- a/shell/main.c
++++ b/shell/main.c
+@@ -28,6 +28,7 @@
+
+ #include "cc-application.h"
+ #include "cc-log.h"
++#include "cc-plinius-text-focus.h"
+
+ int
+ main (gint argc, gchar **argv)
+@@ -42,6 +43,7 @@ main (gint argc, gchar **argv)
+     cc_log_init ();
+
+     application = cc_application_new ();
++    g_signal_connect (application, "startup", G_CALLBACK (cc_plinius_text_focus_init), NULL);
+
+     return g_application_run (G_APPLICATION (application), argc, argv);
+ }
+--- a/shell/meson.build
++++ b/shell/meson.build
+@@ -112,7 +112,8 @@ libshell_dep = declare_dependency(
+ ########################
+
+ # Plinius: form dialogs as pages of the navigation (the executable overrides adw_dialog_present)
+-shell_sources = common_sources + files('main.c', 'cc-plinius-dialog-pages.c')
++# and no automatic focus into text fields
++shell_sources = common_sources + files('main.c', 'cc-plinius-dialog-pages.c', 'cc-plinius-text-focus.c')
+
+ shell_deps = common_deps + [
+   libdevice_dep,

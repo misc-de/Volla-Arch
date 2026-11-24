@@ -1,0 +1,15 @@
+# Loads the phone's own AppArmor profiles before the services they are for start (they enter
+# their profile through AppArmorProfile= in drop-ins of this package). Started through the
+# package's own link in sysinit.target.wants (no [Install]: nothing to enable by hand).
+[Unit]
+Description=AppArmor profiles of the phone
+DefaultDependencies=no
+After=local-fs.target systemd-journald.socket
+Before=sysinit.target
+ConditionSecurity=apparmor
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/plinius-apparmor/plinius-apparmor-load
+ExecReload=/usr/lib/plinius-apparmor/plinius-apparmor-load

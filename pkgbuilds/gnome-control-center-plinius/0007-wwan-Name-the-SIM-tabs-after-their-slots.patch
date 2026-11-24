@@ -1,0 +1,102 @@
+From c39d4fb5911b89cae8a76d2f241e3b592029ceb0 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:58:15 +0100
+Subject: [PATCH] wwan: Name the SIM tabs after their slots
+
+Plinius: ModemManager lists the modems in no particular order and the
+panel counted them, so the eSIM in slot 2 could show up as "SIM 1".
+Take the slot from oFono's modem path that oFono2MM reports as the
+device (/ril_0 is slot 1), and add the modems in slot order.
+---
+ panels/wwan/cc-wwan-panel.c | 44 ++++++++++++++++++++++++++++++++-----
+ 1 file changed, 39 insertions(+), 5 deletions(-)
+
+diff --git a/panels/wwan/cc-wwan-panel.c b/panels/wwan/cc-wwan-panel.c
+index f036525dd..a7e4de6b8 100644
+--- a/panels/wwan/cc-wwan-panel.c
++++ b/panels/wwan/cc-wwan-panel.c
+@@ -326,6 +326,39 @@ cc_wwan_panel_update_view (CcWwanPanel *self)
+                                        g_list_model_get_n_items (G_LIST_MODEL (self->devices)) > 1);
+ }
+ 
++/*
++ * Plinius: the number of the SIM slot a modem belongs to, from oFono's modem path that oFono2MM
++ * reports as the device ("/ril_0" is slot 1). ModemManager lists the modems in no particular
++ * order, so counting them would put the second slot under "SIM 1". Falls back to @index + 1.
++ */
++static gint
++wwan_panel_sim_number (CcWwanPanel *self, CcWwanDevice *device, gint index)
++{
++    g_autoptr(GDBusObject) object = NULL;
++    MMModem *modem;
++    const char *name;
++    gint64 slot;
++
++    object = g_dbus_object_manager_get_object (G_DBUS_OBJECT_MANAGER (self->mm_manager),
++                                               cc_wwan_device_get_path (device));
++    modem = object ? mm_object_peek_modem (MM_OBJECT (object)) : NULL;
++    name = modem ? mm_modem_get_device (modem) : NULL;
++    if (name && g_str_has_prefix (name, "/ril_") && g_ascii_string_to_signed (name + 5, 10, 0, 63, &slot, NULL))
++        return slot + 1;
++    return index + 1;
++}
++
++/* Plinius: modems in the order of their SIM slots */
++static gint
++wwan_panel_compare_objects (gconstpointer a, gconstpointer b)
++{
++    MMModem *modem_a = mm_object_peek_modem (MM_OBJECT ((gpointer) a));
++    MMModem *modem_b = mm_object_peek_modem (MM_OBJECT ((gpointer) b));
++
++    return g_strcmp0 (modem_a ? mm_modem_get_device (modem_a) : NULL,
++                      modem_b ? mm_modem_get_device (modem_b) : NULL);
++}
++
+ static void
+ cc_wwan_panel_add_device (CcWwanPanel *self, CcWwanDevice *device)
+ {
+@@ -337,11 +370,11 @@ cc_wwan_panel_add_device (CcWwanPanel *self, CcWwanDevice *device)
+     g_list_store_append (self->devices, device);
+ 
+     n_items = g_list_model_get_n_items (G_LIST_MODEL (self->devices));
+-    operator_name = g_strdup_printf (_("SIM %d"), n_items);
++    operator_name = g_strdup_printf (_("SIM %d"), wwan_panel_sim_number (self, device, n_items - 1));
+     stack_name = g_strdup_printf ("sim-%d", n_items);
+ 
+     device_page = cc_wwan_device_page_new (device, GTK_WIDGET (self->toast_overlay));
+-    cc_wwan_device_page_set_sim_index (device_page, n_items);
++    cc_wwan_device_page_set_sim_index (device_page, wwan_panel_sim_number (self, device, n_items - 1));
+     gtk_stack_add_titled (self->devices_stack, GTK_WIDGET (device_page), stack_name, operator_name);
+ 
+     gtk_stack_set_visible_child_name (self->main_stack, "device-settings");
+@@ -367,8 +400,8 @@ cc_wwan_panel_update_page_title (CcWwanDevicePage *device_page, CcWwanPanel *sel
+         g_return_if_reached ();
+ 
+     /* index starts with 0, but we need human readable index to be 1+ */
+-    cc_wwan_device_page_set_sim_index (device_page, index + 1);
+-    title = g_strdup_printf (_("SIM %d"), index + 1);
++    cc_wwan_device_page_set_sim_index (device_page, wwan_panel_sim_number (self, device, index));
++    title = g_strdup_printf (_("SIM %d"), wwan_panel_sim_number (self, device, index));
+     name = g_strdup_printf ("sim-%d", index + 1);
+     gtk_stack_page_set_title (page, title);
+     gtk_stack_page_set_name (page, name);
+@@ -425,7 +458,7 @@ wwan_panel_add_data_device_to_list (CcWwanPanel *self, CcWwanDevice *device)
+     g_list_store_append (self->data_devices, device);
+ 
+     index = wwan_model_get_item_index (G_LIST_MODEL (self->devices), device);
+-    operator = g_strdup_printf ("SIM %d", index + 1);
++    operator = g_strdup_printf ("SIM %d", wwan_panel_sim_number (self, device, index));
+     str = gtk_string_object_new (operator);
+     g_object_set_data_full (G_OBJECT (str), "device", g_object_ref (device), g_object_unref);
+     g_list_store_append (self->data_devices_name_list, str);
+@@ -476,6 +509,7 @@ cc_wwan_panel_update_devices (CcWwanPanel *self)
+     GList *devices, *iter;
+ 
+     devices = g_dbus_object_manager_get_objects (G_DBUS_OBJECT_MANAGER (self->mm_manager));
++    devices = g_list_sort (devices, wwan_panel_compare_objects);
+ 
+     for (iter = devices; iter; iter = iter->next) {
+         MMObject *mm_object = iter->data;
+-- 
+2.55.0
+

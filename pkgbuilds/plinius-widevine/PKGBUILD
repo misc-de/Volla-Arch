@@ -1,0 +1,56 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-widevine
+pkgver=0.3
+pkgrel=1
+pkgdesc="Protected content (Widevine DRM) for Firefox: fetches Google's CDM onto the device when switched on"
+arch=(any)  # scripts; arm64: the CDM of ChromeOS, x64 (the KVM preview): Google's Linux one
+license=(MIT)
+# Widevine itself may not be redistributed (its LICENSE), so it is not in this package:
+# plinius-widevine-update downloads it from Google onto the phone: on arm64 the CDM of ChromeOS
+# from Google's last LaCrOS image, made loadable by Asahi Linux's widevine_fixup.py (Netflix gives
+# no licence to Google's CDM for Linux arm64: E100), on x64 the one Google's component update
+# server offers, as Chrome asks it. Mozilla offers Widevine for Linux x86_64 only.
+# Off unless switched on in GNOME Settings > Privacy (pkexec plinius-widevine-set).
+depends=(python systemd polkit openssl squashfs-tools)
+optdepends=('firefox: plays DRM video (Netflix, Prime Video) with the CDM')
+install=plinius-widevine.install
+# widevine_fixup.py (MIT, David Buchanan) as in Asahi Linux's widevine-installer
+_fixup=eab8c668ad3f9db27a444ee1f94b82d8f3ab5336
+source=(plinius-widevine-update
+	plinius-widevine-set
+	org.plinius.widevine.policy
+	plinius-widevine-update.service
+	plinius-widevine-update.timer
+	plinius-widevine.sysusers
+	plinius-widevine.js
+	50-plinius-widevine.conf
+	plinius-widevine.sh
+	LICENSE
+	"widevine_fixup-$_fixup.py::https://raw.githubusercontent.com/AsahiLinux/widevine-installer/$_fixup/widevine_fixup.py")
+sha256sums=('cdebdcac8d23262ea10f8098ab712ff9a11703ac5a05d1e79ec7703f4d7d970d'
+	'afb09b990ea9105ab92d1ef337890c78c66a0748651da574ab0db8eb3438b699'
+	'9cb9a3edd7b1df6c9c7ee3ed7cbe37494d4a4be5107224dc89d872f4ac8fe7ba'
+	'3139c13226f76a62aff53824403cadfd59c228dc2c384771d5e3a55d0423e915'
+	'88bde305fe1d5f764ff85d2b6047021345890074f979ecc22ef7c09072ad95e5'
+	'd17524def736a9a331d3a77218b62d256d5a09d4391a0414f6d24bae37ea3f8a'
+	'e92dc34843cd57957aa44119396a0d3b9336478f0f3de5e0582fcd2eb4d212e5'
+	'cede2c6d2745b5dc04d53123fa88e672ed47537372a00c91da08da7bdcd641ac'
+	'c472c130cd48217cbab666f98a5afed2081c80298d4054a2f4d4e09c2e3f716a'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
+	'6e886755201f1ba9dab1ead5f11846bae321cbf343da1112f06c08c8a8012182')
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-widevine-update plinius-widevine-set -t "$pkgdir/usr/lib/plinius-widevine"
+	install -Dm644 "widevine_fixup-$_fixup.py" "$pkgdir/usr/lib/plinius-widevine/widevine_fixup.py"
+	install -Dm644 org.plinius.widevine.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	install -Dm644 plinius-widevine-update.service plinius-widevine-update.timer \
+		-t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/timers.target.wants"
+	ln -s ../plinius-widevine-update.timer "$pkgdir/usr/lib/systemd/system/timers.target.wants/"
+	install -Dm644 plinius-widevine.sysusers "$pkgdir/usr/lib/sysusers.d/plinius-widevine.conf"
+	install -Dm644 plinius-widevine.js -t "$pkgdir/usr/lib/firefox/defaults/pref"
+	install -Dm644 50-plinius-widevine.conf -t "$pkgdir/usr/lib/environment.d"
+	install -Dm644 plinius-widevine.sh -t "$pkgdir/etc/profile.d"
+}

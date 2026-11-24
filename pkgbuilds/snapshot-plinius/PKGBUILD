@@ -1,0 +1,80 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=snapshot-plinius
+pkgver=51.0
+pkgrel=13
+pkgdesc="GNOME Snapshot (camera) with a flash button, the last camera kept, real photos with noise reduction, exposure and scene settings through camera-hal-bridge, a top bar below the front camera and the thumbnail opening the default app for pictures instead of the own gallery"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://apps.gnome.org/Snapshot"
+license=(GPL-3.0-or-later)
+# As Arch's snapshot
+depends=(
+	dconf fontconfig glib2 glibc glycin glycin-gtk4 graphene gst-plugin-gtk4
+	gst-plugin-pipewire gst-plugins-bad-libs gst-plugins-base gst-plugins-base-libs
+	gst-plugins-good gstreamer gtk4 hicolor-icon-theme lcms2 libadwaita libgcc
+	libseccomp pango
+)
+makedepends=(git meson rust)
+provides=("snapshot=$pkgver")
+conflicts=(snapshot)
+# Commit on the stable branch gnome-51 after tag $pkgver (only translations since the tag):
+# a branch moves, a commit hash does not
+_commit=2987210d87c86d85094102a5780b650d29c22988
+source=(
+	"git+https://gitlab.gnome.org/GNOME/snapshot.git#commit=$_commit"
+	0002-camera-A-flash-button-for-the-flash-LED-off-light-wi.patch
+	0003-viewfinder-Switch-to-the-default-camera-when-it-show.patch
+	0004-camera-Real-photos-and-scene-settings-through-camera.patch
+	0005-camera-The-top-bar-below-the-front-camera-larger-mod.patch
+	0006-window-The-thumbnail-opens-the-default-app-instead-of.patch
+	0007-camera-Noise-reduction-and-exposure-for-cameras-of-c.patch
+	0008-camera-A-video-resolution-button-for-cameras-of-came.patch
+)
+sha256sums=('SKIP'
+            '58e5813ca0f9ee847a7e98e54451dd8a8fd4cbef795b1850be5266405e605b71'
+            '1bb5b4f6e1909661c79f517963cb62df61f7ab2002190c144108d2367dcc2e93'
+            '6bb0fb25dc6049fd183fbaa8382aa92453ea9ac722d91e4c984666cbd68da3b9'
+            '8a45e7b9a2fd216d0aff9bc3dc32fb8adad6e409125048de3705c84d21c6faf6'
+            '354a84d211a81a7c71a184f9d92a3bede6653293804ff1554e147e4aae12fa07'
+            '368129541d9695d96b1b0050f8605c6290e6719b8f25233cb417667a54a0eb4d'
+            '04e24e5892ab5b711b12b3cbc23d61cd75d5ccc0e30a01a3c55125a3a8c8fc6a')
+
+prepare() {
+	# The flash LED (plinius-torch) as off, a lamp with a dimmer or a flash for pictures,
+	# switched through logind like Phosh's torch toggle
+	patch -d snapshot -Np1 -i "$srcdir/0002-camera-A-flash-button-for-the-flash-LED-off-light-wi.patch"
+	# The camera used last also when PipeWire announces the cameras only after the start
+	# (every other start on the phone): the viewfinder switches to it when it shows up
+	patch -d snapshot -Np1 -i "$srcdir/0003-viewfinder-Switch-to-the-default-camera-when-it-show.patch"
+	# Cameras of camera-hal-bridge take real photos through the HAL instead of storing a
+	# preview frame, and a scene button sets the HAL's scene mode and white balance
+	patch -d snapshot -Np1 -i "$srcdir/0004-camera-Real-photos-and-scene-settings-through-camera.patch"
+	# On phones in portrait the top bar sits below the front camera and its light ring,
+	# and the picture/video/QR toggles are larger
+	patch -d snapshot -Np1 -i "$srcdir/0005-camera-The-top-bar-below-the-front-camera-larger-mod.patch"
+	# The thumbnail opens the newest picture or video with the default app for its type
+	# (on the phone the gallery app Muga); Snapshot's own gallery is no longer shown, so the
+	# zoom patch for it (0001, docs/upstream/snapshot/gallery-zoom) is no longer applied
+	patch -d snapshot -Np1 -i "$srcdir/0006-window-The-thumbnail-opens-the-default-app-instead-of.patch"
+	# The scene button's menu also switches the HAL's multi-frame noise reduction and sets the
+	# exposure compensation, which camera-hal-bridge offers since it shoots through Camera2
+	patch -d snapshot -Np1 -i "$srcdir/0007-camera-Noise-reduction-and-exposure-for-cameras-of-c.patch"
+	# In video mode a button picks the video resolution (720p, 1080p, 4K with the hardware
+	# encoder) among the stream sizes camera-hal-bridge offers; aperture's viewfinder gets a
+	# video-size property for it
+	patch -d snapshot -Np1 -i "$srcdir/0008-camera-A-video-resolution-button-for-cameras-of-came.patch"
+
+	# Fetch the crates now (CARGO_HOME as in src/meson.build), not during the build
+	cd snapshot
+	CARGO_HOME="$srcdir/build/cargo-home" \
+		cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+	arch-meson snapshot build
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+}

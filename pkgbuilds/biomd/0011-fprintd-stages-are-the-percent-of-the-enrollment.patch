@@ -1,0 +1,46 @@
+From cbe433f654d27ad5d470302c4364b62db72cc7ef Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 11:02:16 +0100
+Subject: [PATCH] fprintd: stages are the percent of the enrollment
+
+The fprintd interface reported a fixed 13 stages and one "stage passed" for every report of the
+sensor, which needs more touches on the Volla Phone Plinius. GNOME Settings then showed a full bar
+while the ring over the sensor, which shows the real progress, was at 85 %. There are 100 stages
+now, one for each percent, so that both show the same.
+---
+ src/fprintd/fprintd.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/fprintd/fprintd.c b/src/fprintd/fprintd.c
+index 51a816b..b74fd98 100644
+--- a/src/fprintd/fprintd.c
++++ b/src/fprintd/fprintd.c
+@@ -507,13 +507,15 @@ on_biomd_enroll_progress_changed(GDBusConnection *connection,
+     g_variant_get(parameters, "(i)", &progress);
+ 
+     g_debug("Enroll progress: %d", progress);
++    gint passed = progress - self->enroll_progress;
+     self->enroll_progress = progress;
+ 
+     if (progress == 100) {
+         emit_enroll_status(self, "enroll-completed", TRUE);
+         self->enroll_in_progress = FALSE;
+     } else {
+-        emit_enroll_status(self, "enroll-stage-passed", FALSE);
++        for (gint i = 0; i < passed; i++)
++            emit_enroll_status(self, "enroll-stage-passed", FALSE);
+     }
+ }
+ 
+@@ -915,7 +917,7 @@ handle_get_property(GDBusConnection *connection,
+         if (g_strcmp0(property_name, "name") == 0) {
+             return g_variant_new_string("Biomd");
+         } else if (g_strcmp0(property_name, "num-enroll-stages") == 0) {
+-            return g_variant_new_int32(13);
++            return g_variant_new_int32(100);
+         } else if (g_strcmp0(property_name, "scan-type") == 0) {
+             return g_variant_new_string("press");
+         } else if (g_strcmp0(property_name, "finger-present") == 0) {
+-- 
+2.56.0
+

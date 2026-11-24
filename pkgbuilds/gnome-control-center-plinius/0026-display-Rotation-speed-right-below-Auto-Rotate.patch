@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 23:25:15 +0100
+Subject: [PATCH] display: Rotation speed right below Auto Rotate
+
+Plinius: the "Rotation Speed" row (cc-plinius-display.c) goes into the
+display's list right below "Auto Rotate" instead of a group of its own,
+shown with it and only usable while Auto Rotate is on.
+---
+--- a/panels/display/cc-display-settings.c
++++ b/panels/display/cc-display-settings.c
+@@ -73,6 +73,7 @@
+     gboolean has_plinius_options;
+     GtkWidget *listbox;
+     GtkWidget *end_row;
++    GtkWidget *rotation_speed_row;
+ };
+ 
+ typedef struct _CcDisplaySettings CcDisplaySettings;
+@@ -945,6 +946,18 @@
+     self->has_notch_setting = cc_plinius_device_setup_notch_row (self->notch_row);
+     self->has_plinius_options = cc_plinius_display_setup (self->plinius_box);
+ 
++    /* Plinius: the rotation speed right below "Auto Rotate", shown with it and only usable while
++     * the screen rotates by itself */
++    self->rotation_speed_row = cc_plinius_display_rotation_row_new ();
++    if (self->rotation_speed_row) {
++        gtk_list_box_insert (GTK_LIST_BOX (self->listbox), self->rotation_speed_row,
++                             gtk_list_box_row_get_index (GTK_LIST_BOX_ROW (self->auto_orientation_row)) + 1);
++        g_object_bind_property (self->auto_orientation_row, "visible", self->rotation_speed_row, "visible",
++                                G_BINDING_SYNC_CREATE);
++        g_object_bind_property (self->auto_orientation_row, "active", self->rotation_speed_row, "sensitive",
++                                G_BINDING_SYNC_CREATE);
++    }
++
+     self->orientation_list = G_LIST_MODEL (gtk_string_list_new (NULL));
+     self->refresh_rate_list = g_list_store_new (CC_TYPE_DISPLAY_MODE);
+     self->resolution_list = g_list_store_new (CC_TYPE_DISPLAY_MODE);

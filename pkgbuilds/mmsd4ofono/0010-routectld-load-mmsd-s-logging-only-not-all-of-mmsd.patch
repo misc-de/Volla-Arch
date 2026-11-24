@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 20:31:14 +0100
+Subject: [PATCH] routectld: load mmsd's logging only, not all of mmsd
+
+`from mmsd.logging import mmsd_print` runs mmsd/__init__.py first, which
+imports every module of mmsd: aiohttp, dbus-fast and the MMS decoder end up
+in a daemon that adds and removes routes. On a Volla Quintus routectld held
+37 MB of its own memory, mmsd itself 29 MB.
+
+Load mmsd/logging.py on its own instead.
+---
+ routectld/routectld.py | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/routectld/routectld.py b/routectld/routectld.py
+index 350db6d..81333ec 100755
+--- a/routectld/routectld.py
++++ b/routectld/routectld.py
+@@ -43,7 +43,21 @@ def host_address(value):
+         return None
+     return str(address)
+ 
+-from mmsd.logging import mmsd_print
++def _mmsd_print():
++    """mmsd_print from mmsd/logging.py alone: importing it as mmsd.logging runs
++    mmsd/__init__.py, which loads all of mmsd (aiohttp, dbus-fast, the MMS
++    decoder) into a daemon that only adds and removes routes."""
++    from importlib.util import module_from_spec, spec_from_file_location
++    for base in (topdir, mmsd_dir):
++        path = join(base, "mmsd", "logging.py")
++        if isfile(path):
++            spec = spec_from_file_location("mmsd_logging", path)
++            module = module_from_spec(spec)
++            spec.loader.exec_module(module)
++            return module.mmsd_print
++    raise ImportError("mmsd/logging.py not found")
++
++mmsd_print = _mmsd_print()
+ 
+ class MMSRouteController:
+     def __init__(self, verbose=False):

@@ -1,0 +1,19 @@
+# The hook only runs when a transaction touches RetroArch's launcher. When RetroArch was installed
+# before plinius-games, nothing does, so it is hidden here as well.
+# On removal it comes back, otherwise the app would have no icon at all.
+_launchers="usr/share/applications/com.libretro.RetroArch.desktop"
+
+post_install() {
+	echo "$_launchers" | /usr/share/libalpm/scripts/plinius-hide-apps
+}
+
+post_upgrade() {
+	post_install
+}
+
+post_remove() {
+	for f in $_launchers; do
+		[ -f "/$f" ] && sed -i '/^NoDisplay=true$/d' "/$f"
+	done
+	return 0
+}

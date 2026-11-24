@@ -1,0 +1,33 @@
+From ccdf600f50ecface5b73bb5c8417b41f6e70b876 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 09:00:09 +0100
+Subject: [PATCH] mount-android-partitions: /mnt as Android mounts it, not
+ world-writable
+
+The tmpfs for /android/mnt had no mode, so it got tmpfs's default
+1777, and through the rbind /mnt on the host too: every user could
+create names there before the container made them. Android mounts its
+/mnt with nodev, noexec, nosuid, mode=0755, uid 0 and gid 1000 (system);
+use the same.
+---
+ usr/libexec/lxc-android-config/mount-android-partitions | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/usr/libexec/lxc-android-config/mount-android-partitions b/usr/libexec/lxc-android-config/mount-android-partitions
+index 363de29..dfbcd1d 100755
+--- a/usr/libexec/lxc-android-config/mount-android-partitions
++++ b/usr/libexec/lxc-android-config/mount-android-partitions
+@@ -75,7 +75,9 @@ process_single_fstab_entry() {
+             [[ "$2" =~ ^/mnt ]] && \
+             [ -d /android/mnt ] \
+     ; then
+-        mount -t tmpfs android_mnt /android/mnt
++        # As Android mounts its /mnt: tmpfs defaults to 1777, which lets every user claim names
++        # there before the container makes them
++        mount -t tmpfs -o nodev,noexec,nosuid,mode=0755,uid=0,gid=1000 android_mnt /android/mnt
+         mount -o rbind /android/mnt /mnt
+         mkdir -p "$android_mount_point"
+     fi
+-- 
+2.56.0
+

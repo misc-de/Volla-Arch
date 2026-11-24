@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 07:36:27 +0100
+Subject: [PATCH] route_controller, routectld: take the socket path from the
+ environment
+
+With MMSD_ROUTECTL_SOCKET set, routectld can run with ProtectSystem=strict
+and a RuntimeDirectory of its own instead of needing all of /run writable,
+and a test can give mmsd a stand-in route daemon without touching the
+routes of the device. Without the variable nothing changes.
+---
+ mmsd/route_controller.py | 4 +++-
+ routectld/routectld.py   | 2 +-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/mmsd/route_controller.py b/mmsd/route_controller.py
+index 3e119af..6c7647e 100644
+--- a/mmsd/route_controller.py
++++ b/mmsd/route_controller.py
+@@ -1,10 +1,12 @@
+ import asyncio
++from os import environ
+ from typing import List
+ import json
+ 
+ from mmsd.logging import mmsd_print
+ 
+-_ROUTE_DAEMON_PATH = "/run/mmsroutectl.sock"
++# The service files may move the socket, e.g. into a RuntimeDirectory
++_ROUTE_DAEMON_PATH = environ.get("MMSD_ROUTECTL_SOCKET", "/run/mmsroutectl.sock")
+ 
+ async def setup_mms_routes(ips: List[str]) -> bool:
+     try:
+diff --git a/routectld/routectld.py b/routectld/routectld.py
+index 78d6de2..a4fddf8 100755
+--- a/routectld/routectld.py
++++ b/routectld/routectld.py
+@@ -27,7 +27,7 @@ class MMSRouteController:
+     def __init__(self, verbose=False):
+         mmsd_print("Initializing MMS route controller", verbose)
+         self.verbose = verbose
+-        self.socket_path = "/run/mmsroutectl.sock"
++        self.socket_path = environ.get("MMSD_ROUTECTL_SOCKET", "/run/mmsroutectl.sock")
+         self.ipr = pyroute2.IPRoute()
+         self.active_routes = []
+ 

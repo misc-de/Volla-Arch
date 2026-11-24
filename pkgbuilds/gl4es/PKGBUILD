@@ -1,0 +1,58 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+# Desktop OpenGL for programs that need it, on the device's GLES driver. The Mali driver offers
+# OpenGL ES only, and Zink (Mesa's OpenGL on Vulkan) needs VK_KHR_maintenance5 and the
+# nullDescriptor feature, which the driver's Vulkan 1.3.247 lacks (measured 2026-11-22). gl4es
+# translates OpenGL up to 2.1 to GLES 2 and ships an EGL wrapper, so programs that create their
+# context through EGL (SDL, glmark2) get one. Programs start with `gl4es <program>`; nothing
+# else changes, libGL and libEGL stay glvnd's.
+pkgname=gl4es
+pkgver=1.1.6.r151.g8b1a3da5
+pkgrel=1
+pkgdesc="Desktop OpenGL 2.1 on the device's GLES driver, for programs started with gl4es"
+arch=(aarch64)
+url="https://github.com/ptitSeb/gl4es"
+license=(MIT)
+depends=(bash glibc libglvnd libhybris)
+makedepends=(cmake git ninja)
+# No release since 1.1.6 (2024), 151 commits on master since: commit pin on master,
+# pkgver = last tag + commits + hash
+_commit=8b1a3da5d2331d0f88b70be25963182d46eed857
+source=("git+$url.git#commit=$_commit"
+	0001-Pass-EGLAttrib-lists-to-eglGetPlatformDisplay.patch
+	0002-EGL-wrapper-ask-for-a-GLES-config-when-EGL_OPENGL_BI.patch
+	0003-Forget-a-deleted-program-as-the-current-one.patch
+	gl4es.sh)
+sha256sums=('SKIP'
+	'960c4d77fe92fb1037125a281074e8dd73bb2646fcf60bdbc4505d8bbb9aadec'
+	'0441fbe7f6237c148a5d3b68498359aaba17b888ddb54b6f2825adf44a032542'
+	'3d67ade4c1209e8485252f42ab8c222c1160051473b8d104d0410b6a492925c8'
+	'd199bb0259f66d7765b5dd6b25af2d1b4a2c84c33e1f516d9400f97378bd211f')
+
+prepare() {
+	# GCC 14 and later refuse to build it: EGLint lists passed where EGLAttrib ones belong
+	patch -d gl4es -Np1 -i "$srcdir/0001-Pass-EGLAttrib-lists-to-eglGetPlatformDisplay.patch"
+	# Without it no program gets a window: a GLES driver has no config with EGL_OPENGL_BIT
+	patch -d gl4es -Np1 -i "$srcdir/0002-EGL-wrapper-ask-for-a-GLES-config-when-EGL_OPENGL_BI.patch"
+	# Without it glmark2 crashed when it switched scenes (a deleted program stayed current)
+	patch -d gl4es -Np1 -i "$srcdir/0003-Forget-a-deleted-program-as-the-current-one.patch"
+}
+
+build() {
+	# HYBRIS: Android's EGL through libhybris, no GBM; NOX11: no GLX (there is no X server with
+	# this driver), contexts come from EGL; EGL_WRAPPER: libEGL that maps desktop GL requests to
+	# GLES. The GLX stubs (GLX_STUBS) do not build with GCC 14 and are not needed without X11.
+	cmake -S gl4es -B build -G Ninja -DCMAKE_BUILD_TYPE=None \
+		-DHYBRIS=ON -DNOX11=ON -DEGL_WRAPPER=ON
+	cmake --build build
+}
+
+package() {
+	# gl4es writes its libraries into its source tree (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+	install -Dm755 gl4es/lib/libGL.so.1 gl4es/lib/libEGL.so.1 -t "$pkgdir/usr/lib/gl4es"
+	# Some programs open libGL.so and libEGL.so without a version (glmark2)
+	ln -s libGL.so.1 "$pkgdir/usr/lib/gl4es/libGL.so"
+	ln -s libEGL.so.1 "$pkgdir/usr/lib/gl4es/libEGL.so"
+	install -Dm755 gl4es.sh "$pkgdir/usr/bin/gl4es"
+	install -Dm644 gl4es/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

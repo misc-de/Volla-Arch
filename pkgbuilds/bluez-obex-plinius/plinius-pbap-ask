@@ -1,0 +1,201 @@
+#!/usr/bin/python3 -I
+# Volla Phone Plinius: who may read the contacts over Bluetooth (PBAP).
+#
+# obexd (patch 0004) serves the phone book only to devices allowed in
+# $XDG_DATA_HOME/plinius/bluetooth-contacts:
+#
+#   [devices]
+#   AA:BB:CC:DD:EE:FF=true      allowed
+#   11:22:33:44:55:66=false     refused
+#
+# GNOME Settings > Bluetooth > Contacts shows and changes the same file.
+#
+#   plinius-pbap-ask --init       first start after the update: every device that is paired
+#                                 already is allowed, so a car keeps its phone book
+#   plinius-pbap-ask <address>    a device not decided yet asked for the contacts: ask the user
+#                                 in a notification and keep the answer
+#
+# obexd starts it and does not wait for it; the device is refused meanwhile and gets the
+# contacts at its next try once the user allowed it.
+
+import os
+import re
+import sys
+import time
+
+from gi.repository import Gio, GLib
+
+ADDRESS = re.compile(r'^[0-9A-F]{2}(:[0-9A-F]{2}){5}$')
+# How long a question stays open; obexd asks again after 10 minutes at the soonest
+ANSWER_TIMEOUT_S = 600
+
+TEXTS = {
+    'en': ('Share contacts with “{name}”?',
+           '{name} wants to read your contacts over Bluetooth.', 'Allow', 'Don’t Allow'),
+    'de': ('Kontakte mit „{name}“ teilen?',
+           '{name} möchte deine Kontakte über Bluetooth lesen.', 'Erlauben', 'Nicht erlauben'),
+    'es': ('¿Compartir los contactos con «{name}»?',
+           '{name} quiere leer tus contactos por Bluetooth.', 'Permitir', 'No permitir'),
+    'fr': ('Partager les contacts avec « {name} » ?',
+           '{name} veut lire vos contacts via Bluetooth.', 'Autoriser', 'Ne pas autoriser'),
+    'it': ('Condividere i contatti con «{name}»?',
+           '{name} vuole leggere i tuoi contatti tramite Bluetooth.', 'Consenti', 'Non consentire'),
+    'nl': ('Contacten delen met ‘{name}’?',
+           '{name} wil je contacten via Bluetooth lezen.', 'Toestaan', 'Niet toestaan'),
+    'pl': ('Udostępnić kontakty urządzeniu „{name}”?',
+           '{name} chce odczytać Twoje kontakty przez Bluetooth.', 'Zezwól', 'Nie zezwalaj'),
+    'pt': ('Partilhar os contactos com «{name}»?',
+           '{name} quer ler os seus contactos por Bluetooth.', 'Permitir', 'Não permitir'),
+    'ru': ('Поделиться контактами с «{name}»?',
+           '{name} хочет прочитать ваши контакты по Bluetooth.', 'Разрешить', 'Не разрешать'),
+}
+
+
+def texts():
+    for var in ('LANGUAGE', 'LC_ALL', 'LC_MESSAGES', 'LANG'):
+        for value in os.environ.get(var, '').split(':'):
+            lang = value.split('_')[0].split('.')[0]
+            if lang in TEXTS:
+                return TEXTS[lang]
+            if lang in ('C', 'POSIX'):
+                return TEXTS['en']
+    return TEXTS['en']
+
+
+def store_path():
+    return os.path.join(GLib.get_user_data_dir(), 'plinius', 'bluetooth-contacts')
+
+
+def load():
+    kf = GLib.KeyFile()
+    try:
+        kf.load_from_file(store_path(), GLib.KeyFileFlags.KEEP_COMMENTS)
+    except GLib.Error:
+        pass
+    return kf
+
+
+def save(kf):
+    path = store_path()
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    data = kf.to_data()[0]
+    # Atomic, and only for the user: the file says who may read the contacts
+    GLib.file_set_contents_full(path, data.encode(), GLib.FileSetContentsFlags.CONSISTENT, 0o600)
+
+
+def decided(kf, address):
+    try:
+        kf.get_boolean('devices', address)
+        return True
+    except GLib.Error:
+        return False
+
+
+def bluez_devices():
+    """(address, alias, paired) of every device bluetoothd knows."""
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+    reply = bus.call_sync('org.bluez', '/', 'org.freedesktop.DBus.ObjectManager',
+                          'GetManagedObjects', None, GLib.VariantType('(a{oa{sa{sv}}})'),
+                          Gio.DBusCallFlags.NONE, 5000)
+    devices = []
+    for _path, interfaces in reply.unpack()[0].items():
+        device = interfaces.get('org.bluez.Device1')
+        if device and 'Address' in device:
+            devices.append((device['Address'].upper(), device.get('Alias') or device['Address'],
+                            bool(device.get('Paired'))))
+    return devices
+
+
+def init():
+    if os.path.exists(store_path()):
+        return 0
+    devices = None
+    # obexd starts with the session, bluetoothd may still be on its way
+    for _ in range(10):
+        try:
+            devices = bluez_devices()
+            break
+        except GLib.Error:
+            time.sleep(3)
+    kf = load()
+    kf.set_comment(None, None,
+                   ' Who may read the contacts over Bluetooth (PBAP): true allowed, false refused.'
+                   '\n Changed in Settings > Bluetooth > Contacts.')
+    for address, _alias, paired in devices or []:
+        if paired and not decided(kf, address):
+            kf.set_boolean('devices', address, True)
+    save(kf)
+    return 0
+
+
+def ask(address):
+    if decided(load(), address):
+        return 0
+    name = address
+    try:
+        for addr, alias, _paired in bluez_devices():
+            if addr == address:
+                name = alias
+    except GLib.Error:
+        pass
+    summary, body, allow, deny = texts()
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+    loop = GLib.MainLoop()
+    state = {'id': None, 'answer': None}
+
+    def on_signal(_bus, _sender, _path, _iface, signal, params):
+        args = params.unpack()
+        if args[0] != state['id']:
+            return
+        if signal == 'ActionInvoked':
+            state['answer'] = args[1]
+        loop.quit()
+
+    bus.signal_subscribe('org.freedesktop.Notifications', 'org.freedesktop.Notifications', None,
+                         '/org/freedesktop/Notifications', None, Gio.DBusSignalFlags.NONE,
+                         on_signal)
+    hints = {'urgency': GLib.Variant('y', 1), 'resident': GLib.Variant('b', True),
+             'category': GLib.Variant('s', 'device'),
+             'desktop-entry': GLib.Variant('s', 'gnome-bluetooth-panel')}
+    reply = bus.call_sync('org.freedesktop.Notifications', '/org/freedesktop/Notifications',
+                          'org.freedesktop.Notifications', 'Notify',
+                          GLib.Variant('(susssasa{sv}i)', (
+                              'Bluetooth', 0, 'bluetooth-active-symbolic',
+                              summary.format(name=name), body.format(name=name),
+                              ['allow', allow, 'deny', deny], hints, 0)),
+                          GLib.VariantType('(u)'), Gio.DBusCallFlags.NONE, 10000)
+    state['id'] = reply.unpack()[0]
+    GLib.timeout_add_seconds(ANSWER_TIMEOUT_S, loop.quit)
+    loop.run()
+    if state['answer'] not in ('allow', 'deny'):
+        # Closed without an answer: asked again at the device's next try
+        if state['answer'] is None:
+            try:
+                bus.call_sync('org.freedesktop.Notifications', '/org/freedesktop/Notifications',
+                              'org.freedesktop.Notifications', 'CloseNotification',
+                              GLib.Variant('(u)', (state['id'],)), None, Gio.DBusCallFlags.NONE,
+                              2000)
+            except GLib.Error:
+                pass
+        return 0
+    kf = load()
+    kf.set_boolean('devices', address, state['answer'] == 'allow')
+    save(kf)
+    return 0
+
+
+def main(argv):
+    if len(argv) != 2:
+        print(f'usage: {argv[0]} --init | <address>', file=sys.stderr)
+        return 2
+    if argv[1] == '--init':
+        return init()
+    address = argv[1].upper()
+    if not ADDRESS.fullmatch(address):
+        print(f'{argv[1]}: not a Bluetooth address', file=sys.stderr)
+        return 2
+    return ask(address)
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

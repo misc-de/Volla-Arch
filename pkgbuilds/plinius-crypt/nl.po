@@ -1,0 +1,218 @@
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-crypt\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-30 10:42+0100\n"
+"PO-Revision-Date: 2026-10-30 10:30+0100\n"
+"Last-Translator: plinius-crypt\n"
+"Language-Team: none\n"
+"Language: nl\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: plinius-encrypt:69
+msgid "The password must not be empty."
+msgstr "Het wachtwoord mag niet leeg zijn."
+
+#: plinius-encrypt:74
+#, sh-printf-format
+msgid "These characters cannot be typed on the keyboard at startup: %s"
+msgstr "Deze tekens kunnen bij het opstarten niet met het toetsenbord worden ingevoerd: %s"
+
+#: plinius-encrypt:89
+msgid "The password must differ from the PIN of the screen lock."
+msgstr "Het wachtwoord moet verschillen van de pincode van het vergrendelscherm."
+
+#: plinius-encrypt:94
+msgid "Could not compare the password with the PIN of the screen lock."
+msgstr "Het wachtwoord kon niet met de pincode van het vergrendelscherm worden vergeleken."
+
+#: plinius-encrypt:108
+msgid "The system is not encrypted."
+msgstr "Het systeem is niet versleuteld."
+
+#: plinius-encrypt:114
+msgid "Expected the current and the new password on stdin, one per line."
+msgstr "Verwacht op stdin het huidige en het nieuwe wachtwoord, elk op een eigen regel."
+
+#: plinius-encrypt:120
+msgid "Current password"
+msgstr "Huidig wachtwoord"
+
+#: plinius-encrypt:123
+msgid "The current password is wrong."
+msgstr "Het huidige wachtwoord is onjuist."
+
+#: plinius-encrypt:130
+msgid "New password"
+msgstr "Nieuw wachtwoord"
+
+#: plinius-encrypt:138 hook:216
+msgid "Repeat new password"
+msgstr "Herhaal het nieuwe wachtwoord"
+
+#: plinius-encrypt:140 hook:218
+msgid "The passwords do not match. Please enter them again."
+msgstr "De wachtwoorden komen niet overeen. Voer ze opnieuw in."
+
+#: plinius-encrypt:145
+msgid "Changing the password failed. Is the current password right?"
+msgstr "Het wachtwoord kon niet worden gewijzigd. Klopt het huidige wachtwoord?"
+
+#: plinius-encrypt:148
+msgid "Password changed. From the next start on, the new password is asked."
+msgstr "Wachtwoord gewijzigd. Vanaf de volgende start wordt het nieuwe wachtwoord gevraagd."
+
+#: plinius-encrypt:160
+msgid "Please run as root."
+msgstr "Voer dit uit als root."
+
+#: plinius-encrypt:167
+msgid "Usage: plinius-encrypt [--request|--status|--cancel|--change-password [--stdin]]"
+msgstr "Gebruik: plinius-encrypt [--request|--status|--cancel|--change-password [--stdin]]"
+
+#: plinius-encrypt:202
+msgid "Request cancelled."
+msgstr "Aanvraag ingetrokken."
+
+#: plinius-encrypt:215
+#, sh-printf-format
+msgid "The system is already encrypted (%s)."
+msgstr "Het systeem is al versleuteld (%s)."
+
+#: plinius-encrypt:219
+msgid "Only ext4 is supported."
+msgstr "Alleen ext4 wordt ondersteund."
+
+#: plinius-encrypt:223
+msgid "This system's initramfs does not contain the plinius-crypt hook; encryption only works with an initramfs built by mkinitcpio with plinius-crypt."
+msgstr "De initramfs van dit systeem bevat de hook plinius-crypt niet; versleutelen werkt alleen met een initramfs die mkinitcpio met plinius-crypt heeft gemaakt."
+
+#: plinius-encrypt:230
+#, sh-printf-format
+msgid "Encryption requested for %s."
+msgstr "Versleuteling aangevraagd voor %s."
+
+#: plinius-encrypt:231
+msgid "At the next boot the device asks twice for the new password and then encrypts. Depending on the amount of data this takes a few minutes; do not power off meanwhile."
+msgstr "Bij de volgende start vraagt het apparaat twee keer om het nieuwe wachtwoord en versleutelt het daarna. Afhankelijk van de hoeveelheid gegevens duurt dit enkele minuten; schakel het apparaat intussen niet uit."
+
+#: plinius-encrypt:232
+msgid "Reboot now with: systemctl reboot   (to cancel: plinius-encrypt --cancel)"
+msgstr "Start nu opnieuw met: systemctl reboot   (intrekken: plinius-encrypt --cancel)"
+
+#: hook:66
+msgid "Enter password..."
+msgstr "Voer wachtwoord in..."
+
+#: hook:67
+msgid "Switch off?"
+msgstr "Uitschakelen?"
+
+#: hook:68
+msgid "Yes"
+msgstr "Ja"
+
+#: hook:68
+msgid "No"
+msgstr "Nee"
+
+#: hook:87
+msgid "Continue"
+msgstr "Doorgaan"
+
+#: hook:99
+msgid "This takes a few minutes. Do not switch off the device."
+msgstr "Dit duurt enkele minuten. Schakel het apparaat niet uit."
+
+#: hook:100
+#, sh-printf-format
+msgid "about %s min left"
+msgstr "nog ongeveer %s min"
+
+#: hook:117
+msgid "Password to unlock"
+msgstr "Wachtwoord om te ontgrendelen"
+
+#: hook:118
+msgid "Wrong password."
+msgstr "Onjuist wachtwoord."
+
+#: hook:123
+msgid "Resuming the encryption"
+msgstr "Versleuteling wordt hervat"
+
+#: hook:125
+msgid "The encryption could not be resumed."
+msgstr "De versleuteling kon niet worden hervat."
+
+#: hook:158
+msgid "Encrypt the device?"
+msgstr "Apparaat versleutelen?"
+
+#: hook:158
+msgid "Encryption was requested for this device. You choose a password that is asked at every start and should differ from the screen lock PIN. Encrypting then takes a few minutes."
+msgstr "Voor dit apparaat is versleuteling aangevraagd. Je kiest een wachtwoord dat bij elke start wordt gevraagd en dat moet verschillen van de pincode van het vergrendelscherm. Het versleutelen duurt daarna enkele minuten."
+
+#: hook:159
+msgid "Set password"
+msgstr "Wachtwoord instellen"
+
+#: hook:159
+msgid "Continue without encryption"
+msgstr "Doorgaan zonder versleuteling"
+
+#: hook:198
+msgid "Encryption not set up"
+msgstr "Versleuteling niet ingesteld"
+
+#: hook:203
+msgid "Set up encryption: new password"
+msgstr "Versleuteling instellen: nieuw wachtwoord"
+
+#: hook:204
+msgid "Leave empty to go back."
+msgstr "Laat leeg om terug te gaan."
+
+#: hook:222
+msgid "Encrypting the device"
+msgstr "Apparaat wordt versleuteld"
+
+#: hook:227
+msgid "Encryption interrupted"
+msgstr "Versleuteling onderbroken"
+
+#: hook:230
+msgid "Encryption failed"
+msgstr "Versleuteling mislukt"
+
+#: hook:241
+msgid "Encryption complete"
+msgstr "Versleuteling voltooid"
+
+#: hook:199
+msgid "No matching password was entered. The system starts unencrypted and asks again at the next start."
+msgstr "Er is geen overeenkomend wachtwoord ingevoerd. Het systeem start onversleuteld en vraagt bij de volgende start opnieuw."
+
+#: hook:228
+msgid "Enter the password to continue the encryption."
+msgstr "Voer het wachtwoord in om de versleuteling voort te zetten."
+
+#: hook:231
+msgid "Your data are unchanged and the system starts unencrypted. Encryption is tried again at the next start."
+msgstr "Je gegevens zijn ongewijzigd en het systeem start onversleuteld. Bij de volgende start wordt de versleuteling opnieuw geprobeerd."
+
+#: hook:242
+msgid "The device is now encrypted. From now on it asks for this password at every start."
+msgstr "Het apparaat is nu versleuteld. Vanaf nu vraagt het bij elke start om dit wachtwoord."
+
+#: halium-unlock:72
+msgid "Starting the system…"
+msgstr "Systeem wordt gestart…"
+
+#: plinius-encrypt:188
+msgid "This phone's boot ramdisk does not contain the programs for encryption."
+msgstr "De opstart-ramdisk van deze telefoon bevat de programma's voor versleuteling niet."

@@ -1,0 +1,58 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=gnome-usage-plinius
+pkgver=48.0
+pkgrel=6
+pkgdesc="GNOME Usage with system services kept out of the app list and launchers of the same name told apart, storage counted once per file system"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://apps.gnome.org/Usage"
+license=(GPL-3.0-or-later)
+# As Arch's gnome-usage
+depends=(
+	cairo dconf glib2 glibc graphene gtk4 hicolor-icon-theme json-glib libadwaita libgee
+	libgtop libnm pango tinysparql
+)
+makedepends=(git meson vala)
+optdepends=(
+	'accountsservice: show user tags for processes'
+	'gamemode: show processes requesting game mode'
+)
+provides=("gnome-usage=$pkgver")
+conflicts=(gnome-usage)
+# Commit on the stable branch gnome-48 after tag $pkgver (only translations since the tag):
+# a branch moves, a commit hash does not
+_commit=d5bc77c64d515fe66b7906520d604815f09a5a8f
+source=(
+	"git+https://gitlab.gnome.org/GNOME/gnome-usage.git#commit=$_commit"
+	0001-app-item-Don-t-match-system-services-to-applications.patch
+	0002-app-item-Tell-launchers-of-the-same-name-apart.patch
+	0003-storage-view-Count-every-file-system-once.patch
+)
+sha256sums=('SKIP'
+            '2c51379a85c84cb7579cf98a067bc65ce570a2d9489888407f1e25295a67e1a0'
+            '100b649b5130929312818230ce07126168934d31532adfd009547bd9f2e0ff46'
+            '432b05df1bca554cb7020417745891a8492f241b74e7c1918890c57afea411d3')
+
+prepare() {
+	# Usage takes an app ID from a process's systemd unit. System services are named the
+	# same way, so cupsd (cups.service) became the hidden launcher cups.desktop ("Manage
+	# Printing") with a root tag. Only units below /user.slice/ are looked at now; system
+	# services end up under "System" (docs/upstream/gnome-usage/system-services)
+	patch -d gnome-usage -Np1 -i "$srcdir/0001-app-item-Don-t-match-system-services-to-applications.patch"
+	# The portal backends all have a hidden launcher called "Portal", the list showed it
+	# three times. Same names get the differing end of their desktop ID: "Portal-gtk"
+	patch -d gnome-usage -Np1 -i "$srcdir/0002-app-item-Tell-launchers-of-the-same-name-apart.patch"
+	# Storage added up every mount: the rootfs image bind-mounted 53 times into the
+	# container and /userdata 11 times showed 223 GB as 4.5 TB. Each file system counts
+	# once now, file-backed loop devices (rootfs.img, Android images) not at all
+	patch -d gnome-usage -Np1 -i "$srcdir/0003-storage-view-Count-every-file-system-once.patch"
+}
+
+build() {
+	arch-meson gnome-usage build
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+}

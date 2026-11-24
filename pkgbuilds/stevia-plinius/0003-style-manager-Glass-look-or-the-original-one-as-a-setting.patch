@@ -1,0 +1,217 @@
+From d0684e456ce22f9ad1327c91484d4cc921873f29 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 19:10:00 +0100
+Subject: [PATCH] style-manager: Glass look or the original one as a setting
+
+GNOME Settings (gnome-control-center-plinius, Keyboard page) offers the
+glass look of the password prompt at startup or Stevia's original look
+for the on-screen keyboard: setting org.plinius.keyboard style, "glass"
+or "original".
+
+- adwaita-dark.css is upstream's again; the glass look comes as its own
+  resource adwaita-dark-glass.css, which imports adwaita-dark.css and
+  plinius-glass.css. The style manager loads it instead of
+  adwaita-dark.css when the glass look is chosen (never for high
+  contrast).
+- The blurred wallpaper behind the keys only with the glass look
+- A change takes effect at once, without restarting the keyboard
+- Without the schema the glass look stays, as before
+---
+ src/phosh-osk-stevia.gresources.xml   |  1 +
+ src/pos-style-manager.c               | 90 +++++++++++++++++++++++++++++------
+ src/stylesheet/adwaita-dark-glass.css |  7 +++
+ src/stylesheet/adwaita-dark.css       |  3 --
+ 4 files changed, 83 insertions(+), 18 deletions(-)
+
+diff --git a/src/phosh-osk-stevia.gresources.xml b/src/phosh-osk-stevia.gresources.xml
+index 4020da6..b3992cb 100644
+--- a/src/phosh-osk-stevia.gresources.xml
++++ b/src/phosh-osk-stevia.gresources.xml
+@@ -11,6 +11,7 @@
+     <file preprocess="xml-stripblanks">ui/shortcuts-bar.ui</file>
+     <file alias="keymap.txt">../data/keymap.txt</file>
+     <file compressed="true">stylesheet/adwaita-dark.css</file>
++    <file compressed="true">stylesheet/adwaita-dark-glass.css</file>
+     <file compressed="true">stylesheet/adwaita-hc-light.css</file>
+     <file compressed="true">stylesheet/common.css</file>
+     <file compressed="true">stylesheet/plinius-glass.css</file>
+diff --git a/src/pos-style-manager.c b/src/pos-style-manager.c
+index 2116c8c..867c930 100644
+--- a/src/pos-style-manager.c
++++ b/src/pos-style-manager.c
+@@ -28,6 +28,14 @@
+ #define PLINIUS_SCHEMA_NAME     "org.plinius.appearance"
+ #define PLINIUS_KEY_ACCENT_COLOR "accent-color"
+ 
++/* Plinius: glass look or Stevia's original one (schema shipped by stevia-plinius) */
++#define KB_SCHEMA_NAME          "org.plinius.keyboard"
++#define KB_KEY_STYLE            "style"
++#define KB_STYLE_GLASS          "glass"
++
++/* Plinius: adwaita-dark.css with the glass look on top */
++#define GLASS_STYLESHEET        "/mobi/phosh/stevia/stylesheet/adwaita-dark-glass.css"
++
+ /* Plinius: the wallpaper behind the glass keys */
+ #define BG_SCHEMA_NAME          "org.gnome.desktop.background"
+ #define BG_KEY_PICTURE_URI      "picture-uri"
+@@ -80,6 +88,10 @@ struct _PosStyleManager {
+   GSettings      *interface_settings;
+   GSettings      *plinius_settings;
+ 
++  /* Plinius: glass look (TRUE) or the original one, from org.plinius.keyboard */
++  GSettings      *keyboard_settings;
++  gboolean        glass;
++
+   /* Plinius: the blurred wallpaper as background of the glass keyboard */
+   GSettings      *background_settings;
+   GtkCssProvider *glass_css_provider;
+@@ -419,8 +431,9 @@ on_wallpaper_changed (PosStyleManager *self)
+   g_cancellable_cancel (self->glass_cancel);
+   g_clear_object (&self->glass_cancel);
+ 
+-  /* High contrast keeps its plain keyboard */
+-  wallpaper = pos_style_manager_is_high_contrast (self) ? NULL : get_wallpaper_path (self);
++  /* High contrast and the original look keep the plain keyboard */
++  if (self->glass && !pos_style_manager_is_high_contrast (self))
++    wallpaper = get_wallpaper_path (self);
+   if (!wallpaper) {
+     set_glass_background (self, NULL);
+     return;
+@@ -454,27 +467,22 @@ on_wallpaper_changed (PosStyleManager *self)
+ }
+ 
+ 
++/* Plinius: (re)load the stylesheet for the GTK theme and the chosen look */
+ static void
+-on_gtk_theme_name_changed (PosStyleManager *self, GParamSpec *pspec, GtkSettings *settings)
++load_stylesheet (PosStyleManager *self)
+ {
+   const char *style;
+-  g_autofree char *name = NULL;
+   g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
+ 
+-  g_object_get (settings, "gtk-theme-name", &name, NULL);
+-
+-  if (g_strcmp0 (self->theme_name, name) == 0)
+-    return;
+-
+-  self->theme_name = g_steal_pointer (&name);
+-  g_debug ("GTK theme: %s", self->theme_name);
+-
+   if (self->css_provider) {
+     gtk_style_context_remove_provider_for_screen (gdk_screen_get_default (),
+                                                   GTK_STYLE_PROVIDER (self->css_provider));
+   }
+ 
+   style = pos_style_manager_get_stylesheet (self->theme_name);
++  /* The glass look only goes on top of the dark style, never on high contrast */
++  if (self->glass && !pos_style_manager_is_high_contrast (self))
++    style = GLASS_STYLESHEET;
+ 
+   gtk_css_provider_load_from_resource (provider, style);
+   gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
+@@ -482,11 +490,48 @@ on_gtk_theme_name_changed (PosStyleManager *self, GParamSpec *pspec, GtkSettings
+                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+   g_set_object (&self->css_provider, provider);
+ 
+-  /* Refresh accent color */
+-  on_accent_color_changed (self);
+-  /* Plinius: high contrast has no wallpaper behind the keys */
++  /* Plinius: the wallpaper behind the keys only with the glass look */
+   if (self->background_settings)
+     on_wallpaper_changed (self);
++}
++
++
++/* Plinius: the user picked the other look in GNOME Settings (Keyboard page) */
++static void
++on_keyboard_style_changed (PosStyleManager *self)
++{
++  g_autofree char *style = g_settings_get_string (self->keyboard_settings, KB_KEY_STYLE);
++  gboolean glass = g_strcmp0 (style, KB_STYLE_GLASS) == 0;
++
++  if (glass == self->glass)
++    return;
++
++  g_debug ("Keyboard look: %s", style);
++  self->glass = glass;
++  /* Only once the theme is known, the first load happens in on_gtk_theme_name_changed */
++  if (self->theme_name)
++    load_stylesheet (self);
++}
++
++
++static void
++on_gtk_theme_name_changed (PosStyleManager *self, GParamSpec *pspec, GtkSettings *settings)
++{
++  g_autofree char *name = NULL;
++
++  g_object_get (settings, "gtk-theme-name", &name, NULL);
++
++  if (g_strcmp0 (self->theme_name, name) == 0)
++    return;
++
++  g_free (self->theme_name);
++  self->theme_name = g_steal_pointer (&name);
++  g_debug ("GTK theme: %s", self->theme_name);
++
++  load_stylesheet (self);
++
++  /* Refresh accent color */
++  on_accent_color_changed (self);
+ 
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_THEME_NAME]);
+ }
+@@ -522,6 +567,7 @@ pos_style_manager_dispose (GObject *object)
+ 
+   g_clear_object (&self->interface_settings);
+   g_clear_object (&self->plinius_settings);
++  g_clear_object (&self->keyboard_settings);
+ 
+   g_cancellable_cancel (self->glass_cancel);
+   g_clear_object (&self->glass_cancel);
+@@ -578,6 +624,20 @@ pos_style_manager_init (PosStyleManager *self)
+                               self);
+   }
+ 
++  /* Plinius: glass look or the original one; without the schema the glass look */
++  self->glass = TRUE;
++  g_clear_pointer (&schema, g_settings_schema_unref);
++  schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
++                                            KB_SCHEMA_NAME, TRUE);
++  if (schema) {
++    self->keyboard_settings = g_settings_new (KB_SCHEMA_NAME);
++    g_signal_connect_swapped (self->keyboard_settings,
++                              "changed::" KB_KEY_STYLE,
++                              G_CALLBACK (on_keyboard_style_changed),
++                              self);
++    on_keyboard_style_changed (self);
++  }
++
+   /* Plinius: the wallpaper behind the glass keys follows Phosh's */
+   self->background_settings = g_settings_new (BG_SCHEMA_NAME);
+   g_signal_connect_swapped (self->background_settings,
+diff --git a/src/stylesheet/adwaita-dark-glass.css b/src/stylesheet/adwaita-dark-glass.css
+new file mode 100644
+index 0000000..283ca48
+--- /dev/null
++++ b/src/stylesheet/adwaita-dark-glass.css
+@@ -0,0 +1,7 @@
++/*
++ * Plinius: the dark style with the glass look of the password prompt at startup on top.
++ * PosStyleManager loads this instead of adwaita-dark.css when org.plinius.keyboard style
++ * is "glass".
++ */
++@import url("resource:///mobi/phosh/stevia/stylesheet/adwaita-dark.css");
++@import url("resource:///mobi/phosh/stevia/stylesheet/plinius-glass.css");
+diff --git a/src/stylesheet/adwaita-dark.css b/src/stylesheet/adwaita-dark.css
+index 2f39c82..a7717bb 100644
+--- a/src/stylesheet/adwaita-dark.css
++++ b/src/stylesheet/adwaita-dark.css
+@@ -8,6 +8,3 @@
+ pos-key {
+   box-shadow:0 1px 1px 0 rgba(0,0,0,0.2);
+ }
+-
+-/* Plinius: glass look as the password prompt at startup */
+-@import url("resource:///mobi/phosh/stevia/stylesheet/plinius-glass.css");

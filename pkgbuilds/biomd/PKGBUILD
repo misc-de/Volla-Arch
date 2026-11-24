@@ -1,0 +1,130 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgbase=biomd
+pkgname=(biomd biomd-fprintd biomd-pam biomd-session)
+pkgver=1.4.0.20261116
+pkgrel=2
+pkgdesc="Biometrics daemon talking to the Android fingerprint HAL over binder (HIDL and AIDL)"
+arch=(aarch64 x86_64)
+url="https://github.com/FuriLabs/biomd"
+license=(GPL-2.0-only)
+makedepends=(git glib2 'libgbinder>=1.1.48' sqlite openssl pam gstreamer)
+# FuriLabs' own project (not a fork), GPL-2.0-only per the SPDX headers and debian/copyright.
+# Upstream main; pkgver = version on the FLX1 (1.4.0) + commit date. The patches from LuneOS
+# (Makefile overrides, WITH_FACE=0, free-form finger names, the AIDL backend) are upstream since
+# 2026-11-13, and so are the own references to the AIDL services (formerly part of 0001).
+_commit=84055a18c8a5c06a7ffe319395c5380ac77d72ae
+# Without face recognition (WITH_FACE=0) only biomd-session still needs fart_enums.h from
+# libfart (FuriLabs face-analysis-recognition-toolkit, GPL-2.0-only); libfart is not linked.
+_fart=c9a664c71927d6d1862fee40f04ea47b8fc6af61
+# 0001 (ours): non-null marker of the AIDL parcelables (otherwise no enrollment); needs
+# gbinder_*_start_parcelable from libgbinder 1.1.48.
+# 0002 (ours): sensor location and touch reports for under-display sensors (Plinius: optical,
+# Goodix), which only capture after onPointerDown/onUiReady; plinius-udfps does the UI part.
+# 0003 (ours): biomd-session takes the user's display session instead of the one on VT 7
+# (greetd starts Phosh on VT 1), otherwise fingerprint unlock never starts.
+# 0004 (ours): escaped logind session path (session "1" is .../_31; the bare id never gets the
+# LockedHint changes), and an unlock attempt when the session is already locked at start.
+# 0005 (ours): wait up to 60 s for the fingerprint HAL; it is registered seconds after the
+# container is up, and biomd started before that stayed without a sensor until restarted.
+# 0006 (ours): a rejected finger (AIDL onAuthenticationFailed) keeps identifying instead of
+# ending the operation, which left the lock screen without the sensor after one wrong finger.
+# 0007 (ours): biomd-fprintd is idle right after StopIdentify/StopEnroll, not only after the
+# StateChanged signal; GNOME Settings could not enroll another finger (AlreadyInUse).
+# 0008 (ours): Release ends a running enrollment or verification, as in fprintd; a cancelled
+# enrollment in GNOME Settings kept the touch target up until the HAL timed out.
+# 0009 (ours): biomd-session forgets a stopped identification even when biomd answers that it had
+# already ended; after unlocking with the PIN or a pattern the fingerprint never came back.
+# 0010 (ours): no biometrics before the session was unlocked once with the PIN or pattern.
+# 0011 (ours): biomd-fprintd reports 100 enrollment stages (percent) instead of a fixed 13.
+source=("git+$url.git#commit=$_commit"
+	"fart_enums.h::https://raw.githubusercontent.com/FuriLabs/face-analysis-recognition-toolkit/$_fart/include/fart_enums.h"
+	0001-fingerprint-aidl-fix-parcelable-wire-format.patch
+	0002-fingerprint-report-touches-on-an-under-display-sensor.patch
+	0003-session-find-the-user-s-display-session-on-any-VT.patch
+	0004-session-use-logind-s-escaped-session-path-start-when-already-locked.patch
+	0005-fingerprint-wait-for-the-HAL-to-be-registered-at-start.patch
+	0006-fingerprint-aidl-a-rejected-finger-keeps-identifying.patch
+	0007-fprintd-idle-right-after-stopping-identification-or-enrollment.patch
+	0008-fprintd-stop-what-is-running-when-the-device-is-released.patch
+	0009-session-the-fingerprint-comes-back-after-unlocking-without-it.patch
+	0010-session-no-fingerprint-before-the-first-PIN-unlock.patch
+	0011-fprintd-stages-are-the-percent-of-the-enrollment.patch)
+sha256sums=('SKIP'
+	'16815e35b144f061ab4e36e5a5f36cacd36504526eebb2cdcc189b9154f784de'
+	'1b815a66783cefb00bce2c671a51a8cb4c57a1ec21a5d46045a3fca343b4c89a'
+	'a1e32ef8136b02530d6ad36831844d9664e635fe734cc51b0ec0749ecce06943'
+	'77d1913270209e610160dc7d21edcb6c091c4a4bd490515785b07c0b468e4a90'
+	'9318195078b1aa81270c53eeafc8fcdccc0ea36d53f7130d21b2e01c867d9bab'
+	'afa47643afdf9c72931ff4bf8a049044b65667ce99c068c7abba9570abde4c88'
+	'f5358eb0891fea9c08030ab9f8c5072c0b40a8b9d27537ba8feff7942e729599'
+	'9c494843e2bab62c80991d9b32511c5aa3d496f1a894f7f615cf5b47d7d2f1e7'
+	'7d1ef2cd92f546837928a15b58eec2ccb68203402d302e48729e05a2ceea10a6'
+	'c9cc90f44d53a76bd9de3325d5c5cc34cfb3e9cd53fc729fa8ef59b04539505a'
+	'471b4251d7ea994672791ffb533ad1f163467cabd76a865e60926994efebcf71'
+	'9722d15c9c1d001104a6731880cb807d252f456a7201af50014cbbad81e67103')
+
+prepare() {
+	cd biomd
+	local p
+	for p in ../0*.patch; do
+		git apply "$p"
+	done
+	install -Dm644 ../fart_enums.h "$srcdir/fart-include/fart/fart_enums.h"
+	# Arch: programs go to /usr/bin, helpers to /usr/lib/biomd instead of libexec
+	sed -i 's|/usr/libexec/|/usr/lib/biomd/|' data/10-biomd.conf data/biomd-session.service
+	sed -i 's|^ExecStart=/usr/sbin/biomd$|ExecStart=/usr/bin/biomd|' debian/biomd.biomd.service
+}
+
+build() {
+	cd biomd
+	make WITH_FACE=0 PREFIX=/usr LIBDIR=/usr/lib \
+		ENV_CFLAGS="$CFLAGS -I$srcdir/fart-include" ENV_LDFLAGS="$LDFLAGS"
+}
+
+_install() {
+	cd "$srcdir/biomd"
+	make WITH_FACE=0 PREFIX=/usr LIBDIR=/usr/lib DESTDIR="$srcdir/root" install
+}
+
+package_biomd() {
+	depends=(glib2 'libgbinder>=1.1.48' sqlite openssl)
+	optdepends=('python-dbus: biomdctl' 'python-gobject: biomdctl')
+	_install
+	cd "$srcdir/root"
+	install -Dm755 usr/sbin/biomd -t "$pkgdir/usr/bin"
+	install -Dm755 usr/bin/biomdctl -t "$pkgdir/usr/bin"
+	install -Dm644 usr/share/dbus-1/system.d/io.FuriOS.Biomd.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 usr/include/biomd/biomd_enums.h -t "$pkgdir/usr/include/biomd"
+	# As in Debian/LuneOS; the device package redirects After=lxc@android.service to the container service
+	install -Dm644 "$srcdir/biomd/debian/biomd.biomd.service" "$pkgdir/usr/lib/systemd/system/biomd.service"
+}
+
+package_biomd-fprintd() {
+	pkgdesc="fprintd D-Bus interface (net.reactivated.Fprint) provided by biomd"
+	depends=(biomd fprintd glib2)
+	_install
+	cd "$srcdir/root"
+	install -Dm755 usr/libexec/biomd-fprintd -t "$pkgdir/usr/lib/biomd"
+	install -Dm644 usr/lib/systemd/system/fprintd.service.d/10-biomd.conf \
+		-t "$pkgdir/usr/lib/systemd/system/fprintd.service.d"
+}
+
+package_biomd-pam() {
+	pkgdesc="PAM module for fingerprint authentication with biomd"
+	depends=(biomd pam glib2)
+	_install
+	install -Dm644 "$srcdir/root/usr/lib/security/pam_biomd.so" -t "$pkgdir/usr/lib/security"
+}
+
+package_biomd-session() {
+	pkgdesc="biomd user-session agent: unlocks Phosh via logind after a fingerprint match"
+	depends=(biomd glib2 gstreamer)
+	_install
+	cd "$srcdir/root"
+	install -Dm755 usr/libexec/biomd-session -t "$pkgdir/usr/lib/biomd"
+	install -Dm644 usr/lib/systemd/user/biomd-session.service -t "$pkgdir/usr/lib/systemd/user"
+	# As in debian/biomd.links: starts with the GNOME/Phosh session
+	install -d "$pkgdir/usr/lib/systemd/user/gnome-session.target.wants"
+	ln -s ../biomd-session.service "$pkgdir/usr/lib/systemd/user/gnome-session.target.wants/biomd-session.service"
+}

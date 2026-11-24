@@ -1,0 +1,35 @@
+# pacman install script of plinius-account.
+#
+# From 0.6-2 on, plinius-add-user gives accounts without administrator rights fewer groups
+# (attack review 2026-11-18, L14/T7): no video, audio and radio; their sessions reach those
+# devices through the ACL of the active session instead. Accounts added before (0.6-1) still
+# have them: they are taken out here once, on the upgrade from a version before 0.6-2.
+# Only local accounts of plinius-add-user (UIDs 32012-32999) that are not in wheel; the phone's
+# first user (32011) and administrators keep every group.
+
+_ids_min=32012
+_ids_max=32999
+_dropped=(video audio radio)
+
+_drop_groups() {
+	local name uid rest g
+	while IFS=: read -r name _ uid rest; do
+		((uid >= _ids_min && uid <= _ids_max)) || continue
+		# id -nG: the user's groups by name, the primary one included
+		if id -nG -- "$name" 2>/dev/null | tr ' ' '\n' | grep -qx wheel; then
+			continue
+		fi
+		for g in "${_dropped[@]}"; do
+			if id -nG -- "$name" 2>/dev/null | tr ' ' '\n' | grep -qx "$g"; then
+				gpasswd -d "$name" "$g" >/dev/null && echo "plinius-account: $name is no longer in $g"
+			fi
+		done
+	done < <(getent passwd)
+}
+
+post_upgrade() {
+	# $2: the version upgraded from
+	if (($(vercmp "$2" 0.6-2) < 0)); then
+		_drop_groups
+	fi
+}

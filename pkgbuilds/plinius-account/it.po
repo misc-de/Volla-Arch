@@ -1,0 +1,80 @@
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-account\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-28 00:16+0100\n"
+"PO-Revision-Date: 2026-10-28 00:30+0100\n"
+"Last-Translator: plinius-account\n"
+"Language-Team: none\n"
+"Language: it\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: plinius-rename-user:38
+msgid "usage: plinius-rename-user OLD NEW | --status | --cancel"
+msgstr "uso: plinius-rename-user VECCHIO NUOVO | --status | --cancel"
+
+#: plinius-rename-user:40
+msgid "must be run as root"
+msgstr "deve essere eseguito come root"
+
+#: plinius-rename-user:43
+msgid "only your own account can be renamed"
+msgstr "si può rinominare solo il proprio account"
+
+#: plinius-rename-user:45
+#, sh-printf-format
+msgid "user %s does not exist"
+msgstr "l’utente %s non esiste"
+
+#: plinius-rename-user:46
+#, sh-printf-format
+msgid "%s is not a regular user"
+msgstr "%s non è un utente normale"
+
+#: plinius-rename-user:48
+msgid "invalid name: lower case letters, digits, _ and -, starting with a letter or _, at most 32 characters"
+msgstr "nome non valido: lettere minuscole, cifre, _ e -, iniziando con una lettera o _, al massimo 32 caratteri"
+
+#: plinius-rename-user:49
+#, sh-printf-format
+msgid "user %s already exists"
+msgstr "l’utente %s esiste già"
+
+#: plinius-rename-user:50
+#, sh-printf-format
+msgid "group %s already exists"
+msgstr "il gruppo %s esiste già"
+
+#: plinius-rename-user:51
+#, sh-printf-format
+msgid "%s already exists"
+msgstr "%s esiste già"
+
+#: plinius-add-user:37
+msgid "usage: plinius-add-user USER FULL-NAME [--admin] < password"
+msgstr "uso: plinius-add-user UTENTE NOME-COMPLETO [--admin] < password"
+
+#: plinius-add-user:47
+msgid "the full name is longer than 64 characters"
+msgstr "il nome completo supera i 64 caratteri"
+
+#: plinius-add-user:50
+msgid "a password is needed"
+msgstr "serve una password"
+
+#: plinius-add-user:60
+#, sh-printf-format
+msgid "no free user ID between %s and %s"
+msgstr "nessun ID utente libero tra %s e %s"
+
+#: plinius-add-user:73
+msgid "the account could not be created"
+msgstr "impossibile creare l'account"
+
+#: plinius-add-user:79
+msgid "the password could not be set, the account was removed again"
+msgstr "impossibile impostare la password, l'account è stato rimosso"

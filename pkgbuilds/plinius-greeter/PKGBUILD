@@ -1,0 +1,72 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-greeter
+pkgver=0.1
+pkgrel=4
+pkgdesc="Account picker in front of Phosh for phones with more than one account (greetd)"
+arch=(any)
+license=(MIT)
+# With one login account the phone logs in at once as before (greetd's initial_session from
+# /etc/greetd/config.toml); with more, greetd starts in the greeter, a tap starts that account's
+# Phosh, which locks itself (PIN or pattern as usual). An account without a password yet (an image
+# for everybody, Plinius Boot) is asked once for a PIN or a password in the greeter, the PIN on its
+# own keypad, a password with Stevia. After a session ends the greeter shows
+# instead of agreety. New accounts: Accounts > Local Accounts > Add in gnome-control-center-plinius
+# (plinius-account's plinius-add-user). Strings are English, translated in *.po (template
+# plinius-greeter.pot).
+depends=(greetd phoc python python-gobject gtk4 libadwaita accountsservice systemd dbus cryptsetup shadow)
+# The on-screen keyboard for a first password
+optdepends=(stevia)
+makedepends=(gettext)
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-greeter
+	plinius_greeter_accounts.py
+	plinius-greeter-config
+	plinius-greeter-session
+	greetd-plinius-greeter.conf
+	plinius-greeter-login.path
+	plinius-greeter-login.service
+	plinius-greeter-password.path
+	plinius-greeter-password.service
+	plinius-greeter.tmpfiles
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('f99509e3462fde4ce944ac4245d0efab06127ae2af3a555c421b83cba2d7ba8a'
+	'f41ca1386b59edb6cadb6f9a842afe2017b9c29f77c0939201d3c1c18af3e93d'
+	'13579ce0b654208f18bfe15d62709a9db89d92e2a6fb5e804ba65afa133ea97e'
+	'5f4c062cffcf72c9457e22f66190ebf130330cad2930a9707b100a370091e2f8'
+	'cb03a5dde81b869dcf6c713b96b3e1b7f37ec414060f72086dd4e3d85773ea86'
+	'6ac14af0059d5378941fcd7a1a657bbe03b0cc1ddf76f773b455917c02250352'
+	'018f45c36851ab272863f84746c24bc2a7eebe0bcc77306048005881f704ef67'
+	'24381ae709f0cd33c43a094fd48b96f2b86b870249ac9c8deda52c0bb76a0a75'
+	'4f2f917d3a3029c77ba9742ea59de355e46521cd3df7e4ea00cffa62629537d6'
+	'1231fd46473c544b0d0e4019ec2309ccaf41b1293ef2d21e241f7c52b5e6962a'
+	'3a0d5a65253d14729b34618159a32acd6b4bd5285b6e17f787e9a60cef218088'
+	'5c5de8c52faef73f35b216452220d44aecd57dd6da6f567be6ac0cee362b0e20'
+	'b60ab336b040e5fd262cc934c1e9e22c068360e6daf407372cd77924d5945ed4'
+	'34bf51269fc8068481440639eddb8f48a2b9c189a18054c5d79204575b15a046'
+	'8cb48cc43f6fe0fe26e354bf5c9dd3f1acbf772c8b0fb73292b308ded17e0523'
+	'a1f542d9b69b33e3f8912a8403ab5c70290d9acbae5bc797a6c85ec7485d98cc'
+	'b658a78fc49f157ce64b106d7393b218c6da27832e25703d0110c6af792bf0d1'
+	'a6bb9c229074f603c5e923159da014963fa3583b70588724f54f4dc6945970aa'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm755 plinius-greeter plinius-greeter-config plinius-greeter-session \
+		-t "$pkgdir/usr/lib/plinius-greeter"
+	install -Dm644 plinius_greeter_accounts.py -t "$pkgdir/usr/lib/plinius-greeter"
+	install -Dm644 greetd-plinius-greeter.conf "$pkgdir/usr/lib/systemd/system/greetd.service.d/plinius-greeter.conf"
+	install -Dm644 plinius-greeter-login.path plinius-greeter-login.service plinius-greeter-password.path \
+		plinius-greeter-password.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 plinius-greeter.tmpfiles "$pkgdir/usr/lib/tmpfiles.d/plinius-greeter.conf"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-greeter.mo"
+	done
+}

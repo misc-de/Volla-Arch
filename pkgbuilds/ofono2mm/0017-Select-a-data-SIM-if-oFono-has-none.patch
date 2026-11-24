@@ -1,0 +1,81 @@
+From 2993ec78510701869c11c61ba49da755641029ff Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 06:41:13 +0100
+Subject: [PATCH] Select a data SIM if oFono has none
+
+oFono only auto-selects a data SIM once every present SIM has an IMSI. An
+eSIM chip without a profile counts as present and never gets one, so on a
+new system no modem was allowed to attach and Connect hung until
+NetworkManager timed out (20 to 50 minutes, again and again).
+
+When a connection is requested and oFono has no data modem, use the SIM of
+the modem being connected. A stored choice that matches a SIM in the phone
+stays as it is.
+---
+ ofono2mm/mm_modem_simple.py | 37 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/ofono2mm/mm_modem_simple.py b/ofono2mm/mm_modem_simple.py
+index 7d30ca8..7a28f50 100644
+--- a/ofono2mm/mm_modem_simple.py
++++ b/ofono2mm/mm_modem_simple.py
+@@ -1,6 +1,6 @@
+ from dbus_next.service import (ServiceInterface, method, dbus_property, signal)
+ from dbus_next.constants import PropertyAccess
+-from dbus_next import Variant
++from dbus_next import Message, MessageType, Variant
+ 
+ from ofono2mm.mm_types import ModemManagerState, ModemManagerAccessTechnology
+ from ofono2mm.logger import Logger
+@@ -94,6 +94,36 @@ class MMModemSimpleInterface(ServiceInterface):
+         else:
+             self.props['access-technologies'] = Variant('u', ModemManagerAccessTechnology.UNKNOWN)
+ 
++    async def call_ofono_manager(self, member, signature='', body=None):
++        reply = await self.mm_modem.bus.call(Message(destination='org.ofono', path='/',
++                                                     interface='org.nemomobile.ofono.ModemManager',
++                                                     member=member, signature=signature, body=body or []))
++        if reply.message_type == MessageType.ERROR:
++            raise Exception(f'{member}: {reply.body}')
++        return reply.body
++
++    async def ensure_data_sim(self):
++        # oFono only picks a data SIM by itself once every present SIM has an IMSI. The eSIM chip
++        # counts as present and has none without a profile. Without a stored choice (a new system,
++        # another SIM) no modem may attach, and activating a context waits forever. A choice that
++        # matches a SIM in the phone stays: GetDefaultDataModem is empty only if there is none.
++        if (await self.call_ofono_manager('GetDefaultDataModem'))[0]:
++            return
++
++        imsi = self.ofono_interface_props.get('org.ofono.SimManager', {}).get('SubscriberIdentity')
++        if imsi is None or not imsi.value:
++            return
++
++        Logger.info('No data SIM selected, using the SIM of %s', self.mm_modem.modem_name)
++        await self.call_ofono_manager('SetDefaultDataSim', 's', [imsi.value])
++
++        # Activating the context before the attach would fail
++        for _ in range(30):
++            attached = self.ofono_interface_props.get('org.ofono.ConnectionManager', {}).get('Attached')
++            if attached is not None and attached.value:
++                break
++            await asyncio.sleep(1)
++
+     @method()
+     async def Connect(self, properties: 'a{sv}') -> 'o':
+         try:
+@@ -114,6 +144,11 @@ class MMModemSimpleInterface(ServiceInterface):
+             while self.mm_modem.props['State'].value < ModemManagerState.REGISTERED:
+                 await asyncio.sleep(1)
+ 
++            try:
++                await self.ensure_data_sim()
++            except Exception as e:
++                Logger.error("Could not select a data SIM: %s", e)
++
+             Logger.info('Using bearer %s for %s', path, properties['apn'].value)
+             await bearer.doConnect()
+         except Exception as e:
+-- 
+2.56.0
+

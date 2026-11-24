@@ -1,0 +1,459 @@
+From ffffa98939d51270cb8f1edc3cdd49f2c1d88d85 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 14:40:54 +0100
+Subject: [PATCH] backend/drm: Doze for an always-on display
+
+MediaTek's DRM driver has a CRTC property DOZE_ACTIVE: with it set,
+the panel driver switches the OLED into its low-power mode, where it
+keeps showing a picture at little power (Android's DOZE). With the CRTC
+switched off and DOZE_ACTIVE still set, the command-mode panel keeps the
+last picture from its own memory and the SoC can suspend (Android's
+DOZE_SUSPEND).
+
+Let the compositor ask for it with wlr_drm_connector_set_doze(). The
+driver skips the whole plane update of a commit that changes
+DOZE_ACTIVE or that is a modeset while dozing, and with it the
+page-flip event: a frame that came with such a change left wlroots
+waiting for that event forever, no frame and no further change reached
+the kernel and the panel stayed dark. So, as Android does, the change
+goes to the kernel as a blocking commit of its own without an event,
+right before the next frame, which then leaves DOZE_ACTIVE as it is.
+Only an output going off takes DOZE_ACTIVE off with that commit
+(the driver's ordinary power-off path).
+
+While dozing, the CRTC goes off once the output stays idle for a second
+after a frame; the next commit switches it on again first, also with a
+commit of its own. Only the CRTC's ACTIVE changes for that, connector,
+mode and planes stay, and so does the picture.
+
+wlr-output-power-management gets a mode "doze" (value 2) for that, a
+Plinius extension: the server reports it for a dozing output and sends
+the mode again when doze changes with an ordinary frame.
+---
+ backend/drm/atomic.c                          |  39 ++++++
+ backend/drm/drm.c                             | 123 ++++++++++++++++++
+ backend/drm/properties.c                      |   1 +
+ include/backend/drm/drm.h                     |  11 ++
+ include/backend/drm/properties.h              |   2 +
+ include/wlr/backend/drm.h                     |  19 +++
+ .../types/wlr_output_power_management_v1.h    |   1 +
+ ...lr-output-power-management-unstable-v1.xml |   3 +
+ types/wlr_output_power_management_v1.c        |  25 +++-
+ 9 files changed, 220 insertions(+), 4 deletions(-)
+
+diff --git a/backend/drm/atomic.c b/backend/drm/atomic.c
+index faa535d44..43b2d87c1 100644
+--- a/backend/drm/atomic.c
++++ b/backend/drm/atomic.c
+@@ -518,6 +518,12 @@ static void atomic_connector_add(struct atomic *atom,
+ 	}
+ 	atomic_add(atom, crtc->id, crtc->props.mode_id, state->mode_id);
+ 	atomic_add(atom, crtc->id, crtc->props.active, active);
++	if (!active && crtc->props.doze_active != 0 && conn->doze) {
++		// A dozing panel goes off with its CRTC (MediaTek's ordinary power-off path);
++		// any other change of DOZE_ACTIVE gets a commit of its own, see
++		// drm_atomic_doze_commit()
++		atomic_add(atom, crtc->id, crtc->props.doze_active, 0);
++	}
+ 	if (active) {
+ 		if (crtc->props.gamma_lut != 0) {
+ 			atomic_add(atom, crtc->id, crtc->props.gamma_lut, state->gamma_lut);
+@@ -610,6 +616,39 @@ out:
+ 	return ok;
+ }
+ 
++/*
++ * Commits only ACTIVE and DOZE_ACTIVE of a connector's CRTC and leaves everything else
++ * (connector, mode, planes and their buffers) as it is. Blocking, without a page-flip
++ * event, like Android's power mode changes: MediaTek's driver skips the whole plane
++ * update of a commit that changes DOZE_ACTIVE or that is a modeset while dozing, and
++ * with it the page-flip event, so a frame must never come with such a change.
++ *
++ * DOZE_ACTIVE with the CRTC on puts the panel into its low-power mode (Android's DOZE).
++ * With the CRTC off and DOZE_ACTIVE set, the command-mode panel goes on showing the
++ * last picture from its own memory and the SoC may suspend (Android's DOZE_SUSPEND).
++ */
++bool drm_atomic_doze_commit(struct wlr_drm_connector *conn, bool active, bool doze) {
++	struct wlr_drm_backend *drm = conn->backend;
++	struct wlr_drm_crtc *crtc = conn->crtc;
++
++	if (drm->iface != &atomic_iface || crtc == NULL || crtc->props.doze_active == 0) {
++		return false;
++	}
++
++	struct atomic atom;
++	atomic_begin(&atom);
++	atomic_add(&atom, crtc->id, crtc->props.active, active);
++	atomic_add(&atom, crtc->id, crtc->props.doze_active, doze);
++	bool ok = !atom.failed &&
++		drmModeAtomicCommit(drm->fd, atom.req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL) == 0;
++	if (!ok) {
++		wlr_drm_conn_log_errno(conn, WLR_ERROR, "Failed to set the CRTC %s with doze %s",
++			active ? "on" : "off", doze ? "on" : "off");
++	}
++	atomic_finish(&atom);
++	return ok;
++}
++
+ const struct wlr_drm_interface atomic_iface = {
+ 	.commit = atomic_device_commit,
+ };
+diff --git a/backend/drm/drm.c b/backend/drm/drm.c
+index c4728af49..ea178e1dd 100644
+--- a/backend/drm/drm.c
++++ b/backend/drm/drm.c
+@@ -589,6 +589,81 @@ static void drm_connector_set_pending_page_flip(struct wlr_drm_connector *conn,
+ 	conn->pending_page_flip = page_flip;
+ }
+ 
++/* How long a dozing output stays idle before its CRTC goes off (doze suspend) */
++#define DOZE_IDLE_MS 1000
++
++static void drm_connector_doze_stop_idle(struct wlr_drm_connector *conn) {
++	if (conn->doze_idle_timer != NULL) {
++		wl_event_source_timer_update(conn->doze_idle_timer, 0);
++	}
++}
++
++static int handle_doze_idle(void *data) {
++	struct wlr_drm_connector *conn = data;
++
++	// Only an idle, dozing output: a pending page-flip means a new frame is on its way
++	if (!conn->doze || conn->doze_suspended || conn->crtc == NULL ||
++			conn->pending_page_flip != NULL || !conn->backend->session->active) {
++		return 0;
++	}
++	if (drm_atomic_doze_commit(conn, false, true)) {
++		wlr_drm_conn_log(conn, WLR_DEBUG, "Doze: CRTC off, the panel keeps the picture");
++		conn->doze_suspended = true;
++	}
++	return 0;
++}
++
++static void drm_connector_doze_arm_idle(struct wlr_drm_connector *conn) {
++	if (conn->doze_idle_timer == NULL) {
++		conn->doze_idle_timer = wl_event_loop_add_timer(
++			conn->backend->session->event_loop, handle_doze_idle, conn);
++		if (conn->doze_idle_timer == NULL) {
++			return;
++		}
++	}
++	wl_event_source_timer_update(conn->doze_idle_timer, DOZE_IDLE_MS);
++}
++
++/*
++ * Prepares a commit of a connector that dozes, did or is about to. Neither a change of
++ * DOZE_ACTIVE nor a CRTC switched on again may come with the frame (see
++ * drm_atomic_doze_commit()): a CRTC switched off while dozing comes on again first,
++ * then the panel enters or leaves its low-power mode, each with a blocking commit of
++ * its own. The commit itself then leaves DOZE_ACTIVE as it is and needs no modeset for
++ * it. Only an output going off takes DOZE_ACTIVE off with its own commit (see
++ * atomic_connector_add()), from a dozing CRTC that is on.
++ */
++static void drm_connector_doze_prepare(struct wlr_drm_connector *conn,
++		const struct wlr_drm_connector_state *state, bool test_only) {
++	if (test_only || conn->crtc == NULL || conn->crtc->props.doze_active == 0) {
++		return;
++	}
++
++	if (conn->doze_suspended) {
++		drm_connector_doze_stop_idle(conn);
++		if (drm_atomic_doze_commit(conn, true, true)) {
++			wlr_drm_conn_log(conn, WLR_DEBUG, "Doze: CRTC on for a new frame");
++			conn->doze_suspended = false;
++		}
++	}
++
++	// Only with the CRTC on: one that comes on with this commit (an output enabled
++	// right into doze) starts without doze and takes it with its next frame
++	bool doze = state->doze;
++	if (!state->active || doze == conn->doze || !conn->output.enabled ||
++			conn->doze_suspended) {
++		return;
++	}
++	if (drm_atomic_doze_commit(conn, true, doze)) {
++		wlr_drm_conn_log(conn, WLR_INFO, "Doze: the panel %s its low-power mode",
++			doze ? "enters" : "leaves");
++		conn->doze = doze;
++		if (!doze) {
++			drm_connector_doze_stop_idle(conn);
++		}
++	}
++}
++
+ static void drm_connector_apply_commit(const struct wlr_drm_connector_state *state,
+ 		struct wlr_drm_page_flip *page_flip) {
+ 	struct wlr_drm_connector *conn = state->connector;
+@@ -625,6 +700,9 @@ static void drm_connector_apply_commit(const struct wlr_drm_connector_state *sta
+ 	}
+ 
+ 	if (!state->active) {
++		drm_connector_doze_stop_idle(conn);
++		conn->doze_suspended = false;
++		conn->doze = false;
+ 		drm_plane_finish_surface(crtc->primary);
+ 		drm_plane_finish_surface(crtc->cursor);
+ 		drm_fb_clear(&conn->cursor_pending_fb);
+@@ -697,6 +775,7 @@ static void drm_connector_state_init(struct wlr_drm_connector_state *state,
+ 		.base = base,
+ 		.active = output_pending_enabled(&conn->output, base),
+ 		.primary_in_fence_fd = -1,
++		.doze = conn->doze_pending,
+ 	};
+ 
+ 	struct wlr_output_mode *mode = conn->output.current_mode;
+@@ -991,6 +1070,8 @@ static bool drm_connector_commit_state(struct wlr_drm_connector *conn,
+ 		goto out;
+ 	}
+ 
++	drm_connector_doze_prepare(conn, &pending, test_only);
++
+ 	if (test_only && conn->backend->mgpu_renderer.wlr_rend) {
+ 		// If we're running as a secondary GPU, we can't perform an atomic
+ 		// commit without blitting a buffer.
+@@ -1353,6 +1434,39 @@ bool wlr_output_is_drm(struct wlr_output *output) {
+ 	return output->impl == &output_impl;
+ }
+ 
++bool wlr_drm_connector_supports_doze(struct wlr_output *output) {
++	struct wlr_drm_connector *conn = get_drm_connector_from_output(output);
++	struct wlr_drm_backend *drm = conn->backend;
++
++	if (drm->iface != &atomic_iface) {
++		return false;
++	}
++	for (size_t i = 0; i < drm->num_crtcs; i++) {
++		if ((conn->possible_crtcs & (1 << i)) && drm->crtcs[i].props.doze_active != 0) {
++			return true;
++		}
++	}
++	return false;
++}
++
++void wlr_drm_connector_set_doze(struct wlr_output *output, bool doze) {
++	struct wlr_drm_connector *conn = get_drm_connector_from_output(output);
++
++	if (conn->doze_pending == doze) {
++		return;
++	}
++	wlr_drm_conn_log(conn, WLR_INFO, "Doze %s with the next commit", doze ? "on" : "off");
++	conn->doze_pending = doze;
++	if (!doze) {
++		drm_connector_doze_stop_idle(conn);
++	}
++}
++
++bool wlr_drm_connector_get_doze(struct wlr_output *output) {
++	struct wlr_drm_connector *conn = get_drm_connector_from_output(output);
++	return conn->doze_pending;
++}
++
+ uint32_t wlr_drm_connector_get_id(struct wlr_output *output) {
+ 	struct wlr_drm_connector *conn = get_drm_connector_from_output(output);
+ 	return conn->id;
+@@ -2003,6 +2117,7 @@ bool commit_drm_device(struct wlr_drm_backend *drm,
+ 		}
+ 
+ 		modeset |= output_state->base.allow_reconfiguration;
++		drm_connector_doze_prepare(conn, conn_state, test_only);
+ 	}
+ 
+ 	if (test_only && drm->mgpu_renderer.wlr_rend) {
+@@ -2110,6 +2225,10 @@ static void handle_page_flip(int fd, unsigned seq,
+ 	};
+ 	wlr_output_send_present(&conn->output, &present_event);
+ 
++	if (conn->doze) {
++		drm_connector_doze_arm_idle(conn);
++	}
++
+ 	if (drm->session->active) {
+ 		wlr_output_send_frame(&conn->output);
+ 	}
+@@ -2145,6 +2264,10 @@ static void disconnect_drm_connector(struct wlr_drm_connector *conn) {
+ void destroy_drm_connector(struct wlr_drm_connector *conn) {
+ 	disconnect_drm_connector(conn);
+ 
++	if (conn->doze_idle_timer != NULL) {
++		wl_event_source_remove(conn->doze_idle_timer);
++	}
++
+ 	wl_list_remove(&conn->link);
+ 	free(conn);
+ }
+diff --git a/backend/drm/properties.c b/backend/drm/properties.c
+index 314023954..a88843d87 100644
+--- a/backend/drm/properties.c
++++ b/backend/drm/properties.c
+@@ -40,6 +40,7 @@ static const struct prop_info connector_info[] = {
+ static const struct prop_info crtc_info[] = {
+ #define INDEX(name) (offsetof(struct wlr_drm_crtc_props, name) / sizeof(uint32_t))
+ 	{ "ACTIVE", INDEX(active) },
++	{ "DOZE_ACTIVE", INDEX(doze_active) },
+ 	{ "GAMMA_LUT", INDEX(gamma_lut) },
+ 	{ "GAMMA_LUT_SIZE", INDEX(gamma_lut_size) },
+ 	{ "MODE_ID", INDEX(mode_id) },
+diff --git a/include/backend/drm/drm.h b/include/backend/drm/drm.h
+index a8c5e077a..32c87d98f 100644
+--- a/include/backend/drm/drm.h
++++ b/include/backend/drm/drm.h
+@@ -164,6 +164,7 @@ struct wlr_drm_connector_state {
+ 	bool vrr_enabled;
+ 	uint32_t colorspace;
+ 	uint32_t hdr_output_metadata;
++	bool doze;
+ };
+ 
+ /**
+@@ -223,6 +224,15 @@ struct wlr_drm_connector {
+ 	uint32_t hdr_output_metadata;
+ 
+ 	int32_t refresh;
++
++	// Doze (always-on display, MediaTek DOZE_ACTIVE): what the compositor asked for,
++	// what the kernel has (changed only by drm_atomic_doze_commit(), never with a
++	// frame), and whether the CRTC is off while the panel keeps showing the last
++	// picture on its own ("doze suspend")
++	bool doze_pending;
++	bool doze;
++	bool doze_suspended;
++	struct wl_event_source *doze_idle_timer;
+ };
+ 
+ struct wlr_drm_backend *get_drm_backend_from_backend(
+@@ -242,6 +252,7 @@ size_t drm_crtc_get_gamma_lut_size(struct wlr_drm_backend *drm,
+ 	struct wlr_drm_crtc *crtc);
+ void drm_lease_destroy(struct wlr_drm_lease *lease);
+ void drm_page_flip_destroy(struct wlr_drm_page_flip *page_flip);
++bool drm_atomic_doze_commit(struct wlr_drm_connector *conn, bool active, bool doze);
+ 
+ struct wlr_drm_layer *get_drm_layer(struct wlr_drm_backend *drm,
+ 	struct wlr_output_layer *layer);
+diff --git a/include/backend/drm/properties.h b/include/backend/drm/properties.h
+index c02d655ba..c78dbdebb 100644
+--- a/include/backend/drm/properties.h
++++ b/include/backend/drm/properties.h
+@@ -35,6 +35,8 @@ struct wlr_drm_crtc_props {
+ 	uint32_t vrr_enabled;
+ 	uint32_t gamma_lut;
+ 	uint32_t gamma_lut_size;
++	// MediaTek: the panel's low-power mode for an always-on display
++	uint32_t doze_active;
+ 
+ 	// atomic-modesetting only
+ 
+diff --git a/include/wlr/backend/drm.h b/include/wlr/backend/drm.h
+index 3ca6390ab..482df0df1 100644
+--- a/include/wlr/backend/drm.h
++++ b/include/wlr/backend/drm.h
+@@ -52,6 +52,25 @@ struct wlr_backend *wlr_drm_backend_get_parent(struct wlr_backend *backend);
+  */
+ uint32_t wlr_drm_connector_get_id(struct wlr_output *output);
+ 
++/**
++ * Whether the panel of the connector has a low-power doze mode for an always-on
++ * display (the DOZE_ACTIVE property of MediaTek's CRTCs, atomic modesetting only).
++ */
++bool wlr_drm_connector_supports_doze(struct wlr_output *output);
++
++/**
++ * Puts the panel into its doze mode or takes it out of it with the next commit of
++ * the output, which becomes a modeset. While dozing, the CRTC goes off once the
++ * output stays idle for a second: the command-mode panel keeps showing the last
++ * picture on its own and the SoC may suspend. The next commit switches it on again.
++ */
++void wlr_drm_connector_set_doze(struct wlr_output *output, bool doze);
++
++/**
++ * Whether doze was asked for with wlr_drm_connector_set_doze().
++ */
++bool wlr_drm_connector_get_doze(struct wlr_output *output);
++
+ /**
+  * Tries to open non-master DRM FD. The compositor must not call drmSetMaster()
+  * on the returned FD.
+diff --git a/include/wlr/types/wlr_output_power_management_v1.h b/include/wlr/types/wlr_output_power_management_v1.h
+index ef8da8e55..e0f1cbbbc 100644
+--- a/include/wlr/types/wlr_output_power_management_v1.h
++++ b/include/wlr/types/wlr_output_power_management_v1.h
+@@ -31,6 +31,7 @@ struct wlr_output_power_v1 {
+ 	struct {
+ 		struct wl_listener output_destroy_listener;
+ 		struct wl_listener output_commit_listener;
++		int sent_mode; // last mode sent, -1 for none
+ 	} WLR_PRIVATE;
+ };
+ 
+diff --git a/protocol/wlr-output-power-management-unstable-v1.xml b/protocol/wlr-output-power-management-unstable-v1.xml
+index 20dbb7760..4e8fb4aa2 100644
+--- a/protocol/wlr-output-power-management-unstable-v1.xml
++++ b/protocol/wlr-output-power-management-unstable-v1.xml
+@@ -76,6 +76,9 @@
+              summary="Output is turned off."/>
+       <entry name="on" value="1"
+              summary="Output is turned on, no power saving"/>
++      <!-- Plinius extension (phoc-plinius, phosh-plinius), not in the upstream protocol -->
++      <entry name="doze" value="2"
++             summary="Output in a low-power mode that keeps showing a picture (always-on display)"/>
+     </enum>
+ 
+     <enum name="error">
+diff --git a/types/wlr_output_power_management_v1.c b/types/wlr_output_power_management_v1.c
+index 2a9948393..6b7291963 100644
+--- a/types/wlr_output_power_management_v1.c
++++ b/types/wlr_output_power_management_v1.c
+@@ -7,6 +7,10 @@
+ #include <wlr/types/wlr_output_power_management_v1.h>
+ #include <wlr/types/wlr_output.h>
+ #include <wlr/util/log.h>
++#include <wlr/config.h>
++#if WLR_HAS_DRM_BACKEND
++#include <wlr/backend/drm.h>
++#endif
+ #include "wlr-output-power-management-unstable-v1-protocol.h"
+ 
+ #define OUTPUT_POWER_MANAGER_V1_VERSION 1
+@@ -50,11 +54,22 @@ static void output_power_handle_output_destroy(struct wl_listener *listener,
+ 	output_power_destroy(output_power);
+ }
+ 
++static enum zwlr_output_power_v1_mode output_power_v1_get_mode(struct wlr_output *output) {
++	if (!output->enabled) {
++		return ZWLR_OUTPUT_POWER_V1_MODE_OFF;
++	}
++#if WLR_HAS_DRM_BACKEND
++	if (wlr_output_is_drm(output) && wlr_drm_connector_get_doze(output)) {
++		return ZWLR_OUTPUT_POWER_V1_MODE_DOZE;
++	}
++#endif
++	return ZWLR_OUTPUT_POWER_V1_MODE_ON;
++}
++
+ static void output_power_v1_send_mode(struct wlr_output_power_v1 *output_power) {
+-	enum zwlr_output_power_v1_mode mode;
++	enum zwlr_output_power_v1_mode mode = output_power_v1_get_mode(output_power->output);
+ 
+-	mode = output_power->output->enabled ? ZWLR_OUTPUT_POWER_V1_MODE_ON :
+-		ZWLR_OUTPUT_POWER_V1_MODE_OFF;
++	output_power->sent_mode = mode;
+ 	zwlr_output_power_v1_send_mode(output_power->resource, mode);
+ }
+ 
+@@ -63,7 +78,8 @@ static void output_power_handle_output_commit(struct wl_listener *listener,
+ 	struct wlr_output_power_v1 *output_power =
+ 		wl_container_of(listener, output_power, output_commit_listener);
+ 	struct wlr_output_event_commit *event = data;
+-	if (event->state->committed & WLR_OUTPUT_STATE_ENABLED) {
++	if ((event->state->committed & WLR_OUTPUT_STATE_ENABLED) ||
++			(int)output_power_v1_get_mode(output_power->output) != output_power->sent_mode) {
+ 		output_power_v1_send_mode(output_power);
+ 	}
+ }
+@@ -120,6 +136,7 @@ static void output_power_manager_get_output_power(struct wl_client *client,
+ 		wl_client_post_no_memory(client);
+ 		return;
+ 	}
++	output_power->sent_mode = -1;
+ 	output_power->output = output;
+ 	output_power->manager = manager;
+ 	wl_list_init(&output_power->link);

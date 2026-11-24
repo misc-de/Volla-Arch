@@ -1,0 +1,300 @@
+From b753dd0b668f64add4bcf17a62b734c9414a83c5 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 11:57:49 +0100
+Subject: [PATCH] app-grid: Search, app names and a folder dock from the
+ settings
+
+Plinius: GNOME Settings > Display sets three keys in org.plinius.display
+that change the app overview:
+
+- app-grid-search: hide the search entry (typing does not search then)
+- app-grid-app-names: show only the icons of the apps, as for favorites;
+  folders and the apps inside a folder keep their names
+- app-grid-folder-dock: the folders stand in one row at the bottom edge
+  that scrolls sideways, instead of between the apps; while searching
+  they are back in the grid
+
+The behaviour follows misc-de's folder-dock plugin for phosh 0.55, done
+inside the grid instead of from a plugin.
+---
+ src/app-grid.c     | 130 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/ui/app-grid.ui |  46 +++++++++++++++++++
+ 2 files changed, 176 insertions(+)
+
+diff --git a/src/app-grid.c b/src/app-grid.c
+index a8457104..2595e6ac 100644
+--- a/src/app-grid.c
++++ b/src/app-grid.c
+@@ -25,6 +25,9 @@
+ 
+ #define ACTIVE_SEARCH_CLASS "search-active"
+ 
++/* Plinius: layout options of the overview, set in GNOME Settings > Display */
++#define PLINIUS_DISPLAY_SCHEMA "org.plinius.display"
++
+ #define SEARCH_DEBOUNCE 350
+ #define DEFAULT_GTK_DEBOUNCE 150
+ 
+@@ -61,6 +64,14 @@ struct _PhoshAppGridPrivate {
+   GtkWidget *folder_name_entry;
+   GtkWidget *folder_name_label;
+   GtkWidget *folder_apps;
++  GtkWidget *folder_dock;
++  GtkWidget *folder_dock_revealer;
++
++  /* Plinius layout options */
++  GSettings *plinius_settings;
++  GtkFilterListModel *dock_model;
++  gboolean show_app_names;
++  gboolean folder_dock_enabled;
+ 
+   PhoshFolderInfo *open_folder;
+   int              open_folder_idx;
+@@ -348,6 +359,9 @@ search_apps (gpointer item, gpointer data)
+ 
+   /* filter out favorites when not searching */
+   if (gm_str_is_null_or_empty (search)) {
++    /* Plinius: the folders stand in the dock then */
++    if (PHOSH_IS_FOLDER_INFO (info) && priv->folder_dock_enabled)
++      return FALSE;
+     if (PHOSH_IS_FOLDER_INFO (info))
+       return phosh_folder_info_refilter (PHOSH_FOLDER_INFO (info), search);
+     if (phosh_favorite_list_model_app_is_favorite (NULL, info))
+@@ -405,6 +419,7 @@ favorites_changed (GListModel *list, guint pos, guint removed, guint added, Phos
+ static GtkWidget *
+ create_launcher (gpointer item, gpointer self)
+ {
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
+   GtkWidget *btn;
+ 
+   if (PHOSH_IS_FOLDER_INFO (item)) {
+@@ -413,6 +428,9 @@ create_launcher (gpointer item, gpointer self)
+   } else {
+     btn = phosh_app_grid_button_new (G_APP_INFO (item));
+     g_signal_connect (btn, "app-launched", G_CALLBACK (app_launched_cb), self);
++    /* Plinius: only the icon, as phosh shows its favorites */
++    if (!priv->show_app_names)
++      phosh_app_grid_base_button_set_label (PHOSH_APP_GRID_BASE_BUTTON (btn), NULL);
+   }
+ 
+   gtk_widget_set_visible (btn, TRUE);
+@@ -421,6 +439,82 @@ create_launcher (gpointer item, gpointer self)
+ }
+ 
+ 
++/* Plinius: the folders for the dock; they show only while not searching */
++static gboolean
++filter_dock_folders (gpointer item, gpointer data)
++{
++  PhoshAppGrid *self = data;
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++
++  if (!PHOSH_IS_FOLDER_INFO (item) || !priv->folder_dock_enabled)
++    return FALSE;
++  if (!gm_str_is_null_or_empty (priv->search_string))
++    return FALSE;
++
++  /* Also undoes the filter a search left on the folder's apps */
++  return phosh_folder_info_refilter (PHOSH_FOLDER_INFO (item), NULL);
++}
++
++
++/* Shows the dock while it has folders */
++static void
++reveal_folder_dock (PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++  gboolean reveal;
++
++  reveal = priv->folder_dock_enabled && gm_str_is_null_or_empty (priv->search_string) &&
++    g_list_model_get_n_items (G_LIST_MODEL (priv->dock_model)) > 0;
++  gtk_revealer_set_reveal_child (GTK_REVEALER (priv->folder_dock_revealer), reveal);
++}
++
++
++static void
++update_folder_dock (PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++
++  if (priv->dock_model == NULL)
++    return;
++
++  gtk_filter_list_model_refilter (priv->dock_model);
++  reveal_folder_dock (self);
++}
++
++
++static void
++on_plinius_settings_changed (PhoshAppGrid *self, const char *key, GSettings *settings)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++  gboolean show_search, show_names, dock;
++
++  show_search = g_settings_get_boolean (settings, "app-grid-search");
++  show_names = g_settings_get_boolean (settings, "app-grid-app-names");
++  dock = g_settings_get_boolean (settings, "app-grid-folder-dock");
++
++  /* The search entry sits in a box of its own */
++  gtk_widget_set_visible (gtk_widget_get_parent (priv->search), show_search);
++  if (!show_search)
++    gtk_entry_set_text (GTK_ENTRY (priv->search), "");
++
++  if (show_names != priv->show_app_names) {
++    priv->show_app_names = show_names;
++    /* Rebinding builds the buttons anew */
++    gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->apps),
++                             G_LIST_MODEL (priv->model),
++                             create_launcher,
++                             self,
++                             NULL);
++  }
++
++  if (dock != priv->folder_dock_enabled) {
++    priv->folder_dock_enabled = dock;
++    gtk_filter_list_model_refilter (priv->model);
++  }
++  update_folder_dock (self);
++}
++
++
+ static void
+ phosh_app_grid_init (PhoshAppGrid *self)
+ {
+@@ -452,7 +546,19 @@ phosh_app_grid_init (PhoshAppGrid *self)
+                                            search_apps,
+                                            self,
+                                            NULL);
++  priv->show_app_names = TRUE;
++  priv->dock_model = gtk_filter_list_model_new (G_LIST_MODEL (sorted),
++                                                filter_dock_folders,
++                                                self,
++                                                NULL);
+   g_object_unref (sorted);
++  gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->folder_dock),
++                           G_LIST_MODEL (priv->dock_model),
++                           create_launcher,
++                           self,
++                           NULL);
++  g_signal_connect_object (priv->dock_model, "items-changed",
++                           G_CALLBACK (reveal_folder_dock), self, G_CONNECT_SWAPPED);
+   gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->apps),
+                            G_LIST_MODEL (priv->model),
+                            create_launcher,
+@@ -466,6 +572,21 @@ phosh_app_grid_init (PhoshAppGrid *self)
+                     NULL);
+   on_filter_setting_changed (self, NULL, NULL);
+ 
++  /* Plinius: the schema comes with phosh-plinius; without it the overview stays as shipped */
++  {
++    GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++    g_autoptr (GSettingsSchema) schema = NULL;
++
++    if (source)
++      schema = g_settings_schema_source_lookup (source, PLINIUS_DISPLAY_SCHEMA, TRUE);
++    if (schema) {
++      priv->plinius_settings = g_settings_new (PLINIUS_DISPLAY_SCHEMA);
++      g_signal_connect_object (priv->plinius_settings, "changed",
++                               G_CALLBACK (on_plinius_settings_changed), self, G_CONNECT_SWAPPED);
++      on_plinius_settings_changed (self, NULL, priv->plinius_settings);
++    }
++  }
++
+   priv->actions = g_simple_action_group_new ();
+   gtk_widget_insert_action_group (GTK_WIDGET (self), "app-grid", G_ACTION_GROUP (priv->actions));
+   action = G_ACTION (g_property_action_new ("filter-adaptive", self, "filter-adaptive"));
+@@ -484,7 +605,9 @@ phosh_app_grid_dispose (GObject *object)
+   g_clear_object (&priv->open_folder);
+   g_clear_object (&priv->actions);
+   g_clear_object (&priv->model);
++  g_clear_object (&priv->dock_model);
+   g_clear_object (&priv->settings);
++  g_clear_object (&priv->plinius_settings);
+   g_clear_handle_id (&priv->debounce, g_source_remove);
+ 
+   G_OBJECT_CLASS (phosh_app_grid_parent_class)->dispose (object);
+@@ -515,6 +638,10 @@ phosh_app_grid_key_press_event (GtkWidget   *widget,
+   if (priv->open_folder != NULL)
+     return GDK_EVENT_PROPAGATE;
+ 
++  /* Plinius: no search without its entry */
++  if (!gtk_widget_get_visible (gtk_widget_get_parent (priv->search)))
++    return GDK_EVENT_PROPAGATE;
++
+   return gtk_search_entry_handle_event (GTK_SEARCH_ENTRY (priv->search),
+                                         (GdkEvent *) event);
+ }
+@@ -537,6 +664,7 @@ do_search (gpointer data)
+   phosh_util_toggle_style_class (GTK_WIDGET (priv->apps), ACTIVE_SEARCH_CLASS, search_active);
+   toggle_favorites_revealer (self);
+   gtk_filter_list_model_refilter (priv->model);
++  update_folder_dock (self);
+ 
+   priv->debounce = 0;
+ }
+@@ -729,6 +857,8 @@ phosh_app_grid_class_init (PhoshAppGridClass *klass)
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, favs);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, favs_revealer);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_apps);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_dock);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_dock_revealer);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_name_btn);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_name_img);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_name_entry);
+diff --git a/src/ui/app-grid.ui b/src/ui/app-grid.ui
+index 02b30952..56005d0c 100644
+--- a/src/ui/app-grid.ui
++++ b/src/ui/app-grid.ui
+@@ -141,6 +141,52 @@
+                 </child>
+               </object>
+             </child>
++            <child>
++              <object class="GtkRevealer" id="folder_dock_revealer">
++                <property name="visible">1</property>
++                <property name="transition-type">slide-up</property>
++                <property name="reveal-child">0</property>
++                <child>
++                  <object class="GtkBox">
++                    <property name="visible">1</property>
++                    <property name="orientation">vertical</property>
++                    <child>
++                      <object class="GtkSeparator">
++                        <property name="visible">1</property>
++                        <property name="margin-start">6</property>
++                        <property name="margin-end">6</property>
++                      </object>
++                    </child>
++                    <child>
++                      <!-- One row that scrolls sideways: a vertical flowbox with one child per column -->
++                      <object class="GtkScrolledWindow">
++                        <property name="visible">1</property>
++                        <property name="hscrollbar-policy">external</property>
++                        <property name="vscrollbar-policy">never</property>
++                        <property name="propagate-natural-height">1</property>
++                        <child>
++                          <object class="GtkFlowBox" id="folder_dock">
++                            <property name="visible">1</property>
++                            <property name="orientation">vertical</property>
++                            <property name="max-children-per-line">1</property>
++                            <property name="halign">start</property>
++                            <property name="margin-start">3</property>
++                            <property name="margin-end">3</property>
++                            <property name="margin-top">6</property>
++                            <property name="margin-bottom">6</property>
++                            <property name="homogeneous">1</property>
++                            <property name="selection-mode">none</property>
++                            <property name="activate-on-single-click">0</property>
++                            <property name="column-spacing">6</property>
++                            <property name="row-spacing">6</property>
++                          </object>
++                        </child>
++                      </object>
++                    </child>
++                  </object>
++                </child>
++              </object>
++            </child>
+           </object>
+           <packing>
+             <property name="name">main_grid</property>

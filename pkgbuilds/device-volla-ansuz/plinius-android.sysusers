@@ -1,0 +1,21 @@
+# Android IDs as host users and groups for the device nodes of the Android container
+# (tools/ueventd2udev.py; IDs from AOSP android_filesystem_config.h)
+u aid_system 1000 "Android system" - -
+u aid_radio 1001 "Android radio" - -
+u aid_bluetooth 1002 "Android bluetooth" - -
+u aid_graphics 1003 "Android graphics" - -
+u aid_input 1004 "Android input" - -
+u aid_audio 1005 "Android audio" - -
+u aid_camera 1006 "Android camera" - -
+u aid_log 1007 "Android log" - -
+u aid_wifi 1010 "Android wifi" - -
+u aid_media 1013 "Android media" - -
+u aid_sdcard_rw 1015 "Android sdcard_rw" - -
+u aid_vpn 1016 "Android vpn" - -
+u aid_usb 1018 "Android usb" - -
+u aid_gps 1021 "Android gps" - -
+u aid_mtp 1024 "Android mtp" - -
+u aid_nfc 1027 "Android nfc" - -
+u aid_secure_element 1068 "Android secure_element" - -
+u aid_prng_seeder 1092 "Android prng_seeder" - -
+u aid_uhid 3011 "Android uhid" - -

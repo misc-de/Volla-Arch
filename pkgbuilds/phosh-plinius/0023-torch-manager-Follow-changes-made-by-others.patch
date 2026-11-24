@@ -1,0 +1,94 @@
+From d2267f2eede085e2e605548a4bcdeafdbdbd58e0 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 19:40:18 +0100
+Subject: [PATCH] torch-manager: Follow changes made by others
+
+Plinius: the torch quick setting read the LED's brightness only at start
+and after switching it itself, so it stayed on "off" when the assistant
+button switched the torch on, and on "on" after the torch daemon's
+timeout. The udev manager now passes on change uevents of LEDs and the
+torch manager reads the brightness again on one for its device;
+plinius-torch sends one after every change.
+---
+ src/torch-manager.c | 20 ++++++++++++++++++++
+ src/udev-manager.c  | 15 +++++++++++++++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/src/torch-manager.c b/src/torch-manager.c
+index 33b97caf..c289c1da 100644
+--- a/src/torch-manager.c
++++ b/src/torch-manager.c
+@@ -209,6 +209,20 @@ find_torch_device (PhoshTorchManager *self, PhoshUdevManager *udev_manager)
+ }
+ 
+ 
++/* Switched by someone else (e.g. a button or a timeout): show what the LED is at now */
++static void
++on_leds_changed (PhoshTorchManager *self, GUdevDevice *device)
++{
++  if (!self->udev_device ||
++      g_strcmp0 (g_udev_device_get_sysfs_path (device),
++                 g_udev_device_get_sysfs_path (self->udev_device)) != 0)
++    return;
++
++  g_debug ("Torch device changed");
++  apply_brightness (self);
++}
++
++
+ static void
+ phosh_torch_manager_idle_init (PhoshManager *manager)
+ {
+@@ -225,6 +239,12 @@ phosh_torch_manager_idle_init (PhoshManager *manager)
+ 
+     g_object_notify_by_pspec (G_OBJECT (self), props[PROP_PRESENT]);
+     g_object_thaw_notify (G_OBJECT (self));
++
++    g_signal_connect_object (udev_manager,
++                             "leds-changed",
++                             G_CALLBACK (on_leds_changed),
++                             self,
++                             G_CONNECT_SWAPPED);
+   }
+ }
+ 
+diff --git a/src/udev-manager.c b/src/udev-manager.c
+index e678b10f..5f645bf7 100644
+--- a/src/udev-manager.c
++++ b/src/udev-manager.c
+@@ -29,6 +29,7 @@
+ 
+ enum {
+   BACKLIGHT_CHANGED,
++  LEDS_CHANGED,
+   N_SIGNALS
+ };
+ static guint signals[N_SIGNALS];
+@@ -102,6 +103,9 @@ on_uevent (PhoshUdevManager *self, const char *action, GUdevDevice *device)
+   if (g_str_equal (g_udev_device_get_subsystem (device), BACKLIGHT_SUBSYSTEM) &&
+       g_str_equal (action, "change")) {
+     g_signal_emit (self, signals[BACKLIGHT_CHANGED], 0, device);
++  } else if (g_str_equal (g_udev_device_get_subsystem (device), LEDS_SUBSYSTEM) &&
++             g_str_equal (action, "change")) {
++    g_signal_emit (self, signals[LEDS_CHANGED], 0, device);
+   }
+ }
+ 
+@@ -132,6 +136,17 @@ phosh_udev_manager_class_init (PhoshUdevManagerClass *klass)
+                                              G_TYPE_NONE,
+                                              1,
+                                              G_UDEV_TYPE_DEVICE);
++  /*
++   * A change uevent of a LED: the LED's brightness need not come with one, a daemon
++   * driving the LED can send one so others see that it was switched.
++   */
++  signals[LEDS_CHANGED] = g_signal_new ("leds-changed",
++                                        G_TYPE_FROM_CLASS (object_class),
++                                        G_SIGNAL_RUN_LAST,
++                                        0, NULL, NULL, NULL,
++                                        G_TYPE_NONE,
++                                        1,
++                                        G_UDEV_TYPE_DEVICE);
+ }
+ 
+ 

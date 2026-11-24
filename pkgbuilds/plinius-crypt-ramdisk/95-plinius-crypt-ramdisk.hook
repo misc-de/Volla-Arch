@@ -1,0 +1,14 @@
+# New programs of the password prompt: halium-rebuild puts them into the phone's Halium ramdisk,
+# through a trial start from the memory card where the phone has one (plinius-crypt)
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/plinius-crypt/ramdisk/programs.zst
+Target = usr/lib/plinius-crypt/ramdisk/init.lz4
+
+[Action]
+Description = Setting up the password prompt of the startup...
+When = PostTransaction
+# plinius-crypt brings halium-rebuild; without it there is nothing to do
+Exec = /bin/sh -c '[ ! -x /usr/lib/plinius-crypt/halium-rebuild ] || exec /usr/lib/plinius-crypt/halium-rebuild --update'

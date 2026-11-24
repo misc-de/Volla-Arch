@@ -1,0 +1,38 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-wake
+pkgver=0.5
+pkgrel=4
+pkgdesc="Wake the screen by a double tap on it or by picking the phone up, brighten it when picked up while dimmed (Volla Phone Plinius)"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# sensor-proxy-bridge: pick-up, tilt and proximity (no waking in a pocket)
+depends=(glib2)
+optdepends=('sensor-proxy-bridge: pick-up and tilt, no waking while the proximity sensor is covered'
+	'plinius-backlight-wake: the display state, so the pick-up sensor is off with the screen off')
+source=(plinius-wake.c
+	plinius-wake.service
+	org.plinius.Wake.conf
+	70-plinius-wake
+	LICENSE)
+sha256sums=('d67170eb9daf35b60d9d8fdfccf03cab1baf3b37068a42e543f5640517142fc7'
+	'a462f04b8f0cdab4b1aa78c625b5015acde2f7d709efe8a97a1c2ecd1f27ea99'
+	'456706b76a44c65c2dab614c2ce940e95593990f15497041f766136bd2aa0cc1'
+	'64c26b07be8b36243ea0463fc94cb499a3482f237a262e4d192a8dcda729c558'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-wake plinius-wake.c \
+		$(pkg-config --cflags --libs gio-unix-2.0) $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-wake -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-wake.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 org.plinius.Wake.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	# Display state from plinius-backlight-wake
+	install -Dm755 70-plinius-wake -t "$pkgdir/usr/lib/plinius/display.d"
+}

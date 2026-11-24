@@ -1,0 +1,54 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on: AUR lpac (2.3.0-1)
+
+pkgname=lpac
+pkgver=2.3.0.r121.654215e
+pkgrel=3
+pkgdesc="eUICC local profile assistant (eSIM profiles), with an APDU backend through oFono"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://github.com/estkme-group/lpac"
+# lpac and its drivers AGPL-3.0, libeuicc LGPL-2.1
+license=(AGPL-3.0-only LGPL-2.1-only)
+# Why a custom build: no Arch package, and the Plinius needs the oFono backend (patch 0001).
+# oFono owns the modem; the backend sends the APDUs through its eUICC channel interface
+# (pkgbuilds/ofono-sailfish, patch 0001). Without PC/SC: the phone has no card reader.
+depends=(glibc glib2 curl cjson)
+makedepends=(git cmake)
+optdepends=('ofono-sailfish>=1.29.20260827-2: APDU backend "ofono" (LPAC_APDU=ofono)')
+provides=(libeuicc libeuicc.so)
+# Commit on main after 2.3.0: drivers are separate modules there (the oFono backend is one);
+# 2.3.0 still compiles a fixed driver list. A tag can be moved later, a commit hash cannot.
+_commit=654215e44b22dbbd1377932b2fa4c76d308cc5ab
+# gsma-ci-bundle.pem: the GSMA CI roots (origin in the file). GNOME Settings' eSIM page hands
+# them to lpac with the system's CAs (LPAC_HTTP_TRUST_STORE): without a trust store lpac checks
+# neither the certificate nor the name of the SM-DP+ (attack review 2026-11-12, E16)
+source=("git+$url.git#commit=$_commit"
+	0001-driver-add-an-APDU-backend-for-oFono.patch
+	gsma-ci-bundle.pem)
+sha256sums=('SKIP'
+	'1c9e5cf5086bda356ab193c456cf21c90ace8e9bf9988ab37fa08c9b4c414c30'
+	'47651596cb61915318910da79b08981713fcb98e9f6b0ed714dd1320d6a332fa')
+
+prepare() {
+	patch -d lpac -Np1 -i "$srcdir/0001-driver-add-an-APDU-backend-for-oFono.patch"
+}
+
+build() {
+	cmake -B build -S lpac \
+		-DCMAKE_BUILD_TYPE=None \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DUSE_SYSTEM_DEPS=ON \
+		-DBUILD_TESTING=OFF \
+		-DLPAC_WITH_APDU_PCSC=OFF \
+		-DLPAC_WITH_APDU_OFONO=ON \
+		-Wno-dev
+	cmake --build build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+	install -Dm644 lpac/docs/{USAGE,ENVVARS,FAQ}.md -t "$pkgdir/usr/share/doc/lpac"
+	install -Dm644 lpac/src/LICENSE "$pkgdir/usr/share/licenses/$pkgname/AGPL-3.0"
+	install -Dm644 lpac/euicc/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LGPL-2.1"
+	install -Dm644 gsma-ci-bundle.pem -t "$pkgdir/usr/share/lpac"
+}

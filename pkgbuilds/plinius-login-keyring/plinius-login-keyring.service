@@ -1,0 +1,16 @@
+# Opens the login keyring with the device key before gnome-session starts, so the session's
+# first secret lookups (goa-daemon, Evolution) find it open instead of raising an unlock prompt.
+[Unit]
+Description=Open the login keyring with the device key
+Before=gnome-session-pre.target plinius-goa-refresh.service
+
+[Service]
+# READY once the keyring is open; moving an old keyring may wait for the user afterwards
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/lib/plinius-login-keyring/plinius-login-keyring-unlock
+TimeoutStartSec=20
+Restart=no
+
+[Install]
+WantedBy=gnome-session-pre.target

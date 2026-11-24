@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- pkgbuilds/gnome-control-center-plinius/cc-esim-dialog.blp as GtkBuilder XML, written by hand
+     (tests/gcc: the host has no blueprint-compiler; test_gcc_blp_ui_match.py checks that the ids,
+     classes and signal handlers still match the .blp) -->
+<interface domain="plinius-control-center">
+  <requires lib="gtk" version="4.0"/>
+  <template class="CcEsimDialog" parent="AdwDialog">
+    <property name="title" translatable="yes">eSIM</property>
+    <property name="content-width">420</property>
+    <property name="content-height">640</property>
+    <property name="child">
+      <object class="AdwToastOverlay" id="toast_overlay">
+        <child>
+          <object class="AdwNavigationView" id="navigation_view">
+            <child>
+              <object class="AdwNavigationPage">
+                <property name="title" translatable="yes">eSIM</property>
+                <property name="tag">main</property>
+                <property name="child">
+                  <object class="AdwToolbarView">
+                    <child type="top">
+                      <object class="AdwHeaderBar"/>
+                    </child>
+                    <property name="content">
+                      <object class="GtkStack" id="main_stack">
+                        <child>
+                          <object class="GtkStackPage">
+                            <property name="name">loading</property>
+                            <property name="child">
+                              <object class="AdwSpinner">
+                                <property name="halign">center</property>
+                                <property name="valign">center</property>
+                                <property name="width-request">32</property>
+                                <property name="height-request">32</property>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkStackPage">
+                            <property name="name">error</property>
+                            <property name="child">
+                              <object class="AdwStatusPage" id="error_page">
+                                <property name="icon-name">auth-sim-missing-symbolic</property>
+                                <property name="title" translatable="yes">eSIM Not Available</property>
+                                <child>
+                                  <object class="GtkButton">
+                                    <property name="halign">center</property>
+                                    <property name="label" translatable="yes">_Try Again</property>
+                                    <property name="use-underline">true</property>
+                                    <signal name="clicked" handler="retry_clicked_cb" object="CcEsimDialog" swapped="yes"/>
+                                    <style>
+                                      <class name="pill"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkStackPage">
+                            <property name="name">content</property>
+                            <property name="child">
+                              <object class="AdwPreferencesPage">
+                                <child>
+                                  <object class="AdwPreferencesGroup" id="profiles_group">
+                                    <property name="title" translatable="yes">Profiles</property>
+                                    <property name="description" translatable="yes">Only one profile can be active at a time.</property>
+                                    <child type="header-suffix">
+                                      <object class="AdwSpinner" id="busy_spinner">
+                                        <property name="visible">false</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwPreferencesGroup">
+                                    <child>
+                                      <object class="AdwButtonRow" id="add_row">
+                                        <property name="title" translatable="yes">_Add Profile…</property>
+                                        <property name="use-underline">true</property>
+                                        <property name="start-icon-name">list-add-symbolic</property>
+                                        <signal name="activated" handler="add_row_activated_cb" object="CcEsimDialog" swapped="yes"/>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="AdwPreferencesGroup">
+                                    <property name="title" translatable="yes">eSIM Chip</property>
+                                    <child>
+                                      <object class="AdwActionRow" id="eid_row">
+                                        <property name="title" translatable="yes">EID</property>
+                                        <property name="subtitle-selectable">true</property>
+                                        <style>
+                                          <class name="property"/>
+                                        </style>
+                                        <child type="suffix">
+                                          <object class="GtkButton">
+                                            <property name="valign">center</property>
+                                            <property name="icon-name">edit-copy-symbolic</property>
+                                            <property name="tooltip-text" translatable="yes">Copy EID</property>
+                                            <signal name="clicked" handler="copy_eid_clicked_cb" object="CcEsimDialog" swapped="yes"/>
+                                            <style>
+                                              <class name="flat"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="AdwActionRow" id="memory_row">
+                                        <property name="title" translatable="yes">Free Memory</property>
+                                        <style>
+                                          <class name="property"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="AdwActionRow" id="version_row">
+                                        <property name="title" translatable="yes">Specification</property>
+                                        <style>
+                                          <class name="property"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                      </object>
+                    </property>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwNavigationPage" id="profile_page">
+                <property name="title" translatable="yes">Profile</property>
+                <property name="tag">profile</property>
+                <property name="child">
+                  <object class="AdwToolbarView">
+                    <child type="top">
+                      <object class="AdwHeaderBar"/>
+                    </child>
+                    <property name="content">
+                      <object class="AdwPreferencesPage">
+                        <child>
+                          <object class="AdwPreferencesGroup">
+                            <child>
+                              <object class="AdwEntryRow" id="label_row">
+                                <property name="title" translatable="yes">Label</property>
+                                <property name="show-apply-button">true</property>
+                                <signal name="apply" handler="label_apply_cb" object="CcEsimDialog" swapped="yes"/>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwActionRow" id="provider_row">
+                                <property name="title" translatable="yes">Provider</property>
+                                <style>
+                                  <class name="property"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwActionRow" id="name_row">
+                                <property name="title" translatable="yes">Profile Name</property>
+                                <style>
+                                  <class name="property"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwActionRow" id="iccid_row">
+                                <property name="title" translatable="yes">ICCID</property>
+                                <property name="subtitle-selectable">true</property>
+                                <style>
+                                  <class name="property"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwActionRow" id="class_row">
+                                <property name="title" translatable="yes">Type</property>
+                                <style>
+                                  <class name="property"/>
+                                </style>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="AdwPreferencesGroup">
+                            <child>
+                              <object class="AdwSwitchRow" id="active_row">
+                                <property name="title" translatable="yes">_Active</property>
+                                <property name="use-underline">true</property>
+                                <signal name="notify::active" handler="active_row_changed_cb" object="CcEsimDialog" swapped="yes"/>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="AdwPreferencesGroup">
+                            <child>
+                              <object class="AdwButtonRow" id="delete_row">
+                                <property name="title" translatable="yes">_Delete Profile…</property>
+                                <property name="use-underline">true</property>
+                                <signal name="activated" handler="delete_row_activated_cb" object="CcEsimDialog" swapped="yes"/>
+                                <style>
+                                  <class name="destructive-action"/>
+                                </style>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </property>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwNavigationPage" id="add_page">
+                <property name="title" translatable="yes">Add Profile</property>
+                <property name="tag">add</property>
+                <property name="child">
+                  <object class="AdwToolbarView">
+                    <child type="top">
+                      <object class="AdwHeaderBar"/>
+                    </child>
+                    <property name="content">
+                      <object class="AdwPreferencesPage">
+                        <child>
+                          <object class="AdwPreferencesGroup">
+                            <property name="description" translatable="yes">Enter the activation code from your provider. It starts with “LPA:1$”, the QR code from the provider contains the same text.</property>
+                            <child>
+                              <object class="AdwEntryRow" id="code_row">
+                                <property name="title" translatable="yes">Activation Code</property>
+                                <property name="input-purpose">url</property>
+                                <signal name="changed" handler="add_input_changed_cb" object="CcEsimDialog" swapped="yes"/>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="AdwEntryRow" id="confirmation_row">
+                                <property name="title" translatable="yes">Confirmation Code (if required)</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="AdwPreferencesGroup">
+                            <child>
+                              <object class="AdwButtonRow" id="download_row">
+                                <property name="title" translatable="yes">_Download Profile</property>
+                                <property name="use-underline">true</property>
+                                <property name="sensitive">false</property>
+                                <signal name="activated" handler="download_row_activated_cb" object="CcEsimDialog" swapped="yes"/>
+                                <style>
+                                  <class name="suggested-action"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkBox" id="download_box">
+                                <property name="visible">false</property>
+                                <property name="spacing">12</property>
+                                <property name="halign">center</property>
+                                <property name="margin-top">12</property>
+                                <child>
+                                  <object class="AdwSpinner"/>
+                                </child>
+                                <child>
+                                  <object class="GtkLabel" id="download_label">
+                                    <property name="wrap">true</property>
+                                    <style>
+                                      <class name="dim-label"/>
+                                    </style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </property>
+                  </object>
+                </property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </property>
+  </template>
+</interface>

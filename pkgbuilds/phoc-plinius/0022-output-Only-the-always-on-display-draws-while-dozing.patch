@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:20:00 +0100
+Subject: [PATCH] output: Only the always-on display draws while dozing
+
+A dozing output stays enabled, so every client went on getting frame
+callbacks. Under the always-on display's black surface plinius-ambient
+drew 30 frames a second (measured on the Plinius), and so did Phosh's
+lock screen and the fade of its camera glow. The DRM backend switches
+the CRTC off a second after the last page flip: with frames coming all
+the time that never happened, its wakelock stayed held and the phone
+could not suspend.
+
+While dozing, only the surface of the always-on display (layer shell
+namespace "phosh aod") gets frame callbacks. The other clients wait as
+they do for an output that is off, and go on with the first frame after
+waking up.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/output.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/src/output.c b/src/output.c
+index 368d0c6..8f9ed91 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -409,6 +409,20 @@ phoc_output_set_gamma_lut (PhocOutput *self, struct wlr_output_state *pending)
+ }
+ 
+ 
++/* Plinius: whether a surface belongs to the always-on display, the only thing that draws
++ * while the output dozes */
++static gboolean
++surface_draws_while_dozing (struct wlr_surface *wlr_surface)
++{
++  struct wlr_layer_surface_v1 *layer_surface;
++
++  layer_surface =
++    wlr_layer_surface_v1_try_from_wlr_surface (wlr_surface_get_root_surface (wlr_surface));
++
++  return layer_surface && g_strcmp0 (layer_surface->namespace, "phosh aod") == 0;
++}
++
++
+ static void
+ surface_send_frame_done_iterator (PhocOutput         *output,
+                                   struct wlr_surface *wlr_surface,
+@@ -419,6 +433,11 @@ surface_send_frame_done_iterator (PhocOutput         *output,
+   struct timespec *when = data;
+   struct wlr_layer_surface_v1 *layer_surface;
+ 
++  /* Plinius: everything else drawing under the always-on display would keep the CRTC on, see
++   * handle_doze_idle() in wlroots */
++  if (!phoc_output_is_awake (output) && !surface_draws_while_dozing (wlr_surface))
++    return;
++
+   /* Plinius: plinius-ambient gets frames only while its effect can be seen (render_layer()), so
+    * that it stops animating under windows */
+   if (!output->ambient_shown) {
+@@ -720,6 +739,9 @@ phoc_output_handle_frame (struct wl_listener *listener, void *data)
+       if (!layer_surface->mapped ||
+           g_strcmp0 (layer_surface->layer_surface->namespace, "plinius-ambient") == 0)
+         continue;
++      if (!phoc_output_is_awake (self) &&
++          !surface_draws_while_dozing (layer_surface->layer_surface->surface))
++        continue;
+       wlr_surface_send_frame_done (layer_surface->layer_surface->surface, &now);
+     }
+   }

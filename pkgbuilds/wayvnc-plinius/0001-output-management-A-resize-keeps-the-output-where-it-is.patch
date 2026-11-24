@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 11:32:10 +0100
+Subject: [PATCH] output-management: A resize keeps the output where it is
+
+A viewer that asks for another size sends a layout that starts at 0,0.
+wayvnc passed that position on, so the resized headless output landed on
+top of the compositor's other outputs: clicks went to the wrong screen
+and the windows of both overlapped. Only the size and the transform
+are the viewer's to choose.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/output-management.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/output-management.c b/src/output-management.c
+index a70934c..092f330 100644
+--- a/src/output-management.c
++++ b/src/output-management.c
+@@ -34,6 +34,7 @@ struct output_manager_head {
+ 	struct wl_list modes;
+ 	char* name;
+ 	bool enabled;
++	int32_t x, y;
+ };
+ 
+ static struct wl_list heads;
+@@ -101,6 +102,9 @@ static void output_head_position(void* data,
+ 		struct zwlr_output_head_v1* output_head, int32_t x, int32_t y)
+ {
+ 	nvnc_trace("Got head position: %d,%d", x, y);
++	struct output_manager_head* head = data;
++	head->x = x;
++	head->y = y;
+ }
+ 
+ static void output_head_transform(void* data,
+@@ -346,8 +350,13 @@ bool wlr_output_manager_configure_output(
+ 		zwlr_output_configuration_head_v1_set_custom_mode(
+ 			config_head, width, height, refresh_rate);
+ 
++		/* The viewer's layout starts at 0,0 and knows nothing of the
++		 * compositor's other outputs: with x and y the output would
++		 * land on top of them. Where it is stays the compositor's
++		 * business.
++		 */
+ 		zwlr_output_configuration_head_v1_set_position(config_head,
+-				x, y);
++				head->x, head->y);
+ 
+ 		/* It doesn't make any sense to have rotation on a
+ 		 * headless display, so we set the transform here to be
+-- 
+2.56.0
+

@@ -1,0 +1,13 @@
+# Daily update check for plinius-software (user timer, enabled for all users by the package).
+# Runs plinius-software-check.service, which notifies once about a new set of updates.
+[Unit]
+Description=Check for system updates daily
+
+[Timer]
+OnBootSec=15min
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

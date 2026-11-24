@@ -1,0 +1,144 @@
+From e9bffd27cbd08fa3c54c06efe6fa2130dde39f27 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 19:37:33 +0100
+Subject: [PATCH] Report the lock oFono names and the enabled PIN locks
+
+Every SimManager PinRequired other than "none" was reported as
+MM_MODEM_LOCK_SIM_PIN. When the PIN was blocked after three wrong
+entries oFono asks for "puk", but clients saw "PIN required": GNOME
+Settings prompted for a PIN, the SIM rejected it, and the PUK could not
+be entered anywhere. Map oFono's pin types to ModemManager's locks
+(SIM_PIN, SIM_PUK, PH_SIM_PIN, PH_NET_PIN, ...). Locks for PIN2 do not
+make the modem "locked", as in ModemManager.
+
+EnabledFacilityLocks was a fixed "none", so the "Lock SIM with PIN"
+switch in GNOME Settings always showed the lock as off and the PIN could
+not be disabled or changed. Build it from SimManager LockedPins.
+---
+ ofono2mm/mm_modem.py      | 15 +++++++++++----
+ ofono2mm/mm_modem_3gpp.py | 12 +++++++++++-
+ ofono2mm/mm_types.py      | 31 +++++++++++++++++++++++++++++++
+ 3 files changed, 53 insertions(+), 5 deletions(-)
+
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index f276779..75bcca2 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -29,6 +29,7 @@ from ofono2mm.mm_types import ModemManagerState,\
+                               OFONO_TECHNOLOGIES,\
+                               OFONO_CELL_TYPES,\
+                               OFONO_RETRIES_LOCK,\
++                              PIN2_LOCKS,\
+                               OFONO_MODES,\
+                               OFONO_CAPS,\
+                               MM_MODES
+@@ -389,12 +390,18 @@ class MMModemInterface(ServiceInterface):
+         self.props['Sim'] = self.sim
+         self.props['StateFailedReason'] = Variant('i', ModemManagerStateFailedReason.NONE)
+ 
+-        if self.ofono_interface_props['org.ofono.SimManager']['PinRequired'].value == 'none':
++        sim_manager = self.ofono_interface_props['org.ofono.SimManager']
++        pin_required = sim_manager['PinRequired'].value if 'PinRequired' in sim_manager else 'none'
++        if pin_required == 'none':
+             self.props['UnlockRequired'] = Variant('u', ModemManagerLock.NONE)
+         else:
+-            self.props['UnlockRequired'] = Variant('u', ModemManagerLock.SIM_PIN)
+-            self.props['State'] = Variant('i', ModemManagerState.LOCKED)
+-            return
++            # oFono names the lock that blocks the SIM ("pin", "puk", "phone", ...). Report that
++            # lock: with SIM_PIN for everything, GNOME Settings asked for a PIN when the PUK was due
++            lock = OFONO_RETRIES_LOCK.get(pin_required, ModemManagerLock.UNKNOWN)
++            self.props['UnlockRequired'] = Variant('u', lock)
++            if lock not in PIN2_LOCKS:
++                self.props['State'] = Variant('i', ModemManagerState.LOCKED)
++                return
+ 
+         #################
+         # SIM UNLOCKED  #
+diff --git a/ofono2mm/mm_modem_3gpp.py b/ofono2mm/mm_modem_3gpp.py
+index 999917e..bbdb6ea 100644
+--- a/ofono2mm/mm_modem_3gpp.py
++++ b/ofono2mm/mm_modem_3gpp.py
+@@ -3,6 +3,8 @@ from dbus_next.service import (ServiceInterface,
+ from dbus_next.constants import PropertyAccess
+ from dbus_next import Variant, DBusError
+ 
++from ofono2mm.mm_types import OFONO_LOCKED_PINS_FACILITY
++
+ class MMModem3gppInterface(ServiceInterface):
+     def __init__(self, index, bus, ofono_client, modem_name, ofono_modem, ofono_props, ofono_interfaces, ofono_interface_props):
+         super().__init__('org.freedesktop.ModemManager1.Modem.Modem3gpp')
+@@ -61,7 +63,15 @@ class MMModem3gppInterface(ServiceInterface):
+             self.props['RegistrationState'] = Variant('u', 4) # unknown MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN
+ 
+         self.props['Imei'] = Variant('s', self.ofono_props['Serial'].value if 'Serial' in self.ofono_props else '')
+-        self.props['EnabledFacilityLocks'] = Variant('u', 0) # none MM_MODEM_3GPP_FACILITY_NONE
++        # The locks the user has enabled (SIM PIN at startup, ...). GNOME Settings shows the
++        # "Lock SIM with PIN" switch from this; with a fixed "none" the PIN could not be turned off
++        locks = 0
++        if 'org.ofono.SimManager' in self.ofono_interface_props:
++            sim_manager = self.ofono_interface_props['org.ofono.SimManager']
++            if 'LockedPins' in sim_manager:
++                for pin in sim_manager['LockedPins'].value:
++                    locks |= OFONO_LOCKED_PINS_FACILITY.get(pin, 0)
++        self.props['EnabledFacilityLocks'] = Variant('u', locks)
+ 
+         changed_props = {}
+         for prop in self.props:
+diff --git a/ofono2mm/mm_types.py b/ofono2mm/mm_types.py
+index a999173..12c23b8 100644
+--- a/ofono2mm/mm_types.py
++++ b/ofono2mm/mm_types.py
+@@ -70,11 +70,15 @@ class ModemManagerLock:
+     PH_NETSUB_PIN  = 15
+     PH_NETSUB_PUK  = 16
+ 
++# oFono's pin types (SimManager PinRequired, LockedPins, Retries) as ModemManager locks
+ OFONO_RETRIES_LOCK = {
+     'pin' : ModemManagerLock.SIM_PIN,
+     'pin2': ModemManagerLock.SIM_PIN2,
+     'puk': ModemManagerLock.SIM_PUK,
+     'puk2': ModemManagerLock.SIM_PUK2,
++    'phone': ModemManagerLock.PH_SIM_PIN,
++    'firstphone': ModemManagerLock.PH_FSIM_PIN,
++    'firstphonepuk': ModemManagerLock.PH_FSIM_PUK,
+     'service': ModemManagerLock.PH_SP_PIN,
+     'servicepuk': ModemManagerLock.PH_SP_PUK,
+     'network': ModemManagerLock.PH_NET_PIN,
+@@ -85,6 +89,33 @@ OFONO_RETRIES_LOCK = {
+     'netsubpuk': ModemManagerLock.PH_NETSUB_PUK,
+ }
+ 
++# Locks that only guard PIN2 services (fixed dialing); ModemManager does not count them as
++# locking the modem, so the modem state is not "locked" because of them
++PIN2_LOCKS = (ModemManagerLock.SIM_PIN2, ModemManagerLock.SIM_PUK2)
++
++class ModemManager3gppFacility:
++    NONE          = 0
++    SIM           = 1 << 0
++    FIXED_DIALING = 1 << 1
++    PH_SIM        = 1 << 2
++    PH_FSIM       = 1 << 3
++    NET_PERS      = 1 << 4
++    NET_SUB_PERS  = 1 << 5
++    PROVIDER_PERS = 1 << 6
++    CORP_PERS     = 1 << 7
++
++# oFono's SimManager LockedPins (locks the user must unlock at startup) as facility locks
++OFONO_LOCKED_PINS_FACILITY = {
++    'pin': ModemManager3gppFacility.SIM,
++    'pin2': ModemManager3gppFacility.FIXED_DIALING,
++    'phone': ModemManager3gppFacility.PH_SIM,
++    'firstphone': ModemManager3gppFacility.PH_FSIM,
++    'network': ModemManager3gppFacility.NET_PERS,
++    'netsub': ModemManager3gppFacility.NET_SUB_PERS,
++    'service': ModemManager3gppFacility.PROVIDER_PERS,
++    'corp': ModemManager3gppFacility.CORP_PERS,
++}
++
+ class ModemManagerAccessTechnology:
+     UNKNOWN     = 0
+     POTS        = 1 << 0
+-- 
+2.55.0
+

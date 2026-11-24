@@ -1,0 +1,112 @@
+#!/bin/bash
+# Adds a local account (runs as root, via pkexec). Called by GNOME Settings (Accounts > Local
+# Accounts > Add, gnome-control-center-plinius) instead of AccountsService's CreateUser:
+#
+# - User and group IDs come from 32012-32999, next to the phone's first user (32011, as on
+#   Ubuntu Touch). useradd would start at 1000, but 1000-9999 are Android's IDs on this phone
+#   (aid_system is 1000, device-volla-ansuz' sysusers), and the Android container's files and
+#   services trust them; 10000-19999 are its apps.
+# - An administrator gets the groups the device nodes need (sound, modem, camera, rfkill, NFC)
+#   and wheel, as the first user does in image/mkimage.sh. Any other account gets only the groups
+#   it cannot do without (see device_groups below): it reaches the sound, camera and video codec
+#   nodes through the ACL that logind gives the user of the active session (uaccess), not through
+#   a group, so its programs lose them once another account is in front of the phone (attack
+#   review 2026-11-18, L14/T7).
+# - The password (on the phone the PIN of the screen lock) comes on stdin, one line, never on the
+#   command line. Without it there is no account: the screen lock needs one.
+#
+# Usage: plinius-add-user USER FULL-NAME [--admin] < password
+set -euo pipefail
+
+# pkexec clears the environment; take the language from the system settings so that the
+# error shown in GNOME Settings is translated (gettext domain plinius-account)
+[[ -r /etc/locale.conf ]] && { . /etc/locale.conf; export LANG; }
+export TEXTDOMAIN=plinius-account
+
+die() { echo "plinius-add-user: $*" >&2; exit 1; }
+# t MSGID [ARG...]: translated message, %s placeholders filled with ARGs
+t() {
+	local fmt
+	fmt=$(gettext "$1")
+	shift
+	# shellcheck disable=SC2059
+	printf "$fmt" "$@"
+}
+
+id_min=32012
+id_max=32999
+# The groups of the first user without wheel (image/mkimage.sh), for administrators; only those
+# that exist
+admin_groups=(video audio radio aid_audio aid_media rfkill privileged)
+# Every other account. Left out, with what the account then lacks while it is not the active one:
+#   video  camera-hal-bridge's /dev/ashmem and the video codec nodes: uaccess ACL instead
+#          (camera-hal-bridge 73-camera-hal-bridge.rules, device-volla-ansuz
+#          72-plinius-camera-no-uaccess.rules)
+#   audio  /dev/snd: systemd tags it uaccess itself
+#   radio  no device node; D-Bus policies of the modem that act for the whole phone: voice domains
+#          (VoLTE, Wi-Fi calling), Cell Broadcast channels, eSIM channels (lpac), ModemManager
+#          control without a session (ofono2mm 50-ofono2mm-radio.rules), and handling an
+#          emergency call while another account is in front (ofono2mm 0021). As the active
+#          session it still makes and takes calls, SMS and emergency calls (polkit allow_active).
+# Kept for now: aid_audio and aid_media. The vendor audio HAL in the account's audio-hal-bridge
+# opens the modem audio and DSP nodes; some are read-only for the group (adsp_0/1, audio_ipi,
+# vow, mtk_usb_offload), and a uaccess ACL would give the active user write access there too,
+# and /dev/socket/micshm is no udev node at all. Planned: a service that gives exactly these to
+# the user of the active session (read-only where the group has read only), then without them.
+user_groups=(aid_audio aid_media rfkill privileged)
+
+[[ $# -eq 2 || ($# -eq 3 && $3 == --admin) ]] || die "$(t "usage: plinius-add-user USER FULL-NAME [--admin] < password")"
+name=$1 full=$2 admin=${3:-}
+[[ $(id -u) -eq 0 ]] || die "$(t "must be run as root")"
+[[ $name =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] ||
+	die "$(t "invalid name: lower case letters, digits, _ and -, starting with a letter or _, at most 32 characters")"
+! getent passwd "$name" >/dev/null || die "$(t "user %s already exists" "$name")"
+! getent group "$name" >/dev/null || die "$(t "group %s already exists" "$name")"
+[[ ! -e /home/$name ]] || die "$(t "%s already exists" "/home/$name")"
+# The full name goes into the GECOS field: no field or list separators, no control characters
+full=$(printf '%s' "$full" | tr -d ':,\000-\037\177')
+((${#full} <= 64)) || die "$(t "the full name is longer than 64 characters")"
+
+IFS= read -r password || true
+[[ -n $password ]] || die "$(t "a password is needed")"
+
+# The lowest ID free as a user and as a group
+uid=
+for ((i = id_min; i <= id_max; i++)); do
+	if ! getent passwd "$i" >/dev/null && ! getent group "$i" >/dev/null; then
+		uid=$i
+		break
+	fi
+done
+[[ -n $uid ]] || die "$(t "no free user ID between %s and %s" "$id_min" "$id_max")"
+
+groups=()
+if [[ $admin == --admin ]]; then
+	device_groups=("${admin_groups[@]}" wheel)
+else
+	device_groups=("${user_groups[@]}")
+fi
+for g in "${device_groups[@]}"; do
+	if getent group "$g" >/dev/null; then groups+=("$g"); fi
+done
+args=(-m -u "$uid" -g "$uid" -c "$full")
+if ((${#groups[@]})); then args+=(-G "$(IFS=,; echo "${groups[*]}")"); fi
+
+groupadd -g "$uid" -- "$name"
+if ! useradd "${args[@]}" -- "$name"; then
+	groupdel -- "$name" || true
+	die "$(t "the account could not be created")"
+fi
+# chpasswd takes everything after the first colon as the password
+if ! printf '%s:%s\n' "$name" "$password" | chpasswd; then
+	userdel -r -- "$name" >/dev/null 2>&1 || true
+	getent group "$name" >/dev/null && groupdel -- "$name"
+	die "$(t "the password could not be set, the account was removed again")"
+fi
+unset password
+
+# AccountsService lists users it has cached; this is what GDM does after a login. Settings shows
+# the account at once, the greeter does not depend on it.
+busctl --quiet call org.freedesktop.Accounts /org/freedesktop/Accounts org.freedesktop.Accounts \
+	CacheUser s "$name" >/dev/null 2>&1 || true
+echo "$name"

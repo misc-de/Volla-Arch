@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 17:00:00 +0100
+Subject: [PATCH] network: DNS Filter as a group of its own at the top
+
+Plinius: a group "DNS Filter" at the top of Network & VPN; its row opens
+the pages of plinius-dnsfilter: the switch and a pause, the last 24
+hours, the query log (a name's page with Block and Unblock and its
+queries by app), statistics, blocklists, own rules, DNS servers (also
+DoT and DoH) and settings.
+"gnome-control-center network plinius-dnsfilter-log" (and the other
+page names) opens a page directly. The group and its pages come from
+cc-plinius-dnsfilter.c; without the service the page stays as it was.
+---
+ panels/network/cc-network-panel.c | 17 +++++++++++++++++
+ panels/network/meson.build        |  1 +
+ 2 files changed, 18 insertions(+)
+
+diff --git a/panels/network/cc-network-panel.c b/panels/network/cc-network-panel.c
+index 87c6a84..4ef9787 100644
+--- a/panels/network/cc-network-panel.c
++++ b/panels/network/cc-network-panel.c
+@@ -32,6 +32,7 @@
+ 
+ #include "cc-list-row.h"
+ #include "cc-net-proxy-page.h"
++#include "cc-plinius-dnsfilter.h"
+ #include "net-device-bluetooth.h"
+ #include "net-device-ethernet.h"
+ #include "net-device-mobile.h"
+@@ -170,6 +171,12 @@ cc_network_panel_set_property (GObject *object, guint property_id, const GValue
+             array = variant_av_to_string_array (parameters);
+             args = (const gchar **) array->pdata;
+ 
++            /* Plinius: "network plinius-dnsfilter[-log|-stats|…]" opens a page of the DNS filter */
++            if (args[0] && g_str_has_prefix (args[0], "plinius-dnsfilter")) {
++                cc_panel_set_parameters (CC_PANEL (self), parameters);
++                return;
++            }
++
+             g_debug ("Invoked with operation %s", args[0]);
+ 
+             if (args[0])
+@@ -718,6 +725,16 @@ cc_network_panel_init (CcNetworkPanel *self)
+ 
+     gtk_list_box_set_sort_func (GTK_LIST_BOX (self->box_vpn), sort_vpns_func, NULL, NULL);
+ 
++    /* Plinius: DNS Filter (plinius-dnsfilter) as a group of its own at the top, its pages from
++     * cc-plinius-dnsfilter.c */
++    {
++        GtkWidget *dns_filter = cc_plinius_dnsfilter_group_new (CC_PANEL (self));
++        GtkWidget *page = gtk_widget_get_ancestor (self->proxy_row, ADW_TYPE_PREFERENCES_PAGE);
++
++        if (dns_filter && page)
++            adw_preferences_page_insert (ADW_PREFERENCES_PAGE (page), ADW_PREFERENCES_GROUP (dns_filter), 0);
++    }
++
+     /* Create and store a NMClient instance if it doesn't exist yet */
+     if (!cc_object_storage_has_object (CC_OBJECT_NMCLIENT)) {
+         g_autoptr(NMClient) client = nm_client_new (NULL, NULL);
+diff --git a/panels/network/meson.build b/panels/network/meson.build
+index e102c21..a5fe14f 100644
+--- a/panels/network/meson.build
++++ b/panels/network/meson.build
+@@ -56,6 +56,7 @@ sources = files(
+   'cc-qr-code.c',
+   'cc-qr-code-dialog.c',
+   'cc-network-panel.c',
++  'cc-plinius-dnsfilter.c',
+   'cc-plinius-hidden-wifi.c',
+   'cc-net-proxy-page.c',
+   'cc-wifi-connection-row.c',

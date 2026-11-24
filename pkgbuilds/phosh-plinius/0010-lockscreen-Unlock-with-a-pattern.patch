@@ -1,0 +1,736 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 01:19:20 +0100
+Subject: [PATCH] lockscreen: Unlock with a pattern
+
+A user who has set an unlock pattern (plinius-pattern, grid size and hash
+in ~/.config/plinius/unlock-pattern) gets a pattern pad of that size (3x3
+to 6x6 points) on the unlock page instead of the PIN entry: either PIN or
+pattern, pam_plinius_pattern refuses the PIN on the lock screen while a
+pattern is set (the fingerprint still unlocks). The drawn pattern goes to
+PAM as the answer to the password prompt, marked with
+"\x01plinius-pattern:" so that pam_plinius_pattern checks it and pam_unix
+never sees it. A pattern file that the PAM module would not accept (wrong
+owner, writable by others, no hash) counts as no pattern, so the PIN entry
+stays and nobody is locked out.
+
+PhoshPatternPad picks each point once, takes the grid points a line jumps
+over (as on Android), shows a wrong pattern in red for a moment and reports
+while a finger is down, so the lock screen keeps its carousel from taking
+the drawing as a swipe. It hands out "grid:points" (points numbered row by
+row from 0). Its strings come from the plinius-control-center domain, like
+the calendar week.
+
+Without a pattern nothing changes.
+---
+ src/lockscreen.c  | 148 ++++++++++++++++++
+ src/meson.build   |   1 +
+ src/pattern-pad.c | 436 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/pattern-pad.h |  23 +++
+ 4 files changed, 608 insertions(+)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index 447673e7..dbb9516a 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -20,6 +20,7 @@
+ #include "notifications/notify-manager.h"
+ #include "notifications/notification-frame.h"
+ #include "osk-manager.h"
++#include "pattern-pad.h"
+ #include "shell-priv.h"
+ #include "util.h"
+ #include "widget-box.h"
+@@ -28,6 +29,9 @@
+ #include "gmobile.h"
+ 
+ #include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <glib/gstdio.h>
+ #include <glib/gi18n.h>
+ #include <math.h>
+ 
+@@ -53,6 +57,19 @@
+ 
+ #define LOCKSCREEN_SMALL_DISPLAY 700
+ 
++/*
++ * Unlock pattern (plinius-pattern): the pattern pad answers the password prompt with this marker
++ * and the pattern; pam_plinius_pattern in /etc/pam.d/phosh checks it. Only shown when the user
++ * has set a pattern (GNOME Settings writes grid size and hash to PATTERN_FILE in the home
++ * directory), and then instead of the PIN entry.
++ */
++#define PATTERN_PREFIX "\x01plinius-pattern:"
++#define PATTERN_FILE   ".config/plinius/unlock-pattern"
++/* "Wrong Pattern" shows this long, then the request to draw again */
++#define PATTERN_STATUS_SECONDS 2
++/* Our own strings come from GNOME Settings' Plinius domain, like the calendar week */
++#define PLINIUS_DOMAIN "plinius-control-center"
++
+ /**
+  * PhoshLockscreen:
+  *
+@@ -121,6 +138,10 @@ typedef struct {
+   GtkWidget          *entry_pin;
+   GtkGesture         *long_press_del_gesture;
+   GtkWidget          *lbl_unlock_status;
++  /* Unlock pattern: the pad, shown instead of the PIN entry when the user has a pattern */
++  GtkWidget          *pattern_pad;
++  gboolean            pattern_mode;
++  guint               pattern_status_id;
+   GtkWidget          *btn_submit;
+   GtkWidget          *btn_keyboard;
+   guint               idle_timer;
+@@ -337,6 +358,9 @@ clear_input (PhoshLockscreen *self, gboolean clear_all)
+     gtk_editable_delete_text (GTK_EDITABLE (priv->entry_pin), 0, -1);
+   else
+     g_signal_emit_by_name (priv->entry_pin, "backspace", NULL);
++
++  if (clear_all && priv->pattern_pad)
++    phosh_pattern_pad_clear (PHOSH_PATTERN_PAD (priv->pattern_pad));
+ }
+ 
+ 
+@@ -420,6 +444,19 @@ focus_pin_entry (PhoshLockscreen *self, gboolean enable_osk)
+ }
+ 
+ 
++static gboolean
++restore_pattern_status (gpointer user_data)
++{
++  PhoshLockscreen *self = PHOSH_LOCKSCREEN (user_data);
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++
++  priv->pattern_status_id = 0;
++  if (priv->auth == NULL)
++    phosh_lockscreen_set_unlock_status (self, g_dgettext (PLINIUS_DOMAIN, "Draw Pattern"));
++  return G_SOURCE_REMOVE;
++}
++
++
+ static void
+ on_auth_authenticate_ready (GObject *source_object, GAsyncResult *result, gpointer user_data)
+ {
+@@ -438,6 +475,13 @@ on_auth_authenticate_ready (GObject *source_object, GAsyncResult *result, gpoint
+ 
+   if (authenticated) {
+     g_signal_emit (self, signals[LOCKSCREEN_UNLOCK], 0);
++  } else if (priv->pattern_mode) {
++    phosh_lockscreen_set_unlock_status (self, g_dgettext (PLINIUS_DOMAIN, "Wrong Pattern"));
++    phosh_pattern_pad_show_error (PHOSH_PATTERN_PAD (priv->pattern_pad));
++    g_clear_handle_id (&priv->pattern_status_id, g_source_remove);
++    priv->pattern_status_id = g_timeout_add_seconds (PATTERN_STATUS_SECONDS, restore_pattern_status, self);
++    /* For a PIN the end of the shake animation does this (finish_shake_entry) */
++    gtk_widget_set_sensitive (GTK_WIDGET (self), TRUE);
+   } else {
+     /* give visual feedback on error */
+     phosh_lockscreen_set_unlock_status (self, _("Enter Passcode"));
+@@ -1015,6 +1059,108 @@ on_biomd_proxy_ready (GObject *source_object, GAsyncResult *res, gpointer user_d
+ }
+ 
+ 
++/* Keep the carousel from taking the finger's path as a swipe, and the page from timing out */
++static void
++on_pattern_drawing_changed (PhoshLockscreen *self, GParamSpec *pspec, PhoshPatternPad *pad)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++
++  priv->last_input = g_get_monotonic_time ();
++  hdy_carousel_set_interactive (HDY_CAROUSEL (priv->carousel),
++                                !phosh_pattern_pad_get_drawing (pad));
++}
++
++
++static void
++on_pattern_entered (PhoshLockscreen *self, const char *pattern, PhoshPatternPad *pad)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  g_autofree char *answer = NULL;
++
++  priv->last_input = g_get_monotonic_time ();
++
++  /* A single point is a tap, not a pattern */
++  if (strchr (pattern, '.') == NULL || priv->auth != NULL) {
++    phosh_pattern_pad_clear (pad);
++    return;
++  }
++
++  answer = g_strconcat (PATTERN_PREFIX, pattern, NULL);
++  phosh_lockscreen_set_unlock_status (self, _("Checking…"));
++  gtk_widget_set_sensitive (GTK_WIDGET (self), FALSE);
++
++  priv->auth = PHOSH_AUTH (phosh_auth_new ());
++  phosh_auth_authenticate_async (priv->auth,
++                                 answer,
++                                 NULL,
++                                 on_auth_authenticate_ready,
++                                 g_object_ref (self));
++}
++
++
++/*
++ * The user's pattern grid size, or 0 if no pattern is set. Same checks as pam_plinius_pattern:
++ * a regular file of the user, writable by nobody else, a grid size of 3 to 6 on the first line
++ * and a hash on the second. Anything else counts as no pattern, so the PIN unlocks: a broken
++ * file must never lock the user out.
++ */
++static int
++get_pattern_grid (void)
++{
++  g_autofree char *path = g_build_filename (g_get_home_dir (), PATTERN_FILE, NULL);
++  g_autofree char *contents = NULL;
++  g_auto (GStrv) lines = NULL;
++  GStatBuf st;
++  int grid;
++
++  if (g_lstat (path, &st) != 0 || !S_ISREG (st.st_mode) || st.st_uid != getuid () ||
++      (st.st_mode & (S_IWGRP | S_IWOTH)))
++    return 0;
++  if (!g_file_get_contents (path, &contents, NULL, NULL))
++    return 0;
++
++  lines = g_strsplit (contents, "\n", 3);
++  if (g_strv_length (lines) < 2 || lines[1][0] == '\0')
++    return 0;
++  grid = (int) g_ascii_strtoll (lines[0], NULL, 10);
++  return grid >= 3 && grid <= 6 ? grid : 0;
++}
++
++
++/*
++ * With a pattern the unlock page shows only the pattern pad: the PIN does not unlock the screen
++ * then (pam_plinius_pattern refuses it), only the pattern or the fingerprint.
++ */
++static void
++setup_pattern (PhoshLockscreen *self)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  int grid = get_pattern_grid ();
++
++  if (grid == 0)
++    return;
++
++  priv->pattern_mode = TRUE;
++  priv->pattern_pad = phosh_pattern_pad_new ();
++  phosh_pattern_pad_set_grid (PHOSH_PATTERN_PAD (priv->pattern_pad), grid);
++  gtk_widget_set_margin_top (priv->pattern_pad, 12);
++  gtk_widget_set_margin_bottom (priv->pattern_pad, 12);
++  gtk_widget_show (priv->pattern_pad);
++  gtk_box_pack_start (GTK_BOX (priv->box_unlock), priv->pattern_pad, FALSE, FALSE, 0);
++  /* Right below the status label */
++  gtk_box_reorder_child (GTK_BOX (priv->box_unlock), priv->pattern_pad, 1);
++  g_signal_connect_object (priv->pattern_pad, "entered",
++                           G_CALLBACK (on_pattern_entered), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (priv->pattern_pad, "notify::drawing",
++                           G_CALLBACK (on_pattern_drawing_changed), self, G_CONNECT_SWAPPED);
++
++  gtk_widget_hide (priv->entry_pin);
++  gtk_widget_hide (priv->keypad_revealer);
++  gtk_widget_hide (gtk_widget_get_parent (priv->btn_submit));
++  phosh_lockscreen_set_unlock_status (self, g_dgettext (PLINIUS_DOMAIN, "Draw Pattern"));
++}
++
++
+ static void
+ phosh_lockscreen_constructed (GObject *object)
+ {
+@@ -1125,6 +1271,7 @@ phosh_lockscreen_constructed (GObject *object)
+   on_info_reveal_child_changed (self);
+ 
+   phosh_lockscreen_add_background (self);
++  setup_pattern (self);
+ 
+   priv->cancel = g_cancellable_new ();
+   g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM,
+@@ -1168,6 +1315,7 @@ phosh_lockscreen_dispose (GObject *object)
+   g_clear_object (&priv->cancel);
+   g_clear_object (&priv->biomd);
+   g_clear_object (&priv->notification_settings);
++  g_clear_handle_id (&priv->pattern_status_id, g_source_remove);
+   g_clear_handle_id (&priv->idle_timer, g_source_remove);
+   g_clear_object (&priv->calls_manager);
+   g_clear_pointer (&priv->active, g_free);
+diff --git a/src/meson.build b/src/meson.build
+index 7ae2c506..a2fd98ad 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -424,6 +424,7 @@ phosh_sources = files(
+   'network-auth-manager.c',
+   'network-auth-prompt.c',
+   'osk-manager.c',
++  'pattern-pad.c',
+   'polkit-auth-agent.c',
+   'polkit-auth-prompt.c',
+   'portal-access-manager.c',
+diff --git a/src/pattern-pad.c b/src/pattern-pad.c
+new file mode 100644
+index 00000000..f1b51f81
+--- /dev/null
++++ b/src/pattern-pad.c
+@@ -0,0 +1,436 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-pattern-pad"
++
++#include "phosh-config.h"
++
++#include "pattern-pad.h"
++
++#include <math.h>
++
++/**
++ * PhoshPatternPad:
++ *
++ * A grid of 3x3 to 6x6 points to unlock with a pattern
++ *
++ * The finger connects points; each point counts once and a line across unused points of the
++ * grid takes those in between, as on Android. When the finger lifts, #PhoshPatternPad::entered
++ * hands out the pattern as "grid:points", the points numbered row by row from 0 at the top left
++ * ("3:0.1.2.4.6.7.8" is a Z on a 3x3 grid, see plinius-pattern). The pattern stays on screen
++ * until it is cleared, or shown in red for a moment by phosh_pattern_pad_show_error().
++ *
++ * #PhoshPatternPad:drawing is true while a finger is down, so that the lock screen can keep its
++ * carousel from taking the drag as a swipe.
++ */
++
++#define MIN_GRID            3
++#define MAX_GRID            6
++#define MAX_POINTS          (MAX_GRID * MAX_GRID)
++/* Side length of the pad in logical pixels; larger grids get a little more room */
++#define PAD_SIZE            270
++#define PAD_SIZE_LARGE      320
++/* Radius of a point, of a picked point, and of the area that picks it, relative to a cell */
++#define DOT_RADIUS          0.07
++#define PICKED_RADIUS       0.15
++#define HIT_RADIUS          0.32
++#define LINE_WIDTH          0.045
++#define ERROR_TIMEOUT_MS    1000
++
++enum {
++  PROP_0,
++  PROP_DRAWING,
++  PROP_LAST_PROP
++};
++static GParamSpec *props[PROP_LAST_PROP];
++
++enum {
++  ENTERED,
++  N_SIGNALS
++};
++static guint signals[N_SIGNALS];
++
++struct _PhoshPatternPad {
++  GtkDrawingArea  parent;
++
++  GtkGesture     *drag;
++  double          start_x, start_y;
++  /* The finger's position while drawing, for the line from the last point to it */
++  double          finger_x, finger_y;
++  gboolean        drawing;
++
++  /* Points per side, and the points picked so far (row by row from 0), in order */
++  int             grid;
++  int             points[MAX_POINTS];
++  int             n_points;
++  gboolean        error;
++  guint           error_id;
++};
++
++G_DEFINE_TYPE (PhoshPatternPad, phosh_pattern_pad, GTK_TYPE_DRAWING_AREA)
++
++
++static void
++phosh_pattern_pad_get_property (GObject    *object,
++                                guint       property_id,
++                                GValue     *value,
++                                GParamSpec *pspec)
++{
++  PhoshPatternPad *self = PHOSH_PATTERN_PAD (object);
++
++  switch (property_id) {
++  case PROP_DRAWING:
++    g_value_set_boolean (value, self->drawing);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++/* Size of a cell and the grid's top left corner, the grid centered in the allocation */
++static double
++get_geometry (PhoshPatternPad *self, double *x0, double *y0)
++{
++  int width = gtk_widget_get_allocated_width (GTK_WIDGET (self));
++  int height = gtk_widget_get_allocated_height (GTK_WIDGET (self));
++  double cell = MIN (width, height) / (double) self->grid;
++
++  *x0 = (width - self->grid * cell) / 2;
++  *y0 = (height - self->grid * cell) / 2;
++  return cell;
++}
++
++
++static void
++get_point_center (PhoshPatternPad *self, int point, double *x, double *y)
++{
++  double x0, y0, cell = get_geometry (self, &x0, &y0);
++
++  *x = x0 + (point % self->grid + 0.5) * cell;
++  *y = y0 + (point / self->grid + 0.5) * cell;
++}
++
++
++static gboolean
++is_picked (PhoshPatternPad *self, int point)
++{
++  for (int i = 0; i < self->n_points; i++) {
++    if (self->points[i] == point)
++      return TRUE;
++  }
++  return FALSE;
++}
++
++
++static void
++pick (PhoshPatternPad *self, int point)
++{
++  if (self->n_points < MAX_POINTS && !is_picked (self, point))
++    self->points[self->n_points++] = point;
++}
++
++
++static int gcd (int a, int b);
++
++/* Pick the point under the finger, and unused points that the line jumps over */
++static void
++pick_at (PhoshPatternPad *self, double x, double y)
++{
++  double x0, y0, cell = get_geometry (self, &x0, &y0);
++
++  for (int point = 0; point < self->grid * self->grid; point++) {
++    double cx, cy;
++
++    get_point_center (self, point, &cx, &cy);
++    if (hypot (x - cx, y - cy) > HIT_RADIUS * cell || is_picked (self, point))
++      continue;
++
++    if (self->n_points > 0) {
++      int last = self->points[self->n_points - 1];
++      int dcol = point % self->grid - last % self->grid;
++      int drow = point / self->grid - last / self->grid;
++      int steps = gcd (abs (dcol), abs (drow));
++
++      /* Grid points exactly on the line from the last point, in order */
++      for (int i = 1; i < steps; i++)
++        pick (self, last + (drow / steps) * i * self->grid + (dcol / steps) * i);
++    }
++    pick (self, point);
++    return;
++  }
++}
++
++
++static int
++gcd (int a, int b)
++{
++  while (b) {
++    int t = a % b;
++
++    a = b;
++    b = t;
++  }
++  return a;
++}
++
++
++static void
++set_drawing (PhoshPatternPad *self, gboolean drawing)
++{
++  if (self->drawing == drawing)
++    return;
++
++  self->drawing = drawing;
++  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_DRAWING]);
++}
++
++
++static void
++on_drag_begin (PhoshPatternPad *self, double x, double y, GtkGestureDrag *gesture)
++{
++  phosh_pattern_pad_clear (self);
++  gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
++
++  self->start_x = self->finger_x = x;
++  self->start_y = self->finger_y = y;
++  set_drawing (self, TRUE);
++  pick_at (self, x, y);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++static void
++on_drag_update (PhoshPatternPad *self, double offset_x, double offset_y, GtkGestureDrag *gesture)
++{
++  self->finger_x = self->start_x + offset_x;
++  self->finger_y = self->start_y + offset_y;
++  pick_at (self, self->finger_x, self->finger_y);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++static void
++on_drag_end (PhoshPatternPad *self, double offset_x, double offset_y, GtkGestureDrag *gesture)
++{
++  g_autoptr (GString) pattern = g_string_new (NULL);
++
++  set_drawing (self, FALSE);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++
++  if (self->n_points == 0)
++    return;
++
++  g_string_printf (pattern, "%d:", self->grid);
++  for (int i = 0; i < self->n_points; i++)
++    g_string_append_printf (pattern, i ? ".%d" : "%d", self->points[i]);
++  g_signal_emit (self, signals[ENTERED], 0, pattern->str);
++}
++
++
++static gboolean
++phosh_pattern_pad_draw (GtkWidget *widget, cairo_t *cr)
++{
++  PhoshPatternPad *self = PHOSH_PATTERN_PAD (widget);
++  GtkStyleContext *context = gtk_widget_get_style_context (widget);
++  double x0, y0, cell = get_geometry (self, &x0, &y0);
++  GdkRGBA color;
++
++  gtk_style_context_get_color (context, gtk_style_context_get_state (context), &color);
++  if (self->error)
++    gdk_rgba_parse (&color, "#e01b24");
++
++  /* The line through the picked points, and on to the finger while drawing */
++  if (self->n_points > 0) {
++    double x, y;
++
++    cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha * 0.6);
++    cairo_set_line_width (cr, LINE_WIDTH * cell);
++    cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
++    cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
++    for (int i = 0; i < self->n_points; i++) {
++      get_point_center (self, self->points[i], &x, &y);
++      if (i == 0)
++        cairo_move_to (cr, x, y);
++      else
++        cairo_line_to (cr, x, y);
++    }
++    if (self->drawing)
++      cairo_line_to (cr, self->finger_x, self->finger_y);
++    cairo_stroke (cr);
++  }
++
++  for (int point = 0; point < self->grid * self->grid; point++) {
++    double x, y;
++
++    get_point_center (self, point, &x, &y);
++    cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha);
++    cairo_arc (cr, x, y, DOT_RADIUS * cell, 0, 2 * G_PI);
++    cairo_fill (cr);
++    if (is_picked (self, point)) {
++      cairo_set_line_width (cr, LINE_WIDTH * cell * 0.6);
++      cairo_arc (cr, x, y, PICKED_RADIUS * cell, 0, 2 * G_PI);
++      cairo_stroke (cr);
++    }
++  }
++
++  return GDK_EVENT_PROPAGATE;
++}
++
++
++static void
++phosh_pattern_pad_dispose (GObject *object)
++{
++  PhoshPatternPad *self = PHOSH_PATTERN_PAD (object);
++
++  g_clear_handle_id (&self->error_id, g_source_remove);
++  g_clear_object (&self->drag);
++
++  G_OBJECT_CLASS (phosh_pattern_pad_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_pattern_pad_class_init (PhoshPatternPadClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->get_property = phosh_pattern_pad_get_property;
++  object_class->dispose = phosh_pattern_pad_dispose;
++  widget_class->draw = phosh_pattern_pad_draw;
++
++  /**
++   * PhoshPatternPad:drawing:
++   *
++   * Whether a finger is drawing a pattern right now
++   */
++  props[PROP_DRAWING] =
++    g_param_spec_boolean ("drawing", "", "",
++                          FALSE,
++                          G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
++  g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
++
++  /**
++   * PhoshPatternPad::entered:
++   * @self: The pattern pad
++   * @pattern: The pattern as "grid:points", e.g. "3:0.1.2.4.6.7.8"
++   *
++   * The finger lifted after picking at least one point
++   */
++  signals[ENTERED] = g_signal_new ("entered",
++                                   G_TYPE_FROM_CLASS (klass),
++                                   G_SIGNAL_RUN_LAST,
++                                   0, NULL, NULL, NULL,
++                                   G_TYPE_NONE, 1, G_TYPE_STRING);
++
++  gtk_widget_class_set_css_name (widget_class, "phosh-pattern-pad");
++}
++
++
++static void
++phosh_pattern_pad_init (PhoshPatternPad *self)
++{
++  self->grid = MIN_GRID;
++  gtk_widget_set_size_request (GTK_WIDGET (self), PAD_SIZE, PAD_SIZE);
++  gtk_widget_set_halign (GTK_WIDGET (self), GTK_ALIGN_CENTER);
++  gtk_widget_add_events (GTK_WIDGET (self),
++                         GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
++                         GDK_BUTTON_MOTION_MASK | GDK_TOUCH_MASK);
++
++  self->drag = gtk_gesture_drag_new (GTK_WIDGET (self));
++  gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (self->drag), GTK_PHASE_BUBBLE);
++  g_signal_connect_swapped (self->drag, "drag-begin", G_CALLBACK (on_drag_begin), self);
++  g_signal_connect_swapped (self->drag, "drag-update", G_CALLBACK (on_drag_update), self);
++  g_signal_connect_swapped (self->drag, "drag-end", G_CALLBACK (on_drag_end), self);
++}
++
++
++GtkWidget *
++phosh_pattern_pad_new (void)
++{
++  return g_object_new (PHOSH_TYPE_PATTERN_PAD, NULL);
++}
++
++/**
++ * phosh_pattern_pad_set_grid:
++ * @self: The pattern pad
++ * @grid: Points per side, 3 to 6
++ *
++ * Sets the size of the grid; clears the pad
++ */
++void
++phosh_pattern_pad_set_grid (PhoshPatternPad *self, int grid)
++{
++  int size;
++
++  g_return_if_fail (PHOSH_IS_PATTERN_PAD (self));
++
++  self->grid = CLAMP (grid, MIN_GRID, MAX_GRID);
++  size = self->grid > 4 ? PAD_SIZE_LARGE : PAD_SIZE;
++  gtk_widget_set_size_request (GTK_WIDGET (self), size, size);
++  phosh_pattern_pad_clear (self);
++}
++
++/**
++ * phosh_pattern_pad_get_drawing:
++ * @self: The pattern pad
++ *
++ * Returns: Whether a finger is drawing a pattern right now
++ */
++gboolean
++phosh_pattern_pad_get_drawing (PhoshPatternPad *self)
++{
++  g_return_val_if_fail (PHOSH_IS_PATTERN_PAD (self), FALSE);
++
++  return self->drawing;
++}
++
++
++static gboolean
++on_error_timeout (gpointer user_data)
++{
++  PhoshPatternPad *self = PHOSH_PATTERN_PAD (user_data);
++
++  self->error_id = 0;
++  phosh_pattern_pad_clear (self);
++  return G_SOURCE_REMOVE;
++}
++
++/**
++ * phosh_pattern_pad_show_error:
++ * @self: The pattern pad
++ *
++ * Shows the last pattern in red for a moment, then clears it
++ */
++void
++phosh_pattern_pad_show_error (PhoshPatternPad *self)
++{
++  g_return_if_fail (PHOSH_IS_PATTERN_PAD (self));
++
++  self->error = TRUE;
++  g_clear_handle_id (&self->error_id, g_source_remove);
++  self->error_id = g_timeout_add (ERROR_TIMEOUT_MS, on_error_timeout, self);
++  g_source_set_name_by_id (self->error_id, "[PhoshPatternPad] error");
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++/**
++ * phosh_pattern_pad_clear:
++ * @self: The pattern pad
++ *
++ * Takes the pattern off the pad
++ */
++void
++phosh_pattern_pad_clear (PhoshPatternPad *self)
++{
++  g_return_if_fail (PHOSH_IS_PATTERN_PAD (self));
++
++  self->n_points = 0;
++  self->error = FALSE;
++  g_clear_handle_id (&self->error_id, g_source_remove);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
+diff --git a/src/pattern-pad.h b/src/pattern-pad.h
+new file mode 100644
+index 00000000..009ba377
+--- /dev/null
++++ b/src/pattern-pad.h
+@@ -0,0 +1,23 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include <gtk/gtk.h>
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_PATTERN_PAD (phosh_pattern_pad_get_type ())
++
++G_DECLARE_FINAL_TYPE (PhoshPatternPad, phosh_pattern_pad, PHOSH, PATTERN_PAD, GtkDrawingArea)
++
++GtkWidget *phosh_pattern_pad_new (void);
++void       phosh_pattern_pad_set_grid (PhoshPatternPad *self, int grid);
++gboolean   phosh_pattern_pad_get_drawing (PhoshPatternPad *self);
++void       phosh_pattern_pad_show_error (PhoshPatternPad *self);
++void       phosh_pattern_pad_clear (PhoshPatternPad *self);
++
++G_END_DECLS

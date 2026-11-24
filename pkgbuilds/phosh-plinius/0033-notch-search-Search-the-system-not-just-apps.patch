@@ -1,0 +1,1092 @@
+From d9cee50d3832b9d7d55b473e4054ccb76584e94c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 15:22:48 +0100
+Subject: [PATCH] notch-search: Search the system, not just apps
+
+Besides apps the search from the notch now asks GNOME's search providers
+(org.gnome.Shell.SearchProvider2) the way GNOME Shell does: settings,
+contacts, calendar events, the calculator and whatever else has a key
+file in gnome-shell/search-providers. GNOME Settings switches them on
+and off and orders them (org.gnome.desktop.search-providers).
+
+Each provider gets a section below the apps with up to three results.
+A result opens in its app, the section's header opens the app with the
+search. Results scroll above the keyboard.
+---
+ po/de.po                  |   4 +
+ po/es.po                  |   4 +
+ po/fr.po                  |   4 +
+ po/it.po                  |   4 +
+ po/nl.po                  |   4 +
+ po/pl.po                  |   4 +
+ po/pt.po                  |   4 +
+ po/pt_BR.po               |   4 +
+ src/notch-search.c        | 746 +++++++++++++++++++++++++++++++++++++++++++---
+ src/stylesheet/common.css |  26 ++
+ 10 files changed, 757 insertions(+), 47 deletions(-)
+
+diff --git a/po/de.po b/po/de.po
+index 984a4469..43ecc0ec 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -622,6 +622,10 @@ msgstr "Aus dem _Ordner entfernen"
+ msgid "Search apps…"
+ msgstr "Anwendungen suchen …"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Suchen …"
++
+ #: src/ui/audio-settings.ui:84
+ msgid "Output Devices"
+ msgstr "Ausgabegeräte"
+diff --git a/po/es.po b/po/es.po
+index 708812a5..175f1d84 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -424,6 +424,10 @@ msgstr "Ver _detalles"
+ msgid "Search apps…"
+ msgstr "Buscar apps…"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Buscar…"
++
+ #: src/ui/emergency-menu.ui:26
+ msgid "Close the emergency call dialog"
+ msgstr "Cerrar el diálogo de las llamadas de emergencia"
+diff --git a/po/fr.po b/po/fr.po
+index 98d46c09..0eec2da5 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -565,6 +565,10 @@ msgstr "Supp_rimer du dossier"
+ msgid "Search apps…"
+ msgstr "Recherche d’applis…"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Rechercher…"
++
+ #: src/ui/audio-settings.ui:84
+ msgid "Output Devices"
+ msgstr "Périphériques de sortie"
+diff --git a/po/it.po b/po/it.po
+index d05de598..7bfb275a 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -447,6 +447,10 @@ msgstr "Visualizza _dettagli"
+ msgid "Search apps…"
+ msgstr "Ricerca app…"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Cerca…"
++
+ #: src/ui/audio-settings.ui:84
+ msgid "Output Devices"
+ msgstr "Dispositivi di uscita"
+diff --git a/po/nl.po b/po/nl.po
+index 765b4588..df58807d 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -634,6 +634,10 @@ msgstr "Verborgen toepassingen beheren"
+ msgid "Search apps…"
+ msgstr "Toepassingen zoeken…"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Zoeken…"
++
+ #: src/ui/audio-settings.ui:84
+ msgid "Output Devices"
+ msgstr "Uitvoerapparaten"
+diff --git a/po/pl.po b/po/pl.po
+index 3f043db7..7e0eab3f 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -656,6 +656,10 @@ msgstr "Zarządzaj ukrytymi programami"
+ msgid "Search apps…"
+ msgstr "Wyszukiwanie programów…"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Wyszukiwanie…"
++
+ #: src/ui/audio-settings.ui:84
+ msgid "Output Devices"
+ msgstr "Urządzenia wyjściowe"
+diff --git a/po/pt.po b/po/pt.po
+index b5e08b09..44e387c6 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -646,6 +646,10 @@ msgstr "Gerir aplicações ocultas"
+ msgid "Search apps…"
+ msgstr "Procurar aplicações…"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Procurar…"
++
+ #: src/ui/audio-settings.ui:84
+ msgid "Output Devices"
+ msgstr "Dispositivos de saída"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 589ac58c..4cd58bb2 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -649,6 +649,10 @@ msgstr "Ocultar aplicativos ocultos"
+ msgid "Search apps…"
+ msgstr "Procurar aplicativos…"
+ 
++#: src/notch-search.c:962
++msgid "Search…"
++msgstr "Procurar…"
++
+ #: src/ui/audio-settings.ui:84
+ msgid "Output Devices"
+ msgstr "Dispositivos de saída"
+diff --git a/src/notch-search.c b/src/notch-search.c
+index 8825743d..2730f099 100644
+--- a/src/notch-search.c
++++ b/src/notch-search.c
+@@ -11,7 +11,10 @@
+ #include "app-tracker.h"
+ #include "layout-manager.h"
+ #include "notch-search.h"
++#include "phosh-wayland.h"
+ #include "shell-priv.h"
++#include "toplevel-manager.h"
++#include "util.h"
+ 
+ #include <gio/gdesktopappinfo.h>
+ #include <glib/gi18n.h>
+@@ -20,18 +23,29 @@
+ /**
+  * PhoshNotchSearch:
+  *
+- * Plinius: a minimal app search that unfolds from the notch when the notch is tapped.
++ * Plinius: a minimal search that unfolds from the notch when the notch is tapped.
++ * It finds apps and asks the search providers of GNOME (org.gnome.Shell.SearchProvider2:
++ * settings, contacts, calendar, calculator, …) the way GNOME Shell does, following the
++ * search settings of GNOME Settings (org.gnome.desktop.search-providers).
+  * It covers the whole screen so that a tap next to the search, or on the notch again,
+  * closes it.
+  */
+ 
+-#define MAX_RESULTS     6
+-#define ICON_SIZE       32
+-#define CARD_MARGIN     4    /* distance of the card to the screen's sides (and top without notch) */
+-#define CARD_MAX_WIDTH  420
+-#define REVEAL_DURATION 180  /* ms */
+-#define STEM_TOP_RADIUS 8    /* the stem flows out of the screen's top edge with this radius */
+-#define STEM_CARD_RADIUS 12  /* and into the card with this one */
++#define MAX_APP_RESULTS      4
++#define MAX_PROVIDER_RESULTS 3
++#define ICON_SIZE            32
++#define HEADER_ICON_SIZE     16
++#define CARD_MARGIN          4    /* distance of the card to the screen's sides (and top without notch) */
++#define CARD_MAX_WIDTH       420
++#define RESULTS_MAX_HEIGHT   45   /* percent of the screen's height, the keyboard covers the rest */
++#define REVEAL_DURATION      180  /* ms */
++#define STEM_TOP_RADIUS      8    /* the stem flows out of the screen's top edge with this radius */
++#define STEM_CARD_RADIUS     12   /* and into the card with this one */
++#define PROVIDER_TIMEOUT     10000 /* ms, a provider may have to start first */
++
++#define SEARCH_PROVIDER_IFACE    "org.gnome.Shell.SearchProvider2"
++#define SEARCH_PROVIDER_GROUP    "Shell Search Provider"
++#define SEARCH_PROVIDERS_SCHEMA  "org.gnome.desktop.search-providers"
+ 
+ enum {
+   PROP_0,
+@@ -46,6 +60,23 @@ enum {
+ };
+ static guint signals[N_SIGNALS] = { 0 };
+ 
++/* A search provider and its section in the results */
++typedef struct {
++  PhoshNotchSearch *self;        /* not a reference, the search outlives its providers */
++  GDesktopAppInfo  *app;
++  char             *bus_name;
++  char             *object_path;
++  gboolean          autostart;
++  int               order;       /* position in the order of GNOME Settings */
++  gboolean          unavailable; /* not on the bus and not startable, not asked again */
++
++  GtkWidget        *list;        /* a header row and the results, hidden without results */
++
++  /* The terms of the last answer and its results: a longer search narrows these down */
++  GStrv             terms;
++  GStrv             result_set;
++} Provider;
++
+ struct _PhoshNotchSearch {
+   PhoshLayerSurface parent;
+ 
+@@ -54,7 +85,12 @@ struct _PhoshNotchSearch {
+   GtkWidget        *revealer;
+   GtkWidget        *card;
+   GtkWidget        *entry;
+-  GtkWidget        *results;
++  GtkWidget        *scroller;
++  GtkWidget        *apps;
++
++  GDBusConnection  *bus;
++  GPtrArray        *providers;
++  GCancellable     *cancellable; /* of the current search, cancelled by the next one */
+ 
+   GtkGesture       *click_gesture;
+   gboolean          close_on_release;
+@@ -67,6 +103,18 @@ struct _PhoshNotchSearch {
+ G_DEFINE_TYPE (PhoshNotchSearch, phosh_notch_search, PHOSH_TYPE_LAYER_SURFACE)
+ 
+ 
++static void
++provider_free (Provider *provider)
++{
++  g_clear_object (&provider->app);
++  g_free (provider->bus_name);
++  g_free (provider->object_path);
++  g_strfreev (provider->terms);
++  g_strfreev (provider->result_set);
++  g_free (provider);
++}
++
++
+ static void
+ close_search (PhoshNotchSearch *self)
+ {
+@@ -74,51 +122,80 @@ close_search (PhoshNotchSearch *self)
+ }
+ 
+ 
++/* The results scroll; without any results the card is just the entry */
+ static void
+-launch_app (PhoshNotchSearch *self, GAppInfo *info)
++update_scroller (PhoshNotchSearch *self)
+ {
+-  PhoshAppTracker *app_tracker = phosh_shell_get_app_tracker (phosh_shell_get_default ());
++  gboolean visible = gtk_widget_get_visible (self->apps);
+ 
+-  g_debug ("Launching %s", g_app_info_get_id (info));
+-  phosh_app_tracker_launch_app_info (app_tracker, info);
+-  g_signal_emit (self, signals[APP_LAUNCHED], 0, info);
+-  close_search (self);
++  for (guint i = 0; i < self->providers->len && !visible; i++) {
++    Provider *provider = g_ptr_array_index (self->providers, i);
++
++    visible = gtk_widget_get_visible (provider->list);
++  }
++
++  gtk_widget_set_visible (self->scroller, visible);
+ }
+ 
+ 
+ static GtkWidget *
+-create_result_row (GAppInfo *info)
++create_row (GIcon *icon, int icon_size, const char *title, const char *description)
+ {
+-  GtkWidget *row, *box, *icon, *label;
+-  GIcon *gicon = g_app_info_get_icon (info);
++  GtkWidget *row, *box, *image, *labels, *label;
+ 
+-  box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
++  box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, icon_size == ICON_SIZE ? 12 : 8);
+ 
+-  icon = gicon ? gtk_image_new_from_gicon (gicon, GTK_ICON_SIZE_DND) :
++  image = icon ? gtk_image_new_from_gicon (icon, GTK_ICON_SIZE_DND) :
+     gtk_image_new_from_icon_name ("application-x-executable", GTK_ICON_SIZE_DND);
+-  gtk_image_set_pixel_size (GTK_IMAGE (icon), ICON_SIZE);
+-  gtk_container_add (GTK_CONTAINER (box), icon);
++  gtk_image_set_pixel_size (GTK_IMAGE (image), icon_size);
++  gtk_container_add (GTK_CONTAINER (box), image);
++
++  labels = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  gtk_widget_set_valign (labels, GTK_ALIGN_CENTER);
++  gtk_container_add (GTK_CONTAINER (box), labels);
+ 
+-  label = gtk_label_new (g_app_info_get_display_name (info));
++  label = gtk_label_new (title);
+   gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
+   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+-  gtk_container_add (GTK_CONTAINER (box), label);
++  gtk_container_add (GTK_CONTAINER (labels), label);
++
++  if (description && description[0]) {
++    /* Descriptions may span lines (calendar), one is enough here */
++    g_autofree char *line = g_strdelimit (g_strdup (description), "\n", ' ');
++
++    label = gtk_label_new (line);
++    gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
++    gtk_label_set_xalign (GTK_LABEL (label), 0.0);
++    gtk_style_context_add_class (gtk_widget_get_style_context (label), "description");
++    gtk_container_add (GTK_CONTAINER (labels), label);
++  }
+ 
+   row = gtk_list_box_row_new ();
+   gtk_container_add (GTK_CONTAINER (row), box);
+-  g_object_set_data_full (G_OBJECT (row), "app-info", g_object_ref (info), g_object_unref);
+   gtk_widget_show_all (row);
+ 
+   return row;
+ }
+ 
++/* Apps */
++
++static void
++launch_app (PhoshNotchSearch *self, GAppInfo *info)
++{
++  PhoshAppTracker *app_tracker = phosh_shell_get_app_tracker (phosh_shell_get_default ());
++
++  g_debug ("Launching %s", g_app_info_get_id (info));
++  phosh_app_tracker_launch_app_info (app_tracker, info);
++  g_signal_emit (self, signals[APP_LAUNCHED], 0, info);
++  close_search (self);
++}
++
+ 
+ /* GLib's desktop file index ranks the hits in groups, best group first */
+ static void
+-update_results (PhoshNotchSearch *self)
++update_apps (PhoshNotchSearch *self, const char *text)
+ {
+-  g_autoptr (GList) rows = gtk_container_get_children (GTK_CONTAINER (self->results));
+-  g_autofree char *text = g_strstrip (g_strdup (gtk_entry_get_text (GTK_ENTRY (self->entry))));
++  g_autoptr (GList) rows = gtk_container_get_children (GTK_CONTAINER (self->apps));
+   char ***groups;
+   guint n = 0;
+ 
+@@ -127,37 +204,565 @@ update_results (PhoshNotchSearch *self)
+ 
+   groups = text[0] ? g_desktop_app_info_search (text) : NULL;
+   for (int i = 0; groups && groups[i]; i++) {
+-    for (int j = 0; groups[i][j] && n < MAX_RESULTS; j++) {
++    for (int j = 0; groups[i][j] && n < MAX_APP_RESULTS; j++) {
+       g_autoptr (GDesktopAppInfo) info = g_desktop_app_info_new (groups[i][j]);
++      GtkWidget *row;
+ 
+       if (info == NULL || !g_app_info_should_show (G_APP_INFO (info)))
+         continue;
+ 
+-      gtk_container_add (GTK_CONTAINER (self->results), create_result_row (G_APP_INFO (info)));
++      row = create_row (g_app_info_get_icon (G_APP_INFO (info)), ICON_SIZE,
++                        g_app_info_get_display_name (G_APP_INFO (info)), NULL);
++      g_object_set_data_full (G_OBJECT (row), "app-info", g_object_ref (info), g_object_unref);
++      gtk_container_add (GTK_CONTAINER (self->apps), row);
+       n++;
+     }
+     g_strfreev (groups[i]);
+   }
+   g_free (groups);
+ 
+-  gtk_widget_set_visible (self->results, n > 0);
++  gtk_widget_set_visible (self->apps, n > 0);
+ }
+ 
+ 
+ static void
+-on_entry_activated (PhoshNotchSearch *self)
++on_app_row_activated (PhoshNotchSearch *self, GtkListBoxRow *row)
+ {
+-  GtkListBoxRow *row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (self->results), 0);
++  launch_app (self, g_object_get_data (G_OBJECT (row), "app-info"));
++}
+ 
+-  if (row)
+-    launch_app (self, g_object_get_data (G_OBJECT (row), "app-info"));
++/* Search providers */
++
++static int
++strv_index (GStrv strv, const char *str)
++{
++  for (int i = 0; strv && strv[i]; i++) {
++    if (g_str_equal (strv[i], str))
++      return i;
++  }
++  return -1;
+ }
+ 
+ 
++static int
++compare_providers (gconstpointer a, gconstpointer b)
++{
++  const Provider *pa = *(Provider **)a;
++  const Provider *pb = *(Provider **)b;
++
++  if (pa->order != pb->order)
++    return pa->order < pb->order ? -1 : 1;
++
++  return g_utf8_collate (g_app_info_get_display_name (G_APP_INFO (pa->app)),
++                         g_app_info_get_display_name (G_APP_INFO (pb->app)));
++}
++
++
++/* The providers like GNOME Shell finds them: a key file each in
++ * $XDG_DATA_DIRS/gnome-shell/search-providers, switched on and ordered in GNOME Settings */
+ static void
+-on_row_activated (PhoshNotchSearch *self, GtkListBoxRow *row)
++load_providers (PhoshNotchSearch *self)
+ {
+-  launch_app (self, g_object_get_data (G_OBJECT (row), "app-info"));
++  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++  g_autoptr (GSettingsSchema) schema = NULL;
++  g_autoptr (GPtrArray) dirs = g_ptr_array_new ();
++  g_autoptr (GHashTable) seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
++  g_auto (GStrv) enabled = NULL;
++  g_auto (GStrv) disabled = NULL;
++  g_auto (GStrv) sort_order = NULL;
++  const char * const *system_dirs = g_get_system_data_dirs ();
++
++  schema = source ? g_settings_schema_source_lookup (source, SEARCH_PROVIDERS_SCHEMA, TRUE) : NULL;
++  if (schema) {
++    g_autoptr (GSettings) settings = g_settings_new (SEARCH_PROVIDERS_SCHEMA);
++
++    if (g_settings_get_boolean (settings, "disable-external"))
++      return;
++
++    enabled = g_settings_get_strv (settings, "enabled");
++    disabled = g_settings_get_strv (settings, "disabled");
++    sort_order = g_settings_get_strv (settings, "sort-order");
++  }
++
++  g_ptr_array_add (dirs, (gpointer) g_get_user_data_dir ());
++  for (int i = 0; system_dirs[i]; i++)
++    g_ptr_array_add (dirs, (gpointer) system_dirs[i]);
++
++  for (guint i = 0; i < dirs->len; i++) {
++    g_autofree char *path = g_build_filename (g_ptr_array_index (dirs, i),
++                                              "gnome-shell", "search-providers", NULL);
++    g_autoptr (GDir) dir = g_dir_open (path, 0, NULL);
++    const char *name;
++
++    while (dir && (name = g_dir_read_name (dir))) {
++      g_autoptr (GKeyFile) keyfile = g_key_file_new ();
++      g_autofree char *file = g_build_filename (path, name, NULL);
++      g_autofree char *desktop_id = NULL, *bus_name = NULL, *object_path = NULL;
++      g_autoptr (GDesktopAppInfo) app = NULL;
++      gboolean default_disabled;
++      Provider *provider;
++      int order;
++
++      if (!g_str_has_suffix (name, ".ini") ||
++          !g_key_file_load_from_file (keyfile, file, G_KEY_FILE_NONE, NULL))
++        continue;
++
++      desktop_id = g_key_file_get_string (keyfile, SEARCH_PROVIDER_GROUP, "DesktopId", NULL);
++      bus_name = g_key_file_get_string (keyfile, SEARCH_PROVIDER_GROUP, "BusName", NULL);
++      object_path = g_key_file_get_string (keyfile, SEARCH_PROVIDER_GROUP, "ObjectPath", NULL);
++      if (!desktop_id || !bus_name || !object_path ||
++          g_key_file_get_integer (keyfile, SEARCH_PROVIDER_GROUP, "Version", NULL) < 2 ||
++          !g_dbus_is_name (bus_name) || !g_variant_is_object_path (object_path))
++        continue;
++
++      /* The user's own files come first and hide the system's */
++      if (g_hash_table_contains (seen, desktop_id))
++        continue;
++      g_hash_table_add (seen, g_strdup (desktop_id));
++
++      app = g_desktop_app_info_new (desktop_id);
++      if (!app || !g_app_info_should_show (G_APP_INFO (app)))
++        continue;
++
++      default_disabled = g_key_file_get_boolean (keyfile, SEARCH_PROVIDER_GROUP,
++                                                 "DefaultDisabled", NULL);
++      if (default_disabled ? strv_index (enabled, desktop_id) < 0 :
++                             strv_index (disabled, desktop_id) >= 0)
++        continue;
++
++      order = strv_index (sort_order, desktop_id);
++
++      provider = g_new0 (Provider, 1);
++      provider->self = self;
++      provider->app = g_steal_pointer (&app);
++      provider->bus_name = g_steal_pointer (&bus_name);
++      provider->object_path = g_steal_pointer (&object_path);
++      provider->order = order < 0 ? G_MAXINT : order;
++      provider->autostart = TRUE;
++      if (g_key_file_has_key (keyfile, SEARCH_PROVIDER_GROUP, "AutoStart", NULL))
++        provider->autostart = g_key_file_get_boolean (keyfile, SEARCH_PROVIDER_GROUP,
++                                                      "AutoStart", NULL);
++      g_ptr_array_add (self->providers, provider);
++      g_debug ("Search provider %s (%s)", desktop_id, provider->bus_name);
++    }
++  }
++
++  g_ptr_array_sort (self->providers, compare_providers);
++}
++
++
++static void
++provider_call (Provider           *provider,
++               const char         *method,
++               GVariant           *parameters,
++               const GVariantType *reply_type,
++               GCancellable       *cancellable,
++               GAsyncReadyCallback callback,
++               gpointer            user_data)
++{
++  g_dbus_connection_call (provider->self->bus,
++                          provider->bus_name,
++                          provider->object_path,
++                          SEARCH_PROVIDER_IFACE,
++                          method,
++                          parameters,
++                          reply_type,
++                          provider->autostart ? G_DBUS_CALL_FLAGS_NONE :
++                                                G_DBUS_CALL_FLAGS_NO_AUTO_START,
++                          PROVIDER_TIMEOUT,
++                          cancellable,
++                          callback,
++                          user_data);
++}
++
++
++/* Hide a provider's results, the header row stays for the next ones */
++static void
++provider_clear (Provider *provider)
++{
++  g_autoptr (GList) rows = gtk_container_get_children (GTK_CONTAINER (provider->list));
++
++  for (GList *l = rows; l; l = l->next) {
++    if (!g_object_get_data (l->data, "header"))
++      gtk_widget_destroy (l->data);
++  }
++
++  gtk_widget_set_visible (provider->list, FALSE);
++}
++
++
++/* A result's icon: GNOME Shell takes "icon", then "gicon", then "icon-data" */
++static GIcon *
++meta_icon (GVariantDict *meta)
++{
++  g_autoptr (GVariant) serialized = g_variant_dict_lookup_value (meta, "icon", NULL);
++  g_autoptr (GVariant) data = NULL;
++  g_autoptr (GVariant) pixels = NULL;
++  g_autoptr (GBytes) bytes = NULL;
++  const char *gicon;
++  int width, height, rowstride, bits, channels;
++  gboolean has_alpha;
++  gsize len;
++
++  if (serialized) {
++    GIcon *icon = g_icon_deserialize (serialized);
++
++    if (icon)
++      return icon;
++  }
++
++  if (g_variant_dict_lookup (meta, "gicon", "&s", &gicon)) {
++    GIcon *icon = g_icon_new_for_string (gicon, NULL);
++
++    if (icon)
++      return icon;
++  }
++
++  data = g_variant_dict_lookup_value (meta, "icon-data", G_VARIANT_TYPE ("(iiibiiay)"));
++  if (!data)
++    return NULL;
++
++  g_variant_get (data, "(iiibii@ay)", &width, &height, &rowstride, &has_alpha, &bits, &channels,
++                 &pixels);
++  len = g_variant_get_size (pixels);
++  /* Only what GdkPixbuf can take: 8 bit RGB(A), all rows inside the data */
++  if (width <= 0 || height <= 0 || bits != 8 || channels != (has_alpha ? 4 : 3) ||
++      rowstride < width * channels ||
++      len < (gsize) rowstride * (height - 1) + (gsize) width * channels)
++    return NULL;
++
++  bytes = g_variant_get_data_as_bytes (pixels);
++  return G_ICON (gdk_pixbuf_new_from_bytes (bytes, GDK_COLORSPACE_RGB, has_alpha, bits,
++                                            width, height, rowstride));
++}
++
++
++static GtkWidget *
++create_result_row (Provider *provider, const char *id, GVariant *meta_variant)
++{
++  GVariantDict meta;
++  g_autoptr (GIcon) icon = NULL;
++  const char *name = NULL, *description = NULL;
++  GtkWidget *row;
++
++  g_variant_dict_init (&meta, meta_variant);
++  g_variant_dict_lookup (&meta, "name", "&s", &name);
++  g_variant_dict_lookup (&meta, "description", "&s", &description);
++
++  icon = meta_icon (&meta);
++  if (!icon && g_app_info_get_icon (G_APP_INFO (provider->app)))
++    icon = g_object_ref (g_app_info_get_icon (G_APP_INFO (provider->app)));
++
++  row = create_row (icon, ICON_SIZE, name ?: id, description);
++  g_object_set_data_full (G_OBJECT (row), "result-id", g_strdup (id), g_free);
++  g_variant_dict_clear (&meta);
++
++  return row;
++}
++
++
++typedef struct {
++  Provider *provider;   /* valid unless the call was cancelled */
++  GStrv     ids;
++} MetasCall;
++
++
++static void
++on_result_metas (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  MetasCall *call = user_data;
++  g_auto (GStrv) ids = call->ids;
++  Provider *provider = call->provider;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = NULL;
++  g_autoptr (GVariant) metas = NULL;
++  g_autoptr (GHashTable) by_id = NULL;
++  guint n = 0;
++
++  g_free (call);
++
++  /* The search has moved on or closed, the provider may be gone */
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  provider_clear (provider);
++  if (!reply) {
++    g_debug ("%s: no result metas: %s", provider->bus_name, err->message);
++    update_scroller (provider->self);
++    return;
++  }
++
++  /* The metas may come in any order, the results keep the provider's */
++  by_id = g_hash_table_new_full (g_str_hash, g_str_equal, NULL, (GDestroyNotify) g_variant_unref);
++  metas = g_variant_get_child_value (reply, 0);
++  for (gsize i = 0; i < g_variant_n_children (metas); i++) {
++    GVariant *meta = g_variant_get_child_value (metas, i);
++    const char *id;
++
++    if (g_variant_lookup (meta, "id", "&s", &id))
++      g_hash_table_replace (by_id, (gpointer) id, meta);
++    else
++      g_variant_unref (meta);
++  }
++
++  for (int i = 0; ids[i]; i++) {
++    GVariant *meta = g_hash_table_lookup (by_id, ids[i]);
++
++    if (!meta)
++      continue;
++    gtk_container_add (GTK_CONTAINER (provider->list), create_result_row (provider, ids[i], meta));
++    n++;
++  }
++
++  gtk_widget_set_visible (provider->list, n > 0);
++  update_scroller (provider->self);
++}
++
++
++typedef struct {
++  Provider *provider;   /* valid unless the call was cancelled */
++  GStrv     terms;
++} SearchCall;
++
++
++static void
++on_result_set (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  SearchCall *call = user_data;
++  g_auto (GStrv) terms = call->terms;
++  Provider *provider = call->provider;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = NULL;
++  MetasCall *metas_call;
++  guint n;
++
++  g_free (call);
++
++  /* The search has moved on or closed, the provider may be gone */
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  if (!reply) {
++    g_debug ("%s: no results: %s", provider->bus_name, err->message);
++    /* E.g. Firefox: its provider only exists while Firefox runs */
++    if (g_error_matches (err, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN) ||
++        g_error_matches (err, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER))
++      provider->unavailable = TRUE;
++    provider_clear (provider);
++    update_scroller (provider->self);
++    return;
++  }
++
++  g_clear_pointer (&provider->result_set, g_strfreev);
++  g_variant_get (reply, "(^as)", &provider->result_set);
++  g_strfreev (provider->terms);
++  provider->terms = g_steal_pointer (&terms);
++
++  n = MIN (g_strv_length (provider->result_set), MAX_PROVIDER_RESULTS);
++  if (n == 0) {
++    provider_clear (provider);
++    update_scroller (provider->self);
++    return;
++  }
++
++  /* The results so far stay until their successors are there, the list does not flicker */
++  metas_call = g_new0 (MetasCall, 1);
++  metas_call->provider = provider;
++  metas_call->ids = g_new0 (char *, n + 1);
++  for (guint i = 0; i < n; i++)
++    metas_call->ids[i] = g_strdup (provider->result_set[i]);
++
++  provider_call (provider, "GetResultMetas",
++                 g_variant_new ("(^as)", metas_call->ids),
++                 G_VARIANT_TYPE ("(aa{sv})"),
++                 provider->self->cancellable,
++                 on_result_metas,
++                 metas_call);
++}
++
++
++/* Whether @terms only narrow @previous down, so the provider can search its last results */
++static gboolean
++terms_narrow_down (GStrv previous, GStrv terms)
++{
++  if (!previous || !previous[0] || g_strv_length (terms) < g_strv_length (previous))
++    return FALSE;
++
++  for (int i = 0; previous[i]; i++) {
++    if (!g_str_has_prefix (terms[i], previous[i]))
++      return FALSE;
++  }
++  return TRUE;
++}
++
++
++static void
++provider_search (Provider *provider, GStrv terms)
++{
++  SearchCall *call = g_new0 (SearchCall, 1);
++  GVariant *parameters;
++  const char *method;
++
++  call->provider = provider;
++  call->terms = g_strdupv (terms);
++
++  if (provider->result_set && terms_narrow_down (provider->terms, terms)) {
++    method = "GetSubsearchResultSet";
++    parameters = g_variant_new ("(^as^as)", provider->result_set, terms);
++  } else {
++    method = "GetInitialResultSet";
++    parameters = g_variant_new ("(^as)", terms);
++  }
++
++  provider_call (provider, method, parameters, G_VARIANT_TYPE ("(as)"),
++                 provider->self->cancellable, on_result_set, call);
++}
++
++
++/* After the provider handled the activation: bring a window of its app to the front.
++ * A running app gets no activation token from the provider interface and stays behind
++ * otherwise; the window of a starting app gets the focus anyway. */
++static void
++on_result_activated (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GDesktopAppInfo) info = user_data;
++  PhoshToplevelManager *toplevel_manager;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = NULL;
++
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (!reply) {
++    g_warning ("Activating a result of %s failed: %s", g_app_info_get_id (G_APP_INFO (info)),
++               err->message);
++    return;
++  }
++
++  toplevel_manager = phosh_shell_get_toplevel_manager (phosh_shell_get_default ());
++  for (guint i = 0; i < phosh_toplevel_manager_get_num_toplevels (toplevel_manager); i++) {
++    PhoshToplevel *toplevel = phosh_toplevel_manager_get_toplevel (toplevel_manager, i);
++    g_autoptr (GDesktopAppInfo) toplevel_info =
++      phosh_get_desktop_app_info_for_app_id (phosh_toplevel_get_app_id (toplevel));
++
++    if (toplevel_info && g_app_info_equal (G_APP_INFO (toplevel_info), G_APP_INFO (info))) {
++      phosh_toplevel_activate (toplevel, phosh_wayland_get_wl_seat (phosh_wayland_get_default ()));
++      return;
++    }
++  }
++}
++
++
++/* A result opens in its app; without @id (the header) the app searches itself */
++static void
++activate_result (PhoshNotchSearch *self, Provider *provider, const char *id)
++{
++  const char * const no_terms[] = { NULL };
++  const char * const *terms = provider->terms ? (const char * const *) provider->terms : no_terms;
++  guint32 timestamp = gtk_get_current_event_time ();
++
++  g_debug ("Activating %s of %s", id ?: "the search", provider->bus_name);
++  provider_call (provider,
++                 id ? "ActivateResult" : "LaunchSearch",
++                 id ? g_variant_new ("(s^asu)", id, terms, timestamp) :
++                      g_variant_new ("(^asu)", terms, timestamp),
++                 NULL,
++                 NULL,
++                 on_result_activated,
++                 g_object_ref (provider->app));
++
++  g_signal_emit (self, signals[APP_LAUNCHED], 0, provider->app);
++  close_search (self);
++}
++
++
++static void
++on_provider_row_activated (GtkListBox *list, GtkListBoxRow *row, Provider *provider)
++{
++  activate_result (provider->self, provider, g_object_get_data (G_OBJECT (row), "result-id"));
++}
++
++
++/* A provider's section: its app as header, below it the results */
++static void
++provider_add_section (PhoshNotchSearch *self, Provider *provider, GtkContainer *box)
++{
++  GtkWidget *header;
++
++  provider->list = gtk_list_box_new ();
++  gtk_list_box_set_selection_mode (GTK_LIST_BOX (provider->list), GTK_SELECTION_NONE);
++  gtk_style_context_add_class (gtk_widget_get_style_context (provider->list), "provider");
++  gtk_widget_set_no_show_all (provider->list, TRUE);
++  g_signal_connect (provider->list, "row-activated", G_CALLBACK (on_provider_row_activated), provider);
++
++  header = create_row (g_app_info_get_icon (G_APP_INFO (provider->app)), HEADER_ICON_SIZE,
++                       g_app_info_get_display_name (G_APP_INFO (provider->app)), NULL);
++  gtk_style_context_add_class (gtk_widget_get_style_context (header), "provider-header");
++  g_object_set_data (G_OBJECT (header), "header", GINT_TO_POINTER (TRUE));
++  gtk_container_add (GTK_CONTAINER (provider->list), header);
++
++  gtk_container_add (box, provider->list);
++}
++
++/* The search */
++
++static void
++on_search_changed (PhoshNotchSearch *self)
++{
++  g_autofree char *text = g_strstrip (g_strdup (gtk_entry_get_text (GTK_ENTRY (self->entry))));
++  g_auto (GStrv) terms = g_strsplit_set (text, " \t\n", -1);
++  g_autoptr (GStrvBuilder) builder = g_strv_builder_new ();
++  g_auto (GStrv) words = NULL;
++
++  /* Answers to the last terms are of no use anymore */
++  g_cancellable_cancel (self->cancellable);
++  g_clear_object (&self->cancellable);
++
++  update_apps (self, text);
++
++  for (int i = 0; terms[i]; i++) {
++    if (terms[i][0])
++      g_strv_builder_add (builder, terms[i]);
++  }
++  words = g_strv_builder_end (builder);
++
++  if (words[0])
++    self->cancellable = g_cancellable_new ();
++
++  for (guint i = 0; i < self->providers->len; i++) {
++    Provider *provider = g_ptr_array_index (self->providers, i);
++
++    if (!words[0])
++      provider_clear (provider);
++    else if (!provider->unavailable && self->bus)
++      provider_search (provider, words);
++  }
++
++  update_scroller (self);
++}
++
++
++/* Enter: the best app, else the first result */
++static void
++on_entry_activated (PhoshNotchSearch *self)
++{
++  GtkListBoxRow *row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (self->apps), 0);
++
++  if (row) {
++    launch_app (self, g_object_get_data (G_OBJECT (row), "app-info"));
++    return;
++  }
++
++  for (guint i = 0; i < self->providers->len; i++) {
++    Provider *provider = g_ptr_array_index (self->providers, i);
++
++    /* Row 0 is the header */
++    row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (provider->list), 1);
++    if (row && gtk_widget_get_visible (provider->list)) {
++      activate_result (self, provider, g_object_get_data (G_OBJECT (row), "result-id"));
++      return;
++    }
++  }
+ }
+ 
+ 
+@@ -296,20 +901,37 @@ phosh_notch_search_dispose (GObject *object)
+ {
+   PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (object);
+ 
++  /* Cancelled calls leave the providers alone, so they can go */
++  g_cancellable_cancel (self->cancellable);
++  g_clear_object (&self->cancellable);
+   g_clear_object (&self->click_gesture);
+   g_clear_object (&self->monitor);
++  g_clear_object (&self->bus);
+ 
+   G_OBJECT_CLASS (phosh_notch_search_parent_class)->dispose (object);
+ }
+ 
+ 
++static void
++phosh_notch_search_finalize (GObject *object)
++{
++  PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (object);
++
++  /* After dispose: the provider lists, which point to them, are gone */
++  g_clear_pointer (&self->providers, g_ptr_array_unref);
++
++  G_OBJECT_CLASS (phosh_notch_search_parent_class)->finalize (object);
++}
++
++
+ static void
+ phosh_notch_search_constructed (GObject *object)
+ {
+   PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (object);
+   PhoshShell *shell = phosh_shell_get_default ();
+   PhoshWayland *wl = phosh_wayland_get_default ();
+-  GtkWidget *clamp, *inner, *box;
++  GtkWidget *clamp, *inner, *box, *results;
++  g_autoptr (GError) err = NULL;
+   GdkRectangle notch;
+   gboolean has_notch;
+ 
+@@ -326,20 +948,47 @@ phosh_notch_search_constructed (GObject *object)
+                 "namespace", "phosh notch-search",
+                 NULL);
+ 
++  self->bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &err);
++  if (!self->bus)
++    g_warning ("No session bus, only apps are searched: %s", err->message);
++  else
++    load_providers (self);
++
+   self->card = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+   gtk_style_context_add_class (gtk_widget_get_style_context (self->card), "card");
+ 
+   self->entry = gtk_search_entry_new ();
+-  gtk_entry_set_placeholder_text (GTK_ENTRY (self->entry), _("Search apps…"));
++  gtk_entry_set_placeholder_text (GTK_ENTRY (self->entry),
++                                  self->providers->len ? _("Search…") : _("Search apps…"));
+   gtk_container_add (GTK_CONTAINER (self->card), self->entry);
+-  g_signal_connect_swapped (self->entry, "search-changed", G_CALLBACK (update_results), self);
++  g_signal_connect_swapped (self->entry, "search-changed", G_CALLBACK (on_search_changed), self);
+   g_signal_connect_swapped (self->entry, "activate", G_CALLBACK (on_entry_activated), self);
+ 
+-  self->results = gtk_list_box_new ();
+-  gtk_list_box_set_selection_mode (GTK_LIST_BOX (self->results), GTK_SELECTION_NONE);
+-  gtk_widget_set_no_show_all (self->results, TRUE);
+-  gtk_container_add (GTK_CONTAINER (self->card), self->results);
+-  g_signal_connect_swapped (self->results, "row-activated", G_CALLBACK (on_row_activated), self);
++  /* Apps first, then a section per provider in the order of GNOME Settings */
++  results = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++
++  self->apps = gtk_list_box_new ();
++  gtk_list_box_set_selection_mode (GTK_LIST_BOX (self->apps), GTK_SELECTION_NONE);
++  gtk_widget_set_no_show_all (self->apps, TRUE);
++  gtk_container_add (GTK_CONTAINER (results), self->apps);
++  g_signal_connect_swapped (self->apps, "row-activated", G_CALLBACK (on_app_row_activated), self);
++
++  for (guint i = 0; i < self->providers->len; i++)
++    provider_add_section (self, g_ptr_array_index (self->providers, i), GTK_CONTAINER (results));
++
++  /* The keyboard covers the lower part of the screen, the results scroll above it */
++  self->scroller = gtk_scrolled_window_new (NULL, NULL);
++  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (self->scroller),
++                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
++  gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (self->scroller), TRUE);
++  if (self->monitor->logical.height > 0) {
++    gtk_scrolled_window_set_max_content_height (GTK_SCROLLED_WINDOW (self->scroller),
++                                                self->monitor->logical.height * RESULTS_MAX_HEIGHT / 100);
++  }
++  gtk_container_add (GTK_CONTAINER (self->scroller), results);
++  gtk_widget_set_no_show_all (self->scroller, TRUE);
++  gtk_widget_show_all (results);
++  gtk_container_add (GTK_CONTAINER (self->card), self->scroller);
+ 
+   clamp = hdy_clamp_new ();
+   hdy_clamp_set_maximum_size (HDY_CLAMP (clamp), CARD_MAX_WIDTH);
+@@ -408,6 +1057,7 @@ phosh_notch_search_class_init (PhoshNotchSearchClass *klass)
+   object_class->get_property = phosh_notch_search_get_property;
+   object_class->constructed = phosh_notch_search_constructed;
+   object_class->dispose = phosh_notch_search_dispose;
++  object_class->finalize = phosh_notch_search_finalize;
+   widget_class->map = phosh_notch_search_map;
+ 
+   props[PROP_MONITOR] =
+@@ -420,9 +1070,10 @@ phosh_notch_search_class_init (PhoshNotchSearchClass *klass)
+   /**
+    * PhoshNotchSearch::app-launched:
+    * @self: The notch search
+-   * @info: The launched app
++   * @info: The launched app, or the app of an activated search result
+    *
+-   * An app was started from the search (which then closes).
++   * An app was started from the search, or a search result opened in its app
++   * (the search closes then).
+    */
+   signals[APP_LAUNCHED] = g_signal_new ("app-launched",
+                                         G_TYPE_FROM_CLASS (klass),
+@@ -439,6 +1090,7 @@ phosh_notch_search_class_init (PhoshNotchSearchClass *klass)
+ static void
+ phosh_notch_search_init (PhoshNotchSearch *self)
+ {
++  self->providers = g_ptr_array_new_with_free_func ((GDestroyNotify) provider_free);
+ }
+ 
+ 
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 320b2c28..cb39358c 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -681,6 +681,32 @@ phosh-notch-search .card list row:active {
+   background-color: alpha(white, 0.12);
+ }
+ 
++phosh-notch-search .card scrolledwindow,
++phosh-notch-search .card viewport {
++  background: none;
++  border: none;
++}
++
++phosh-notch-search .card list row .description {
++  color: alpha(white, 0.6);
++  font-size: 0.85em;
++}
++
++/* A provider's section: its app as a small header above the results */
++phosh-notch-search .card list.provider {
++  margin-top: 8px;
++}
++
++phosh-notch-search .card list row.provider-header {
++  padding: 2px 8px;
++}
++
++phosh-notch-search .card list row.provider-header label {
++  color: alpha(white, 0.6);
++  font-size: 0.85em;
++  font-weight: bold;
++}
++
+ /*
+  * System modal dialogs (polkit, gcr, ...)
+  */

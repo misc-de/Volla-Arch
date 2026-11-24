@@ -1,0 +1,13 @@
+[Unit]
+Description=Phone self-test (display, audio, modem, Wi-Fi, Bluetooth)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/plinius-health check
+# 2 = a check failed: not a unit failure, the notification comes via plinius-health-notify
+SuccessExitStatus=2
+RuntimeDirectory=plinius-health
+RuntimeDirectoryPreserve=yes
+Nice=10
+IOSchedulingClass=idle

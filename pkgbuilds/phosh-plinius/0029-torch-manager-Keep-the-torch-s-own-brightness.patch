@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 06:41:38 +0100
+Subject: [PATCH] torch-manager: Keep the torch's own brightness
+
+The torch shares its LED with the camera app, which lights it as a lamp
+with a brightness of its own. Switching the torch off remembered
+whatever brightness the LED had, so after using the camera light the
+torch came back at the camera's brightness, and after a restart of the
+shell always at full brightness.
+
+Keep the brightness the user picks with the torch slider in the
+org.plinius.torch schema of plinius-torch (if installed) and switch the
+torch on with it; the assistant button uses the same key. The slider
+following a change of the LED by someone else no longer counts as the
+user's choice.
+---
+ src/settings.c      |  9 +++++++++
+ src/torch-manager.c | 57 ++++++++++++++++++++++++++++++++++++++++++++++-------
+ 2 files changed, 59 insertions(+), 7 deletions(-)
+
+diff --git a/src/settings.c b/src/settings.c
+index 797b67f0..a0b7386e 100644
+--- a/src/settings.c
++++ b/src/settings.c
+@@ -74,6 +74,7 @@ typedef struct _PhoshSettings {
+   GtkWidget *revealer;
+   GtkWidget *scale_torch;
+   gboolean   setting_torch;
++  gboolean   syncing_torch; /* Plinius: the slider follows the LED, not the user */
+ } PhoshSettings;
+ 
+ 
+@@ -277,6 +278,10 @@ on_torch_scale_value_changed (PhoshSettings *self, GtkScale *scale_torch)
+   g_return_if_fail (PHOSH_IS_SETTINGS (self));
+   g_return_if_fail (PHOSH_IS_TORCH_MANAGER (self->torch_manager));
+ 
++  /* Plinius: moved by us to show the LED's brightness (e.g. set by the camera app) */
++  if (self->syncing_torch)
++    return;
++
+   /* Only react to scale changes when torch is enabled */
+   if (!phosh_torch_manager_get_enabled (self->torch_manager))
+     return;
+@@ -299,8 +304,10 @@ on_torch_brightness_changed (PhoshSettings *self, GParamSpec *pspec, PhoshTorchM
+     return;
+   }
+ 
++  self->syncing_torch = TRUE;
+   gtk_range_set_value (GTK_RANGE (self->scale_torch),
+                        100.0 * phosh_torch_manager_get_scaled_brightness (self->torch_manager));
++  self->syncing_torch = FALSE;
+ }
+ 
+ 
+@@ -337,8 +344,10 @@ setup_torch (PhoshSettings *self)
+                           self->revealer, "reveal-child",
+                           G_BINDING_SYNC_CREATE);
+   gtk_range_set_range (GTK_RANGE (self->scale_torch), 0, 100);
++  self->syncing_torch = TRUE;
+   gtk_range_set_value (GTK_RANGE (self->scale_torch),
+                        phosh_torch_manager_get_scaled_brightness (self->torch_manager) * 100.0);
++  self->syncing_torch = FALSE;
+   g_signal_connect_object (self->torch_manager,
+                            "notify::brightness",
+                            G_CALLBACK (on_torch_brightness_changed),
+diff --git a/src/torch-manager.c b/src/torch-manager.c
+index c289c1da..a9044f69 100644
+--- a/src/torch-manager.c
++++ b/src/torch-manager.c
+@@ -11,6 +11,7 @@
+ 
+ #include "phosh-config.h"
+ 
++#include <gio/gio.h>
+ #include <gudev/gudev.h>
+ 
+ #include "torch-manager.h"
+@@ -21,6 +22,14 @@
+ 
+ #define TORCH_SUBSYSTEM "leds"
+ 
++/*
++ * Plinius: the brightness the user picked for the torch, from plinius-torch. The camera app
++ * drives the same LED with a brightness of its own, so the torch does not take over the
++ * brightness the LED happens to have.
++ */
++#define TORCH_SCHEMA "org.plinius.torch"
++#define TORCH_KEY_BRIGHTNESS "brightness"
++
+ #define TORCH_DISABLED_ICON "torch-disabled-symbolic"
+ #define TORCH_ENABLED_ICON  "torch-enabled-symbolic"
+ 
+@@ -55,6 +64,7 @@ struct _PhoshTorchManager {
+   int                    min_brightness;
+   int                    max_brightness;
+   int                    last_brightness;
++  GSettings             *settings; /* Plinius: NULL without plinius-torch's schema */
+ 
+   GUdevDevice           *udev_device;
+ 
+@@ -260,6 +270,7 @@ phosh_torch_manager_dispose (GObject *object)
+   g_clear_object (&self->session_proxy);
+ 
+   g_clear_object (&self->udev_device);
++  g_clear_object (&self->settings);
+ 
+   G_OBJECT_CLASS (phosh_torch_manager_parent_class)->dispose (object);
+ }
+@@ -337,8 +348,34 @@ phosh_torch_manager_class_init (PhoshTorchManagerClass *klass)
+ static void
+ phosh_torch_manager_init (PhoshTorchManager *self)
+ {
++  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++  g_autoptr (GSettingsSchema) schema = NULL;
++
+   self->icon_name = TORCH_DISABLED_ICON;
+   self->max_brightness = 1;
++
++  /* Plinius: optional, the schema comes with plinius-torch */
++  if (source)
++    schema = g_settings_schema_source_lookup (source, TORCH_SCHEMA, TRUE);
++  if (schema)
++    self->settings = g_settings_new (TORCH_SCHEMA);
++}
++
++
++/* Plinius: the torch's own brightness, the brightest level when none was picked yet */
++static int
++get_torch_brightness (PhoshTorchManager *self)
++{
++  int brightness = self->last_brightness;
++
++  /* Read each time: the assistant button (plinius-assist) uses the same key */
++  if (self->settings)
++    brightness = g_settings_get_int (self->settings, TORCH_KEY_BRIGHTNESS);
++
++  if (brightness <= 0 || brightness > self->max_brightness)
++    brightness = self->max_brightness;
++
++  return MAX (brightness, self->min_brightness);
+ }
+ 
+ 
+@@ -431,6 +468,11 @@ phosh_torch_manager_set_scaled_brightness (PhoshTorchManager *self, double frac)
+   if (brightness > self->max_brightness)
+     brightness = self->max_brightness;
+ 
++  /* Plinius: the user picked it for the torch, keep it across restarts */
++  self->last_brightness = brightness;
++  if (self->settings)
++    g_settings_set_int (self->settings, TORCH_KEY_BRIGHTNESS, brightness);
++
+   set_brightness (self, brightness);
+ }
+ 
+@@ -451,15 +493,16 @@ phosh_torch_manager_toggle (PhoshTorchManager *self)
+   g_return_if_fail (PHOSH_DBUS_IS_LOGIN_SESSION (self->session_proxy));
+ 
+   if (self->brightness) {
++    /*
++     * Plinius: the brightness is not remembered here, the LED may be lit by the camera app.
++     * The torch's brightness is kept when the user moves the slider.
++     */
+     g_debug ("Disabling torch");
+-    self->last_brightness = self->brightness;
+     set_brightness (self, 0);
+   } else {
+-    if (self->last_brightness == 0) {
+-      self->last_brightness = self->max_brightness;
+-      g_debug ("Last brightness: %d", self->last_brightness);
+-    }
+-    g_debug ("Setting torch brightness to %d", self->last_brightness);
+-    set_brightness (self, self->last_brightness);
++    int brightness = get_torch_brightness (self);
++
++    g_debug ("Setting torch brightness to %d", brightness);
++    set_brightness (self, brightness);
+   }
+ }

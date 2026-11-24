@@ -1,0 +1,694 @@
+From 3d70a4596c08decc17f585ac74eeb4e251f7a73e Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 20:31:59 +0100
+Subject: [PATCH] printers: Add Printer and Printer Options as adaptive
+ dialogs, driver window phone-sized
+
+Plinius: on a phone the Settings window is 360 logical pixels wide and has
+no window buttons. The Add Printer window demanded 480 pixels and could not
+be resized, so it hung over the screen edge and its search field was out of
+reach. It is now an Adw.Dialog: a bottom sheet of the full screen width on
+the phone and a floating dialog of the old size in a wide window. The panel
+presents it on itself and closes it with adw_dialog_force_close(); closing it
+by Escape, a swipe or a click outside answers with Cancel as the close
+request did before. Below 400sp the header bar shows only Cancel and Add, the
+title would only be cut short between them. For the same reason the panel's
+compact mode adds printers through an icon button instead of the labelled
+one; a stack holds both, because the panel code shows and hides the labelled
+button itself.
+
+Printer Options was a window as well, 500 pixels wide and without a way to
+close it by touch. As an Adw.Dialog, like Printer Details and the job list
+already are, it gets its own close button. Its option groups are
+tabs on top now (scrollable when there are many) instead of a sidebar, which
+left the options too little width on a phone. Its drop-downs ellipsize the
+selected value and wrap long entries in their list, and long option names
+wrap, so that a driver with long values no longer pushes the dialog and its
+close button over the screen edge. The driver window no longer asks
+for more than 340 pixels so that it fits on the screen.
+---
+ panels/printers/cc-printers-panel.blp       | 47 ++++++++----
+ panels/printers/cc-printers-panel.c         | 13 ++--
+ panels/printers/pp-ipp-option-widget.c      | 10 +--
+ panels/printers/pp-new-printer-dialog.c     | 32 +++------
+ panels/printers/pp-new-printer-dialog.h     |  6 +-
+ panels/printers/pp-new-printer-dialog.ui    | 32 ++++-----
+ panels/printers/pp-options-dialog.blp       | 45 ++++--------
+ panels/printers/pp-options-dialog.c         | 80 ++++-----------------
+ panels/printers/pp-options-dialog.h         |  2 +-
+ panels/printers/pp-ppd-option-widget.c      | 10 +--
+ panels/printers/pp-ppd-selection-dialog.blp |  3 +-
+ panels/printers/pp-printer-entry.c          |  5 +-
+ panels/printers/pp-utils.c                  | 30 ++++++++
+ panels/printers/pp-utils.h                  |  2 +
+ 14 files changed, 135 insertions(+), 182 deletions(-)
+
+diff --git a/panels/printers/cc-printers-panel.blp b/panels/printers/cc-printers-panel.blp
+index 564c87d..6a4b990 100644
+--- a/panels/printers/cc-printers-panel.blp
++++ b/panels/printers/cc-printers-panel.blp
+@@ -11,6 +11,7 @@ template $CcPrintersPanel: $CcPanel {
+ 
+       setters {
+         template.compact: true;
++        add_button_stack.visible-child-name: "compact";
+       }
+     }
+ 
+@@ -24,19 +25,41 @@ template $CcPrintersPanel: $CcPanel {
+           icon-name: "edit-find-symbolic";
+         }
+ 
++        /* Phone (compact): the same action as an icon, so that the title keeps its room.
++           The panel code shows and hides printer_add_button, the stack follows it. */
+         [end]
+-        Button printer_add_button {
+-          sensitive: false;
+-          use-underline: true;
+-          can-shrink: true;
+-
+-          /* Translators: This button adds new printer. */
+-          label: _("_Add Printer…");
+-          clicked => $printer_add_cb(template);
+-
+-          styles [
+-            "suggested-action",
+-          ]
++        Stack add_button_stack {
++          hhomogeneous: false;
++          visible: bind printer_add_button.visible;
++
++          StackPage {
++            name: "wide";
++
++            child: Button printer_add_button {
++              sensitive: false;
++              use-underline: true;
++              can-shrink: true;
++
++              /* Translators: This button adds new printer. */
++              label: _("_Add Printer…");
++              clicked => $printer_add_cb(template);
++
++              styles [
++                "suggested-action",
++              ]
++            };
++          }
++
++          StackPage {
++            name: "compact";
++
++            child: Button printer_add_button_compact {
++              icon-name: "list-add-symbolic";
++              sensitive: bind printer_add_button.sensitive;
++              tooltip-text: _("Add Printer");
++              clicked => $printer_add_cb(template);
++            };
++          }
+         }
+       }
+ 
+diff --git a/panels/printers/cc-printers-panel.c b/panels/printers/cc-printers-panel.c
+index d9b6a50..d3201d9 100644
+--- a/panels/printers/cc-printers-panel.c
++++ b/panels/printers/cc-printers-panel.c
+@@ -764,10 +764,9 @@ printer_add_async_cb (GObject *source_object, GAsyncResult *res, gpointer user_d
+ }
+ 
+ static void
+-new_printer_dialog_response_cb (GtkWindow *_dialog, gint response_id, gpointer user_data)
++new_printer_dialog_response_cb (PpNewPrinterDialog *pp_new_printer_dialog, gint response_id, gpointer user_data)
+ {
+     CcPrintersPanel *self = (CcPrintersPanel *) user_data;
+-    PpNewPrinterDialog *pp_new_printer_dialog = PP_NEW_PRINTER_DIALOG (_dialog);
+     g_autoptr(PpNewPrinter) new_printer = NULL;
+ 
+     if (response_id == GTK_RESPONSE_OK) {
+@@ -779,21 +778,17 @@ new_printer_dialog_response_cb (GtkWindow *_dialog, gint response_id, gpointer u
+         pp_new_printer_add_async (new_printer, cc_panel_get_cancellable (CC_PANEL (self)), printer_add_async_cb, self);
+     }
+ 
+-    gtk_window_destroy (GTK_WINDOW (pp_new_printer_dialog));
++    adw_dialog_force_close (ADW_DIALOG (pp_new_printer_dialog));
+     self->pp_new_printer_dialog = NULL;
+ }
+ 
+ static void
+ printer_add_cb (CcPrintersPanel *self)
+ {
+-    GtkNative *native;
+-
+-    native = gtk_widget_get_native (GTK_WIDGET (self));
+     self->pp_new_printer_dialog = pp_new_printer_dialog_new (self->all_ppds_list, new_printer_dialog_response_cb, self);
+ 
+-    gtk_window_set_transient_for (GTK_WINDOW (self->pp_new_printer_dialog), GTK_WINDOW (native));
+-
+-    gtk_window_present (GTK_WINDOW (self->pp_new_printer_dialog));
++    /* An Adw.Dialog: a bottom sheet on a phone, a floating dialog on a wide window */
++    adw_dialog_present (ADW_DIALOG (self->pp_new_printer_dialog), GTK_WIDGET (self));
+ }
+ 
+ static void
+diff --git a/panels/printers/pp-ipp-option-widget.c b/panels/printers/pp-ipp-option-widget.c
+index 3f8f313..1a8800f 100644
+--- a/panels/printers/pp-ipp-option-widget.c
++++ b/panels/printers/pp-ipp-option-widget.c
+@@ -152,14 +152,8 @@ pp_ipp_option_widget_new (IPPAttribute *attr_supported, IPPAttribute *attr_defau
+ static GtkWidget *
+ dropdown_new (void)
+ {
+-    GtkStringList *store = NULL;
+-    GtkWidget *dropdown;
+-
+-    store = gtk_string_list_new (NULL);
+-
+-    dropdown = gtk_drop_down_new (G_LIST_MODEL (store), NULL);
+-
+-    return dropdown;
++    /* Plinius: ellipsizes long values, see pp-utils.c */
++    return pp_string_drop_down_new ();
+ }
+ 
+ static void
+diff --git a/panels/printers/pp-new-printer-dialog.c b/panels/printers/pp-new-printer-dialog.c
+index 4368324..38d4e66 100644
+--- a/panels/printers/pp-new-printer-dialog.c
++++ b/panels/printers/pp-new-printer-dialog.c
+@@ -76,7 +76,7 @@ enum {
+ };
+ 
+ struct _PpNewPrinterDialog {
+-    AdwWindow parent_instance;
++    AdwDialog parent_instance;
+ 
+     GPtrArray *local_cups_devices;
+ 
+@@ -114,7 +114,7 @@ struct _PpNewPrinterDialog {
+     GtkEntry *password_entry;
+     /* end dialog stack */
+ 
+-    UserResponseCallback user_callback;
++    PpNewPrinterDialogCallback user_callback;
+     gpointer user_data;
+ 
+     cups_dest_t *dests;
+@@ -145,7 +145,7 @@ struct _PpNewPrinterDialog {
+     guint host_search_timeout_id;
+ };
+ 
+-G_DEFINE_FINAL_TYPE (PpNewPrinterDialog, pp_new_printer_dialog, ADW_TYPE_WINDOW)
++G_DEFINE_FINAL_TYPE (PpNewPrinterDialog, pp_new_printer_dialog, ADW_TYPE_DIALOG)
+ 
+ typedef struct {
+     gchar *server_name;
+@@ -1372,13 +1372,13 @@ ppd_selection_cb (GtkWindow *_dialog, gint response_id, gpointer user_data)
+     /* This is needed here since parent dialog is destroyed first. */
+     gtk_window_set_transient_for (GTK_WINDOW (self->ppd_selection_dialog), NULL);
+ 
+-    self->user_callback (GTK_WINDOW (self), response_id, self->user_data);
++    self->user_callback (self, response_id, self->user_data);
+ }
+ 
+ static void
+ cancel_cb (PpNewPrinterDialog *self)
+ {
+-    self->user_callback (GTK_WINDOW (self), GTK_RESPONSE_CANCEL, self->user_data);
++    self->user_callback (self, GTK_RESPONSE_CANCEL, self->user_data);
+ }
+ 
+ static void
+@@ -1403,19 +1403,21 @@ add_cb (PpNewPrinterDialog *self)
+             self->new_device = pp_print_device_copy (device);
+             self->ppd_selection_dialog = pp_ppd_selection_dialog_new (self->list, NULL, ppd_selection_cb, self);
+ 
+-            gtk_window_set_transient_for (GTK_WINDOW (self->ppd_selection_dialog), GTK_WINDOW (self));
++            /* The dialog is no window itself; the driver window belongs to the window showing it */
++            gtk_window_set_transient_for (GTK_WINDOW (self->ppd_selection_dialog),
++                                          GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self))));
+ 
+             /* New device will be set at return from ppd selection */
+             gtk_widget_set_visible (GTK_WIDGET (self->ppd_selection_dialog), TRUE);
+         } else {
+             self->new_device = pp_print_device_copy (device);
+-            self->user_callback (GTK_WINDOW (self), GTK_RESPONSE_OK, self->user_data);
++            self->user_callback (self, GTK_RESPONSE_OK, self->user_data);
+         }
+     }
+ }
+ 
+ PpNewPrinterDialog *
+-pp_new_printer_dialog_new (PPDList *ppd_list, UserResponseCallback user_callback, gpointer user_data)
++pp_new_printer_dialog_new (PPDList *ppd_list, PpNewPrinterDialogCallback user_callback, gpointer user_data)
+ {
+     PpNewPrinterDialog *self;
+ 
+@@ -1453,16 +1455,6 @@ pp_new_printer_dialog_new (PPDList *ppd_list, UserResponseCallback user_callback
+     return self;
+ }
+ 
+-static gboolean
+-pp_new_printer_dialog_close_request (GtkWindow *window)
+-{
+-    PpNewPrinterDialog *self = PP_NEW_PRINTER_DIALOG (window);
+-
+-    cancel_cb (self);
+-
+-    return GDK_EVENT_STOP;
+-}
+-
+ static void
+ pp_new_printer_dialog_dispose (GObject *object)
+ {
+@@ -1503,7 +1495,6 @@ pp_new_printer_dialog_dispose (GObject *object)
+ void
+ pp_new_printer_dialog_class_init (PpNewPrinterDialogClass *klass)
+ {
+-    GtkWindowClass *window_class = GTK_WINDOW_CLASS (klass);
+     GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+     GObjectClass *object_class = G_OBJECT_CLASS (klass);
+ 
+@@ -1548,9 +1539,6 @@ pp_new_printer_dialog_class_init (PpNewPrinterDialogClass *klass)
+     gtk_widget_class_bind_template_callback (widget_class, cancel_cb);
+ 
+     object_class->dispose = pp_new_printer_dialog_dispose;
+-    window_class->close_request = pp_new_printer_dialog_close_request;
+-
+-    gtk_widget_class_add_binding_action (widget_class, GDK_KEY_Escape, GDK_NO_MODIFIER_MASK, "window.close", NULL);
+ }
+ 
+ void
+diff --git a/panels/printers/pp-new-printer-dialog.h b/panels/printers/pp-new-printer-dialog.h
+index 22c4f7e..8a0555e 100644
+--- a/panels/printers/pp-new-printer-dialog.h
++++ b/panels/printers/pp-new-printer-dialog.h
+@@ -26,8 +26,10 @@
+ G_BEGIN_DECLS
+ 
+ #define PP_TYPE_NEW_PRINTER_DIALOG (pp_new_printer_dialog_get_type ())
+-G_DECLARE_FINAL_TYPE (PpNewPrinterDialog, pp_new_printer_dialog, PP, NEW_PRINTER_DIALOG, AdwWindow);
+-PpNewPrinterDialog *pp_new_printer_dialog_new (PPDList *ppd_list, UserResponseCallback user_callback,
++G_DECLARE_FINAL_TYPE (PpNewPrinterDialog, pp_new_printer_dialog, PP, NEW_PRINTER_DIALOG, AdwDialog);
++
++typedef void (*PpNewPrinterDialogCallback) (PpNewPrinterDialog *dialog, gint response_id, gpointer user_data);
++PpNewPrinterDialog *pp_new_printer_dialog_new (PPDList *ppd_list, PpNewPrinterDialogCallback user_callback,
+                                                gpointer user_data);
+ void pp_new_printer_dialog_set_ppd_list (PpNewPrinterDialog *dialog, PPDList *list);
+ PpNewPrinter *pp_new_printer_dialog_get_new_printer (PpNewPrinterDialog *dialog);
+diff --git a/panels/printers/pp-new-printer-dialog.ui b/panels/printers/pp-new-printer-dialog.ui
+index d249016..bcf82a1 100644
+--- a/panels/printers/pp-new-printer-dialog.ui
++++ b/panels/printers/pp-new-printer-dialog.ui
+@@ -22,28 +22,24 @@
+   <object class="GtkTreeModelFilter" id="devices_model_filter">
+     <property name="child_model">devices_liststore</property>
+   </object>
+-  <template class="PpNewPrinterDialog" parent="AdwWindow">
+-    <property name="width_request">480</property>
+-    <property name="height_request">490</property>
++  <template class="PpNewPrinterDialog" parent="AdwDialog">
+     <property name="title" translatable="yes" comments="Translators: This is the title presented at top of the dialog.">Add Printer</property>
+-    <property name="resizable">False</property>
+-    <property name="modal">True</property>
+-    <property name="destroy_with_parent">True</property>
+-    <style>
+-      <class name="view"/>
+-    </style>
++    <property name="content-width">480</property>
++    <property name="content-height">490</property>
++    <!-- Closing (Escape, swipe, click outside) runs cancel_cb so the panel gets a response -->
++    <property name="can-close">False</property>
++    <signal name="close-attempt" handler="cancel_cb" swapped="yes"/>
++    <!-- On a phone the two buttons fill the header bar, the title would only be cut short -->
+     <child>
+-      <object class="GtkShortcutController">
+-        <property name="propagation-phase">capture</property>
+-        <child>
+-          <object class="GtkShortcut">
+-            <property name="trigger">Escape</property>
+-            <property name="action">action(window.close)</property>
+-          </object>
+-        </child>
++      <object class="AdwBreakpoint">
++        <condition>max-width: 400sp</condition>
++        <setter object="headerbar" property="show-title">False</setter>
+       </object>
+     </child>
+-    <property name="content">
++    <style>
++      <class name="view"/>
++    </style>
++    <property name="child">
+       <object class="AdwToolbarView">
+         <child type="top">
+           <object class="AdwHeaderBar" id="headerbar">
+diff --git a/panels/printers/pp-options-dialog.blp b/panels/printers/pp-options-dialog.blp
+index c27552c..ca288c1 100644
+--- a/panels/printers/pp-options-dialog.blp
++++ b/panels/printers/pp-options-dialog.blp
+@@ -1,14 +1,12 @@
+ using Gtk 4.0;
+ using Adw 1;
+ 
+-template $PpOptionsDialog: Adw.Window {
++template $PpOptionsDialog: Adw.Dialog {
+   title: _("Printer Options");
+-  width-request: 500;
+-  height-request: 400;
+-  resizable: false;
+-  modal: true;
++  content-width: 500;
++  content-height: 400;
+ 
+-  content: Adw.ToolbarView {
++  child: Adw.ToolbarView {
+     top-bar-style: raised;
+ 
+     [top]
+@@ -43,33 +41,14 @@ template $PpOptionsDialog: Adw.Window {
+       StackPage {
+         name: "pp-options-page";
+ 
+-        child: Adw.OverlaySplitView {
+-          sidebar: ScrolledWindow {
+-            width-request: 120;
+-            hscrollbar-policy: never;
+-
+-            TreeView categories_treeview {
+-              headers-visible: false;
+-
+-              styles [
+-                "navigation-sidebar",
+-                "printer-options-sidebar",
+-              ]
+-
+-              [internal-child selection]
+-              TreeSelection categories_selection {
+-                changed => $category_selection_changed_cb(template);
+-              }
+-            }
+-          };
+-
+-          content: Notebook notebook {
+-            tab-pos: left;
+-            show-tabs: false;
+-            show-border: false;
+-            hexpand: true;
+-            vexpand: true;
+-          };
++        /* Plinius: the option groups as tabs on top instead of a sidebar, so that the
++           options keep the full width of a phone screen */
++        child: Notebook notebook {
++          tab-pos: top;
++          scrollable: true;
++          show-border: false;
++          hexpand: true;
++          vexpand: true;
+         };
+       }
+     };
+diff --git a/panels/printers/pp-options-dialog.c b/panels/printers/pp-options-dialog.c
+index b2df83a..825ab36 100644
+--- a/panels/printers/pp-options-dialog.c
++++ b/panels/printers/pp-options-dialog.c
+@@ -41,10 +41,8 @@
+ #include "pp-utils.h"
+ 
+ struct _PpOptionsDialog {
+-    AdwWindow parent_instance;
++    AdwDialog parent_instance;
+ 
+-    GtkTreeSelection *categories_selection;
+-    GtkTreeView *categories_treeview;
+     GtkNotebook *notebook;
+     GtkStack *stack;
+     AdwWindowTitle *title_widget;
+@@ -63,12 +61,7 @@ struct _PpOptionsDialog {
+     gboolean sensitive;
+ };
+ 
+-G_DEFINE_FINAL_TYPE (PpOptionsDialog, pp_options_dialog, ADW_TYPE_WINDOW)
+-
+-enum {
+-    CATEGORY_IDS_COLUMN = 0,
+-    CATEGORY_NAMES_COLUMN
+-};
++G_DEFINE_FINAL_TYPE (PpOptionsDialog, pp_options_dialog, ADW_TYPE_DIALOG)
+ 
+ /* These lists come from Gtk+ */
+ /* TODO: Only "Resolution" currently has a context to disambiguate it from
+@@ -276,6 +269,10 @@ ipp_option_add (IPPAttribute *attr_supported, IPPAttribute *attr_default, const
+         label = gtk_label_new (option_display_name);
+         gtk_label_set_mnemonic_widget (GTK_LABEL (label), widget);
+         gtk_widget_add_css_class (label, "dim-label");
++        /* Plinius: long option names wrap instead of widening the dialog on a phone */
++        gtk_label_set_wrap (GTK_LABEL (label), TRUE);
++        gtk_label_set_justify (GTK_LABEL (label), GTK_JUSTIFY_RIGHT);
++        gtk_label_set_xalign (GTK_LABEL (label), 1.0);
+         gtk_widget_set_halign (label, GTK_ALIGN_END);
+         gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
+         gtk_widget_set_margin_start (label, 10);
+@@ -304,6 +301,10 @@ ppd_option_add (ppd_option_t option, const gchar *printer_name, GtkWidget *grid,
+         label = gtk_label_new (ppd_option_name_translate (&option));
+         gtk_label_set_mnemonic_widget (GTK_LABEL (label), widget);
+         gtk_widget_add_css_class (label, "dim-label");
++        /* Plinius: long option names wrap instead of widening the dialog on a phone */
++        gtk_label_set_wrap (GTK_LABEL (label), TRUE);
++        gtk_label_set_justify (GTK_LABEL (label), GTK_JUSTIFY_RIGHT);
++        gtk_label_set_xalign (GTK_LABEL (label), 1.0);
+         gtk_widget_set_halign (label, GTK_ALIGN_END);
+         gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
+         gtk_widget_set_margin_start (label, 10);
+@@ -331,64 +332,28 @@ tab_grid_new ()
+     return grid;
+ }
+ 
++/* Plinius: every option group is a tab of the notebook (tabs on top, scrollable),
++ * not an entry of a sidebar, which takes too much width on a phone */
+ static void
+ tab_add (PpOptionsDialog *self, const gchar *tab_name, GtkWidget *grid)
+ {
+-    GtkListStore *store;
+-    GtkTreeIter iter;
+     GtkWidget *scrolled_window;
+-    gboolean unref_store = FALSE;
+-    gint id;
+ 
+     if (!grid_is_empty (grid)) {
+         scrolled_window = gtk_scrolled_window_new ();
+         gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled_window), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+         gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolled_window), grid);
+ 
+-        id = gtk_notebook_append_page (self->notebook, scrolled_window, NULL);
+-
+-        if (id >= 0) {
+-            store = GTK_LIST_STORE (gtk_tree_view_get_model (self->categories_treeview));
+-            if (!store) {
+-                store = gtk_list_store_new (2, G_TYPE_INT, G_TYPE_STRING);
+-                unref_store = TRUE;
+-            }
+-
+-            gtk_list_store_append (store, &iter);
+-            gtk_list_store_set (store, &iter, CATEGORY_IDS_COLUMN, id, CATEGORY_NAMES_COLUMN, tab_name, -1);
+-
+-            if (unref_store) {
+-                gtk_tree_view_set_model (self->categories_treeview, GTK_TREE_MODEL (store));
+-                g_object_unref (store);
+-            }
+-        }
++        gtk_notebook_append_page (self->notebook, scrolled_window, gtk_label_new (tab_name));
+     } else {
+         g_object_ref_sink (grid);
+         g_object_unref (grid);
+     }
+ }
+ 
+-static void
+-category_selection_changed_cb (PpOptionsDialog *self)
+-{
+-    GtkTreeModel *model;
+-    GtkTreeIter iter;
+-    gint id = -1;
+-
+-    if (gtk_tree_selection_get_selected (self->categories_selection, &model, &iter)) {
+-        gtk_tree_model_get (model, &iter, CATEGORY_IDS_COLUMN, &id, -1);
+-    }
+-
+-    if (id >= 0) {
+-        gtk_notebook_set_current_page (self->notebook, id);
+-    }
+-}
+-
+ static void
+ populate_options_real (PpOptionsDialog *self)
+ {
+-    GtkTreeModel *model;
+-    GtkTreeIter iter;
+     ppd_file_t *ppd_file;
+     GtkWidget *grid;
+     GtkWidget *general_tab_grid = tab_grid_new ();
+@@ -517,10 +482,8 @@ populate_options_real (PpOptionsDialog *self)
+     /* Translators: "Advanced" tab contains all others settings */
+     tab_add (self, C_("Printer Option Group", "Advanced"), advanced_tab_grid);
+ 
+-    /* Select the first option group */
+-    if ((model = gtk_tree_view_get_model (self->categories_treeview)) != NULL
+-        && gtk_tree_model_get_iter_first (model, &iter))
+-        gtk_tree_selection_select_iter (self->categories_selection, &iter);
++    /* Show the first option group */
++    gtk_notebook_set_current_page (self->notebook, 0);
+ }
+ 
+ static void
+@@ -576,8 +539,6 @@ get_ipp_attributes_cb (GHashTable *table, gpointer user_data)
+ static void
+ populate_options (PpOptionsDialog *self)
+ {
+-    GtkTreeViewColumn *column;
+-    GtkCellRenderer *renderer;
+     /*
+      * Options which we need to obtain through an IPP request
+      * to be able to fill the options dialog.
+@@ -592,12 +553,6 @@ populate_options (PpOptionsDialog *self)
+                                   "orientation-requested-default",
+                                   NULL };
+ 
+-    renderer = gtk_cell_renderer_text_new ();
+-
+-    column = gtk_tree_view_column_new_with_attributes ("Categories", renderer, "text", CATEGORY_NAMES_COLUMN, NULL);
+-    gtk_tree_view_column_set_expand (column, TRUE);
+-    gtk_tree_view_append_column (self->categories_treeview, column);
+-
+     printer_get_ppd_async (self->printer_name, NULL, 0, printer_get_ppd_cb, self);
+ 
+     get_named_dest_async (self->printer_name, get_named_dest_cb, self);
+@@ -725,16 +680,11 @@ pp_options_dialog_class_init (PpOptionsDialogClass *klass)
+     gtk_widget_class_set_template_from_resource (widget_class,
+                                                  "/org/gnome/control-center/printers/pp-options-dialog.ui");
+ 
+-    gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, categories_selection);
+-    gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, categories_treeview);
+     gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, notebook);
+     gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, stack);
+     gtk_widget_class_bind_template_child (widget_class, PpOptionsDialog, title_widget);
+ 
+-    gtk_widget_class_bind_template_callback (widget_class, category_selection_changed_cb);
+     gtk_widget_class_bind_template_callback (widget_class, test_page_cb);
+-
+-    gtk_widget_class_add_binding_action (widget_class, GDK_KEY_Escape, GDK_NO_MODIFIER_MASK, "window.close", NULL);
+ }
+ 
+ void
+diff --git a/panels/printers/pp-options-dialog.h b/panels/printers/pp-options-dialog.h
+index 39d0b25..a816812 100644
+--- a/panels/printers/pp-options-dialog.h
++++ b/panels/printers/pp-options-dialog.h
+@@ -26,7 +26,7 @@
+ G_BEGIN_DECLS
+ 
+ #define PP_TYPE_OPTIONS_DIALOG (pp_options_dialog_get_type ())
+-G_DECLARE_FINAL_TYPE (PpOptionsDialog, pp_options_dialog, PP, OPTIONS_DIALOG, AdwWindow);
++G_DECLARE_FINAL_TYPE (PpOptionsDialog, pp_options_dialog, PP, OPTIONS_DIALOG, AdwDialog);
+ PpOptionsDialog *pp_options_dialog_new (gchar *printer_name, gboolean sensitive);
+ 
+ G_END_DECLS
+diff --git a/panels/printers/pp-ppd-option-widget.c b/panels/printers/pp-ppd-option-widget.c
+index cab706e..b836d7f 100644
+--- a/panels/printers/pp-ppd-option-widget.c
++++ b/panels/printers/pp-ppd-option-widget.c
+@@ -209,14 +209,8 @@ pp_ppd_option_widget_new (ppd_option_t *option, const gchar *printer_name)
+ static GtkWidget *
+ dropdown_new (void)
+ {
+-    GtkStringList *store = NULL;
+-    GtkWidget *dropdown;
+-
+-    store = gtk_string_list_new (NULL);
+-
+-    dropdown = gtk_drop_down_new (G_LIST_MODEL (store), NULL);
+-
+-    return dropdown;
++    /* Plinius: ellipsizes long values, see pp-utils.c */
++    return pp_string_drop_down_new ();
+ }
+ 
+ static void
+diff --git a/panels/printers/pp-ppd-selection-dialog.blp b/panels/printers/pp-ppd-selection-dialog.blp
+index 4c6384e..5d49e4a 100644
+--- a/panels/printers/pp-ppd-selection-dialog.blp
++++ b/panels/printers/pp-ppd-selection-dialog.blp
+@@ -2,7 +2,8 @@ using Gtk 4.0;
+ using Adw 1;
+ 
+ template $PpPPDSelectionDialog: Adw.Window {
+-  width-request: 600;
++  /* Plinius: fits a phone screen of 360 logical pixels */
++  width-request: 340;
+   height-request: 400;
+   title: _("Select Printer Driver");
+   modal: true;
+diff --git a/panels/printers/pp-printer-entry.c b/panels/printers/pp-printer-entry.c
+index db169d0..95a00b2 100644
+--- a/panels/printers/pp-printer-entry.c
++++ b/panels/printers/pp-printer-entry.c
+@@ -367,9 +367,8 @@ printer_options_cb (PpPrinterEntry *self, const char *action_name, GVariant *par
+ 
+     dialog = pp_options_dialog_new (self->printer_name, self->is_authorized);
+ 
+-    gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (gtk_widget_get_native (GTK_WIDGET (self))));
+-
+-    gtk_window_present (GTK_WINDOW (dialog));
++    /* An Adw.Dialog with its own close button: the phone shows no window buttons */
++    adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
+ }
+ 
+ static void
+diff --git a/panels/printers/pp-utils.c b/panels/printers/pp-utils.c
+index 0185b2e..cdb41af 100644
+--- a/panels/printers/pp-utils.c
++++ b/panels/printers/pp-utils.c
+@@ -2913,3 +2913,33 @@ printer_name_is_valid (const gchar *str)
+     const gchar *invalid_chars = " \t#/";
+     return strlen (str) == strcspn (str, invalid_chars);
+ }
++
++/* Plinius: a drop-down over a GtkStringList that fits a phone screen. The button
++ * ellipsizes the selected entry, so that a long option value does not make the
++ * printer options wider than the screen; the popup list wraps long entries
++ * instead, so that they stay readable in full. */
++#define PP_DROP_DOWN_ITEM_UI(mode)                                                        \
++    "<interface><template class='GtkListItem'><property name='child'>"                    \
++    "<object class='GtkLabel'><property name='xalign'>0</property>" mode                  \
++    "<binding name='label'><lookup name='string' type='GtkStringObject'>"                 \
++    "<lookup name='item'>GtkListItem</lookup></lookup></binding></object>"                \
++    "</property></template></interface>"
++
++GtkWidget *
++pp_string_drop_down_new (void)
++{
++    static const char button_ui[] = PP_DROP_DOWN_ITEM_UI ("<property name='ellipsize'>end</property>");
++    static const char list_ui[] = PP_DROP_DOWN_ITEM_UI ("<property name='wrap'>True</property>"
++                                                        "<property name='max-width-chars'>30</property>");
++    g_autoptr(GBytes) button_bytes = g_bytes_new_static (button_ui, sizeof (button_ui) - 1);
++    g_autoptr(GBytes) list_bytes = g_bytes_new_static (list_ui, sizeof (list_ui) - 1);
++    g_autoptr(GtkListItemFactory) button_factory = gtk_builder_list_item_factory_new_from_bytes (NULL, button_bytes);
++    g_autoptr(GtkListItemFactory) list_factory = gtk_builder_list_item_factory_new_from_bytes (NULL, list_bytes);
++    GtkWidget *dropdown;
++
++    dropdown = gtk_drop_down_new (G_LIST_MODEL (gtk_string_list_new (NULL)), NULL);
++    gtk_drop_down_set_factory (GTK_DROP_DOWN (dropdown), button_factory);
++    gtk_drop_down_set_list_factory (GTK_DROP_DOWN (dropdown), list_factory);
++
++    return dropdown;
++}
+diff --git a/panels/printers/pp-utils.h b/panels/printers/pp-utils.h
+index aed34eb..e48c9f3 100644
+--- a/panels/printers/pp-utils.h
++++ b/panels/printers/pp-utils.h
+@@ -193,4 +193,6 @@ void shift_string_left (gchar *str);
+ 
+ gboolean printer_name_is_valid (const gchar *str);
+ 
++GtkWidget *pp_string_drop_down_new (void);
++
+ G_END_DECLS

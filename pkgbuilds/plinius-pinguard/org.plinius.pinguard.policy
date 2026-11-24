@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The switch "Wait After Wrong PINs" in GNOME Settings › Screen Lock runs
+     pkexec /usr/lib/plinius-pinguard/plinius-pinguard-set on|off; argv1 picks the action. -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <!-- Switching on only makes the phone safer: no password -->
+  <action id="org.plinius.pinguard.enable">
+    <description>Turn on the wait after wrong PINs</description>
+    <message>Authentication is required to turn on the wait after wrong PINs</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-pinguard/plinius-pinguard-set</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">on</annotate>
+  </action>
+
+  <!-- Switching off lets PINs at the phone be tried without limit, for every account on the
+       phone: an administrator's PIN (the phone's first user confirms with its own PIN, another
+       account needs the PIN of an administrator; attack review 2026-11-18, L13). Before, any
+       account turned it off with its own PIN (auth_self). -->
+  <action id="org.plinius.pinguard.disable">
+    <description>Turn off the wait after wrong PINs</description>
+    <message>Authentication is required to turn off the wait after wrong PINs</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-pinguard/plinius-pinguard-set</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">off</annotate>
+  </action>
+</policyconfig>

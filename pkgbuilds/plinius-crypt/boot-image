@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+# Reads, changes and puts together the phone's boot images for halium-rebuild: vendor_boot (header
+# version 4) and init_boot (boot image header version 4, no kernel).
+# UT's vendor_boot has two ramdisk entries: the platform ramdisk and a "recovery" one holding only
+# ramdisk-recovery.img. A Plinius vendor_boot has one: the programs of the password prompt (zstd),
+# the platform ramdisk and the other archives (lz4) in a row (the bootloader did not hand a second
+# entry to the kernel at a normal start, measured 08.11.). The programs come first: the kernel
+# unpacks a zstd frame exactly to its end and goes on with the next archive, while its lz4 decoder
+# takes everything behind an lz4 archive as more lz4 (lib/decompress_unzstd.c, decompress_unlz4.c,
+# 6.1). Up to plinius-crypt 0.12 the programs were lz4 behind the platform ramdisk.
+#
+# Usage: boot-image append VENDOR_BOOT ARCHIVE OUT   vendor_boot with ARCHIVE behind its ramdisk;
+#                                                    prints the new ramdisk size
+#        boot-image length VENDOR_BOOT                length of the image (a file or the start of a
+#                                                    partition), from its header
+#        boot-image ramdisk VENDOR_BOOT OUT          the ramdisk of its one entry into OUT
+#        boot-image ramdisk-size INIT_BOOT            size of init_boot's ramdisk (header version 4)
+#        boot-image cpio DIR OUT                     DIR's contents as a newc cpio archive for a
+#                                                    ramdisk: owned by root, time 0, numbered in
+#                                                    order, so the same files give the same bytes
+#        boot-image kind VENDOR_BOOT                  "ut" (UT's two entries) or "plinius" (one)
+#        boot-image platform VENDOR_BOOT OUT         the platform ramdisk (first entry) into OUT
+#        boot-image build-vendor UT_VENDOR OUT PROGRAMS ARCHIVE...
+#                                                    UT's vendor_boot with one entry: PROGRAMS, its
+#                                                    platform ramdisk and the archives behind it;
+#                                                    prints the ramdisk size
+#        boot-image contains FILE PART                exit status 0 if FILE holds the bytes of PART
+#        boot-image init-ramdisk INIT_BOOT OUT       init_boot's ramdisk into OUT
+#        boot-image build-init UT_INIT OUT ARCHIVE...
+#                                                    UT's init_boot with the archives behind its
+#                                                    ramdisk, as long as UT's image; prints the
+#                                                    ramdisk size
+#        boot-image halium-script UT_INIT OUT_DIR    OUT_DIR/scripts/halium: UT's script with the
+#                                                    call of /plinius/unlock
+#        boot-image kernel BOOT_IMG OUT              the kernel of a boot image into OUT
+#        boot-image dtb VENDOR_BOOT OUT              the dtb of a vendor_boot into OUT
+#        boot-image cmdline VENDOR_BOOT               the kernel command line of a vendor_boot
+#        boot-image slim ARCHIVE OUT                 ARCHIVE (lz4 legacy cpio) with the comment lines of
+#                                                    its scripts taken out, into OUT
+#        boot-image shrink-background IN OUT         the background IN (XRGB8888 LVGL image) at the
+#                                                    small size of the phone's ramdisk, into OUT
+import os
+import struct
+import subprocess
+import sys
+
+HEADER = "<8sIIIII"          # magic, version, page size, kernel address, ramdisk address, ramdisk size
+# Behind magic .. ramdisk size (28 bytes): command line (2048), tags address (4), name (16)
+AT = 28 + 2048 + 4 + 16       # header size, dtb size, dtb address (8), table size, entries, entry size,
+                              # bootconfig size
+
+
+def fail(text):
+    sys.exit(f"boot-image: {text}")
+
+
+def layout(head):
+    """The parts of a vendor_boot image from its first page: offsets and sizes, all page aligned."""
+    magic, version, page, _kaddr, _raddr, ramdisks = struct.unpack_from(HEADER, head)
+    if magic != b"VNDRBOOT" or version != 4:
+        fail("not a vendor boot image of version 4")
+    header_size, dtb_size, _dtb_addr = struct.unpack_from("<IIQ", head, AT)
+    table_size, count, entry_size, bootconfig = struct.unpack_from("<IIII", head, AT + 16)
+    align = lambda n: (n + page - 1) // page * page
+    first = align(header_size)
+    dtb_at = first + align(ramdisks)
+    table_at = dtb_at + align(dtb_size)
+    config_at = table_at + align(table_size)
+    return dict(page=page, ramdisks=ramdisks, first=first, dtb_at=dtb_at, dtb_size=dtb_size,
+                table_at=table_at, table_size=table_size, count=count, entry_size=entry_size,
+                config_at=config_at, bootconfig=bootconfig, end=config_at + align(bootconfig),
+                align=align)
+
+
+def append(base_path, archive_path, out_path):
+    # As far as the header says, and all of it: a base cut short would give zeros for its end
+    v, p = read_vendor(base_path)
+    archive = open(archive_path, "rb").read()
+    entry = bytearray(v[p["table_at"]:p["table_at"] + p["entry_size"]])
+    size, offset, kind = struct.unpack_from("<III", entry)
+    # Only what tools/crypt-ramdisk.sh makes: one platform ramdisk holding all of it
+    if p["count"] != 1 or offset != 0 or kind != 1 or size != p["ramdisks"]:
+        fail(f"unexpected ramdisks in vendor_boot: {p['count']} entries, first {size}, {offset}, {kind}")
+    ramdisk = v[p["first"]:p["first"] + size] + archive
+    struct.pack_into("<I", entry, 0, len(ramdisk))
+    head = bytearray(v[:p["first"]])
+    struct.pack_into("<I", head, 24, len(ramdisk))
+    pad = lambda data: data + b"\0" * (p["align"](len(data)) - len(data))
+    image = bytes(head) + pad(ramdisk) + pad(v[p["dtb_at"]:p["dtb_at"] + p["dtb_size"]]) \
+        + pad(bytes(entry)) + pad(v[p["config_at"]:p["config_at"] + p["bootconfig"]])
+    open(out_path, "wb").write(image)
+    print(len(ramdisk))
+
+
+def ramdisk(path, out_path):
+    with open(path, "rb") as f:
+        p = layout(f.read(4096))
+        if p["count"] != 1:
+            fail(f"unexpected ramdisks in vendor_boot: {p['count']} entries")
+        f.seek(p["first"])
+        data = f.read(p["ramdisks"])
+    if len(data) != p["ramdisks"]:
+        fail("vendor_boot is cut short")
+    open(out_path, "wb").write(data)
+
+
+def cpio(root, out_path):
+    entries = []
+    for top, dirs, files in os.walk(root):
+        dirs.sort()
+        for name in sorted(dirs + files):
+            path = os.path.join(top, name)
+            entries.append((os.path.relpath(path, root), os.lstat(path)))
+    entries.sort()
+    out = bytearray()
+
+    def add(name, mode, data, ino):
+        name_b = name.encode() + b"\0"
+        nlink = 2 if (mode & 0o170000) == 0o040000 else 1
+        fields = (ino, mode, 0, 0, nlink, 0, len(data), 0, 0, 0, 0, len(name_b), 0)
+        out.extend(b"070701" + b"".join(b"%08X" % f for f in fields) + name_b)
+        out.extend(b"\0" * (-len(out) % 4))
+        out.extend(data)
+        out.extend(b"\0" * (-len(out) % 4))
+
+    for ino, (name, st) in enumerate(entries, start=1):
+        kind = st.st_mode & 0o170000
+        if kind == 0o040000:
+            data = b""
+        elif kind == 0o100000:
+            data = open(os.path.join(root, name), "rb").read()
+        else:
+            fail(f"{name}: only directories and files")
+        add("./" + name, kind | (st.st_mode & 0o7777), data, ino)
+    add("TRAILER!!!", 0, b"", 0)
+    open(out_path, "wb").write(out)
+
+
+def length(path):
+    with open(path, "rb") as f:
+        print(layout(f.read(4096))["end"])
+
+
+def ramdisk_size(path):
+    with open(path, "rb") as f:
+        head = f.read(4096)
+    if head[:8] != b"ANDROID!" or struct.unpack_from("<I", head, 40)[0] != 4:
+        fail("not a boot image of version 4")
+    print(struct.unpack_from("<I", head, 12)[0])
+
+
+
+def read_head(path, size=4096):
+    with open(path, "rb") as f:
+        return f.read(size)
+
+
+def entries(v, p):
+    """The ramdisk table of a vendor_boot: (size, offset, kind) per entry."""
+    return [struct.unpack_from("<III", v, p["table_at"] + i * p["entry_size"]) for i in range(p["count"])]
+
+
+def vendor_kind(v, p):
+    info = entries(v, p)
+    # UT, exactly as measured: the platform ramdisk, then the recovery one with its single file
+    if p["count"] == 2 and info[0][1:] == (0, 1) and info[1][1:] == (info[0][0], 2) \
+            and info[0][0] + info[1][0] == p["ramdisks"]:
+        return "ut"
+    if p["count"] == 1 and info[0][1:] == (0, 1) and info[0][0] == p["ramdisks"]:
+        return "plinius"
+    fail(f"unexpected ramdisks in vendor_boot: {info}")
+
+
+def read_vendor(path):
+    """The whole image as far as its header says, from a file or the start of a partition."""
+    with open(path, "rb") as f:
+        p = layout(f.read(4096))
+        f.seek(0)
+        v = f.read(p["end"])
+    if len(v) != p["end"]:
+        fail(f"{path} is cut short")
+    return v, p
+
+
+def kind(path):
+    v, p = read_vendor(path)
+    print(vendor_kind(v, p))
+
+
+def platform(path, out_path):
+    v, p = read_vendor(path)
+    vendor_kind(v, p)
+    size = entries(v, p)[0][0]
+    open(out_path, "wb").write(v[p["first"]:p["first"] + size])
+
+
+# The kernel's zstd decoder for the ramdisk keeps windows of up to 8 MB (ZSTD_WINDOWSIZE_MAX in
+# lib/decompress_unzstd.c); a frame with a larger one does not unpack
+ZSTD_WINDOW_MAX = 8 << 20
+
+
+def zstd_window(data):
+    """The window size of the zstd frame at the start of DATA (RFC 8878, 3.1.1.1)."""
+    if data[:4] != b"\x28\xb5\x2f\xfd":
+        fail("the programs are no zstd frame")
+    descriptor = data[4]
+    if descriptor & 0x20:
+        # Single segment: the window is the content size
+        size_bytes = {0: 1, 1: 2, 2: 4, 3: 8}[descriptor >> 6]
+        at = 5 + {0: 0, 1: 1, 2: 2, 3: 4}[descriptor & 3]
+        size = int.from_bytes(data[at:at + size_bytes], "little")
+        return size + 256 if size_bytes == 2 else size
+    wd = data[5]
+    base = 1 << (10 + (wd >> 3))
+    return base + base // 8 * (wd & 7)
+
+
+def build_vendor(ut_path, out_path, programs, *archives):
+    v, p = read_vendor(ut_path)
+    if vendor_kind(v, p) != "ut":
+        fail(f"{ut_path} is not UT's vendor_boot")
+    first, pad = p["first"], lambda data: data + b"\0" * (p["align"](len(data)) - len(data))
+    entry = bytearray(v[p["table_at"]:p["table_at"] + p["entry_size"]])
+    ramdisk = open(programs, "rb").read()
+    if zstd_window(ramdisk) > ZSTD_WINDOW_MAX:
+        fail(f"the zstd window of {programs} is larger than the kernel takes (8 MB)")
+    # Zeros up to a multiple of 4: the kernel skips them, and reads a plain cpio archive only at
+    # such an offset (an lz4 one anywhere; measured in QEMU 09.11.)
+    ramdisk += b"\0" * (-len(ramdisk) % 4)
+    ramdisk += v[first:first + struct.unpack_from("<I", entry)[0]]
+    for a in archives:
+        ramdisk += open(a, "rb").read()
+    # One entry: the platform ramdisk with the programs right behind it
+    struct.pack_into("<I", entry, 0, len(ramdisk))
+    head = bytearray(v[:first])
+    struct.pack_into("<I", head, 24, len(ramdisk))
+    struct.pack_into("<II", head, AT + 16, p["entry_size"], 1)
+    image = bytes(head) + pad(ramdisk) + pad(v[p["dtb_at"]:p["dtb_at"] + p["dtb_size"]]) \
+        + pad(bytes(entry)) + pad(v[p["config_at"]:p["config_at"] + p["bootconfig"]])
+    open(out_path, "wb").write(image)
+    print(len(ramdisk))
+
+
+def init_layout(path):
+    with open(path, "rb") as f:
+        image = f.read()
+    if image[:8] != b"ANDROID!" or struct.unpack_from("<I", image, 40)[0] != 4 \
+            or struct.unpack_from("<I", image, 8)[0] != 0:
+        fail(f"{path}: not an init_boot image of version 4 without a kernel")
+    size = struct.unpack_from("<I", image, 12)[0]
+    if len(image) < 4096 + size:
+        fail(f"{path} is cut short")
+    return image, size
+
+
+def init_ramdisk(path, out_path):
+    image, size = init_layout(path)
+    open(out_path, "wb").write(image[4096:4096 + size])
+
+
+def build_init(ut_path, out_path, *archives):
+    old, size = init_layout(ut_path)
+    ramdisk = old[4096:4096 + size]
+    for a in archives:
+        ramdisk += open(a, "rb").read()
+    # Header and new ramdisk, filled up to the old length. Without its signature, like the rescue
+    # system of Plinius Boot; the unlocked bootloader starts that.
+    header = bytearray(old[:4096])
+    struct.pack_into("<I", header, 12, len(ramdisk))
+    struct.pack_into("<I", header, 1580, 0)
+    new = bytes(header) + ramdisk + b"\0" * (-len(ramdisk) % 4096)
+    if len(new) > len(old):
+        fail(f"init_boot would be {len(new)} bytes, UT's image has {len(old)}")
+    open(out_path, "wb").write(new.ljust(len(old), b"\0"))
+    print(len(ramdisk))
+
+
+def cpio_files(data):
+    """(name, mode, body) of the newc entries in DATA, archive after archive."""
+    pos = 0
+    while pos < len(data):
+        if data[pos] == 0:
+            pos += 1
+            continue
+        if data[pos:pos + 6] != b"070701":
+            fail(f"no cpio entry at {pos}")
+        h = data[pos:pos + 110]
+        mode, size, namesize = (int(h[a:a + 8], 16) for a in (14, 54, 94))
+        name = data[pos + 110:pos + 110 + namesize - 1].decode()
+        pos = (pos + 110 + namesize + 3) & ~3
+        yield name, mode, data[pos:pos + size]
+        pos = (pos + size + 3) & ~3
+
+
+def halium_script(ut_path, out_dir):
+    image, size = init_layout(ut_path)
+    # lz4 legacy, as UT packs it; through a pipe, the whole stream
+    cpio_data = subprocess.run(["lz4", "-q", "-dc"], input=image[4096:4096 + size],
+                               capture_output=True, check=True).stdout
+    found = [(mode, body) for name, mode, body in cpio_files(cpio_data)
+             if name.lstrip("./") == "scripts/halium"]
+    if not found:
+        fail(f"no scripts/halium in {ut_path}")
+    # UT's ramdisk holds two archives, each with a scripts/halium (UT 04.11.2026: 24595 and 25634
+    # bytes, the later one loads the modules with kmod). The kernel unpacks them in a row, so the
+    # last one is the script that runs; tools/crypt-ramdisk.sh up to 08.11. took the first.
+    mode, body = found[-1]
+    text = body.decode()
+    anchor = "\t# Format a wiped userdata without a filesystem header\n"
+    if text.count(anchor) != 1:
+        fail("scripts/halium: the place for the unlock call was not found")
+    call = ("\t# plinius-crypt: open the data partition (tools/crypt-ramdisk.sh)\n"
+            "\tif [ -f /plinius/unlock ]; then\n"
+            "\t\t( . /plinius/unlock \"$path\" )\n"
+            "\t\t[ -s /run/plinius-crypt/data-dev ] && path=$(cat /run/plinius-crypt/data-dev)\n"
+            "\tfi\n\n")
+    text = text.replace(anchor, call + anchor)
+    # Start time (measured 09.11.2026, docs/PLAN-VERSCHLUESSELUNG.md): two waits that the prompt
+    # does not need.
+    # 1. After the modules UT sleeps a fixed second before "udevadm settle" and the search for the
+    #    data partition. The partition is there long before (UFS at 7.65 s, modules done at
+    #    7.81 s); wait for it instead, at most the same second.
+    sleep_after = "\ttell_kmsg \"Finished loading kernel modules\"\n\tsleep 1\n"
+    wait_part = ("\ttell_kmsg \"Finished loading kernel modules\"\n"
+                 "\t# plinius-crypt: wait for the data partition instead of a fixed second\n"
+                 "\tfor _ in 1 2 3 4 5 6 7 8 9 10; do\n"
+                 "\t\tfor partname in $partlist; do\n"
+                 "\t\t\t[ -n \"$(find /dev -name $partname | tail -1)\" ] && break 2\n"
+                 "\t\tdone\n"
+                 "\t\tsleep 0.1\n"
+                 "\tdone\n")
+    # 2. The fuel gauge's probe takes a second (register writes with pauses, 1023 ms), and
+    #    nothing in the ramdisk needs the battery. udev loads it early by its device alias, and
+    #    mt6375-battery, the only module that needs its symbols, waited for that second in the
+    #    loop: both load in the background.
+    modprobe = "\t\t/sbin/modprobe \"$modname\" > /dev/kmsg 2>&1\n"
+    modprobe_bg = ("\t\t# plinius-crypt: the fuel gauge's slow probe must not hold up the others\n"
+                   "\t\tcase \"$modname\" in\n"
+                   "\t\tsh366100_battery|mt6375-battery)\n"
+                   "\t\t\t/sbin/modprobe \"$modname\" > /dev/kmsg 2>&1 & ;;\n"
+                   "\t\t*)\n"
+                   "\t\t\t/sbin/modprobe \"$modname\" > /dev/kmsg 2>&1 ;;\n"
+                   "\t\tesac\n")
+    for old, new in ((sleep_after, wait_part), (modprobe, modprobe_bg)):
+        if text.count(old) != 1:
+            fail(f"scripts/halium: the place for the start time change was not found: {old.strip()}")
+        text = text.replace(old, new)
+    # Space: lk loads at most 22,020,096 bytes of ramdisk with our kernel (halium-rebuild), and the
+    # parts, the firmware and the look come to within a few hundred bytes of it. The script's
+    # comment lines are about 3.4 kB of it compressed (UT's script has no here-documents, so a line
+    # that starts with "#" is always a comment).
+    lines = text.split("\n")
+    text = "\n".join(line for i, line in enumerate(lines)
+                     if i == 0 or not line.lstrip().startswith("#"))
+    os.makedirs(os.path.join(out_dir, "scripts"), exist_ok=True)
+    out = os.path.join(out_dir, "scripts/halium")
+    open(out, "w").write(text)
+    os.chmod(out, mode & 0o7777)
+    init_top(cpio_data, out_dir)
+
+
+# 3. Up to 4.4 s pass in init-top (udevd, trigger, settle) without a line in the kernel log, and
+#    they end 0.2 s after "random: crng init done" (two starts, 09.11.2026). The CPU has no random
+#    instruction, and the hardware generator sec-rng only came 16th in modules.load, after that
+#    phase. It loads first now, before udev (no dependencies; it credits entropy), and two lines
+#    in the kernel log mark where init-top begins and ends.
+INIT_TOP_FIRST = """#!/bin/sh
+# plinius-crypt: the hardware random number generator before udev (boot-image)
+case "$1" in prereqs) exit 0 ;; esac
+echo "plinius-crypt: init-top begins" > /dev/kmsg
+[ -e /lib/modules/sec-rng.ko ] && insmod /lib/modules/sec-rng.ko > /dev/kmsg 2>&1
+exit 0
+"""
+INIT_TOP_LAST = """#!/bin/sh
+# plinius-crypt: marks the end of init-top in the kernel log (boot-image)
+case "$1" in prereqs) exit 0 ;; esac
+echo "plinius-crypt: init-top ends" > /dev/kmsg
+exit 0
+"""
+
+
+def init_top(cpio_data, out_dir):
+    orders = [body for name, mode, body in cpio_files(cpio_data)
+              if name.lstrip("./") == "scripts/init-top/ORDER"]
+    if not orders:
+        fail("no scripts/init-top/ORDER in UT's ramdisk")
+    entry = "/scripts/init-top/{} \"$@\"\n[ -e /conf/param.conf ] && . /conf/param.conf\n"
+    order = entry.format("plinius-first") + orders[-1].decode() + entry.format("plinius-last")
+    d = os.path.join(out_dir, "scripts/init-top")
+    os.makedirs(d, exist_ok=True)
+    for name, body in (("ORDER", order), ("plinius-first", INIT_TOP_FIRST), ("plinius-last", INIT_TOP_LAST)):
+        open(os.path.join(d, name), "w").write(body)
+        os.chmod(os.path.join(d, name), 0o644 if name == "ORDER" else 0o755)
+
+
+def contains(path, part_path):
+    data = open(path, "rb").read()
+    sys.exit(0 if open(part_path, "rb").read() in data else 1)
+
+
+def kernel(path, out_path):
+    k = open(path, "rb").read(64 << 20)
+    if k[:8] != b"ANDROID!":
+        fail(f"{path}: not a boot image")
+    size, = struct.unpack_from("<I", k, 8)
+    open(out_path, "wb").write(k[4096:4096 + size])
+
+
+def slim(in_path, out_path):
+    """An lz4 legacy cpio archive (a part such as init.lz4) with the comment lines taken out of its
+    shell scripts, for space (halium-rebuild, MAX_RAMDISK): only files that start with "#!" and hold
+    no here-document are changed, everything else stays as it is, in the same order."""
+    data = subprocess.run(["lz4", "-q", "-dc"], input=open(in_path, "rb").read(),
+                          capture_output=True, check=True).stdout
+    out = bytearray()
+
+    def add(name, mode, body, ino):
+        name_b = name.encode() + b"\0"
+        nlink = 2 if (mode & 0o170000) == 0o040000 else 1
+        fields = (ino, mode, 0, 0, nlink, 0, len(body), 0, 0, 0, 0, len(name_b), 0)
+        out.extend(b"070701" + b"".join(b"%08X" % f for f in fields) + name_b)
+        out.extend(b"\0" * (-len(out) % 4))
+        out.extend(body)
+        out.extend(b"\0" * (-len(out) % 4))
+
+    ino = 0
+    for name, mode, body in cpio_files(data):
+        if name == "TRAILER!!!":
+            continue
+        if (mode & 0o170000) == 0o100000 and body.startswith(b"#!") and b"<<" not in body:
+            lines = body.decode().split("\n")
+            body = "\n".join(line for i, line in enumerate(lines)
+                             if i == 0 or not line.lstrip().startswith("#")).encode()
+        ino += 1
+        add(name, mode, body, ino)
+    add("TRAILER!!!", 0, b"", 0)
+    packed = subprocess.run(["lz4", "-q", "-12", "-l", "-c"], input=bytes(out),
+                            capture_output=True, check=True).stdout
+    open(out_path, "wb").write(packed)
+
+
+# The background of the prompt in the phone's ramdisk (halium-rebuild, plinius-crypt-ramdisk): lz4
+# packs smooth gradients poorly, a wallpaper took some 70 kB at 108x240 and takes some 6.5 kB at
+# this size, 9:20 as the screen; unl0kr (buffybox 3.6.0-13) scales it up smoothly, at 429 dpi it
+# looks almost as the 108x240 one. zstd packs the default one in the programs into some 5 kB.
+SMALL_BACKGROUND = (27, 60)
+LV_IMAGE_HEADER = "<BBHHHHH"  # magic, color format, flags, width, height, stride, reserved
+LV_IMAGE_MAGIC, LV_XRGB8888 = 0x19, 0x11
+
+
+def shrink_background(in_path, out_path):
+    """The XRGB8888 LVGL image IN at SMALL_BACKGROUND into OUT, each pixel the mean of the area it
+    covers (the same aspect ratio is expected; any other is stretched)."""
+    data = open(in_path, "rb").read()
+    size = struct.calcsize(LV_IMAGE_HEADER)
+    if len(data) < size:
+        fail(f"{in_path}: not an LVGL image")
+    magic, cf, _flags, w, h, stride, _ = struct.unpack_from(LV_IMAGE_HEADER, data)
+    if magic != LV_IMAGE_MAGIC or cf != LV_XRGB8888 or not w or not h or stride < w * 4 \
+            or len(data) < size + stride * h:
+        fail(f"{in_path}: not an XRGB8888 LVGL image")
+    dw, dh = SMALL_BACKGROUND
+
+    def spans(n_src, n_dst):
+        """For each target pixel the source pixels it covers, with the covered share of each."""
+        out = []
+        for i in range(n_dst):
+            a, b = i * n_src / n_dst, (i + 1) * n_src / n_dst
+            out.append([(j, min(b, j + 1) - max(a, j)) for j in range(int(a), min(n_src, int(b) + 1))
+                        if min(b, j + 1) - max(a, j) > 1e-9])
+        return out
+
+    xs, ys = spans(w, dw), spans(h, dh)
+    pixels = bytearray()
+    for y_span in ys:
+        for x_span in xs:
+            total, sums = 0.0, [0.0, 0.0, 0.0]
+            for j, wy in y_span:
+                row = size + j * stride
+                for i, wx in x_span:
+                    weight = wx * wy
+                    total += weight
+                    for c in range(3):
+                        sums[c] += data[row + i * 4 + c] * weight
+            pixels.extend(min(255, round(v / total)) for v in sums)
+            pixels.append(0xFF)
+    header = struct.pack(LV_IMAGE_HEADER, LV_IMAGE_MAGIC, LV_XRGB8888, 0, dw, dh, dw * 4, 0)
+    open(out_path, "wb").write(header + pixels)
+
+
+def dtb(path, out_path):
+    v, p = read_vendor(path)
+    open(out_path, "wb").write(v[p["dtb_at"]:p["dtb_at"] + p["dtb_size"]])
+
+
+def cmdline(path):
+    print(read_head(path)[28:28 + 2048].split(b"\0")[0].decode())
+
+
+# name: (function, number of arguments, None for "at least that many")
+commands = {"append": (append, 3), "length": (length, 1), "ramdisk": (ramdisk, 2),
+            "ramdisk-size": (ramdisk_size, 1), "cpio": (cpio, 2), "kind": (kind, 1),
+            "platform": (platform, 2), "build-vendor": (build_vendor, 3, None),
+            "contains": (contains, 2),
+            "init-ramdisk": (init_ramdisk, 2), "build-init": (build_init, 2, None),
+            "halium-script": (halium_script, 2), "kernel": (kernel, 2), "dtb": (dtb, 2),
+            "cmdline": (cmdline, 1), "slim": (slim, 2),
+            "shrink-background": (shrink_background, 2)}
+def usage_ok():
+    if len(sys.argv) < 2 or sys.argv[1] not in commands:
+        return False
+    spec, given = commands[sys.argv[1]], len(sys.argv) - 2
+    return given >= spec[1] if len(spec) == 3 else given == spec[1]
+
+
+if not usage_ok():
+    fail("usage: boot-image append VENDOR_BOOT ARCHIVE OUT | length VENDOR_BOOT | ramdisk VENDOR_BOOT OUT"
+         " | ramdisk-size INIT_BOOT | cpio DIR OUT | kind VENDOR_BOOT | platform VENDOR_BOOT OUT"
+         " | build-vendor UT_VENDOR OUT PROGRAMS ARCHIVE... | contains FILE PART | init-ramdisk INIT_BOOT OUT"
+         " | build-init UT_INIT OUT ARCHIVE... | halium-script UT_INIT OUT_DIR | kernel BOOT_IMG OUT"
+         " | slim ARCHIVE OUT | shrink-background IN OUT"
+         " | dtb VENDOR_BOOT OUT | cmdline VENDOR_BOOT")
+commands[sys.argv[1]][0](*sys.argv[2:])

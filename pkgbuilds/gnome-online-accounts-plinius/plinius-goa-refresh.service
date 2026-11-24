@@ -1,0 +1,7 @@
+# Started by the NetworkManager dispatcher 90-plinius-goa-refresh when the network comes up
+[Unit]
+Description=Look up the calendars and contacts of online accounts
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius/plinius-goa-refresh --discover

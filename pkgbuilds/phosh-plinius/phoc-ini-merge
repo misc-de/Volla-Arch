@@ -1,0 +1,85 @@
+#!/bin/sh
+# phoc-ini-merge SYSTEM_INI USER_INI: the phoc.ini phoc starts with, on stdout.
+#
+# Phosh saves the mode and scale picked in Settings with a copy of the whole system phoc.ini as
+# $XDG_CONFIG_HOME/phosh/phoc.ini (0009). Started with that copy, phoc never saw what a device
+# update changed in the system file later (the light sensor's box, 0034 of phoc-plinius). So this
+# takes the system file as it is now and only "mode" and "scale" of each [output:...] section from
+# the user's copy: in place of the system's line, at the end of the section when the system has
+# none, and as a section of their own for an output the system file doesn't name. Everything else
+# in the copy is the old system file and is left out.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[ $# -eq 2 ] || { echo "usage: phoc-ini-merge SYSTEM_INI USER_INI" >&2; exit 2; }
+[ -r "$1" ] || { echo "phoc-ini-merge: cannot read $1" >&2; exit 1; }
+[ -r "$2" ] || { echo "phoc-ini-merge: cannot read $2" >&2; exit 1; }
+
+exec awk -v user="$2" '
+function section(line) {
+	gsub(/[ \t]/, "", line)
+	return line
+}
+function key(line) {
+	sub(/[ \t]*=.*/, "", line)
+	gsub(/[ \t]/, "", line)
+	return line
+}
+function is_section(line) {
+	return line ~ /^[ \t]*\[.*\][ \t]*$/
+}
+# The user keys of the current section the system file had no line for
+function flush(   ks, i, n) {
+	n = split(keys[sec], ks, " ")
+	for (i = 1; i <= n; i++)
+		if (!done[sec, ks[i]]++)
+			print val[sec, ks[i]]
+}
+# The user copy first: its mode and scale
+BEGIN {
+	while ((getline line < user) > 0) {
+		if (is_section(line)) {
+			sec = section(line)
+			continue
+		}
+		if (sec !~ /^\[output:/ || line !~ /^[ \t]*(mode|scale)[ \t]*=/)
+			continue
+		k = key(line)
+		if (!((sec, k) in val))
+			keys[sec] = keys[sec] " " k
+		val[sec, k] = line
+		if (!(sec in has)) {
+			has[sec] = 1
+			order[++n_secs] = sec
+		}
+	}
+	close(user)
+	sec = ""
+}
+# Then the system file
+is_section($0) {
+	flush()
+	sec = section($0)
+	seen[sec] = 1
+	print
+	next
+}
+{
+	if ($0 ~ /^[ \t]*(mode|scale)[ \t]*=/ && ((sec, key($0)) in val)) {
+		if (!done[sec, key($0)]++)
+			print val[sec, key($0)]
+		next
+	}
+	print
+}
+END {
+	flush()
+	for (i = 1; i <= n_secs; i++) {
+		if (order[i] in seen)
+			continue
+		sec = order[i]
+		print ""
+		print sec
+		flush()
+	}
+}
+' "$1"

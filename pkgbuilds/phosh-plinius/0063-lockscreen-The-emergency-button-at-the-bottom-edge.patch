@@ -1,0 +1,190 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 06 Nov 2026 12:00:00 +0100
+Subject: [PATCH] lockscreen: The emergency button at the bottom edge
+
+Plinius: below the unlock button it took room from the page and was still close to the button
+that gets pressed every time. It now lies over the page in the lower left corner, independent of
+the unlock page's own layout.
+
+The corner and not the middle: the fingerprint sensor sits in the middle, and the room below it
+is hardly higher than the button, right where a finger on the sensor rests. Long translations
+take a second line and so stay beside the sensor. In pattern mode the unlock button's row can go
+away again, as the emergency button left it.
+
+Without a sensor the unlock page keeps clear of the button itself.
+
+The centering now takes the height of the page itself: the box's allocation only holds its
+content, which left the top margin at its value from the template and the page above the middle.
+---
+ src/lockscreen.c     | 29 +++++++++++++++++++++++------
+ src/ui/lockscreen.ui | 34 +++++++++++++++++++++-------------
+ 2 files changed, 44 insertions(+), 19 deletions(-)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index 83503477..b51f0ed2 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -72,6 +72,10 @@
+ #define PATTERN_PAD_MAX      480
+ /* Keypad, unlock button and pattern pad end this far above a fingerprint sensor under the display */
+ #define UNLOCK_SENSOR_GAP_MM 5
++/* Without a sensor the unlock page ends this far above the emergency button */
++#define UNLOCK_EMERGENCY_GAP 12
++/* The emergency button stays beside the sensor: longer labels take a second line */
++#define EMERGENCY_LABEL_MAX_CHARS 12
+ 
+ /*
+  * Unlock pattern (plinius-pattern): the pattern pad answers the password prompt with this marker
+@@ -148,6 +152,7 @@ typedef struct {
+   guint               reveals;
+ 
+   /* unlock page */
++  GtkWidget          *unlock_page;
+   GtkWidget          *box_unlock;
+   GtkWidget          *keypad_revealer;
+   GtkWidget          *keypad;
+@@ -1018,7 +1023,7 @@ update_slide_hint (PhoshLockscreen *self)
+   PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
+   PhoshShell *shell = phosh_shell_get_default ();
+   PhoshMonitor *monitor;
+-  int margin = 0;
++  int margin = 0, button;
+ 
+   monitor = phosh_shell_get_builtin_monitor (shell) ?: phosh_shell_get_primary_monitor (shell);
+ 
+@@ -1045,6 +1050,11 @@ update_slide_hint (PhoshLockscreen *self)
+ 
+     margin = ceil ((monitor->height - priv->udfps_top) / ratio) + gap;
+   }
++
++  /* The emergency button lies over the page's lower edge and must not cover the keypad */
++  gtk_widget_get_preferred_height (priv->btn_emergency, NULL, &button);
++  margin = MAX (margin, button + UNLOCK_EMERGENCY_GAP);
++
+   gtk_widget_set_margin_bottom (GTK_WIDGET (priv->box_unlock), margin);
+ }
+ 
+@@ -1227,8 +1237,7 @@ setup_pattern (PhoshLockscreen *self)
+ 
+   gtk_widget_hide (priv->entry_pin);
+   gtk_widget_hide (priv->keypad_revealer);
+-  /* The row stays: emergency calls don't depend on how the phone unlocks */
+-  gtk_widget_hide (priv->btn_submit);
++  gtk_widget_hide (gtk_widget_get_parent (priv->btn_submit));
+   phosh_lockscreen_set_unlock_status (self, g_dgettext (PLINIUS_DOMAIN, "Draw Pattern"));
+ }
+ 
+@@ -1254,7 +1263,7 @@ center_unlock_page (gpointer user_data)
+   /* The natural size includes the margins, the allocation does not */
+   gtk_widget_get_preferred_height (box, NULL, &content);
+   content -= top + bottom;
+-  page = gtk_widget_get_allocated_height (box) + top + bottom;
++  page = gtk_widget_get_allocated_height (priv->unlock_page);
+ 
+   gtk_widget_set_margin_top (box, MAX (0, MIN (bottom, page - bottom - content)));
+ 
+@@ -1289,6 +1298,7 @@ phosh_lockscreen_constructed (GObject *object)
+   PhoshShell *shell;
+   g_autoptr (GSettings) plugin_settings = NULL;
+   g_auto (GStrv) plugins = NULL;
++  GtkWidget *emergency_label;
+ 
+   G_OBJECT_CLASS (phosh_lockscreen_parent_class)->constructed (object);
+ 
+@@ -1375,7 +1385,7 @@ phosh_lockscreen_constructed (GObject *object)
+                    G_SETTINGS_BIND_GET);
+ 
+   g_object_bind_property (self, "require-unlock",
+-                          priv->box_unlock, "visible",
++                          priv->unlock_page, "visible",
+                           G_BINDING_SYNC_CREATE);
+ 
+   plugin_settings = g_settings_new ("mobi.phosh.shell.plugins");
+@@ -1388,6 +1398,12 @@ phosh_lockscreen_constructed (GObject *object)
+ 
+   phosh_lockscreen_add_background (self);
+   setup_pattern (self);
++  emergency_label = gtk_bin_get_child (GTK_BIN (priv->btn_emergency));
++  if (GTK_IS_LABEL (emergency_label)) {
++    gtk_label_set_line_wrap (GTK_LABEL (emergency_label), TRUE);
++    gtk_label_set_justify (GTK_LABEL (emergency_label), GTK_JUSTIFY_CENTER);
++    gtk_label_set_max_width_chars (GTK_LABEL (emergency_label), EMERGENCY_LABEL_MAX_CHARS);
++  }
+   if (bind_emergency_action (self) == G_SOURCE_CONTINUE) {
+     gtk_widget_set_sensitive (priv->btn_emergency, FALSE);
+     priv->emergency_bind_id = g_timeout_add_seconds (1, bind_emergency_action, self);
+@@ -1664,6 +1680,7 @@ phosh_lockscreen_class_init (PhoshLockscreenClass *klass)
+   gtk_widget_class_bind_template_callback (widget_class, on_deck_transition_running_changed);
+ 
+   /* unlock page */
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, unlock_page);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, box_unlock);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, keypad);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, keypad_revealer);
+@@ -1801,7 +1818,7 @@ phosh_lockscreen_set_page (PhoshLockscreen *self, PhoshLockscreenPage page)
+     scroll_to = GTK_WIDGET (priv->deck);
+     break;
+   case PHOSH_LOCKSCREEN_PAGE_UNLOCK:
+-    scroll_to = priv->box_unlock;
++    scroll_to = priv->unlock_page;
+     break;
+   default:
+     scroll_to = GTK_WIDGET (priv->deck);
+diff --git a/src/ui/lockscreen.ui b/src/ui/lockscreen.ui
+index b8142301..47e3e3a2 100644
+--- a/src/ui/lockscreen.ui
++++ b/src/ui/lockscreen.ui
+@@ -262,6 +262,9 @@
+           </object>
+           <!-- HdyDeck -->
+         </child>
++        <child>
++          <object class="GtkOverlay" id="unlock_page">
++            <property name="visible">1</property>
+         <child>
+           <object class="GtkBox" id="box_unlock">
+             <property name="visible">1</property>
+@@ -337,24 +340,29 @@
+                     </style>
+                   </object>
+                 </child>
+-                <child>
+-                  <object class="GtkButton" id="btn_emergency">
+-                    <property name="visible">1</property>
+-                    <property name="margin-top">24</property>
+-                    <property name="label" translatable="yes">Emergency</property>
+-                    <signal name="clicked" handler="emergency_clicked_cb" swapped="yes"/>
+-                    <style>
+-                      <class name="emergency-button"/>
+-                      <class name="pin-emergency"/>
+-                      <class name="circular"/>
+-                    </style>
+-                  </object>
+-                </child>
+               </object>
+             </child>
+           </object>
+         </child>
+         <!-- box_unlock -->
++            <child type="overlay">
++              <object class="GtkButton" id="btn_emergency">
++                <property name="visible">1</property>
++                <property name="halign">start</property>
++                <property name="valign">end</property>
++                <property name="margin-start">16</property>
++                <property name="margin-bottom">16</property>
++                <property name="label" translatable="yes">Emergency</property>
++                <signal name="clicked" handler="emergency_clicked_cb" swapped="yes"/>
++                <style>
++                  <class name="emergency-button"/>
++                  <class name="pin-emergency"/>
++                  <class name="circular"/>
++                </style>
++              </object>
++            </child>
++          </object>
++        </child>
+       </object>
+     </child>
+   </template>

@@ -1,0 +1,86 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=libhybris
+pkgver=0.1.0.20260624
+pkgrel=8
+pkgdesc="Use Android (bionic) drivers from glibc userspace (upstream, glvnd vendor)"
+arch=(aarch64)
+url="https://github.com/libhybris/libhybris"
+license=(Apache-2.0 BSD-2-Clause)
+depends=(glibc gcc-libs wayland libglvnd)
+makedepends=(git android-headers python wayland-protocols)
+# Upstream master, no tag: commit pin; pkgver = upstream version + commit date
+_commit=7079712a42ea2754adf747e70c6cc75764c8596e
+source=(
+	"git+$url.git#commit=$_commit"
+	0001-camera-rename-libcamera-to-libcamera-hybris.patch
+	0002-egl-gbm-platform-and-dma-buf-import-of-hybris_gbm-buffers.patch
+	0003-egl-import-any-dma-buf-through-the-driver-report-dma.patch
+	0004-wayland-hand-buffers-over-with-linux-dmabuf-without-.patch
+	0005-egl-route-eglSwapBuffersWithDamageKHR-through-the-wi.patch
+	0006-egl-the-driver-s-shader-cache-on-disk-as-Android-s-framework.patch
+	hybris-tls-padding.c
+)
+sha256sums=('SKIP'
+            '0ac80a84b04deaea50a4740031ba4de24c0e7561c689327162a43f9be45ca1a5'
+            '7caf15b2e853ee184720a2dfd82f5abea56f9d101a91ec85fea42a05d5b592a1'
+            'a64fc62515aec71c6d1dcb1c5c0f4c1ccab5c01d245ff3e68d3b90b74c3b9c56'
+            'd7d4b541da575c741aee3dcca8d7a0e14b5b82646e1d44cfa5cea8612c5343be'
+            'a1ca72f02368e0a390d95649c7959a565b89614c3662b0180138cf9f85541b45'
+            '1c906a492001f7f916658d0f20de3b5756612270bffe233eb553b539bd6283d0'
+            '35b754c3be546de8cd1288a3bcabacb34853fe2eceee912edc3c91350347d0cd')
+
+prepare() {
+	cd libhybris
+	# On Arch libcamera.so/.pc belong to the libcamera package (tools/check-conflicts.py)
+	patch -Np1 -i ../0001-camera-rename-libcamera-to-libcamera-hybris.patch
+	# wlroots on real KMS: GBM platform and dma-buf import for buffers of hybris-gbm (docs/GRAFIK.md)
+	patch -Np1 -i ../0002-egl-gbm-platform-and-dma-buf-import-of-hybris_gbm-buffers.patch
+	# GPU for Wayland clients: dma-buf import of their buffers, which they send via linux-dmabuf
+	patch -Np1 -i ../0003-egl-import-any-dma-buf-through-the-driver-report-dma.patch
+	patch -Np1 -i ../0004-wayland-hand-buffers-over-with-linux-dmabuf-without-.patch
+	# Firefox swaps with eglSwapBuffersWithDamageKHR; unwrapped it never reached the compositor
+	patch -Np1 -i ../0005-egl-route-eglSwapBuffersWithDamageKHR-through-the-wi.patch
+	# The driver's compiled shaders on disk per program (~/.cache/hybris/egl), as Android does for
+	# apps; otherwise every start compiles them again and the first frames stall
+	patch -Np1 -i ../0006-egl-the-driver-s-shader-cache-on-disk-as-Android-s-framework.patch
+	cd hybris
+	# test_audio is built with -std=c99, where glibc hides strdup, which the
+	# Halium header system/audio.h uses. GCC >= 14 errors out on implicit
+	# declarations. Only this test program is affected.
+	sed -i 's/^test_audio_CFLAGS = -std=c99/test_audio_CFLAGS = -std=gnu99/' tests/Makefile.am
+	autoreconf -fi
+}
+
+build() {
+	cd libhybris/hybris
+	./configure \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--enable-wayland \
+		--disable-wayland_serverside_buffers \
+		--with-android-headers=/usr/include/android \
+		--enable-property-cache \
+		--enable-experimental \
+		--enable-glvnd \
+		--enable-arch=arm64 \
+		--enable-mali-quirks \
+		--enable-adreno-quirks
+	make
+	# Keeps glibc's static TLS off bionic's slots (see the source)
+	${CC:-gcc} $CFLAGS $LDFLAGS -shared -fPIC -o ../../libhybris-tls-padding.so ../../hybris-tls-padding.c
+}
+
+package() {
+	cd libhybris/hybris
+	make DESTDIR="$pkgdir" install
+	install -Dm755 ../../libhybris-tls-padding.so -t "$pkgdir/usr/lib"
+
+	cd "$pkgdir"
+	# libglvnd, mesa and opencl-headers ship these files; libhybris only hooks in
+	# as a glvnd vendor (/usr/share/glvnd/egl_vendor.d/*libhybris*.json).
+	rm -rf usr/include/{GLES,GLES2,GLES3,EGL,KHR,VG,CL}
+	rm -f usr/lib/lib{EGL,GLESv2,GLESv1_CM,OpenCL}.so*
+	rm -f usr/lib/pkgconfig/{egl,glesv1_cm,glesv2,OpenCL}.pc
+	find usr/lib -name '*.la' -delete
+}

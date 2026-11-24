@@ -1,0 +1,199 @@
+From 8b3f3bbf2f8740e19b09baf54a98de5a608fa8d2 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 23:36:24 +0100
+Subject: [PATCH] brightness-manager: Show the brightness on the slider with
+ auto brightness
+
+Plinius: with auto brightness on, the slider used to set an offset to the
+auto brightness and so sat in the middle, whatever the display showed. Now it
+shows the brightness of the display in both modes and follows the auto
+brightness as it changes. Where the user puts it becomes the offset to the
+auto brightness, so the brightness stays there until the ambient light
+changes. The offset range grows to [-1.0, 1.0] so any slider position can
+be kept.
+---
+ data/mobi.phosh.shell.gschema.xml |  2 +-
+ src/brightness-manager.c          | 80 ++++++++++++++++++++-------------------
+ src/brightness-settings.c         |  4 --
+ 3 files changed, 42 insertions(+), 44 deletions(-)
+
+diff --git a/data/mobi.phosh.shell.gschema.xml b/data/mobi.phosh.shell.gschema.xml
+index 12df7249..7bf28496 100644
+--- a/data/mobi.phosh.shell.gschema.xml
++++ b/data/mobi.phosh.shell.gschema.xml
+@@ -117,7 +117,7 @@
+   <schema id="mobi.phosh.shell.brightness" path="/mobi/phosh/shell/brightness/">
+     <key name="auto-brightness-offset" type="d">
+       <default>0.0</default>
+-      <range min="-0.5" max="0.5"/>
++      <range min="-1.0" max="1.0"/>
+       <summary>Auto brightness offset</summary>
+       <description>
+         Fixed offset added to the calculated auto brightnes value.
+diff --git a/src/brightness-manager.c b/src/brightness-manager.c
+index 3df9eadc..2f8cc73b 100644
+--- a/src/brightness-manager.c
++++ b/src/brightness-manager.c
+@@ -244,14 +244,21 @@ compensate_night_light (PhoshBrightnessManager *self)
+ }
+ 
+ 
++/* Plinius: the auto brightness before the user's offset */
++static double
++calc_auto_brightness_base (PhoshBrightnessManager *self)
++{
++  /* Compensate for night light */
++  return self->auto_brightness.base * compensate_night_light (self);
++}
++
++
+ static double
+ calc_auto_brightness (PhoshBrightnessManager *self)
+ {
+-  double new_brightness = self->auto_brightness.base;
++  double new_brightness = calc_auto_brightness_base (self);
+   double night_light_correction = compensate_night_light (self);
+ 
+-  /* Compensate for night light */
+-  new_brightness *= night_light_correction;
+   /* Apply any offset the user has set */
+   new_brightness += self->auto_brightness.offset;
+   new_brightness = CLAMP (new_brightness, 0.0, 1.0);
+@@ -338,7 +345,6 @@ on_ambient_auto_brightness_changed (PhoshBrightnessManager *self,
+                                     PhoshAmbient           *ambient)
+ {
+   gboolean enabled = phosh_ambient_get_auto_brightness (ambient);
+-  double value = 1.0;
+ 
+   g_debug ("Ambient auto-brightness enabled: %d", enabled);
+ 
+@@ -351,19 +357,13 @@ on_ambient_auto_brightness_changed (PhoshBrightnessManager *self,
+   self->icon_name = enabled ? "auto-brightness-symbolic" : "display-brightness-symbolic";
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ICON_NAME]);
+ 
++  /* Plinius: the slider shows the brightness in both modes, so it doesn't jump here */
+   if (self->auto_brightness.enabled) {
+     self->auto_brightness.offset = g_settings_get_double (self->settings_brightness,
+                                                           BRIGHTNESS_KEY_AUTO_BRIGHTNESS_OFFSET);
+-    /* Adjustment is [0.0, 1.0] */
+-    value = self->auto_brightness.offset + 0.5;
+     set_auto_brightness_tracker (self);
+     on_auto_brightness_changed (self);
+-  } else {
+-    if (self->backlight)
+-      value = phosh_backlight_get_relative (self->backlight);
+   }
+-
+-  gtk_adjustment_set_value (self->adjustment, value);
+ }
+ 
+ 
+@@ -503,10 +503,7 @@ on_backlight_brightness_changed (PhoshBrightnessManager *self,
+ 
+   g_assert (self->backlight == backlight);
+ 
+-  /* With auto brightness the slider gives an offset to the auto brightness target */
+-  if (self->auto_brightness.enabled)
+-    return;
+-
++  /* Plinius: with auto brightness too the slider shows the brightness, not the offset */
+   if (self->setting_brightness)
+     return;
+ 
+@@ -530,24 +527,24 @@ on_value_changed (PhoshBrightnessManager *self, GtkAdjustment *adjustment)
+ 
+   value = gtk_adjustment_get_value (self->adjustment);
+ 
+-  /* With auto brightness the slider gives an offset to the auto brightness target */
+-  if (self->auto_brightness.enabled) {
+-    /* TODO: should we go through the brightness curve? */
+-    /* Auto-brightness offset is [-0.5, +0.5] */
+-    double offset = CLAMP (value - 0.5, -0.5, 0.5);
+-
+-    if (G_APPROX_VALUE (offset, self->auto_brightness.offset, DBL_EPSILON))
+-      return;
+-    self->auto_brightness.offset = offset;
++  new_brightness = value;
+ 
+-    new_brightness = calc_auto_brightness (self);
+-
+-    g_debug ("Updating auto-brightness offset %f", offset);
+-    g_settings_set_double (self->settings_brightness,
+-                           BRIGHTNESS_KEY_AUTO_BRIGHTNESS_OFFSET,
+-                           offset);
+-  } else {
+-    new_brightness = value;
++  /*
++   * Plinius: with auto brightness the slider shows the brightness as well. Where the
++   * user puts it becomes the offset to the auto brightness, so it stays there until the
++   * ambient light changes.
++   */
++  if (self->auto_brightness.enabled) {
++    /* Auto-brightness offset is [-1.0, +1.0] */
++    double offset = CLAMP (value - calc_auto_brightness_base (self), -1.0, 1.0);
++
++    if (!G_APPROX_VALUE (offset, self->auto_brightness.offset, DBL_EPSILON)) {
++      self->auto_brightness.offset = offset;
++      g_debug ("Updating auto-brightness offset %f", offset);
++      g_settings_set_double (self->settings_brightness,
++                             BRIGHTNESS_KEY_AUTO_BRIGHTNESS_OFFSET,
++                             offset);
++    }
+   }
+ 
+   /* Plinius: any transition, dimming too: the user likely wants the new brightness right away */
+@@ -623,9 +620,13 @@ on_auto_brightness_offset_changed (PhoshBrightnessManager *self,
+   if (!self->auto_brightness.enabled)
+     return;
+ 
+-  /* Adjustment goes from [0.0, 1.0] */
+-  offset += 0.5;
+-  phosh_brightness_manager_set_value (self, offset, FALSE);
++  /* Plinius: our own change from the slider */
++  if (G_APPROX_VALUE (offset, self->auto_brightness.offset, FLT_EPSILON))
++    return;
++
++  /* Plinius: a change from elsewhere, the slider follows the backlight */
++  self->auto_brightness.offset = offset;
++  on_auto_brightness_changed (self);
+ }
+ 
+ 
+@@ -973,8 +974,8 @@ phosh_brightness_manager_get_auto_brightness_enabled (PhoshBrightnessManager *se
+  * phosh_brightness_manager_get_value:
+  * @PhoshBrightnessManager: The brightness manager
+  *
+- * Get the value of the brightness adjustment. The interpretation of the value depends
+- * on whether auto brightness is enabled or not.
++ * Get the value of the brightness adjustment. With auto brightness too this is the
++ * brightness of the display (Plinius).
+  *
+  * Returns: The current value of the adjustment [0.0, 1.0]
+  */
+@@ -992,8 +993,9 @@ phosh_brightness_manager_get_value (PhoshBrightnessManager *self)
+  * @value: The brightness adjustment value [0.0, 1.0].
+  * @osd: Whether to show the osd when setting the value
+  *
+- * Set the value of the brightness adjustment. The interpretation of the value depends
+- * on whether auto brightness is enabled or not.
++ * Set the value of the brightness adjustment. With auto brightness too this is the
++ * brightness of the display; the difference to the auto brightness becomes the offset
++ * (Plinius).
+  */
+ void
+ phosh_brightness_manager_set_value (PhoshBrightnessManager *self,
+diff --git a/src/brightness-settings.c b/src/brightness-settings.c
+index c8c85508..26d079aa 100644
+--- a/src/brightness-settings.c
++++ b/src/brightness-settings.c
+@@ -137,10 +137,6 @@ phosh_brightness_settings_init (PhoshBrightnessSettings *self)
+                           self->image, "icon-name",
+                           G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
+ 
+-  g_object_bind_property (brightness_manager, "auto-brightness-enabled",
+-                          self->scale, "has-origin",
+-                          G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
+-
+   g_object_bind_property (brightness_manager, "has-brightness-control",
+                           self, "visible",
+                           G_BINDING_SYNC_CREATE);

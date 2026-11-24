@@ -1,0 +1,11 @@
+# The kernel CNA publishes new records every day; the phones fetch their list once a day.
+[Unit]
+Description=Build the kernel vulnerability lists for the phones every day
+
+[Timer]
+OnCalendar=*-*-* 03:30
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

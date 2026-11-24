@@ -1,0 +1,194 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 09:05:59 +0100
+Subject: [PATCH] wwan: Below each network found, whether the phone could
+ register
+
+Plinius: the network list of the manual network selection only named
+the networks. Now each one gets a line below its name: connected now,
+the SIM's own network, a satellite network that works if its provider
+accepts the phone, another network of the SIM's country that usually
+refuses it, or a network abroad that works with roaming in the
+contract. ModemManager's "forbidden" says that the SIM must not use it.
+
+plinius-satellite compares (org.plinius.Satellite, method Assess); it
+knows the SIM's network and its list of satellite networks. Without it
+only the forbidden networks get a line. A forecast, the network decides.
+---
+ panels/wwan/cc-wwan-network-dialog.c | 120 +++++++++++++++++++++++++--
+ 1 file changed, 114 insertions(+), 6 deletions(-)
+
+diff --git a/panels/wwan/cc-wwan-network-dialog.c b/panels/wwan/cc-wwan-network-dialog.c
+index 695a9e8..1c10df9 100644
+--- a/panels/wwan/cc-wwan-network-dialog.c
++++ b/panels/wwan/cc-wwan-network-dialog.c
+@@ -117,17 +117,104 @@ cc_wwan_network_changed_cb (CcWwanNetworkDialog *self, CcWwanNetworkRow *row)
+     self->selected_row = row;
+ }
+ 
++/*
++ * Plinius: below each network found, whether the phone could register there. plinius-satellite
++ * (org.plinius.Satellite, method Assess) compares the network with the SIM's own network and its
++ * list of satellite networks; ModemManager says which networks the SIM must not use. A forecast,
++ * the network decides. Without plinius-satellite only the forbidden networks get a line.
++ */
++#define SATELLITE_NAME      "org.plinius.Satellite"
++#define SATELLITE_PATH      "/org/plinius/Satellite"
++#define SATELLITE_INTERFACE "org.plinius.Satellite"
++/* Our own strings, translated in the domain of gnome-control-center-plinius */
++#define P_(s) g_dgettext ("plinius-control-center", s)
++
++/* Operator code -> a{sv} with Kind, Verdict and Provider, for the networks of one scan */
++static GHashTable *
++cc_wwan_network_dialog_assess (GList *networks)
++{
++    g_autoptr(GDBusConnection) bus = NULL;
++    g_autoptr(GVariant) reply = NULL;
++    g_autoptr(GVariantIter) iter = NULL;
++    GHashTable *assessed;
++    GVariantBuilder list;
++    GVariant *item;
++
++    assessed = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) g_variant_unref);
++    bus = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, NULL);
++    if (!bus || !networks)
++        return assessed;
++
++    g_variant_builder_init (&list, G_VARIANT_TYPE ("a(ss)"));
++    for (GList *l = networks; l; l = l->next) {
++        const gchar *code = mm_modem_3gpp_network_get_operator_code (l->data);
++        const gchar *name = mm_modem_3gpp_network_get_operator_long (l->data);
++
++        g_variant_builder_add (&list, "(ss)", code ? code : "", name ? name : "");
++    }
++
++    /* Quick, it only compares; without the service there is simply no answer */
++    reply = g_dbus_connection_call_sync (bus, SATELLITE_NAME, SATELLITE_PATH, SATELLITE_INTERFACE, "Assess",
++                                         g_variant_new ("(a(ss))", &list), G_VARIANT_TYPE ("(aa{sv})"),
++                                         G_DBUS_CALL_FLAGS_NO_AUTO_START, 2000, NULL, NULL);
++    if (!reply)
++        return assessed;
++
++    g_variant_get (reply, "(aa{sv})", &iter);
++    while ((item = g_variant_iter_next_value (iter))) {
++        const gchar *code = NULL;
++
++        if (g_variant_lookup (item, "Plmn", "&s", &code) && *code)
++            g_hash_table_replace (assessed, g_strdup (code), g_variant_ref (item));
++        g_variant_unref (item);
++    }
++    return assessed;
++}
++
++/* The line below a network's name, NULL for none */
++static gchar *
++cc_wwan_network_dialog_assessment_text (MMModem3gppNetwork *network, GVariant *assessed)
++{
++    const gchar *kind = "", *verdict = "", *provider = "";
++
++    if (mm_modem_3gpp_network_get_availability (network) == MM_MODEM_3GPP_NETWORK_AVAILABILITY_FORBIDDEN)
++        return g_strdup (P_("Your SIM must not use this network"));
++    if (!assessed)
++        return NULL;
++
++    g_variant_lookup (assessed, "Kind", "&s", &kind);
++    g_variant_lookup (assessed, "Verdict", "&s", &verdict);
++    g_variant_lookup (assessed, "Provider", "&s", &provider);
++
++    if (g_str_equal (verdict, "registered"))
++        return g_strdup (P_("Connected now"));
++    if (g_str_equal (kind, "home"))
++        return g_strdup (P_("Network of your SIM, registration possible"));
++    if (g_str_equal (kind, "satellite") && *provider)
++        /* Translators: %s is a satellite service, e.g. "O2 Satellite" */
++        return g_strdup_printf (P_("Satellite (%s): works if the provider accepts this phone"), provider);
++    if (g_str_equal (kind, "satellite"))
++        return g_strdup (P_("Satellite: works if the provider accepts this phone"));
++    if (g_str_equal (kind, "national"))
++        return g_strdup (P_("Other network in your country, usually refuses your SIM"));
++    if (g_str_equal (kind, "roaming"))
++        return g_strdup (P_("Network abroad, works if roaming is part of your contract"));
++    return NULL;
++}
++
+ /*
+  * cc_wwan_network_dialog_row_new:
+  * @self: a #CcWwanNetworkDialog
+  * @operator_name: (transfer full): The long operator name
+  * @operator_id: (transfer full): operator id
++ * @assessment: (nullable): Plinius: whether the phone could register there
+  */
+ static CcWwanNetworkRow *
+-cc_wwan_network_dialog_row_new (CcWwanNetworkDialog *self, const gchar *operator_name, const gchar *operator_code)
++cc_wwan_network_dialog_row_new (CcWwanNetworkDialog *self, const gchar *operator_name, const gchar *operator_code,
++                                const gchar *assessment)
+ {
+     CcWwanNetworkRow *row;
+-    GtkWidget *box, *label, *image;
++    GtkWidget *box, *labels, *label, *image;
+ 
+     row = g_object_new (CC_TYPE_WWAN_NETWORK_ROW, NULL);
+ 
+@@ -135,10 +222,23 @@ cc_wwan_network_dialog_row_new (CcWwanNetworkDialog *self, const gchar *operator
+     g_object_set (box, "margin-top", 18, "margin-bottom", 18, "margin-start", 18, "margin-end", 18, NULL);
+     gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), box);
+ 
++    labels = gtk_box_new (GTK_ORIENTATION_VERTICAL, 3);
++    gtk_widget_set_hexpand (labels, TRUE);
++    gtk_box_append (GTK_BOX (box), labels);
++
+     label = gtk_label_new (operator_name);
+-    gtk_widget_set_hexpand (label, TRUE);
+     gtk_widget_set_halign (label, GTK_ALIGN_START);
+-    gtk_box_append (GTK_BOX (box), label);
++    gtk_box_append (GTK_BOX (labels), label);
++
++    if (assessment) {
++        label = gtk_label_new (assessment);
++        gtk_widget_set_halign (label, GTK_ALIGN_START);
++        gtk_label_set_xalign (GTK_LABEL (label), 0);
++        gtk_label_set_wrap (GTK_LABEL (label), TRUE);
++        gtk_widget_add_css_class (label, "dim-label");
++        gtk_widget_add_css_class (label, "caption");
++        gtk_box_append (GTK_BOX (labels), label);
++    }
+ 
+     image = gtk_image_new_from_icon_name ("check-plain-symbolic");
+     gtk_widget_set_visible (image, FALSE);
+@@ -173,7 +273,7 @@ cc_wwan_network_dialog_update_current_network (CcWwanNetworkDialog *self)
+         child = next;
+     }
+ 
+-    row = cc_wwan_network_dialog_row_new (self, operator_name, "");
++    row = cc_wwan_network_dialog_row_new (self, operator_name, "", NULL);
+     self->selected_row = row;
+     gtk_widget_set_visible (GTK_WIDGET (row->ok_emblem), TRUE);
+     gtk_list_box_append (GTK_LIST_BOX (self->operator_list_box), GTK_WIDGET (row));
+@@ -182,6 +282,7 @@ cc_wwan_network_dialog_update_current_network (CcWwanNetworkDialog *self)
+ static void
+ cc_wwan_network_dialog_update (CcWwanNetworkDialog *self)
+ {
++    g_autoptr(GHashTable) assessed = NULL;
+     CcWwanNetworkRow *row;
+     GtkWidget *child;
+     GList *item;
+@@ -198,11 +299,18 @@ cc_wwan_network_dialog_update (CcWwanNetworkDialog *self)
+         child = next;
+     }
+ 
++    assessed = cc_wwan_network_dialog_assess (self->operator_list);
++
+     for (item = self->operator_list; item; item = item->next) {
++        g_autofree gchar *assessment = NULL;
++
+         operator_code = mm_modem_3gpp_network_get_operator_code (item->data);
+         operator_name = mm_modem_3gpp_network_get_operator_long (item->data);
++        assessment = cc_wwan_network_dialog_assessment_text (item->data,
++                                                             operator_code ? g_hash_table_lookup (assessed, operator_code)
++                                                                           : NULL);
+ 
+-        row = cc_wwan_network_dialog_row_new (self, operator_name, operator_code);
++        row = cc_wwan_network_dialog_row_new (self, operator_name, operator_code, assessment);
+         gtk_list_box_append (GTK_LIST_BOX (self->operator_list_box), GTK_WIDGET (row));
+     }
+ }

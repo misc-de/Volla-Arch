@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 11:10:00 +0100
+Subject: [PATCH] lockscreen: Center the unlock page on the screen
+
+Plinius: the unlock page (status, PIN entry or pattern pad, keypad,
+unlock button) was centered between a fixed 100 px top margin and the
+room kept clear of the fingerprint sensor, so it sat high on the screen.
+It now gets as much room above as below, the latter still clear of the
+sensor; without enough room for both it sits right above the sensor.
+---
+ src/lockscreen.c | 59 ++++++++++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 51 insertions(+), 8 deletions(-)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index da676482..3ffd6452 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -160,6 +160,8 @@ typedef struct {
+   guint               pattern_status_id;
+   /* Button and digit size of the keypad, set from the lock screen's size */
+   GtkCssProvider     *keypad_css;
++  /* Pending centering of the unlock page after a layout */
++  guint               center_unlock_id;
+   GtkWidget          *btn_submit;
+   GtkWidget          *btn_keyboard;
+   guint               idle_timer;
+@@ -1196,6 +1198,50 @@ setup_pattern (PhoshLockscreen *self)
+ }
+ 
+ 
++/*
++ * Center the unlock page (status, PIN entry or pattern pad, keypad, unlock button) on the
++ * screen: as much room above it as below, where the room below keeps clear of a fingerprint
++ * sensor under the display (update_slide_hint). Without enough room for both it sits right
++ * above the sensor.
++ */
++static gboolean
++center_unlock_page (gpointer user_data)
++{
++  PhoshLockscreen *self = PHOSH_LOCKSCREEN (user_data);
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  GtkWidget *box = GTK_WIDGET (priv->box_unlock);
++  int top = gtk_widget_get_margin_top (box);
++  int bottom = gtk_widget_get_margin_bottom (box);
++  int page, content;
++
++  priv->center_unlock_id = 0;
++
++  /* The natural size includes the margins, the allocation does not */
++  gtk_widget_get_preferred_height (box, NULL, &content);
++  content -= top + bottom;
++  page = gtk_widget_get_allocated_height (box) + top + bottom;
++
++  gtk_widget_set_margin_top (box, MAX (0, MIN (bottom, page - bottom - content)));
++
++  return G_SOURCE_REMOVE;
++}
++
++
++/*
++ * Center again after each layout: the page's height changes with the keypad size, the status
++ * text and the sensor margin. Done from an idle, as margins can't change during an allocation;
++ * a second pass finds the margin in place and stops.
++ */
++static void
++on_box_unlock_size_allocate (PhoshLockscreen *self)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++
++  if (priv->center_unlock_id == 0)
++    priv->center_unlock_id = g_idle_add (center_unlock_page, self);
++}
++
++
+ static void
+ phosh_lockscreen_constructed (GObject *object)
+ {
+@@ -1307,6 +1353,8 @@ phosh_lockscreen_constructed (GObject *object)
+ 
+   phosh_lockscreen_add_background (self);
+   setup_pattern (self);
++  g_signal_connect_object (priv->box_unlock, "size-allocate",
++                           G_CALLBACK (on_box_unlock_size_allocate), self, G_CONNECT_SWAPPED);
+ 
+   priv->cancel = g_cancellable_new ();
+   g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM,
+@@ -1352,6 +1400,7 @@ phosh_lockscreen_dispose (GObject *object)
+   g_clear_object (&priv->notification_settings);
+   g_clear_handle_id (&priv->pattern_status_id, g_source_remove);
+   g_clear_object (&priv->keypad_css);
++  g_clear_handle_id (&priv->center_unlock_id, g_source_remove);
+   g_clear_handle_id (&priv->idle_timer, g_source_remove);
+   g_clear_object (&priv->calls_manager);
+   g_clear_pointer (&priv->active, g_free);
+@@ -1413,19 +1462,13 @@ static void
+ phosh_lockscreen_configured (PhoshLayerSurface *layer_surface)
+ {
+   PhoshLockscreen *self = PHOSH_LOCKSCREEN (layer_surface);
+-  PhoshLockscreenPrivate *priv;
+-  guint height, margin = 100;
++  guint height;
+ 
+   g_return_if_fail (PHOSH_IS_LOCKSCREEN (self));
+ 
+-  priv = phosh_lockscreen_get_instance_private (self);
+   height = phosh_layer_surface_get_configured_height (layer_surface);
+ 
+-  /* Avoid margin on smaller displays */
+-  if (height < LOCKSCREEN_SMALL_DISPLAY)
+-    margin = 0;
+-
+-  gtk_widget_set_margin_top (GTK_WIDGET (priv->box_unlock), margin);
++  /* Plinius: the top margin centers the unlock page (center_unlock_page) */
+   update_slide_hint (self);
+   fit_unlock_controls (self, phosh_layer_surface_get_configured_width (layer_surface), height);
+ 

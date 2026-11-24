@@ -1,0 +1,311 @@
+#!/usr/bin/python3 -I
+"""Open the login keyring with the device key at session start.
+
+greetd logs the phone user in automatically (initial_session), so no password ever reaches
+gnome-keyring and its default keyring stayed locked. The first program that looked up a secret
+(goa-daemon, right after the session started) then raised gnome-keyring's unlock prompt, which
+does not say which application is asking.
+
+This program keeps a keyring labelled "login" locked with a random per-user key that lives
+outside the home directory (/var/lib/plinius-login-keyring/<uid>, made by plinius-login-keyring-key@.service
+before the user manager starts) and opens it before gnome-session starts:
+
+  * no "login" keyring yet: create it with the key and make it the default keyring;
+  * "login" keyring locked: unlock it with the key;
+  * the default keyring is another one with its own password (made by an earlier unlock or
+    create prompt): move its items into "login" as soon as it is open (at once if it already
+    is, otherwise after the user unlocks it one last time), keep a copy of the keyring files
+    and remove the old keyring, so that its items no longer raise prompts.
+
+The key protects the keyring file when the home directory is copied or backed up without the
+system; against someone with the whole device it is as strong as the disk encryption.
+Nothing is ever deleted unless every item was copied and read back with the same secret.
+"""
+
+import datetime
+import os
+import shutil
+import socket
+import sys
+
+from gi.repository import Gio, GLib
+
+# Overridable only for tests in a private D-Bus session (see the package's test notes)
+KEY_DIR = os.environ.get("PLINIUS_LOGIN_KEYRING_KEY_DIR", "/var/lib/plinius-login-keyring")
+
+BUS_NAME = "org.freedesktop.secrets"
+SERVICE_PATH = "/org/freedesktop/secrets"
+SERVICE = "org.freedesktop.Secret.Service"
+COLLECTION = "org.freedesktop.Secret.Collection"
+ITEM = "org.freedesktop.Secret.Item"
+PROPERTIES = "org.freedesktop.DBus.Properties"
+# gnome-keyring's own interface for keyrings with a master password given by the caller:
+# the only way to create or unlock a keyring without a prompt
+INTERNAL = "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface"
+
+LOGIN_LABEL = "login"
+SESSION_COLLECTION = SERVICE_PATH + "/collection/session"
+NO_OBJECT = "/"
+# Copies of keyring files replaced by the move; encrypted with their old password
+BACKUP_ROOT = os.path.join(GLib.get_user_data_dir(), "plinius-login-keyring")
+KEYRING_DIR = os.path.join(GLib.get_user_data_dir(), "keyrings")
+
+
+def log(message):
+    # stderr goes to the journal (journalctl --user -u plinius-login-keyring)
+    print(message, file=sys.stderr, flush=True)
+
+
+def notify(state):
+    """Tell systemd (Type=notify) that the keyring is ready; later steps run on."""
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(address)
+            sock.sendall(state.encode())
+    except OSError as error:
+        log(f"could not notify systemd: {error}")
+
+
+def read_key():
+    """Return the device key as bytes, or None if it is missing or not private."""
+    uid = os.getuid()
+    path = os.path.join(KEY_DIR, str(uid))
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        log(f"no device key at {path}; plinius-login-keyring-key@{uid}.service did not run")
+        return None
+    except OSError as error:
+        log(f"cannot open device key {path}: {error}")
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        # Someone else's file or one others can read is not ours to use
+        if info.st_uid != uid or info.st_mode & 0o077:
+            log(f"refusing device key {path}: owner {info.st_uid}, mode {info.st_mode & 0o777:o}")
+            return None
+        key = handle.read().strip()
+    if len(key) < 32:
+        log(f"refusing device key {path}: too short")
+        return None
+    return key
+
+
+class Secrets:
+    """Thin synchronous wrapper around the Secret Service of gnome-keyring."""
+
+    def __init__(self):
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        # "plain": the key only crosses the user's own session bus, whose other peers could
+        # ask the opened keyring for every secret anyway
+        _, self.session = self.call(SERVICE_PATH, SERVICE, "OpenSession",
+                                    GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))),
+                                    "(vo)")
+
+    def call(self, path, interface, method, args=None, reply=None, timeout_ms=25000):
+        result = self.bus.call_sync(BUS_NAME, path, interface, method, args,
+                                    GLib.VariantType(reply) if reply else None,
+                                    Gio.DBusCallFlags.NONE, timeout_ms, None)
+        return result.unpack() if result is not None else None
+
+    def prop(self, path, interface, name):
+        return self.call(path, PROPERTIES, "Get", GLib.Variant("(ss)", (interface, name)),
+                         "(v)")[0]
+
+    def secret(self, value, content_type="text/plain"):
+        # Secret struct (session, parameters, value, content type) for a plain session
+        return (self.session, b"", value, content_type)
+
+    def collections(self):
+        return [path for path in self.prop(SERVICE_PATH, SERVICE, "Collections")
+                if path != SESSION_COLLECTION]
+
+    def locked(self, collection):
+        return self.prop(collection, COLLECTION, "Locked")
+
+    def label(self, collection):
+        return self.prop(collection, COLLECTION, "Label")
+
+    def alias(self, name):
+        return self.call(SERVICE_PATH, SERVICE, "ReadAlias", GLib.Variant("(s)", (name,)),
+                         "(o)")[0]
+
+    def set_alias(self, name, collection):
+        self.call(SERVICE_PATH, SERVICE, "SetAlias",
+                  GLib.Variant("(so)", (name, collection)))
+
+    def create(self, label, key):
+        properties = {"org.freedesktop.Secret.Collection.Label": GLib.Variant("s", label)}
+        return self.call(SERVICE_PATH, INTERNAL, "CreateWithMasterPassword",
+                         GLib.Variant("(a{sv}(oayays))", (properties, self.secret(key))),
+                         "(o)")[0]
+
+    def unlock(self, collection, key):
+        self.call(SERVICE_PATH, INTERNAL, "UnlockWithMasterPassword",
+                  GLib.Variant("(o(oayays))", (collection, self.secret(key))))
+
+    def items(self, collection):
+        return self.prop(collection, COLLECTION, "Items")
+
+    def get_secrets(self, items):
+        if not items:
+            return {}
+        return self.call(SERVICE_PATH, SERVICE, "GetSecrets",
+                         GLib.Variant("(aoo)", (items, self.session)),
+                         "(a{o(oayays)})")[0]
+
+
+def find_login(secrets):
+    """The collection labelled "login" (path .../collection/login), or None."""
+    for path in secrets.collections():
+        if path.rsplit("/", 1)[-1] == LOGIN_LABEL or secrets.label(path) == LOGIN_LABEL:
+            return path
+    return None
+
+
+def open_login(secrets, key):
+    """Create or unlock the login keyring; return its path or None if the key does not fit."""
+    login = find_login(secrets)
+    if login is None:
+        login = secrets.create(LOGIN_LABEL, key)
+        log(f"created login keyring {login}")
+        return login
+    if secrets.locked(login):
+        try:
+            secrets.unlock(login, key)
+        except GLib.Error as error:
+            # A keyring from another installation or with a hand-set password: leave it to
+            # the user, never replace it
+            log(f"device key does not open {login} ({error.message}); left locked")
+            return None
+        log(f"unlocked {login}")
+    return login
+
+
+def backup_keyring_files():
+    """Copy every keyring file before one is removed; return the copy's directory."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = os.path.join(BACKUP_ROOT, f"backup-{stamp}")
+    os.makedirs(target, mode=0o700, exist_ok=False)
+    for name in os.listdir(KEYRING_DIR):
+        source = os.path.join(KEYRING_DIR, name)
+        if os.path.isfile(source):
+            shutil.copy2(source, target)
+    return target
+
+
+def move_items(secrets, old, login):
+    """Copy all items of the open keyring old into login, check them, then remove old."""
+    items = secrets.items(old)
+    values = secrets.get_secrets(items)
+    copies = []
+    for item in items:
+        label = secrets.prop(item, ITEM, "Label")
+        attributes = secrets.prop(item, ITEM, "Attributes")
+        _, _, value, content_type = values[item]
+        # Gio unpacks "ay" as a list of ints
+        value = bytes(value)
+        properties = {
+            "org.freedesktop.Secret.Item.Label": GLib.Variant("s", label),
+            "org.freedesktop.Secret.Item.Attributes": GLib.Variant("a{ss}", attributes),
+        }
+        copy, prompt = secrets.call(
+            login, COLLECTION, "CreateItem",
+            GLib.Variant("(a{sv}(oayays)b)",
+                         (properties, secrets.secret(value, content_type), True)),
+            "(oo)")
+        if copy == NO_OBJECT:
+            log(f"keyring asked for a prompt ({prompt}) to store '{label}'; old keyring kept")
+            return False
+        copies.append((copy, attributes, value))
+
+    # Read every copy back before anything is removed
+    stored = secrets.get_secrets([copy for copy, _, _ in copies])
+    for copy, attributes, value in copies:
+        if (bytes(stored.get(copy, (None, None, [], None))[2]) != value
+                or secrets.prop(copy, ITEM, "Attributes") != attributes):
+            log(f"copy {copy} differs from the original; old keyring kept")
+            return False
+
+    backup = backup_keyring_files()
+    prompt = secrets.call(old, COLLECTION, "Delete", None, "(o)")[0]
+    if prompt != NO_OBJECT:
+        log(f"removing {old} needs a prompt ({prompt}); copy in {backup}, old keyring kept")
+        return False
+    log(f"moved {len(copies)} item(s) from {old} into {login}; old files copied to {backup}")
+    return True
+
+
+def wait_until_open(secrets, collection):
+    """Block until collection is unlocked (by the user) or gone; True when it is open."""
+    loop = GLib.MainLoop()
+    state = {"open": False}
+
+    def check(*_):
+        try:
+            if collection not in secrets.collections():
+                loop.quit()
+            elif not secrets.locked(collection):
+                state["open"] = True
+                loop.quit()
+        except GLib.Error as error:
+            log(f"keyring went away while waiting: {error.message}")
+            loop.quit()
+
+    # gnome-keyring announces lock changes as CollectionChanged on the service
+    for signal in ("CollectionChanged", "CollectionDeleted"):
+        secrets.bus.signal_subscribe(BUS_NAME, SERVICE, signal, SERVICE_PATH, None,
+                                     Gio.DBusSignalFlags.NONE, check)
+    check()
+    if not state["open"] and collection in secrets.collections():
+        loop.run()
+    return state["open"]
+
+
+def main():
+    key = read_key()
+    if key is None:
+        notify("READY=1")
+        return 1
+    try:
+        secrets = Secrets()
+        login = open_login(secrets, key)
+    except GLib.Error as error:
+        log(f"Secret Service unavailable: {error.message}")
+        notify("READY=1")
+        return 1
+    if login is None:
+        notify("READY=1")
+        return 0
+
+    old = secrets.alias("default")
+    if old != login:
+        # New secrets go to login from now on, without a create or unlock prompt
+        secrets.set_alias("default", login)
+        log(f"default keyring is now {login}")
+    # gnome-session may start: everything it looks up is open now
+    notify("READY=1")
+
+    if old in (login, NO_OBJECT) or old not in secrets.collections():
+        return 0
+    # An old default keyring with its own password: its items still match lookups and would
+    # raise the prompt again, so take them over once it is open
+    if secrets.locked(old):
+        log(f"{old} still has its own password; waiting for it to be unlocked once")
+        if not wait_until_open(secrets, old):
+            log(f"{old} was removed or stayed locked; nothing moved")
+            return 0
+    try:
+        return 0 if move_items(secrets, old, login) else 1
+    except (GLib.Error, OSError) as error:
+        log(f"moving {old} failed: {error}; old keyring kept")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

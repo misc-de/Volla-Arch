@@ -1,0 +1,268 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:12:06 +0100
+Subject: [PATCH] view: Windows open and come to the screen they were picked on
+
+With a second screen (e.g. a virtual one shown over VNC) the user works
+on the phone by touch and on the other screen with a pointer. A touch
+does not move the cursor, so the cursor does not tell which screen the
+user is on. The seat now remembers where the last button press or touch
+began, and phoc uses that screen:
+
+- A new window opens there (a dialog on the screen of its parent), also
+  when it is maximized or fullscreen from the start, as Firefox restores
+  itself; such windows stayed on the screen they were created on.
+- A window activated through foreign-toplevel comes there: a task bar on
+  the second screen and Phosh's overview on the phone both list all
+  windows, picking one brings it to that screen.
+
+Moving reuses the code of move-to-monitor, split out as
+phoc_view_move_to_output().
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/cursor.c |  10 +++++
+ src/seat.h   |   4 ++
+ src/view.c   | 117 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ src/view.h   |   1 +
+ 4 files changed, 122 insertions(+), 10 deletions(-)
+
+diff --git a/src/cursor.c b/src/cursor.c
+index 3e509ae..a7a576b 100644
+--- a/src/cursor.c
++++ b/src/cursor.c
+@@ -1330,6 +1330,12 @@ phoc_cursor_press_button (PhocCursor              *self,
+   PhocView *view;
+   struct wlr_surface *surface;
+ 
++  if (state == WLR_BUTTON_PRESSED) {
++    seat->has_last_press = TRUE;
++    seat->last_press_lx = lx;
++    seat->last_press_ly = ly;
++  }
++
+   surface = phoc_desktop_wlr_surface_at (desktop, lx, ly, &sx, &sy, &view);
+   if (state == WLR_BUTTON_PRESSED && view && phoc_seat_grab_meta_press (seat)) {
+     phoc_seat_set_focus_view (seat, view);
+@@ -1570,6 +1576,10 @@ phoc_cursor_handle_touch_down (PhocCursor                  *self,
+     seat->touch_y = ly;
+   }
+ 
++  seat->has_last_press = TRUE;
++  seat->last_press_lx = lx;
++  seat->last_press_ly = ly;
++
+   double sx, sy;
+   PhocView *view;
+   struct wlr_surface *surface = phoc_desktop_wlr_surface_at (desktop, lx, ly, &sx, &sy, &view);
+diff --git a/src/seat.h b/src/seat.h
+index db9d405..2f9c7c1 100644
+--- a/src/seat.h
++++ b/src/seat.h
+@@ -46,6 +46,10 @@ typedef struct _PhocSeat {
+   int32_t                         touch_id;
+   double                          touch_x, touch_y;
+ 
++  /* Where the last button press or touch began, in layout coordinates */
++  gboolean                        has_last_press;
++  double                          last_press_lx, last_press_ly;
++
+   /*  If the focused layer is set, views cannot receive keyboard focus */
+   struct wlr_layer_surface_v1    *focused_layer;
+ 
+diff --git a/src/view.c b/src/view.c
+index 3f6c180..fb87122 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -276,6 +276,46 @@ handle_toplevel_handle_request_maximize (struct wl_listener *listener, void *dat
+ }
+ 
+ 
++/*
++ * The output where the seat's last button press or touch began. A touch
++ * does not move the cursor, so with a phone and a second screen this, not
++ * the cursor, tells which screen the user is on.
++ */
++static PhocOutput *
++view_output_of_last_press (PhocSeat *seat)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++
++  if (seat == NULL || !seat->has_last_press)
++    return NULL;
++
++  return phoc_desktop_layout_get_output (desktop, seat->last_press_lx, seat->last_press_ly);
++}
++
++/*
++ * A task bar on one screen or the overview on another activates a window
++ * through foreign-toplevel: the window comes to the screen where the
++ * click or the tap for that happened.
++ */
++static void
++view_move_to_output_of_last_press (PhocView *self, PhocSeat *seat)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  PhocOutput *target, *current;
++
++  if (wl_list_length (&desktop->outputs) < 2)
++    return;
++
++  target = view_output_of_last_press (seat);
++  current = phoc_view_get_output (self);
++  if (target == NULL || target == current)
++    return;
++
++  g_debug ("Moving activated view %p to %s", self, phoc_output_get_name (target));
++  phoc_view_move_to_output (self, target);
++}
++
++
+ static void
+ handle_toplevel_handle_request_activate (struct wl_listener *listener, void *data)
+ {
+@@ -288,8 +328,11 @@ handle_toplevel_handle_request_activate (struct wl_listener *listener, void *dat
+     PhocSeat *seat = PHOC_SEAT (elem->data);
+ 
+     g_assert (PHOC_IS_SEAT (seat));
+-    if (event->seat == seat->seat)
+-      phoc_seat_set_focus_view (seat, self);
++    if (event->seat != seat->seat)
++      continue;
++
++    view_move_to_output_of_last_press (self, seat);
++    phoc_seat_set_focus_view (seat, self);
+   }
+ }
+ 
+@@ -1127,11 +1170,8 @@ phoc_view_move_to_next_output (PhocView *self, enum wlr_direction direction)
+ {
+   PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+   struct wlr_output_layout *layout = desktop->layout;
+-  const struct wlr_output_layout_output *l_output;
+   PhocOutput *output;
+   struct wlr_output *new_output;
+-  struct wlr_box usable_area;
+-  double x, y;
+ 
+   output = phoc_view_get_output (self);
+   if (!output)
+@@ -1143,9 +1183,35 @@ phoc_view_move_to_next_output (PhocView *self, enum wlr_direction direction)
+   if (!new_output)
+     return false;
+ 
+-  output = PHOC_OUTPUT (new_output->data);
++  phoc_view_move_to_output (self, PHOC_OUTPUT (new_output->data));
++  return true;
++}
++
++/**
++ * phoc_view_move_to_output:
++ * @self: The view
++ * @output: The output to move the view to
++ *
++ * Moves the view to the given output: a floating view is centered on it,
++ * a maximized, tiled or fullscreen view takes that state on the new output.
++ */
++void
++phoc_view_move_to_output (PhocView *self, PhocOutput *output)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  const struct wlr_output_layout_output *l_output;
++  struct wlr_output *new_output;
++  struct wlr_box usable_area;
++  double x, y;
++
++  g_assert (PHOC_IS_VIEW (self));
++  g_assert (PHOC_IS_OUTPUT (output));
++
++  new_output = output->wlr_output;
+   usable_area = output->usable_area;
+   l_output = wlr_output_layout_get (desktop->layout, new_output);
++  if (!l_output)
++    return;
+ 
+   /* Update saved position to the new output */
+   x = usable_area.x + l_output->x + usable_area.width / 2 - self->saved.width / 2;
+@@ -1155,12 +1221,11 @@ phoc_view_move_to_next_output (PhocView *self, enum wlr_direction direction)
+   self->saved.y = y;
+ 
+   if (phoc_view_is_fullscreen (self)) {
+-    phoc_view_set_fullscreen (self, true, PHOC_OUTPUT (new_output->data));
+-    return true;
++    phoc_view_set_fullscreen (self, true, output);
++    return;
+   }
+ 
+   phoc_view_arrange (self, output, TRUE);
+-  return true;
+ }
+ 
+ 
+@@ -1272,6 +1337,10 @@ view_center (PhocView *self, PhocOutput *output)
+     return false;
+   cursor = phoc_seat_get_cursor (seat);
+ 
++  /* Where the user last clicked or tapped, then where the cursor is */
++  if (!output)
++    output = view_output_of_last_press (seat);
++
+   if (!output) {
+     struct wlr_output *wlr_output = wlr_output_layout_output_at (desktop->layout,
+                                                                  cursor->cursor->x,
+@@ -1536,6 +1605,34 @@ phoc_view_set_initial_focus (PhocView *self)
+   phoc_seat_set_focus_view (seat, self);
+ }
+ 
++/*
++ * A new window opens on the screen where the user last clicked or tapped,
++ * a dialog on the one of its parent. That also holds for a window that is
++ * maximized or fullscreen from the start (e.g. Firefox restoring its
++ * state), which would otherwise stay where it was created.
++ */
++static void
++view_place_initially (PhocView *self)
++{
++  PhocInput *input = phoc_server_get_input (phoc_server_get_default ());
++  PhocOutput *target = NULL;
++
++  if (self->parent)
++    target = phoc_view_get_output (self->parent);
++
++  if (phoc_view_is_floating (self)) {
++    view_center (self, target);
++    return;
++  }
++
++  if (!target)
++    target = view_output_of_last_press (phoc_input_get_last_active_seat (input));
++
++  if (target && target != phoc_view_get_output (self))
++    phoc_view_move_to_output (self, target);
++}
++
++
+ /**
+  * phoc_view_setup:
+  * @self: The view to setup
+@@ -1552,7 +1649,7 @@ phoc_view_setup (PhocView *self)
+   view_create_foreign_toplevel_handle (self);
+   phoc_view_set_initial_focus (self);
+ 
+-  view_center (self, NULL);
++  view_place_initially (self);
+   view_update_scale (self);
+ 
+   view_update_output (self, NULL);
+diff --git a/src/view.h b/src/view.h
+index d9704f5..5831ce9 100644
+--- a/src/view.h
++++ b/src/view.h
+@@ -170,6 +170,7 @@ PhocView *            phoc_view_get_root (PhocView *self);
+ 
+ void                  phoc_view_move (PhocView *self, double x, double y);
+ bool                  phoc_view_move_to_next_output (PhocView *self, enum wlr_direction direction);
++void                  phoc_view_move_to_output (PhocView *self, PhocOutput *output);
+ void                  phoc_view_move_to_corner (PhocView *self, PhocViewCorner corner);
+ void                  phoc_view_move_resize (PhocView *self,
+                                              double    x,

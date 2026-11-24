@@ -1,0 +1,60 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=sherpa-onnx
+pkgver=2.0.2
+pkgrel=1
+pkgdesc="Offline speech recognition and voice activity detection with ONNX Runtime (C API and tools)"
+arch=(aarch64 x86_64)  # x86_64 for the KVM preview
+url="https://github.com/k2-fsa/sherpa-onnx"
+# sherpa-onnx Apache-2.0; statically inside: kaldi-native-fbank, kaldi-decoder, openfst (Apache-2.0),
+# simple-sentencepiece, kaldi-native-io, kaldifst, kaldi-hmm-gmm (Apache-2.0), kissfft (BSD-3-Clause),
+# nlohmann-json (MIT), utf8proc (MIT, its Unicode tables Unicode-DFS-2015)
+license=(Apache-2.0 BSD-3-Clause MIT Unicode-DFS-2015)
+# Built against the ONNX Runtime headers, it requests that C API version at runtime
+depends=(gcc-libs glibc 'onnxruntime-plinius>=1.32.0')
+makedepends=(cmake ninja python)
+# The CMake build fetches its small dependencies at configure time (FetchContent with SHA256
+# in cmake/*.cmake); ONNX Runtime comes from onnxruntime-plinius instead of a prebuilt download.
+# Without TTS and speaker diarization for now: the keyboard only needs recognition and the VAD.
+# 2.0 changed the C ABI (new field in SherpaOnnxOfflineRecognizerConfig, 64-bit VAD positions)
+# without a soname: everything linking the C API (plinius-dictate) has to be rebuilt with it.
+options=(!lto)
+source=("sherpa-onnx-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('187627fa17a2a6d7024cd32f5bbcf8ff414151c14f739532940c24aa7cdc7d69')
+
+build() {
+	# onnxruntime-plinius installs its headers to /usr/include/onnxruntime
+	SHERPA_ONNXRUNTIME_INCLUDE_DIR=/usr/include/onnxruntime \
+	SHERPA_ONNXRUNTIME_LIB_DIR=/usr/lib \
+	cmake -B build -S "sherpa-onnx-$pkgver" -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-DBUILD_SHARED_LIBS=ON \
+		-DSHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE=ON \
+		-DSHERPA_ONNX_ENABLE_C_API=ON \
+		-DSHERPA_ONNX_ENABLE_BINARY=ON \
+		-DSHERPA_ONNX_BUILD_C_API_EXAMPLES=OFF \
+		-DSHERPA_ONNX_ENABLE_PYTHON=OFF \
+		-DSHERPA_ONNX_ENABLE_TESTS=OFF \
+		-DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
+		-DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF \
+		-DSHERPA_ONNX_ENABLE_TTS=OFF \
+		-DSHERPA_ONNX_ENABLE_SPEAKER_DIARIZATION=OFF
+	cmake --build build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+	# Upstream installs the pkg-config file to the prefix itself
+	install -Dm644 "$pkgdir/usr/sherpa-onnx.pc" -t "$pkgdir/usr/lib/pkgconfig"
+	rm "$pkgdir/usr/sherpa-onnx.pc"
+	# onnxruntime belongs to onnxruntime-plinius; CMake copies it next to the libraries
+	rm -f "$pkgdir"/usr/lib/libonnxruntime*.so*
+	install -Dm644 "sherpa-onnx-$pkgver/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname"
+	# The Unicode data license asks for its notice next to every copy of the tables
+	install -Dm644 build/_deps/utf8proc-src/LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/utf8proc"
+	# BSD-3-Clause asks for the notice in binary copies too
+	install -Dm644 build/_deps/kissfft-src/COPYING build/_deps/kissfft-src/LICENSES/BSD-3-Clause \
+		-t "$pkgdir/usr/share/licenses/$pkgname/kissfft"
+}

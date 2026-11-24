@@ -1,0 +1,62 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-health
+pkgver=0.2
+pkgrel=3
+pkgdesc="Phone self-test after boot: container, display on the GPU, audio, modem, Wi-Fi, Bluetooth"
+arch=(any)
+license=(MIT)
+# Checks the layers an update can break (docs/PAKETIERUNG.md, "Gerätetest und Freigabe").
+# Notification via org.freedesktop.Notifications using gdbus (glib2); a tap opens Settings →
+# System → Self-Test (gnome-control-center-plinius), whose "Check Again" runs
+# "pkexec plinius-health check" (polkit). Strings English, translated in *.po.
+depends=(bash coreutils gawk grep procps-ng systemd util-linux lxc pipewire modemmanager glib2 gettext polkit)
+makedepends=(gettext)
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-health
+	notify
+	plinius-health.service
+	plinius-health.timer
+	plinius-health-notify.service
+	org.plinius.health.policy
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('6fa0ae501cf7b7e877ef957234fce60e22dbd6e17310fc9c34c4e0f3d7178d08'
+	'678117954f9ce824d65c22cb5b0282db7c8ce3e1a7bbc66bd8290361208577cb'
+	'1b3a85e7e0d194a818924e9ff8887a5621a3f82f6c2e4adbd9d747a082eaea36'
+	'6000275f636c382067f5f62fc9d8d44ec2ed25cdeafaf3258165591242b87e5e'
+	'53387a0cf7f924e571fb6044bf94218b0e9577f5da244f187cd1bc375613f75b'
+	'afaee7de3bd4a6b49f746915843e07e79173b740b56ce399fa1d233cc13bd805'
+	'd7939fbfb6a7345222991db9b6d421a73f06b38e9a1bc8ed393ae0b4948616a7'
+	'3ecca2a0b4e38cac9dbc531b5a50c556bcfb8c603ff13147d0746fe70dac445f'
+	'313815af3b7402d200386ef69b71b395126e83acbeaa008bbb3dd15339feda56'
+	'81ead5c4c0a3f1a9b18913cf77f5c22c97e20ac7f846b6746ccf9b0e449fb412'
+	'a84c19f920d0e4b25551d606bc04297675ef107ecdfb93b144c2863e1efd7086'
+	'c957902779634c760675fd79b789b7478fb04335fab0e15c2494397a041c248a'
+	'2c0fc18594f8f3097bf36e71e8ba8ac752c27870518f9cf29e11c9f0c0ac5bd5'
+	'f326dd5c2aa5f05e604b49d9b32fdfbafcaf47a2479dd93ebd2c968311ae8789'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-health -t "$pkgdir/usr/bin"
+	install -Dm755 notify -t "$pkgdir/usr/lib/plinius-health"
+	install -Dm644 plinius-health.service plinius-health.timer -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 plinius-health-notify.service -t "$pkgdir/usr/lib/systemd/user"
+	install -Dm644 org.plinius.health.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	# A self-test that has to be switched on would be missing exactly when it is needed
+	install -d "$pkgdir/usr/lib/systemd/system/timers.target.wants" \
+		"$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../plinius-health.timer "$pkgdir/usr/lib/systemd/system/timers.target.wants/"
+	ln -s ../plinius-health-notify.service \
+		"$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-health.mo"
+	done
+}

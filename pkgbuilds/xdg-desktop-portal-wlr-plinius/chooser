@@ -1,0 +1,178 @@
+#!/usr/bin/python3 -P
+"""Output chooser for xdg-desktop-portal-wlr on a phone (chooser_type=dmenu).
+
+xdpw writes what may be shared to stdin, one line each ("Monitor: DSI-1 <description>",
+"Window: <title> (<app id>)") and shares the line printed to stdout; no line cancels.
+
+A screencast started from Phosh's cast quick setting needs no second question: the tap on the
+TV is the consent. The quick setting leaves a stamp in the runtime directory, which only
+programs of the session outside a sandbox can write (they can read the screen through
+wlr-screencopy anyway). A fresh empty stamp picks the built-in display; a stamp naming a screen
+(Schwupp's desktop on the TV writes the virtual screen's name, e.g. HEADLESS-1) picks that one,
+and nothing when it is not there: better no picture than the phone's screen in its place.
+
+Any other request asks in a window of its own: one row per screen (the phone, the desktop over
+VNC while it runs) and window, and Cancel. It is an ordinary window, so the rest of the phone
+stays usable while it is open; slurp, the chooser before, covered the whole screen and took no
+tap. xdpw waits for the chooser before it answers any other screencast request, so without an
+answer the question cancels itself after a minute.
+"""
+
+import gettext
+import os
+import sys
+import time
+from pathlib import Path
+
+DOMAIN = "xdg-desktop-portal-wlr-plinius"
+_ = gettext.translation(DOMAIN, fallback=True).gettext
+
+APP_ID = "org.plinius.ScreencastChooser"
+# The quick setting writes the stamp right before it starts the screencast
+STAMP_MAX_AGE = 15
+# Seconds until an unanswered question cancels itself
+TIMEOUT = 60
+# Connector names of a built-in display in wlroots
+BUILT_IN = ("DSI-", "eDP-", "LVDS-")
+
+
+def stamp_path(env=os.environ):
+    runtime = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(runtime) / "plinius-screencast-consent"
+
+
+def take_stamp(path, now=None):
+    """The screen the quick setting asked for: "" for the built-in display, a name for that
+    screen, None without a fresh stamp. One stamp, one screencast: it is removed either way."""
+    try:
+        mtime = path.stat().st_mtime
+        content = path.read_text(errors="replace").strip() if path.is_file() else ""
+    except OSError:
+        return None
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    age = (time.time() if now is None else now) - mtime
+    return content if 0 <= age <= STAMP_MAX_AGE else None
+
+
+def parse(lines):
+    """The sources xdpw offers, as (kind, name, label) with kind "monitor" or "window"; the
+    label is the line to print. For a window, name is its title and app id."""
+    sources = []
+    for line in lines:
+        line = line.rstrip("\n")
+        if line.startswith("Monitor: "):
+            name = line[len("Monitor: "):].split(" ", 1)[0]
+            if name:
+                sources.append(("monitor", name, line))
+        elif line.startswith("Window: "):
+            rest = line[len("Window: "):]
+            title, app_id = rest, ""
+            if rest.endswith(")") and " (" in rest:
+                title, app_id = rest[:-1].rsplit(" (", 1)
+            sources.append(("window", (title, app_id), line))
+    return sources
+
+
+def built_in(sources):
+    """The line of the phone's own display, or None."""
+    for kind, name, label in sources:
+        if kind == "monitor" and name.startswith(BUILT_IN):
+            return label
+    return None
+
+
+def monitor(sources, wanted):
+    """The line of the screen named wanted, or None."""
+    for kind, name, label in sources:
+        if kind == "monitor" and name == wanted:
+            return label
+    return None
+
+
+def describe(kind, name):
+    """Title, subtitle and icon name of a row."""
+    if kind == "window":
+        title, app_id = name
+        return (title or app_id or _("Window"), app_id if title else "",
+                "focus-windows-symbolic")
+    if name.startswith(BUILT_IN):
+        return _("Phone Screen"), "", "phone-symbolic"
+    if name.startswith("HEADLESS-"):
+        return _("Desktop"), _("The extended desktop over VNC"), "video-display-symbolic"
+    return _("Screen {name}").format(name=name), "", "video-display-symbolic"
+
+
+def ask(sources, timeout=TIMEOUT):
+    """Shows the question; returns the chosen line or None (Cancel, closed, timed out)."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Adw", "1")
+    from gi.repository import Adw, Gio, GLib, Gtk
+
+    answer = []
+
+    def finish(label=None):
+        if label is not None and not answer:
+            answer.append(label)
+        app.quit()
+
+    def activate(app):
+        win = Adw.ApplicationWindow(application=app, title=_("Share Screen"),
+                                    default_width=360, default_height=640)
+        win.connect("close-request", lambda *_a: finish() or False)
+
+        header = Adw.HeaderBar(show_end_title_buttons=False)
+        cancel = Gtk.Button(label=_("Cancel"))
+        cancel.connect("clicked", lambda *_a: finish())
+        header.pack_start(cancel)
+
+        rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        rows.add_css_class("boxed-list")
+        for kind, name, label in sources:
+            title, subtitle, icon = describe(kind, name)
+            row = Adw.ActionRow(title=title, subtitle=subtitle, activatable=True)
+            row.add_prefix(Gtk.Image(icon_name=icon))
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated", lambda _r, line=label: finish(line))
+            rows.append(row)
+
+        page = Adw.StatusPage(
+            icon_name="screen-shared-symbolic", title=_("Share Your Screen?"),
+            description=_("An app wants to see a screen. While it is shared, the app sees "
+                          "everything shown there. Without an answer the request ends after "
+                          "a minute."),
+            child=Adw.Clamp(maximum_size=480, child=rows))
+
+        view = Adw.ToolbarView(content=page)
+        view.add_top_bar(header)
+        win.set_content(view)
+        GLib.timeout_add_seconds(timeout, lambda: finish() or False)
+        win.present()
+
+    app = Adw.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE)
+    app.connect("activate", activate)
+    app.run([])
+    return answer[0] if answer else None
+
+
+def main(stdin=sys.stdin, stdout=sys.stdout, env=os.environ, ask=ask):
+    sources = parse(stdin)
+    wanted = take_stamp(stamp_path(env))
+    if wanted:
+        # A named screen or nothing
+        choice = monitor(sources, wanted)
+    else:
+        choice = built_in(sources) if wanted is not None else None
+        if choice is None and sources:
+            choice = ask(sources)
+    if choice is None:
+        return 1
+    print(choice, file=stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

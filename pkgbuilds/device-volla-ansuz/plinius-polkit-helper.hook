@@ -1,0 +1,12 @@
+# polkit's agent helper setuid root, as on kernels without SO_PEERPIDFD (see the script)
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = polkit
+Target = device-volla-ansuz
+
+[Action]
+Description = Letting polkit check passwords without pidfd sockets...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plinius-polkit-helper

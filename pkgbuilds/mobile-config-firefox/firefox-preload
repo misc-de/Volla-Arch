@@ -1,0 +1,22 @@
+#!/bin/sh
+# Read Firefox into the page cache once after login, so that the first start
+# does not wait for the SD card (measured: 7.1 s cold, 1.3-1.9 s warm).
+# Runs with idle CPU and I/O priority (see the .service); it only reads, the
+# kernel drops the pages again when memory gets short.
+[ -x /usr/lib/firefox/firefox ] || exit 0
+
+# The program: libxul.so, the omni.ja archives, the bundled add-ons
+find /usr/lib/firefox /usr/share/mobile-config-firefox -type f -print0 2>/dev/null |
+	xargs -0 -r cat > /dev/null 2>&1
+
+# The profiles: databases, prefs, session, startup cache. Not the web cache
+# and not site storage, and nothing above 20 MB (rarely needed at start).
+config=${XDG_CONFIG_HOME:-$HOME/.config}/mozilla/firefox
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/mozilla/firefox
+for dir in "$config"/*/ "$cache"/*/startupCache/; do
+	[ -d "$dir" ] || continue
+	find "$dir" -type f -size -20M \
+		-not -path '*/cache2/*' -not -path '*/storage/default/http*' -print0 |
+		xargs -0 -r cat > /dev/null 2>&1
+done
+exit 0

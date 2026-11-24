@@ -1,0 +1,11 @@
+#!/bin/sh
+# Makes printing work right after CUPS is installed: Arch leaves new services disabled, so
+# this enables the printing service (started on demand through its socket) and avahi, which
+# finds network printers. avahi is enabled as a service, not only its socket: CUPS reaches it
+# over D-Bus through the alias dbus-org.freedesktop.Avahi.service, which only "enable" of the
+# service creates. The image scripts enable the same units; this covers CUPS installed later
+# from Software. Started at once only on a running system, not in the chroot of an image build.
+systemctl enable cups.socket avahi-daemon.service
+if [ -d /run/systemd/system ]; then
+	systemctl start cups.socket avahi-daemon.service
+fi

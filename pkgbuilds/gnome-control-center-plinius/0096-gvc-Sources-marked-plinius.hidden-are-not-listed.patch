@@ -1,0 +1,34 @@
+From f4dc8a563951bc3ec02b73e7778d0951c36bd0fd Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 20:38:26 +0100
+Subject: [PATCH] Sources marked plinius.hidden are not listed
+
+audio-hal-bridge offers the FM tuner's sound as a source of its own, which
+the radio app records by name. It is no input to choose in Settings or in
+Phosh's sound menu, so gvc skips sources whose properties say
+plinius.hidden=true.
+---
+ gvc-mixer-control.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/gvc-mixer-control.c b/gvc-mixer-control.c
+index 57dc2d4..f92b3b9 100644
+--- a/gvc-mixer-control.c
++++ b/gvc-mixer-control.c
+@@ -1648,6 +1648,13 @@ update_source (GvcMixerControl      *control,
+                 return;
+         }
+ 
++        /* Sources an app opens by name and that are no device to choose, such as the FM
++         * tuner's sound (audio-hal-bridge): not listed as inputs */
++        if (g_strcmp0 (pa_proplist_gets (info->proplist, "plinius.hidden"), "true") == 0) {
++                g_debug ("Ignoring hidden source '%s'", info->name);
++                return;
++        }
++
+         is_new = FALSE;
+ 
+         stream = g_hash_table_lookup (control->priv->sources,
+-- 
+2.56.0
+

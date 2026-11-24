@@ -1,0 +1,203 @@
+#!/bin/bash
+# Makes the parts of the password prompt for the phone's Halium ramdisk (docs/PLAN-VERSCHLUESSELUNG.md)
+# out of a system root that holds our packages and the Arch packages they need:
+#   programs.zst  for in front of vendor_boot's platform ramdisk: /plinius with cryptsetup, unl0kr,
+#                 plinius-progress, e2fsck, resize2fs, blkdiscard, plinius-pwrate, their libraries and
+#                 our own loader, plus the data unl0kr reads (xkb, libinput, configuration, wallpaper,
+#                 boot logo); zstd, a third smaller than lz4 (boot-image of plinius-crypt says
+#                 why it comes first)
+#   init.lz4      for behind init_boot's ramdisk: the hook (plinius/hook) and the unlock script
+#                 (plinius/unlock) that scripts/halium calls
+#   versions      the packages they were made of, one "name version" per line
+# What comes from the phone itself is added where the ramdisk is put together (boot-image of
+# plinius-crypt): UT's ramdisks, the call in scripts/halium, the firmware of the vibration motor
+# and the look of the prompt.
+#
+# Usage: make-parts SYSROOT OUT_DIR
+#   SYSROOT  "/" in the package build (the makedepends are installed), or a directory the packages
+#            were unpacked into (tools/crypt-ramdisk.sh)
+#   UNLOCK_SCRIPT  the unlock script (default: halium-unlock of plinius-crypt in the system root)
+#   PLINIUS_CRYPT_HOOK  the hook (default: plinius-crypt's in the system root)
+#   PLINIUS_CRYPT_CONF  plinius-crypt's 50-plinius.conf for unl0kr (default: from the system root)
+#   PLINIUS_CRYPT_BACKGROUND  its default background glass-background.bin (default: from the system
+#                             root)
+set -euo pipefail
+
+root=${1:?usage: make-parts SYSROOT OUT_DIR}
+out=${2:?usage: make-parts SYSROOT OUT_DIR}
+here=$(cd "$(dirname "$0")" && pwd)
+
+die() { echo "make-parts: $*" >&2; exit 1; }
+for cmd in cpio lz4 zstd readelf python3; do
+	command -v "$cmd" >/dev/null || die "$cmd missing"
+done
+python3 -I -c 'import PIL' 2>/dev/null || die "Pillow (python-pillow) missing"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+payload=$tmp/payload
+init=$tmp/init
+mkdir -p "$payload/plinius/bin" "$payload/plinius/lib" "$payload/plinius/libexec" "$init/plinius" "$out"
+
+# The programs go to /plinius/libexec, under their names in /plinius/bin a wrapper starts them with
+# our own loader and libraries: the ramdisk has glibc 2.24 of its own.
+python3 -I - "$root" "$payload/plinius" <<-'EOF'
+	import os, re, shutil, subprocess, sys
+	root, dest = sys.argv[1:3]
+	programs = {"cryptsetup": "usr/bin/cryptsetup", "unl0kr": "usr/bin/unl0kr",
+	            "plinius-progress": "usr/bin/plinius-progress",
+	            "e2fsck": "usr/bin/e2fsck", "resize2fs": "usr/bin/resize2fs",
+	            # the fast way for a freshly installed device (hook: encrypt_device)
+	            "blkdiscard": "usr/bin/blkdiscard",
+	            # rates the new password for GNOME Settings (hook: PLINIUS_PWRATE), ~5 KB packed
+	            "plinius-pwrate": "usr/lib/plinius-security/plinius-pwrate"}
+	# cryptsetup loads libgcc_s by name for its threads, so no ELF header mentions it
+	wanted = ["libgcc_s.so.1"]
+
+	def needed(path):
+	    text = subprocess.run(["readelf", "-d", path], capture_output=True, text=True, check=True).stdout
+	    return re.findall(r"\(NEEDED\)\s+Shared library: \[(.+?)\]", text)
+
+	for name, rel in programs.items():
+	    path = os.path.join(root, rel)
+	    if not os.path.isfile(path):
+	        sys.exit(f"{rel} is not in the system root")
+	    shutil.copy2(path, f"{dest}/libexec/{name}")
+	    wanted += needed(path)
+
+	# The libraries the programs need, and the ones those need
+	seen, missing = set(), set()
+	while wanted:
+	    lib = wanted.pop()
+	    if lib in seen:
+	        continue
+	    seen.add(lib)
+	    path = os.path.join(root, "usr/lib", lib)
+	    if not os.path.exists(path):
+	        missing.add(lib)
+	        continue
+	    shutil.copyfile(path, f"{dest}/lib/{lib}")
+	    os.chmod(f"{dest}/lib/{lib}", 0o755)
+	    wanted += needed(path)
+	if missing:
+	    sys.exit("not in the system root: " + " ".join(sorted(missing)))
+	shutil.copyfile(os.path.join(root, "usr/lib/ld-linux-aarch64.so.1"), f"{dest}/lib/ld-linux-aarch64.so.1")
+	os.chmod(f"{dest}/lib/ld-linux-aarch64.so.1", 0o755)
+
+	for name in programs:
+	    wrapper = f"{dest}/bin/{name}"
+	    env = "DM_DISABLE_UDEV=1 " if name == "cryptsetup" else ""
+	    with open(wrapper, "w") as f:
+	        # DM_DISABLE_UDEV: libdevmapper makes the device node itself; otherwise it waits for dm
+	        # rules of udev, which this ramdisk does not have
+	        f.write("#!/bin/sh\n"
+	                f"{env}exec /plinius/lib/ld-linux-aarch64.so.1 --library-path /plinius/lib "
+	                f"/plinius/libexec/{name} \"$@\"\n")
+	    os.chmod(wrapper, 0o755)
+	EOF
+
+# data PATH: a file or directory of the system root into the payload
+data() {
+	[[ -e $root/$1 ]] || die "$1 is not in the system root"
+	mkdir -p "$payload/$(dirname "$1")"
+	# -L: usr/share/X11/xkb is a link to the directory of xkeyboard-config
+	cp -aL "$root/$1" "$payload/$1"
+}
+data usr/share/X11/xkb
+# The bootloader starts a ramdisk only up to some size (halium-rebuild), so what libxkbcommon never
+# reads stays out: geometry, and all rules but the "evdev" ones it uses
+rm -rf "$payload/usr/share/X11/xkb/geometry"
+find "$payload/usr/share/X11/xkb/rules" -type f ! -name evdev -delete
+# The symbols of other vendors' keyboards (macintosh_vndr, sun_vndr, ...): the "evdev" rules use them
+# only for those models, unl0kr has the default pc105. All 597 layouts and variants of evdev.lst give
+# the same keymap without them (13.11.2026, xkbcli 1.13.2); some 27 kB less in programs.zst.
+rm -rf "$payload"/usr/share/X11/xkb/symbols/*_vndr
+data usr/share/libinput
+data etc/unl0kr.conf
+if [[ -n ${PLINIUS_CRYPT_CONF:-} ]]; then
+	install -D -m644 "$PLINIUS_CRYPT_CONF" "$payload/etc/unl0kr.conf.d/50-plinius.conf"
+else
+	data etc/unl0kr.conf.d
+fi
+if [[ -n ${PLINIUS_CRYPT_BACKGROUND:-} ]]; then
+	install -D -m644 "$PLINIUS_CRYPT_BACKGROUND" "$payload/usr/share/plinius-crypt/glass-background.bin"
+else
+	data usr/share/plinius-crypt/glass-background.bin
+fi
+# At the small size of the ramdisk (boot-image of plinius-crypt, SMALL_BACKGROUND): 216x480 took some
+# 22 kB of the programs, 27x60 some 2 kB; unl0kr scales it up smoothly, and the user's wallpaper
+# from halium-rebuild has room then
+"$here/boot-image" shrink-background "$payload/usr/share/plinius-crypt/glass-background.bin" "$payload/bg"
+mv "$payload/bg" "$payload/usr/share/plinius-crypt/glass-background.bin"
+# Only the package's files: a system root of the PC may hold a look of its own (look-files adds
+# the phone's look later)
+rm -f "$payload"/etc/unl0kr.conf.d/{40,60}-plinius-*.conf
+# The display in the ramdisk is DRM, unl0kr would otherwise try fbdev first
+printf '[general]\nbackend=drm\n' > "$payload/etc/unl0kr.conf.d/10-plinius-drm.conf"
+# Accent color until the system knows the user's own (60-plinius-look.conf comes later): the orange
+# of the wallpaper behind the prompt (GNOME "blobs", dark variant)
+printf '[theme]\naccent=#e66100\n' > "$payload/etc/unl0kr.conf.d/55-plinius-first-accent.conf"
+
+# The boot logo shown from the unlock until the session takes over (plinius-progress -l): the
+# PNGs that phoc draws at its start, at the size phoc gives them on this phone
+logos=$root/usr/share/plinius/boot-logo
+[[ -f $logos/mark.png ]] || logos=$here
+mkdir -p "$payload/plinius/share/boot-logo"
+python3 -I - "$logos" "$payload/plinius/share/boot-logo" <<-'EOF'
+	import os, struct, sys
+	from PIL import Image
+	src, dest = sys.argv[1:3]
+	# In this package's directory the PNGs are named as in device-volla-ansuz
+	name = lambda n: f"{src}/{n}.png" if os.path.exists(f"{src}/{n}.png") else f"{src}/boot-logo-{n}.png"
+	# phoc-plinius 0004: a box of 220 logical pixels, mark and wordmark fitted into it with
+	# 4 pixels (of the PNGs) between them. 2.266667 is phoc's output scale on the Volla
+	# ("Adjusting output scale from 2.265625 to 2.266667" in its log).
+	LOGO_SIZE, GAP, OUTPUT_SCALE = 220, 4, 2.266667
+	mark = Image.open(name("mark")).convert("RGBA")
+	word = Image.open(name("wordmark")).convert("RGBA")
+	scale = LOGO_SIZE * OUTPUT_SCALE / max(mark.width, word.width, mark.height + GAP + word.height)
+
+	def save(image, name, top=0):
+	    w, h = round(image.width * scale), round(image.height * scale)
+	    image = image.resize((w, h), Image.LANCZOS)
+	    # The gap goes on top of the wordmark as clear rows: the program stacks both without one
+	    canvas = Image.new("RGBA", (w, h + top), (0, 0, 0, 0))
+	    canvas.paste(image, (0, top))
+	    # lv_image_header_t (magic, cf ARGB8888, flags, w, h, stride, reserved), then B, G, R, A
+	    header = struct.pack("<BBHHHHH", 0x19, 0x10, 0, w, h + top, w * 4, 0)
+	    open(f"{dest}/{name}", "wb").write(header + canvas.tobytes("raw", "BGRA"))
+
+	save(mark, "mark.bin")
+	save(word, "wordmark.bin", top=round(GAP * scale))
+	EOF
+
+# The scripts of plinius-crypt that run in the ramdisk
+hook=${PLINIUS_CRYPT_HOOK:-$root/usr/lib/initcpio/hooks/plinius-crypt}
+[[ -f $hook ]] || die "$hook missing (the hook of plinius-crypt)"
+install -m755 "$hook" "$init/plinius/hook"
+unlock=${UNLOCK_SCRIPT:-$root/usr/lib/plinius-crypt/halium-unlock}
+[[ -f $unlock ]] || die "$unlock missing (plinius-crypt 0.13 or later)"
+install -m755 "$unlock" "$init/plinius/unlock"
+
+# archive DIR: a newc cpio archive of DIR on stdout, root as owner and fixed times; the same files
+# give the same bytes
+archive() {
+	find "$1" -exec touch -h -d @0 {} +
+	(cd "$1" && find . -print0 | LC_ALL=C sort -z | cpio --quiet -o -0 -H newc -R 0:0 --reproducible)
+}
+# The programs as one zstd frame at the highest level that keeps the window at 8 MB, the most the
+# kernel takes; from a pipe, so the frame never claims a single segment (window = content size).
+# One thread: the same input gives the same bytes.
+archive "$payload" | zstd -q -19 --zstd=wlog=23 -T1 -c > "$out/programs.zst"
+# The scripts as lz4 legacy, the format of UT's ramdisk they go behind
+archive "$init" | lz4 -q -12 -l -c > "$out/init.lz4"
+
+# Versions of what went in, for halium-rebuild --status and for comparing builds
+if [[ -d $root/var/lib/pacman/local ]]; then
+	for p in buffybox plinius-progress plinius-crypt plinius-security cryptsetup e2fsprogs util-linux glibc \
+		libxkbcommon libinput xkeyboard-config; do
+		d=$(compgen -G "$root/var/lib/pacman/local/$p-[0-9]*" | head -n 1 || true)
+		[[ -n $d ]] && echo "$p ${d##*/$p-}"
+	done
+fi > "$out/versions"
+echo "make-parts: programs $(stat -c %s "$out/programs.zst") bytes, init $(stat -c %s "$out/init.lz4") bytes" >&2

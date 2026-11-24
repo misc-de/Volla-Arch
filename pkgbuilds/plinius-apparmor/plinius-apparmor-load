@@ -1,0 +1,52 @@
+#!/bin/sh
+# plinius-apparmor-load: loads the phone's own AppArmor profiles (/usr/share/plinius-apparmor/
+# profiles) into the kernel, at boot (plinius-apparmor.service) and after package updates.
+#
+# Only these: Arch's apparmor package brings about 150 profiles, some of which would confine
+# programs here without having been tried on this phone (lxc-start of the Android container,
+# unix_chkpwd of the lock screen, dnsmasq of the hotspot). Its apparmor.service stays off.
+#
+# The services are put into their profile by systemd (AppArmorProfile=-plinius.<name> in their
+# drop-ins, see the package); a profile loaded later applies from the service's next start.
+#
+# Emergency brake: /etc/plinius-apparmor/off loads nothing (profiles already loaded stay until
+# the next boot); /etc/plinius-apparmor/complain loads every profile in complain mode (logs
+# only, blocks nothing), whatever the profile says. Never fails the boot.
+#
+#   plinius-apparmor-load          load (replace) all profiles
+#   plinius-apparmor-load --status names and modes of the loaded plinius profiles
+#
+# SPDX-License-Identifier: MIT
+
+profiles=/usr/share/plinius-apparmor/profiles
+conf=/etc/plinius-apparmor
+cache=/var/cache/plinius-apparmor
+
+if [ "${1:-}" = --status ]; then
+	grep '^plinius\.' /sys/kernel/security/apparmor/profiles 2>/dev/null
+	exit 0
+fi
+
+if ! grep -qw apparmor /sys/kernel/security/lsm 2>/dev/null; then
+	echo "plinius-apparmor: AppArmor is not active in this kernel, nothing loaded"
+	exit 0
+fi
+if [ -e "$conf/off" ]; then
+	echo "plinius-apparmor: $conf/off exists, nothing loaded"
+	exit 0
+fi
+
+mode=
+[ -e "$conf/complain" ] && mode=--Complain
+mkdir -p "$cache"
+failed=0
+for p in "$profiles"/*; do
+	[ -f "$p" ] || continue
+	# One by one: a profile the parser rejects must not keep the others out
+	if ! apparmor_parser --replace --write-cache --cache-loc="$cache" $mode "$p"; then
+		echo "plinius-apparmor: $(basename "$p") could not be loaded" >&2
+		failed=$((failed + 1))
+	fi
+done
+[ "$failed" -eq 0 ] || echo "plinius-apparmor: $failed profile(s) not loaded" >&2
+exit 0

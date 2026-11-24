@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Plinius: look of the on-screen keyboard (stevia-plinius), set in GNOME Settings > Keyboard -->
+<schemalist>
+  <schema id="org.plinius.keyboard" path="/org/plinius/keyboard/">
+    <key name="style" type="s">
+      <choices>
+        <choice value="glass"/>
+        <choice value="original"/>
+      </choices>
+      <default>'original'</default>
+      <summary>Look of the on-screen keyboard</summary>
+      <description>
+        "original": Stevia's own dark keys. "glass": the look of the password prompt at startup,
+        glass keys over the blurred wallpaper with wider character keys. High contrast always
+        uses Stevia's high contrast look.
+      </description>
+    </key>
+  </schema>
+</schemalist>

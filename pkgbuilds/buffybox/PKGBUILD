@@ -1,0 +1,112 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=buffybox
+pkgver=3.6.0
+pkgrel=15
+pkgdesc="Framebuffer/DRM tools from postmarketOS: unl0kr (disk unlocker with on-screen keyboard), buffyboard"
+arch=(aarch64 x86_64)
+url="https://gitlab.postmarketos.org/postmarketOS/buffybox"
+# Adwaita Sans (OFL-1.1) in the fonts of the on-screen keys
+license=(GPL-3.0-or-later OFL-1.1)
+depends=(glibc libinih libinput systemd-libs libxkbcommon libdrm libevdev)
+makedepends=(git meson scdoc python)
+# Commit of tag $pkgver: a tag can be moved later, a commit hash cannot
+_commit=d0f52495f7f3afa8839eef4b19f43f4ca1243107
+# lvgl is a git submodule; commit pinned as in tag 3.6.0
+_lvgl_commit=85aa60d18b3d5e5588d7b247abf90198f07c8a63
+source=(
+	"git+$url.git#commit=$_commit"
+	"git+https://github.com/lvgl/lvgl.git#commit=$_lvgl_commit"
+	0001-themes-make-the-text-cursor-of-the-Breezy-themes-2-d.patch
+	0002-unl0kr-add-placeholder-for-the-text-of-the-empty-pas.patch
+	0003-fonts-add-Cyrillic-U-0400-U-04FF-to-the-built-in-fon.patch
+	0004-unl0kr-add-a-Russian-keyboard-layout.patch
+	0005-themes-add-a-glass-look-and-a-background-image.patch
+	0006-unl0kr-add-options-for-the-texts-of-the-shutdown-con.patch
+	0007-themes-wider-keys-in-plinius-glass.patch
+	0008-themes-Stevia-s-look-for-the-keys-an-accent-color-fr.patch
+	0009-unl0kr-a-keyboard-layout-list-that-fits-a-phone-disp.patch
+	0010-shared-haptic-feedback-with-FF_CONSTANT-where-FF_RUM.patch
+	0011-themes-a-transparent-header-in-the-Plinius-themes.patch
+	0012-unl0kr-the-password-field-in-the-middle-the-eye-insi.patch
+	0013-shared-a-smooth-scaling-of-the-background-image.patch
+	0014-shared-touches-in-any-slot-of-the-touchscreen.patch
+	unl0kr-keycaps.py
+)
+sha256sums=('SKIP'
+            'SKIP'
+            'b5b53154c23768cf826e3336d2c6d108702c08e8da56b7098e7e3a576bdc946b'
+            '836ab89c3df0d323777b1bf5bb7eb09843dafc57e3ba5d32ab007b9840ef1658'
+            'ae3937e118991f0ac2b2fa78b273095439859c6c0b78fa90bb3108a61cfccb64'
+            'bdd05b203845d0914849feb52cb37401a01945fa6ef0a65f8179c3b21f202869'
+            'c48e445828c4599581e1f580738e2e1f28772e5557894e28d5eeb6549664b791'
+            '7146577ff1698268d24fbf56763620a2ef3c7d5c54ace986d608cfc754a9259d'
+            'ee41fb2119e9211d51d3b4c3d2c8e1d5dd892fa8fb72557613c8f51cc5f794f9'
+            '51719a7464372a711cc4aa80a74d77f9009bcacf5e7d86bc7c0f99862473b83c'
+            '72e9dd8a3a7ed8794f196fa9353e58e043b56dd610caa514782725b05446541c'
+            '24d4dd5a9b0cf52ffab147664e147f1dad34c369bca7f78b6fc51ff0144e9403'
+            '54c75bfcf00f7f78621c2e4443758104516c30bf2d29ff9e7ffb8365d4e3e9c8'
+            '57b38adbc8bc9085b2ec8bb755ca7357e763cb2af913357df9b9f2a2788d4591'
+            '9342d6170c29969e6be2cb10bb44618e6270874c7ddde853a8ac477ccb4b5661'
+            'f16472481a95efec695022ced719a3d27f5434a96bfd2f4ef00048f220aabb58'
+            '16dde467bd962c407ebc93029a4b19c2b5a3df87f03f178180989ab49ed86ac5')
+
+prepare() {
+	cd buffybox
+	git submodule init
+	git config submodule.lvgl.url "$srcdir/lvgl"
+	git -c protocol.file.allow=always submodule update
+	# Easier to see blinking cursor in the password field
+	git apply "$srcdir/0001-themes-make-the-text-cursor-of-the-Breezy-themes-2-d.patch"
+	# Translatable placeholder of the password field (unl0kr --placeholder, used by plinius-crypt)
+	git apply "$srcdir/0002-unl0kr-add-placeholder-for-the-text-of-the-empty-pas.patch"
+	# Cyrillic in the built-in font (same patch in pkgbuilds/plinius-progress)
+	git apply "$srcdir/0003-fonts-add-Cyrillic-U-0400-U-04FF-to-the-built-in-fon.patch"
+	# Russian on-screen keyboard
+	git apply "$srcdir/0004-unl0kr-add-a-Russian-keyboard-layout.patch"
+	# Glass look: theme plinius-glass and [theme] background (same patches in plinius-progress)
+	git apply "$srcdir/0005-themes-add-a-glass-look-and-a-background-image.patch"
+	# Translatable shutdown confirmation (--shutdown-title/-yes/-no, used by plinius-crypt;
+	# same patch in plinius-progress)
+	git apply "$srcdir/0006-unl0kr-add-options-for-the-texts-of-the-shutdown-con.patch"
+	# Wider keys in plinius-glass, less space beside them (same patch in plinius-progress)
+	git apply "$srcdir/0007-themes-wider-keys-in-plinius-glass.patch"
+	# The look of Phosh's keyboard: theme plinius-original, sizes and font of its keys, accent
+	# color from the configuration (same patch in plinius-progress)
+	git apply "$srcdir/0008-themes-Stevia-s-look-for-the-keys-an-accent-color-fr.patch"
+	# Larger opened keyboard layout list (only unl0kr has one, not in plinius-progress)
+	git apply "$srcdir/0009-unl0kr-a-keyboard-layout-list-that-fits-a-phone-disp.patch"
+	# Key presses vibrate where the driver refuses FF_RUMBLE (Awinic in the Volla: FF_CONSTANT
+	# only); plinius-progress does not vibrate, so the patch is not copied there
+	git apply "$srcdir/0010-shared-haptic-feedback-with-FF_CONSTANT-where-FF_RUM.patch"
+	# No panel behind the buttons at the top in the Plinius themes, as Phosh's top bar (plinius-progress
+	# has no header, so the patch is not copied there)
+	git apply "$srcdir/0011-themes-a-transparent-header-in-the-Plinius-themes.patch"
+	# Password field centered between header and keyboard, the reveal button inside the field,
+	# "?!#" instead of "123" on the key to the symbols (only unl0kr, not in plinius-progress)
+	git apply "$srcdir/0012-unl0kr-the-password-field-in-the-middle-the-eye-insi.patch"
+	# A smooth scaling of the background, for the tiny one of the phone's ramdisk (same patch in
+	# plinius-progress)
+	git apply "$srcdir/0013-shared-a-smooth-scaling-of-the-background-image.patch"
+	# Touches in any slot of the touchscreen: the Volla's firmware puts some taps into slot 9,
+	# only slots 0 and 1 counted (same patch in plinius-progress)
+	git apply "$srcdir/0014-shared-touches-in-any-slot-of-the-touchscreen.patch"
+}
+
+build() {
+	arch-meson buffybox build \
+		-Dlvgl_backends=framebuffer,drm \
+		-Dman=true \
+		-Dsystemd=false
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+	install -Dm644 buffybox/shared/fonts/AdwaitaSans-LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	# Plinius: characters the on-screen keyboard of unl0kr can type (all layouts), one per line;
+	# plinius-encrypt accepts only new passwords made of them
+	install -d "$pkgdir/usr/share/buffybox"
+	python3 "$srcdir/unl0kr-keycaps.py" buffybox/unl0kr/sq2lv_layouts.c \
+		> "$pkgdir/usr/share/buffybox/unl0kr-keycaps"
+}

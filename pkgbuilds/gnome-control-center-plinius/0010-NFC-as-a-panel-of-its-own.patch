@@ -1,0 +1,90 @@
+From 1b5c4add47751917df3b08714e457ecffd29d0e9 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 15:53:04 +0100
+Subject: [PATCH] NFC as a panel of its own
+
+Plinius: a panel "NFC" in the sidebar after Bluetooth switches NFC on
+and off through nfcd. The panel (cc-nfc-panel.*) and its desktop file
+come as separate files; it is only listed when nfcd is installed.
+---
+ panels/meson.build      |  1 +
+ panels/nfc/meson.build  | 20 ++++++++++++++++++++
+ shell/cc-panel-list.c   |  1 +
+ shell/cc-panel-loader.c |  3 +++
+ 4 files changed, 25 insertions(+)
+ create mode 100644 panels/nfc/meson.build
+
+diff --git a/panels/meson.build b/panels/meson.build
+index 5a5a39c37..f7c42662e 100644
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -12,6 +12,7 @@ panels = [
+   'display',
+   'mouse',
+   'multitasking',
++  'nfc',
+   'notifications',
+   'online-accounts',
+   'power',
+diff --git a/panels/nfc/meson.build b/panels/nfc/meson.build
+new file mode 100644
+index 000000000..9c3ca0c60
+--- /dev/null
++++ b/panels/nfc/meson.build
+@@ -0,0 +1,20 @@
++# Plinius: NFC panel. The sources and the desktop file (with its translations)
++# come as separate files of gnome-control-center-plinius.
++panels_list += cappletname
++
++install_data(
++  'gnome-nfc-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
++sources = files(
++  'cc-nfc-panel.c',
++)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps,
++  c_args: cflags,
++)
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index 464adb395..1930db158 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -340,6 +340,7 @@ static const gchar *const panel_order[] = {
+     "wwan",
+     "mobile-broadband",
+     "bluetooth",
++    "nfc",
+ 
+     "separator",
+ 
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index 0bf8bd9e0..add0aaab3 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -34,6 +34,8 @@
+ extern GType cc_applications_panel_get_type (void);
+ extern GType cc_assistant_panel_get_type (void);
+ extern void cc_assistant_panel_static_init_func (void);
++extern GType cc_nfc_panel_get_type (void);
++extern void cc_nfc_panel_static_init_func (void);
+ extern GType cc_background_panel_get_type (void);
+ #ifdef BUILD_BLUETOOTH
+ extern GType cc_bluetooth_panel_get_type (void);
+@@ -96,6 +98,7 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("keyboard", cc_keyboard_panel_get_type, NULL),
+     PANEL_TYPE ("mouse", cc_mouse_panel_get_type, NULL),
+     /* Plinius: no "Multitasking", its workspaces and hot corners are GNOME Shell features */
++    PANEL_TYPE ("nfc", cc_nfc_panel_get_type, cc_nfc_panel_static_init_func),
+ #ifdef BUILD_NETWORK
+     PANEL_TYPE ("network", cc_network_panel_get_type, NULL),
+     PANEL_TYPE ("wifi", cc_wifi_panel_get_type, cc_wifi_panel_static_init_func),
+-- 
+2.55.0
+

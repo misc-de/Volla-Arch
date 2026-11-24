@@ -1,0 +1,241 @@
+From d1015ba57996874adb8b2ae6395735351cbf7858 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 13:08:40 +0100
+Subject: [PATCH] camera-glow: Charge the ring around the camera, and let it
+ run back
+
+Plinius: the glow around the notch faded in and out as a whole. Now it
+goes around the camera hole instead: from the top, clockwise, once around
+when a camera goes on, and the same way back when it goes off. The front
+of the light is soft. A camera that goes off halfway through just turns
+the sweep around.
+
+The light is at full strength from the start, only its way around the
+hole takes time (0.8 s), so the ring still tells right away that a camera
+is on. The brightness itself no longer changes.
+
+Cairo has no conic gradient, so a mesh pattern makes up the mask. Once
+the ring is closed there is no mask and no frame clock anymore.
+---
+ src/camera-glow.c | 128 +++++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 112 insertions(+), 16 deletions(-)
+
+diff --git a/src/camera-glow.c b/src/camera-glow.c
+index 05eff71c..bf9cd75d 100644
+--- a/src/camera-glow.c
++++ b/src/camera-glow.c
+@@ -24,7 +24,8 @@
+  *
+  * The glow is a soft white disc behind the camera hole. The hole itself has no pixels,
+  * so what shows is a ring of light around it, wherever exactly the hole sits in the
+- * notch. The surface takes no input: the notch stays tappable. When the screen turns,
++ * notch. The ring charges up clockwise from the top when the camera goes on and runs
++ * back the same way when it goes off. The surface takes no input: the notch stays tappable. When the screen turns,
+  * the glow moves along with the camera to the screen's side or bottom. Without a notch
+  * (no panel data) or on a mirrored screen there is no glow.
+  */
+@@ -34,7 +35,8 @@
+ #define BRIDGE_INTERFACE "org.plinius.CameraBridge"
+ 
+ #define GLOW_SPREAD 5     /* how far the light reaches beyond the notch, logical px */
+-#define FADE_US     300000
++#define SWEEP_US    800000 /* once around the hole */
++#define SWEEP_HEAD  (G_PI / 3) /* the soft front of the sweep, radians */
+ 
+ struct _PhoshCameraGlow {
+   GObject           parent;
+@@ -45,8 +47,8 @@ struct _PhoshCameraGlow {
+   PhoshMonitor     *monitor;   /* watched for turns of the screen */
+   GtkWidget        *surface;   /* while shown or fading out */
+   GdkRectangle      notch;     /* in surface coordinates */
+-  double            level;     /* 0 … 1, how bright the glow is now */
+-  gboolean          on;        /* where the fade goes */
++  double            level;     /* 0 … 1, how far around the hole the light is now */
++  gboolean          on;        /* where the sweep goes */
+   guint             tick_id;
+   gint64            last_frame;
+ };
+@@ -54,6 +56,92 @@ struct _PhoshCameraGlow {
+ G_DEFINE_TYPE (PhoshCameraGlow, phosh_camera_glow, G_TYPE_OBJECT)
+ 
+ 
++/*
++ * Part of a cone of light around (cx, cy), between the angles @from and @to (radians, clockwise
++ * from the top, at most a quarter turn), with a linear change of the alpha values along the way.
++ */
++static void
++add_sector (cairo_pattern_t *mask,
++            double           cx,
++            double           cy,
++            double           radius,
++            double           from,
++            double           to,
++            double           alpha_from,
++            double           alpha_to)
++{
++  /* The usual Bézier approximation of an arc */
++  double handle = radius * 4.0 / 3.0 * tan ((to - from) / 4.0);
++  double x0 = cx + radius * sin (from);
++  double y0 = cy - radius * cos (from);
++  double x1 = cx + radius * sin (to);
++  double y1 = cy - radius * cos (to);
++
++  cairo_mesh_pattern_begin_patch (mask);
++  cairo_mesh_pattern_move_to (mask, cx, cy);
++  cairo_mesh_pattern_line_to (mask, x0, y0);
++  cairo_mesh_pattern_curve_to (mask,
++                               x0 + handle * cos (from), y0 + handle * sin (from),
++                               x1 - handle * cos (to), y1 - handle * sin (to),
++                               x1, y1);
++  cairo_mesh_pattern_line_to (mask, cx, cy);
++  /* The corners in the center differ too, so that alpha only depends on the angle */
++  cairo_mesh_pattern_set_corner_color_rgba (mask, 0, 1, 1, 1, alpha_from);
++  cairo_mesh_pattern_set_corner_color_rgba (mask, 1, 1, 1, 1, alpha_from);
++  cairo_mesh_pattern_set_corner_color_rgba (mask, 2, 1, 1, 1, alpha_to);
++  cairo_mesh_pattern_set_corner_color_rgba (mask, 3, 1, 1, 1, alpha_to);
++  cairo_mesh_pattern_end_patch (mask);
++}
++
++
++/* Sectors from @from to @to, with alpha falling linearly, in steps of at most a quarter turn */
++static void
++add_sectors (cairo_pattern_t *mask,
++             double           cx,
++             double           cy,
++             double           radius,
++             double           from,
++             double           to,
++             double           alpha_from,
++             double           alpha_to)
++{
++  int steps = ceil ((to - from) / G_PI_2);
++
++  for (int i = 0; i < steps; i++) {
++    add_sector (mask, cx, cy, radius,
++                from + (to - from) * i / steps,
++                from + (to - from) * (i + 1) / steps,
++                alpha_from + (alpha_to - alpha_from) * i / steps,
++                alpha_from + (alpha_to - alpha_from) * (i + 1) / steps);
++  }
++}
++
++
++/*
++ * How much of the circle the light reaches at @level: the head goes past the full circle by its
++ * own length, so that the soft front has left the circle at 1 and the ring is closed.
++ */
++static cairo_pattern_t *
++create_sweep_mask (double level, double cx, double cy, double radius)
++{
++  cairo_pattern_t *mask = cairo_pattern_create_mesh ();
++  double eased = level * level * (3 - 2 * level);
++  double head = eased * (2 * G_PI + SWEEP_HEAD);
++  double full = MAX (0, head - SWEEP_HEAD);
++  double end = MIN (2 * G_PI, head);
++
++  if (full > 0)
++    add_sectors (mask, cx, cy, radius, 0, full, 1, 1);
++
++  /* The front, cut off at the top once it has gone around */
++  if (end > full)
++    add_sectors (mask, cx, cy, radius, full, end,
++                 (head - full) / SWEEP_HEAD, (head - end) / SWEEP_HEAD);
++
++  return mask;
++}
++
++
+ static gboolean
+ on_draw (PhoshCameraGlow *self, cairo_t *cr, GtkWidget *area)
+ {
+@@ -61,22 +149,30 @@ on_draw (PhoshCameraGlow *self, cairo_t *cr, GtkWidget *area)
+   double cy = self->notch.y + self->notch.height / 2.0;
+   double inner = MIN (self->notch.width, self->notch.height) / 2.0;
+   double outer = inner + GLOW_SPREAD;
+-  cairo_pattern_t *glow = cairo_pattern_create_radial (cx, cy, 0, cx, cy, outer);
+   double edge = inner / outer;
++  cairo_pattern_t *glow = cairo_pattern_create_radial (cx, cy, 0, cx, cy, outer);
+ 
+   /* Full light up to the notch's edge, then a soft falloff */
+-  cairo_pattern_add_color_stop_rgba (glow, 0.0, 1, 1, 1, self->level);
+-  cairo_pattern_add_color_stop_rgba (glow, edge, 1, 1, 1, self->level);
+-  cairo_pattern_add_color_stop_rgba (glow, edge + (1 - edge) * 0.35, 1, 1, 1, 0.45 * self->level);
++  cairo_pattern_add_color_stop_rgba (glow, 0.0, 1, 1, 1, 1);
++  cairo_pattern_add_color_stop_rgba (glow, edge, 1, 1, 1, 1);
++  cairo_pattern_add_color_stop_rgba (glow, edge + (1 - edge) * 0.35, 1, 1, 1, 0.45);
+   cairo_pattern_add_color_stop_rgba (glow, 1.0, 1, 1, 1, 0);
+ 
+   cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
+   cairo_set_source_rgba (cr, 0, 0, 0, 0);
+   cairo_paint (cr);
++
+   cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
+   cairo_set_source (cr, glow);
+-  cairo_arc (cr, cx, cy, outer, 0, 2 * G_PI);
+-  cairo_fill (cr);
++  if (self->level >= 1) {
++    cairo_paint (cr);
++  } else if (self->level > 0) {
++    /* A little beyond the light, the outer edge of the mesh isn't antialiased */
++    cairo_pattern_t *mask = create_sweep_mask (self->level, cx, cy, outer + 2);
++
++    cairo_mask (cr, mask);
++    cairo_pattern_destroy (mask);
++  }
+   cairo_pattern_destroy (glow);
+ 
+   return GDK_EVENT_STOP;
+@@ -107,7 +203,7 @@ destroy_surface (PhoshCameraGlow *self)
+ 
+ /* Not from the surface's own tick callback: GTK still uses the widget after it */
+ static gboolean
+-on_faded_out (gpointer user_data)
++on_swept_out (gpointer user_data)
+ {
+   PhoshCameraGlow *self = PHOSH_CAMERA_GLOW (user_data);
+ 
+@@ -123,7 +219,7 @@ on_tick (GtkWidget *surface, GdkFrameClock *clock, gpointer user_data)
+ {
+   PhoshCameraGlow *self = PHOSH_CAMERA_GLOW (user_data);
+   gint64 now = gdk_frame_clock_get_frame_time (clock);
+-  double step = self->last_frame ? (double)(now - self->last_frame) / FADE_US : 0;
++  double step = self->last_frame ? (double)(now - self->last_frame) / SWEEP_US : 0;
+ 
+   self->last_frame = now;
+   self->level = CLAMP (self->level + (self->on ? step : -step), 0, 1);
+@@ -135,7 +231,7 @@ on_tick (GtkWidget *surface, GdkFrameClock *clock, gpointer user_data)
+   }
+   if (!self->on && self->level <= 0) {
+     self->tick_id = 0;
+-    g_idle_add (on_faded_out, g_object_ref (self));
++    g_idle_add (on_swept_out, g_object_ref (self));
+     return G_SOURCE_REMOVE;
+   }
+   return G_SOURCE_CONTINUE;
+@@ -143,7 +239,7 @@ on_tick (GtkWidget *surface, GdkFrameClock *clock, gpointer user_data)
+ 
+ 
+ static void
+-start_fade (PhoshCameraGlow *self)
++start_sweep (PhoshCameraGlow *self)
+ {
+   if (self->tick_id || !self->surface)
+     return;
+@@ -283,7 +379,7 @@ on_monitor_configured (PhoshCameraGlow *self)
+   self->level = level;
+   gtk_widget_queue_draw (self->surface);
+   if ((self->on && level < 1) || !self->on)
+-    start_fade (self);
++    start_sweep (self);
+ }
+ 
+ 
+@@ -323,7 +419,7 @@ update (PhoshCameraGlow *self)
+   watch_monitor (self);
+   if (on && !self->surface && !create_surface (self))
+     return;
+-  start_fade (self);
++  start_sweep (self);
+ }
+ 
+ 

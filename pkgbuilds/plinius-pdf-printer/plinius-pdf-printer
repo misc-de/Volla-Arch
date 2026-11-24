@@ -1,0 +1,33 @@
+#!/bin/sh
+# plinius-pdf-printer: there is always a printer that saves PDF files (cups-pdf, queue "PDF"), but
+# it is never the default while a real printer exists. Runs at boot and whenever CUPS writes
+# printers.conf (plinius-pdf-printer.path), e.g. after a printer was added in Settings.
+# Only calls lpadmin when something has to change, so its own write does not start it again.
+set -u
+
+# The output of lpstat is parsed below; translated it would not match, and the default printer
+# would look unset on every run: lpadmin writes printers.conf, which starts this script again.
+export LC_ALL=C
+
+PDF=PDF
+
+# CUPS starts through its socket; without a scheduler there is nothing to do
+lpstat -r >/dev/null 2>&1 || exit 0
+
+if ! lpstat -p "$PDF" >/dev/null 2>&1; then
+	lpadmin -p "$PDF" -E -v cups-pdf:/ -m CUPS-PDF_opt.ppd \
+		-D "Save as PDF" -L "PDF folder in your home" -o printer-is-shared=false
+fi
+
+default=$(lpstat -d 2>/dev/null | sed -n 's/^system default destination: //p')
+# First destination that is not the PDF printer
+real=$(lpstat -e 2>/dev/null | grep -vx "$PDF" | head -n 1)
+
+if [ -n "$real" ]; then
+	if [ -z "$default" ] || [ "$default" = "$PDF" ]; then
+		lpadmin -d "$real"
+	fi
+elif [ -z "$default" ]; then
+	lpadmin -d "$PDF"
+fi
+exit 0

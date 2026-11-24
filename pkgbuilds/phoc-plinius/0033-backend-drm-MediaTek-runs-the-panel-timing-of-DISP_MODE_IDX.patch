@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed Nov 18 20:45:00 2026 +0100
+Subject: [PATCH] backend/drm: MediaTek runs the panel timing of DISP_MODE_IDX
+
+Plinius: 120 Hz picked in the settings set MODE_ID to the 120 Hz mode,
+but the panel kept running at 60 Hz. MediaTek's CRTC has the property
+DISP_MODE_IDX, the position of the mode in the connector's list, which
+Android's composer sets; it stayed 0, the kernel logged "mode:0->0" for
+every commit, and phoc's commits came every 16 ms with 8 ms of waiting
+for the next vblank.
+
+Each mode from the kernel now remembers its position in the list, and
+every commit of an active CRTC with DISP_MODE_IDX sets it to the
+position of the mode used. Custom modes are left out.
+---
+  backend/drm/atomic.c             | 25 +++++++++++++++++++++++++
+  backend/drm/drm.c                |  2 ++
+  backend/drm/properties.c         |  1 +
+  include/backend/drm/drm.h        |  2 ++
+  include/backend/drm/properties.h |  3 +++
+  5 files changed, 33 insertions(+)
+
+diff --git a/backend/drm/atomic.c b/backend/drm/atomic.c
+index 43b2d87c1..6f2497b7c 100644
+--- a/backend/drm/atomic.c
++++ b/backend/drm/atomic.c
+@@ -1,6 +1,7 @@
+ #include <drm_fourcc.h>
+ #include <stdlib.h>
+ #include <stdio.h>
++#include <string.h>
+ #include <unistd.h>
+ #include <wlr/render/drm_syncobj.h>
+ #include <wlr/util/box.h>
+@@ -491,6 +492,21 @@ static void set_plane_in_fence_fd(struct atomic *atom,
+ 	atomic_add(atom, plane->id, plane->props.in_fence_fd, sync_file_fd);
+ }
+ 
++/*
++ * MediaTek runs the panel timing of DISP_MODE_IDX, the position of the mode in the connector's
++ * list (Android's composer sets it). A new MODE_ID alone keeps the CRTC at the timing it has:
++ * 120 Hz picked in the settings kept the panel at 60 Hz. Returns -1 for a custom mode.
++ */
++static int connector_mode_index(struct wlr_drm_connector *conn, const drmModeModeInfo *modeinfo) {
++	struct wlr_drm_mode *mode;
++	wl_list_for_each(mode, &conn->output.modes, wlr_mode.link) {
++		if (mode->index >= 0 && memcmp(&mode->drm_mode, modeinfo, sizeof(*modeinfo)) == 0) {
++			return mode->index;
++		}
++	}
++	return -1;
++}
++
+ static void atomic_connector_add(struct atomic *atom,
+ 		struct wlr_drm_connector_state *state, bool modeset) {
+ 	struct wlr_drm_connector *conn = state->connector;
+@@ -524,6 +540,15 @@ static void atomic_connector_add(struct atomic *atom,
+ 		// drm_atomic_doze_commit()
+ 		atomic_add(atom, crtc->id, crtc->props.doze_active, 0);
+ 	}
++	if (active && crtc->props.disp_mode_idx != 0) {
++		int index = connector_mode_index(conn, &state->mode);
++		if (index >= 0) {
++			if (modeset) {
++				wlr_drm_conn_log(conn, WLR_INFO, "Panel timing %d (DISP_MODE_IDX)", index);
++			}
++			atomic_add(atom, crtc->id, crtc->props.disp_mode_idx, index);
++		}
++	}
+ 	if (active) {
+ 		if (crtc->props.gamma_lut != 0) {
+ 			atomic_add(atom, crtc->id, crtc->props.gamma_lut, state->gamma_lut);
+diff --git a/backend/drm/drm.c b/backend/drm/drm.c
+index ea178e1dd..1e6eef2d7 100644
+--- a/backend/drm/drm.c
++++ b/backend/drm/drm.c
+@@ -1181,6 +1181,7 @@ static struct wlr_drm_mode *drm_mode_create(const drmModeModeInfo *modeinfo) {
+ 	}
+ 
+ 	mode->drm_mode = *modeinfo;
++	mode->index = -1;
+ 	mode->wlr_mode.width = mode->drm_mode.hdisplay;
+ 	mode->wlr_mode.height = mode->drm_mode.vdisplay;
+ 	mode->wlr_mode.refresh = calculate_refresh_rate(modeinfo);
+@@ -1801,6 +1802,7 @@ static bool connect_drm_connector(struct wlr_drm_connector *wlr_conn,
+ 			wlr_output_state_finish(&state);
+ 			return false;
+ 		}
++		mode->index = i;
+ 
+ 		// If this is the current mode set on the conn's crtc,
+ 		// then set it as the conn's output current mode.
+diff --git a/backend/drm/properties.c b/backend/drm/properties.c
+index a88843d87..06a8f269d 100644
+--- a/backend/drm/properties.c
++++ b/backend/drm/properties.c
+@@ -40,6 +40,7 @@ static const struct prop_info connector_info[] = {
+ static const struct prop_info crtc_info[] = {
+ #define INDEX(name) (offsetof(struct wlr_drm_crtc_props, name) / sizeof(uint32_t))
+ 	{ "ACTIVE", INDEX(active) },
++	{ "DISP_MODE_IDX", INDEX(disp_mode_idx) },
+ 	{ "DOZE_ACTIVE", INDEX(doze_active) },
+ 	{ "GAMMA_LUT", INDEX(gamma_lut) },
+ 	{ "GAMMA_LUT_SIZE", INDEX(gamma_lut_size) },
+diff --git a/include/backend/drm/drm.h b/include/backend/drm/drm.h
+index 32c87d98f..6c70e501c 100644
+--- a/include/backend/drm/drm.h
++++ b/include/backend/drm/drm.h
+@@ -134,6 +134,8 @@ struct wlr_drm_backend {
+ struct wlr_drm_mode {
+ 	struct wlr_output_mode wlr_mode;
+ 	drmModeModeInfo drm_mode;
++	// Position in the connector's list of modes from the kernel, -1 for a custom mode
++	int index;
+ };
+ 
+ struct wlr_drm_device_state {
+diff --git a/include/backend/drm/properties.h b/include/backend/drm/properties.h
+index c78dbdebb..72dfd47bb 100644
+--- a/include/backend/drm/properties.h
++++ b/include/backend/drm/properties.h
+@@ -37,6 +37,9 @@ struct wlr_drm_crtc_props {
+ 	uint32_t gamma_lut_size;
+ 	// MediaTek: the panel's low-power mode for an always-on display
+ 	uint32_t doze_active;
++	// MediaTek: the panel timing to run, an index into the connector's modes; KMS's MODE_ID
++	// alone does not change it
++	uint32_t disp_mode_idx;
+ 
+ 	// atomic-modesetting only
+ 

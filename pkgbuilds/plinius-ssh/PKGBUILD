@@ -1,0 +1,41 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-ssh
+pkgver=0.1
+pkgrel=3
+pkgdesc="Networks the SSH server answers on: USB, local networks or all, with firewall rules"
+arch=(any)
+license=(MIT)
+# The rules go through iptables-legacy (the kernel has no nftables); both Arch's iptables and
+# iptables-legacy (in the image) ship those tools, so "iptables" is enough. The switches are in
+# gnome-control-center-plinius (System › Secure Shell), the base sshd file (no passwords, key
+# login off) in the device package.
+depends=(bash openssh iptables systemd)
+backup=(etc/plinius-ssh.conf)
+install=plinius-ssh.install
+source=(plinius-ssh-set
+	plinius-ssh.service
+	plinius-ssh.conf
+	org.plinius.ssh.policy
+	LICENSE)
+sha256sums=('7c2038334406fdbf3d7794ee4305da69c022dcd82637e4ac96c11da722056795'
+	'8447f2a8d909d3162a3e49e573c950aab85a8debace5f3d4cd1addef799d8b42'
+	'6a4281c739a686cf4c89893b4cb153a022725600aeb8a2d484c78a385db2e0df'
+	'b1d81d3c550ee39c5503de37bc5f95abc75c3fcfec569f703cb15746d1a4ac5e'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-ssh-set -t "$pkgdir/usr/lib/plinius-ssh"
+	install -Dm644 plinius-ssh.service -t "$pkgdir/usr/lib/systemd/system"
+	# Enabled by the package: without it, a reboot would leave SSH without firewall rules
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-ssh.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 plinius-ssh.conf "$pkgdir/etc/plinius-ssh.conf"
+	install -Dm644 org.plinius.ssh.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	# systemd-ssh-generator gives every local process an sshd on /run/ssh-unix-local/socket
+	# (mode 0666), past the networks chosen here and their firewall rules; nothing on the phone
+	# uses it (attack review 2026-11-12, T9). Masked: a unit in /etc wins over the generator's.
+	install -d "$pkgdir/etc/systemd/system"
+	ln -s /dev/null "$pkgdir/etc/systemd/system/sshd-unix-local.socket"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

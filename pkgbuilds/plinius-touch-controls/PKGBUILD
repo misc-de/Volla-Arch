@@ -1,0 +1,39 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-touch-controls
+pkgver=0.1
+pkgrel=8
+pkgdesc="Touch stick and buttons beside a game's picture that send the keys it wants"
+arch=(any)
+license=(MIT)
+# For DOS games (plinius-dos-installer starts it with DOSBox): two transparent layer-shell
+# surfaces on the overlay layer, which phoc draws and hit-tests over a fullscreen window too.
+# Upright they lie below the 4:3 picture (stick left, buttons right), lying in the bars left and
+# right of it. Keys go through zwp_virtual_keyboard_v1 like Stevia's, so the game keeps the
+# keyboard focus; phoc only keeps that protocol from sandboxed clients. They show while the
+# game's window is active (zwlr_foreign_toplevel_manager_v1) and the OSK is folded, and end once
+# the game's window has been gone for 5 s (DOSBox replaces its first window while starting).
+# 0.1-2: a closed window's handle is destroyed with request 7; 4 was activate, a protocol error.
+# 0.1-3: the direction pad as a stick or a fixed cross like a gamepad's, switched with the small
+# button in its corner and kept in ~/.local/state/plinius-touch-controls/style.
+# 0.1-4: lying, the stick or cross and the big buttons sit in the lower third of the bars, where
+# the thumbs hold the phone, as far down as they fit; the small buttons stay along the top.
+# 0.1-5: lying, the stick rests a big button's height (Ctrl's) above the bottom of its bar.
+# 0.1-6: the big buttons too, Ctrl a button's height above the bottom like the stick.
+# 0.1-7: --keys, up to 8 more keys in rows of 4 below the small buttons (Doom's weapons).
+# 0.1-8: without room for a button's height below them, the big buttons and the stick go down
+# to the edge; a pair of big buttons reaches only as far as it does.
+# The wire protocol is spoken by the script itself: python-pywayland
+# has no virtual keyboard and GTK does not share its connection.
+depends=(python python-gobject python-cairo gtk3 gtk-layer-shell)
+optdepends=('feedbackd: a short vibration per button'
+	'stevia: the keyboard button unfolds it')
+source=(plinius-touch-controls.py
+	LICENSE)
+sha256sums=('18f4e30ac2968c36068d92f56536497fae2f0b0bb369f52df182b66aac5fbb55'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-touch-controls.py "$pkgdir/usr/bin/plinius-touch-controls"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 13:00:00 +0100
+Subject: [PATCH] bluetooth: Contacts on top, no explanation above the devices
+
+The row Contacts (cc-plinius-bt-contacts.c) moves from the bottom to the top,
+below the header bar, so that it shows also with Bluetooth off. The text
+gnome-bluetooth sets as the description of its page (visible as, Bluetooth
+file transfers, the Downloads folder) is cleared whenever it is set.
+---
+ bluetooth/cc-bluetooth-panel.c | 41 ++++++++++++++++++++++++++-
+ 1 file changed, 40 insertions(+), 1 deletion(-)
+
+diff --git a/panels/bluetooth/cc-bluetooth-panel.c b/panels/bluetooth/cc-bluetooth-panel.c
+index 43cf63011..71e66d919 100644
+--- a/panels/bluetooth/cc-bluetooth-panel.c
++++ b/panels/bluetooth/cc-bluetooth-panel.c
+@@ -232,6 +232,44 @@ cc_bluetooth_panel_class_init (CcBluetoothPanelClass *klass)
+     gtk_widget_class_bind_template_callback (widget_class, panel_changed_cb);
+ }
+ 
++/* Plinius: no explanation above the devices (the name the phone is visible as, the folder for
++ * received files); gnome-bluetooth sets it as the description of its page whenever the adapter
++ * changes */
++static void
++explanation_changed_cb (AdwPreferencesPage *page)
++{
++    const char *description = adw_preferences_page_get_description (page);
++
++    if (description != NULL && *description != '\0')
++        adw_preferences_page_set_description (page, "");
++}
++
++static AdwPreferencesPage *
++find_preferences_page (GtkWidget *widget)
++{
++    for (GtkWidget *child = gtk_widget_get_first_child (widget); child != NULL;
++         child = gtk_widget_get_next_sibling (child)) {
++        AdwPreferencesPage *page;
++
++        if (ADW_IS_PREFERENCES_PAGE (child))
++            return ADW_PREFERENCES_PAGE (child);
++        if ((page = find_preferences_page (child)) != NULL)
++            return page;
++    }
++    return NULL;
++}
++
++static void
++hide_explanation (CcBluetoothPanel *self)
++{
++    AdwPreferencesPage *page = find_preferences_page (GTK_WIDGET (self->settings_widget));
++
++    if (page == NULL)
++        return;
++    explanation_changed_cb (page);
++    g_signal_connect (page, "notify::description", G_CALLBACK (explanation_changed_cb), NULL);
++}
++
+ static void
+ cc_bluetooth_panel_init (CcBluetoothPanel *self)
+ {
+@@ -239,9 +277,10 @@ cc_bluetooth_panel_init (CcBluetoothPanel *self)
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
+-    /* Plinius: which devices may read the contacts (PBAP), a row at the bottom
++    /* Plinius: which devices may read the contacts (PBAP), a row at the top
+      * (cc-plinius-bt-contacts.c, nothing without bluez-obex-plinius) */
+     cc_plinius_bt_contacts_add (CC_PANEL (self), self->toolbar_view);
++    hide_explanation (self);
+ 
+     /* RFKill */
+     self->rfkill = cc_object_storage_create_dbus_proxy_sync (

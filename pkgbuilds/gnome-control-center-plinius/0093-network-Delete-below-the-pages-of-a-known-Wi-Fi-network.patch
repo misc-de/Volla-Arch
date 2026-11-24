@@ -1,0 +1,179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 15:00:00 +0100
+Subject: [PATCH] network: Delete below the pages of a known Wi-Fi network
+
+Opening a known network showed its facts as rows on the first page, but
+Forget was one page further down, at the end of Details. It now stands on the
+first page below the rows of the pages (ce_page_details_take_forget, like the
+facts). For a Wi-Fi network it says Delete, and the question before it
+"Delete Network?" with Delete; it removes the saved network as before. Other
+connections keep GNOME's words (Remove Connection Profile, Remove VPN). The
+question opens from the row, as the Details page is not shown then.
+---
+ .../connection-editor/ce-page-details.c       | 39 ++++++++++++++++---
+ .../connection-editor/ce-page-details.h       |  1 +
+ .../connection-editor/connection-editor.blp   |  6 +++
+ .../connection-editor/details-page.blp        |  3 +-
+ .../connection-editor/net-connection-editor.c |  9 ++++-
+ 5 files changed, 51 insertions(+), 7 deletions(-)
+
+diff --git a/panels/network/connection-editor/ce-page-details.c b/panels/network/connection-editor/ce-page-details.c
+index 93fe12f78..bf21878f9 100644
+--- a/panels/network/connection-editor/ce-page-details.c
++++ b/panels/network/connection-editor/ce-page-details.c
+@@ -30,6 +30,8 @@
+ 
+ #include "../panel-common.h"
+ 
++#define PLINIUS_DOMAIN "plinius-control-center"
++
+ struct _CEPageDetails {
+     AdwBin parent;
+ 
+@@ -82,15 +84,23 @@ forget_cb (CEPageDetails *self)
+     message = g_strdup_printf (
+         _("Saved details for “%s” will be permanently lost. This includes passwords and any network changes."),
+           nm_connection_get_id (self->connection));
+-    dialog = adw_alert_dialog_new (_("Forget Connection?"), message);
+-
+-    adw_alert_dialog_add_responses (ADW_ALERT_DIALOG (dialog), "cancel", _("_Cancel"), "forget", _("_Forget"), NULL);
++    /* Plinius: a Wi-Fi network is deleted (the row on the editor's first page says so) */
++    if (nm_connection_is_type (self->connection, NM_SETTING_WIRELESS_SETTING_NAME)) {
++        dialog = adw_alert_dialog_new (g_dgettext (PLINIUS_DOMAIN, "Delete Network?"), message);
++        adw_alert_dialog_add_responses (ADW_ALERT_DIALOG (dialog), "cancel", _("_Cancel"), "forget",
++                                        g_dgettext (PLINIUS_DOMAIN, "_Delete"), NULL);
++    } else {
++        dialog = adw_alert_dialog_new (_("Forget Connection?"), message);
++        adw_alert_dialog_add_responses (ADW_ALERT_DIALOG (dialog), "cancel", _("_Cancel"), "forget", _("_Forget"),
++                                        NULL);
++    }
+     adw_alert_dialog_set_response_appearance (ADW_ALERT_DIALOG (dialog), "forget", ADW_RESPONSE_DESTRUCTIVE);
+     adw_alert_dialog_set_default_response (ADW_ALERT_DIALOG (dialog), "cancel");
+     adw_alert_dialog_set_close_response (ADW_ALERT_DIALOG (dialog), "cancel");
+ 
+     g_signal_connect_swapped (dialog, "response::forget", G_CALLBACK (net_connection_editor_forget), self->editor);
+-    adw_dialog_present (dialog, GTK_WIDGET (self));
++    /* Plinius: from the row, which stands on the editor's first page (this page is not shown) */
++    adw_dialog_present (dialog, GTK_WIDGET (self->forget_row));
+ }
+ 
+ static gchar *
+@@ -461,7 +471,8 @@ connect_details_page (CEPageDetails *self)
+         g_signal_connect_object (self->forget_row, "activated", G_CALLBACK (forget_cb), self, G_CONNECT_SWAPPED);
+ 
+         if (g_str_equal (type, NM_SETTING_WIRELESS_SETTING_NAME))
+-            adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->forget_row), _("Forget Connection…"));
++            adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->forget_row),
++                                           g_dgettext (PLINIUS_DOMAIN, "Delete…"));
+         else if (g_str_equal (type, NM_SETTING_WIRED_SETTING_NAME))
+             adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->forget_row), _("Remove Connection Profile…"));
+         else if (g_str_equal (type, NM_SETTING_BLUETOOTH_SETTING_NAME))
+@@ -557,6 +568,24 @@ ce_page_details_take_info (CEPageDetails *self)
+     return group;
+ }
+ 
++/* Plinius: Forget (for a Wi-Fi network: Delete) stands on the editor's first page, below the rows
++ * of its pages. Returns the group, taken out of this page (the caller owns it), or NULL for a new
++ * connection or one that cannot be removed here. */
++GtkWidget *
++ce_page_details_take_forget (CEPageDetails *self)
++{
++    GtkWidget *page, *group = GTK_WIDGET (self->forget_group);
++
++    g_return_val_if_fail (CE_IS_PAGE_DETAILS (self), NULL);
++
++    page = gtk_widget_get_ancestor (group, ADW_TYPE_PREFERENCES_PAGE);
++    if (self->is_new_connection || !gtk_widget_get_visible (group) || !page)
++        return NULL;
++    g_object_ref (group);
++    adw_preferences_page_remove (ADW_PREFERENCES_PAGE (page), self->forget_group);
++    return group;
++}
++
+ CEPageDetails *
+ ce_page_details_new (NMConnection *connection, NMDevice *device, NMAccessPoint *ap, NetConnectionEditor *editor,
+                      gboolean is_new_connection)
+diff --git a/panels/network/connection-editor/ce-page-details.h b/panels/network/connection-editor/ce-page-details.h
+index 56ff86a13..59eecfca5 100644
+--- a/panels/network/connection-editor/ce-page-details.h
++++ b/panels/network/connection-editor/ce-page-details.h
+@@ -34,5 +34,6 @@ G_DECLARE_FINAL_TYPE (CEPageDetails, ce_page_details, CE, PAGE_DETAILS, AdwBin);
+ CEPageDetails *ce_page_details_new (NMConnection *connection, NMDevice *device, NMAccessPoint *ap,
+                                     NetConnectionEditor *editor, gboolean is_new_connection);
+ GtkWidget *ce_page_details_take_info (CEPageDetails *self);
++GtkWidget *ce_page_details_take_forget (CEPageDetails *self);
+ 
+ G_END_DECLS
+diff --git a/panels/network/connection-editor/connection-editor.blp b/panels/network/connection-editor/connection-editor.blp
+index 64321b483..11b4d107e 100644
+--- a/panels/network/connection-editor/connection-editor.blp
++++ b/panels/network/connection-editor/connection-editor.blp
+@@ -75,6 +75,12 @@ template $NetConnectionEditor: Adw.Dialog {
+                       "boxed-list",
+                     ]
+                   }
++
++                  // Forget (Delete for Wi-Fi) of a known connection, from its Details page
++                  Adw.Bin forget_page {
++                    visible: false;
++                    margin-top: 12;
++                  }
+                 }
+               }
+             }
+diff --git a/panels/network/connection-editor/details-page.blp b/panels/network/connection-editor/details-page.blp
+index 913dfcc05..64a1dda53 100644
+--- a/panels/network/connection-editor/details-page.blp
++++ b/panels/network/connection-editor/details-page.blp
+@@ -5,7 +5,8 @@ template $CEPageDetails: Adw.Bin {
+   // Plinius: in the list style of the rest of Settings: the facts as rows (the title as on the
+   // other pages, the value below it), the options as switches and "Forget" as a button row of its
+   // own at the end, instead of a grid of labels and check buttons that does not fit a phone.
+-  // The facts of a known connection go to the editor's first page (ce_page_details_take_info).
++  // The facts and Forget of a known connection go to the editor's first page
++  // (ce_page_details_take_info, ce_page_details_take_forget).
+   Adw.PreferencesPage {
+     Adw.PreferencesGroup info_group {
+       Adw.ActionRow strength_row {
+diff --git a/panels/network/connection-editor/net-connection-editor.c b/panels/network/connection-editor/net-connection-editor.c
+index 4cc2ec502..13307bb0b 100644
+--- a/panels/network/connection-editor/net-connection-editor.c
++++ b/panels/network/connection-editor/net-connection-editor.c
+@@ -63,6 +63,7 @@ struct _NetConnectionEditor {
+     AdwToastOverlay *toast_overlay;
+     GtkStack *toplevel_stack;
+     AdwBin *info_page;
++    AdwBin *forget_page;
+ 
+     /* Plinius: the settings pages (CEPage) in their order; each has a row in pages_list that
+      * pushes its own navigation page, instead of the notebook tabs */
+@@ -451,6 +452,7 @@ net_connection_editor_class_init (NetConnectionEditorClass *class)
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toast_overlay);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, toplevel_stack);
+     gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, info_page);
++    gtk_widget_class_bind_template_child (widget_class, NetConnectionEditor, forget_page);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, cancel_clicked_cb);
+     gtk_widget_class_bind_template_callback (widget_class, apply_clicked_cb);
+@@ -684,14 +686,19 @@ page_initialized (NetConnectionEditor *self, GError *error, CEPage *page)
+     }
+ 
+     /* Plinius: what one wants to know of a known connection stands on the first page, one step
+-     * up; "Details" keeps only the options and Forget */
++     * up, and Forget (Delete for Wi-Fi) below the rows; "Details" keeps only the options */
+     if (CE_IS_PAGE_DETAILS (page) && !self->is_new_connection) {
+         g_autoptr(GtkWidget) info = ce_page_details_take_info (CE_PAGE_DETAILS (page));
++        g_autoptr(GtkWidget) forget = ce_page_details_take_forget (CE_PAGE_DETAILS (page));
+ 
+         if (info) {
+             adw_bin_set_child (self->info_page, info);
+             gtk_widget_set_visible (GTK_WIDGET (self->info_page), TRUE);
+         }
++        if (forget) {
++            adw_bin_set_child (self->forget_page, forget);
++            gtk_widget_set_visible (GTK_WIDGET (self->forget_page), TRUE);
++        }
+     }
+ 
+     navigation_page = new_navigation_page (page);

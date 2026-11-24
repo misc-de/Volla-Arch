@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Lets plinius-software run its root helper plinius-pkg via pkexec. One action per helper
+  command (pkexec picks it by the first argument, exec.argv1), so the dialog says what is about
+  to happen. Active local sessions need admin authentication. Installing and updating keep it
+  for a few minutes (auth_admin_keep), so operations in a row do not ask again each time;
+  removing and changing the software sources ask every time (auth_admin): another program of
+  the session could otherwise use a recent authentication for them.
+-->
+<policyconfig>
+  <action id="org.plinius.software.install">
+    <description>Install software</description>
+    <description xml:lang="de">Software installieren</description>
+    <description xml:lang="fr">Installer des logiciels</description>
+    <description xml:lang="es">Instalar software</description>
+    <description xml:lang="it">Installare software</description>
+    <description xml:lang="pt">Instalar software</description>
+    <description xml:lang="nl">Software installeren</description>
+    <description xml:lang="pl">Instalowanie oprogramowania</description>
+    <description xml:lang="ru">Установка программ</description>
+    <message>Authentication is required to install software</message>
+    <message xml:lang="de">Zum Installieren von Software ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour installer des logiciels</message>
+    <message xml:lang="es">Se requiere autenticación para instalar software</message>
+    <message xml:lang="it">È richiesta l'autenticazione per installare software</message>
+    <message xml:lang="pt">É necessária autenticação para instalar software</message>
+    <message xml:lang="nl">Authenticatie is vereist om software te installeren</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby zainstalować oprogramowanie</message>
+    <message xml:lang="ru">Для установки программ требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">install</annotate>
+  </action>
+  <action id="org.plinius.software.flatpak-install">
+    <description>Install software</description>
+    <description xml:lang="de">Software installieren</description>
+    <description xml:lang="fr">Installer des logiciels</description>
+    <description xml:lang="es">Instalar software</description>
+    <description xml:lang="it">Installare software</description>
+    <description xml:lang="pt">Instalar software</description>
+    <description xml:lang="nl">Software installeren</description>
+    <description xml:lang="pl">Instalowanie oprogramowania</description>
+    <description xml:lang="ru">Установка программ</description>
+    <message>Authentication is required to install software</message>
+    <message xml:lang="de">Zum Installieren von Software ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour installer des logiciels</message>
+    <message xml:lang="es">Se requiere autenticación para instalar software</message>
+    <message xml:lang="it">È richiesta l'autenticazione per installare software</message>
+    <message xml:lang="pt">É necessária autenticação para instalar software</message>
+    <message xml:lang="nl">Authenticatie is vereist om software te installeren</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby zainstalować oprogramowanie</message>
+    <message xml:lang="ru">Для установки программ требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">flatpak-install</annotate>
+  </action>
+  <action id="org.plinius.software.upgrade">
+    <description>Update the system</description>
+    <description xml:lang="de">System aktualisieren</description>
+    <description xml:lang="fr">Mettre à jour le système</description>
+    <description xml:lang="es">Actualizar el sistema</description>
+    <description xml:lang="it">Aggiornare il sistema</description>
+    <description xml:lang="pt">Atualizar o sistema</description>
+    <description xml:lang="nl">Het systeem bijwerken</description>
+    <description xml:lang="pl">Aktualizowanie systemu</description>
+    <description xml:lang="ru">Обновление системы</description>
+    <message>Authentication is required to update the system</message>
+    <message xml:lang="de">Zum Aktualisieren des Systems ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour mettre à jour le système</message>
+    <message xml:lang="es">Se requiere autenticación para actualizar el sistema</message>
+    <message xml:lang="it">È richiesta l'autenticazione per aggiornare il sistema</message>
+    <message xml:lang="pt">É necessária autenticação para atualizar o sistema</message>
+    <message xml:lang="nl">Authenticatie is vereist om het systeem bij te werken</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby zaktualizować system</message>
+    <message xml:lang="ru">Для обновления системы требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">upgrade</annotate>
+  </action>
+  <action id="org.plinius.software.remove">
+    <description>Remove software</description>
+    <description xml:lang="de">Software entfernen</description>
+    <description xml:lang="fr">Supprimer des logiciels</description>
+    <description xml:lang="es">Eliminar software</description>
+    <description xml:lang="it">Rimuovere software</description>
+    <description xml:lang="pt">Remover software</description>
+    <description xml:lang="nl">Software verwijderen</description>
+    <description xml:lang="pl">Usuwanie oprogramowania</description>
+    <description xml:lang="ru">Удаление программ</description>
+    <message>Authentication is required to remove software</message>
+    <message xml:lang="de">Zum Entfernen von Software ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour supprimer des logiciels</message>
+    <message xml:lang="es">Se requiere autenticación para eliminar software</message>
+    <message xml:lang="it">È richiesta l'autenticazione per rimuovere software</message>
+    <message xml:lang="pt">É necessária autenticação para remover software</message>
+    <message xml:lang="nl">Authenticatie is vereist om software te verwijderen</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby usunąć oprogramowanie</message>
+    <message xml:lang="ru">Для удаления программ требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">remove</annotate>
+  </action>
+  <action id="org.plinius.software.flatpak-remove">
+    <description>Remove software</description>
+    <description xml:lang="de">Software entfernen</description>
+    <description xml:lang="fr">Supprimer des logiciels</description>
+    <description xml:lang="es">Eliminar software</description>
+    <description xml:lang="it">Rimuovere software</description>
+    <description xml:lang="pt">Remover software</description>
+    <description xml:lang="nl">Software verwijderen</description>
+    <description xml:lang="pl">Usuwanie oprogramowania</description>
+    <description xml:lang="ru">Удаление программ</description>
+    <message>Authentication is required to remove software</message>
+    <message xml:lang="de">Zum Entfernen von Software ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour supprimer des logiciels</message>
+    <message xml:lang="es">Se requiere autenticación para eliminar software</message>
+    <message xml:lang="it">È richiesta l'autenticazione per rimuovere software</message>
+    <message xml:lang="pt">É necessária autenticação para remover software</message>
+    <message xml:lang="nl">Authenticatie is vereist om software te verwijderen</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby usunąć oprogramowanie</message>
+    <message xml:lang="ru">Для удаления программ требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">flatpak-remove</annotate>
+  </action>
+  <action id="org.plinius.software.flathub-enable">
+    <description>Turn Flathub on or off</description>
+    <description xml:lang="de">Flathub ein- oder ausschalten</description>
+    <description xml:lang="fr">Activer ou désactiver Flathub</description>
+    <description xml:lang="es">Activar o desactivar Flathub</description>
+    <description xml:lang="it">Attivare o disattivare Flathub</description>
+    <description xml:lang="pt">Ativar ou desativar o Flathub</description>
+    <description xml:lang="nl">Flathub in- of uitschakelen</description>
+    <description xml:lang="pl">Włączanie lub wyłączanie Flathub</description>
+    <description xml:lang="ru">Включение и отключение Flathub</description>
+    <message>Authentication is required to turn Flathub on or off</message>
+    <message xml:lang="de">Zum Ein- oder Ausschalten von Flathub ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour activer ou désactiver Flathub</message>
+    <message xml:lang="es">Se requiere autenticación para activar o desactivar Flathub</message>
+    <message xml:lang="it">È richiesta l'autenticazione per attivare o disattivare Flathub</message>
+    <message xml:lang="pt">É necessária autenticação para ativar ou desativar o Flathub</message>
+    <message xml:lang="nl">Authenticatie is vereist om Flathub in of uit te schakelen</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby włączyć lub wyłączyć Flathub</message>
+    <message xml:lang="ru">Для включения или отключения Flathub требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">flathub-enable</annotate>
+  </action>
+  <action id="org.plinius.software.flathub-disable">
+    <description>Turn Flathub on or off</description>
+    <description xml:lang="de">Flathub ein- oder ausschalten</description>
+    <description xml:lang="fr">Activer ou désactiver Flathub</description>
+    <description xml:lang="es">Activar o desactivar Flathub</description>
+    <description xml:lang="it">Attivare o disattivare Flathub</description>
+    <description xml:lang="pt">Ativar ou desativar o Flathub</description>
+    <description xml:lang="nl">Flathub in- of uitschakelen</description>
+    <description xml:lang="pl">Włączanie lub wyłączanie Flathub</description>
+    <description xml:lang="ru">Включение и отключение Flathub</description>
+    <message>Authentication is required to turn Flathub on or off</message>
+    <message xml:lang="de">Zum Ein- oder Ausschalten von Flathub ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour activer ou désactiver Flathub</message>
+    <message xml:lang="es">Se requiere autenticación para activar o desactivar Flathub</message>
+    <message xml:lang="it">È richiesta l'autenticazione per attivare o disattivare Flathub</message>
+    <message xml:lang="pt">É necessária autenticação para ativar ou desativar o Flathub</message>
+    <message xml:lang="nl">Authenticatie is vereist om Flathub in of uit te schakelen</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby włączyć lub wyłączyć Flathub</message>
+    <message xml:lang="ru">Для включения или отключения Flathub требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">flathub-disable</annotate>
+  </action>
+  <action id="org.plinius.software.channel-beta">
+    <description>Change the update channel</description>
+    <description xml:lang="de">Update-Kanal wechseln</description>
+    <description xml:lang="fr">Changer le canal de mise à jour</description>
+    <description xml:lang="es">Cambiar el canal de actualizaciones</description>
+    <description xml:lang="it">Cambiare il canale degli aggiornamenti</description>
+    <description xml:lang="pt">Alterar o canal de atualizações</description>
+    <description xml:lang="nl">Het updatekanaal wijzigen</description>
+    <description xml:lang="pl">Zmiana kanału aktualizacji</description>
+    <description xml:lang="ru">Смена канала обновлений</description>
+    <message>Authentication is required to change the update channel</message>
+    <message xml:lang="de">Zum Wechseln des Update-Kanals ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour changer le canal de mise à jour</message>
+    <message xml:lang="es">Se requiere autenticación para cambiar el canal de actualizaciones</message>
+    <message xml:lang="it">È richiesta l'autenticazione per cambiare il canale degli aggiornamenti</message>
+    <message xml:lang="pt">É necessária autenticação para alterar o canal de atualizações</message>
+    <message xml:lang="nl">Authenticatie is vereist om het updatekanaal te wijzigen</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby zmienić kanał aktualizacji</message>
+    <message xml:lang="ru">Для смены канала обновлений требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">channel-beta</annotate>
+  </action>
+  <action id="org.plinius.software.channel-stable">
+    <description>Change the update channel</description>
+    <description xml:lang="de">Update-Kanal wechseln</description>
+    <description xml:lang="fr">Changer le canal de mise à jour</description>
+    <description xml:lang="es">Cambiar el canal de actualizaciones</description>
+    <description xml:lang="it">Cambiare il canale degli aggiornamenti</description>
+    <description xml:lang="pt">Alterar o canal de atualizações</description>
+    <description xml:lang="nl">Het updatekanaal wijzigen</description>
+    <description xml:lang="pl">Zmiana kanału aktualizacji</description>
+    <description xml:lang="ru">Смена канала обновлений</description>
+    <message>Authentication is required to change the update channel</message>
+    <message xml:lang="de">Zum Wechseln des Update-Kanals ist eine Legitimierung erforderlich</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour changer le canal de mise à jour</message>
+    <message xml:lang="es">Se requiere autenticación para cambiar el canal de actualizaciones</message>
+    <message xml:lang="it">È richiesta l'autenticazione per cambiare il canale degli aggiornamenti</message>
+    <message xml:lang="pt">É necessária autenticação para alterar o canal de atualizações</message>
+    <message xml:lang="nl">Authenticatie is vereist om het updatekanaal te wijzigen</message>
+    <message xml:lang="pl">Wymagane jest uwierzytelnienie, aby zmienić kanał aktualizacji</message>
+    <message xml:lang="ru">Для смены канала обновлений требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-software/plinius-pkg</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">channel-stable</annotate>
+  </action>
+</policyconfig>

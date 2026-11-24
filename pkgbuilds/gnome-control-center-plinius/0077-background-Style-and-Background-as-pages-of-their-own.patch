@@ -1,0 +1,1064 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 20:00:00 +0100
+Subject: [PATCH] background: Style and Background as pages of their own
+
+Plinius: Appearance was one long page - the animated effect, the style
+previews, the accent colors and every background tile one below the
+other. It now starts with two rows that say what is set and open pages
+of their own (back arrow and back swipe lead back):
+
+- Style: light or dark and the accent color, GNOME's groups as they
+  were (subtitle "Dark · Blue", a dot in the accent color in front).
+- Background: five sections that open each on its own (AdwExpanderRow,
+  the chooser is now an AdwPreferencesGroup): Animated (the effect of
+  plinius-ambient over whatever the background is, with the amount;
+  before a group on the main page), Video (plinius-ambient 0.5, key
+  video-enabled), 360° Photos, Own Pictures and GNOME's Default
+  Pictures. Opening the page opens the section of the current
+  background, and Animated while an effect is on. Video, 360° Photos
+  and Own Pictures each end with their own "Add ..." row. The row on
+  the main page shows the background small with its kind and effect.
+
+The tiles of a section are made when it is opened the first time, so
+opening Appearance creates none of them (the 360° photos and videos
+also read their folders only then).
+
+Removing an own picture asks first (no undo toast any more); removing
+the picture shown goes back to GNOME's default one. The app overview
+group stays on the main page, below the two rows.
+
+The rows and the 360°/video/animated parts are our own files
+(cc-plinius-appearance.c, cc-plinius-panorama.c, cc-plinius-ambient.c);
+their strings are in our gettext domain, so the section titles are set
+in the code.
+
+The Style page also has the background color, below the accent color
+and in its look (nine colors and a color wheel for one's own, through
+the color editor page of the custom accent color): primary-color with
+color-shading-type 'solid', of the background and the lock screen. It
+is what shows when no background is chosen: a tap on the background
+shown - an own or default picture here, a video or 360° photo in our
+sections - takes it away (picture-options 'none', which Phosh fills
+with primary-color), no tile has a check mark then and the row on the
+main page says "Color" with the color in front. Tapping the picture
+again shows it again (set_background sets its placement as before).
+Choosing a picture no longer writes the colors of the wallpaper (the
+background color stays), so a tile counts as the current one by its
+picture and placement only, and none while picture-options is 'none'
+or a video or 360° photo covers it. The background color is our own
+file as well (cc-plinius-bgcolor.c).
+---
+ panels/background/cc-background-chooser.blp | 121 +++++-----
+ panels/background/cc-background-chooser.c   | 330 +++++++++++++++++-----------
+ panels/background/cc-background-chooser.h   |   5 +-
+ panels/background/cc-background-panel.blp   | 152 ++++++++-----
+ panels/background/cc-background-panel.c     |  66 ++++--
+ panels/background/meson.build               |   2 +
+ 6 files changed, 414 insertions(+), 262 deletions(-)
+
+diff --git a/panels/background/cc-background-chooser.blp b/panels/background/cc-background-chooser.blp
+index 0dea9294f..5e743f822 100644
+--- a/panels/background/cc-background-chooser.blp
++++ b/panels/background/cc-background-chooser.blp
+@@ -1,80 +1,69 @@
+ using Gtk 4.0;
++using Adw 1;
+ 
+-template $CcBackgroundChooser: Box {
+-  orientation: vertical;
++// Plinius: five sections, each opens on its own: the animated effect, videos and 360° photos
++// (filled by cc-plinius-ambient.c and cc-plinius-panorama.c), own pictures and GNOME's; the titles
++// are set in the code (our gettext domain)
++template $CcBackgroundChooser: Adw.PreferencesGroup {
++  Adw.ExpanderRow animated_row {}
+ 
+-  // Plinius: 360° photos (cc-plinius-panorama.c), hidden without them
+-  Box panorama_box {
+-    orientation: vertical;
+-  }
+-
+-  Box recent_box {
+-    orientation: vertical;
++  Adw.ExpanderRow video_row {}
+ 
+-    // Plinius: a heading for each kind of picture, set in the code (our gettext domain)
+-    Label recent_heading {
+-      xalign: 0;
+-      margin-start: 18;
+-      margin-top: 12;
+-
+-      styles [
+-        "heading",
+-      ]
+-    }
++  Adw.ExpanderRow panorama_row {}
+ 
+-    FlowBox recent_flowbox {
+-      margin-top: 12;
+-      margin-bottom: 12;
+-      margin-start: 12;
+-      margin-end: 12;
+-      column-spacing: 12;
+-      row-spacing: 12;
+-      homogeneous: true;
+-      halign: center;
+-      min-children-per-line: 1;
+-      max-children-per-line: 8;
+-      activate-on-single-click: true;
+-      selection-mode: single;
+-      child-activated => $on_item_activated_cb(template);
++  Adw.ExpanderRow recent_row {
++    ListBoxRow recent_box {
++      activatable: false;
++      selectable: false;
++      focusable: false;
+ 
+-      styles [
+-        "background-flowbox",
+-      ]
+-    }
++      child: FlowBox recent_flowbox {
++        margin-top: 12;
++        margin-bottom: 12;
++        margin-start: 12;
++        margin-end: 12;
++        column-spacing: 12;
++        row-spacing: 12;
++        homogeneous: true;
++        halign: center;
++        min-children-per-line: 1;
++        max-children-per-line: 8;
++        activate-on-single-click: true;
++        selection-mode: single;
++        child-activated => $on_item_activated_cb(template);
+ 
+-    Separator {
+-      margin-top: 12;
+-      margin-bottom: 12;
++        styles [
++          "background-flowbox",
++        ]
++      };
+     }
+   }
+ 
+-  Label wallpapers_heading {
+-    xalign: 0;
+-    margin-start: 18;
+-    margin-top: 12;
+-
+-    styles [
+-      "heading",
+-    ]
+-  }
++  Adw.ExpanderRow wallpapers_row {
++    ListBoxRow {
++      activatable: false;
++      selectable: false;
++      focusable: false;
+ 
+-  FlowBox flowbox {
+-    margin-top: 12;
+-    margin-bottom: 12;
+-    margin-start: 12;
+-    margin-end: 12;
+-    column-spacing: 12;
+-    row-spacing: 12;
+-    homogeneous: true;
+-    halign: center;
+-    min-children-per-line: 1;
+-    max-children-per-line: 8;
+-    activate-on-single-click: true;
+-    selection-mode: single;
+-    child-activated => $on_item_activated_cb(template);
++      child: FlowBox flowbox {
++        margin-top: 12;
++        margin-bottom: 12;
++        margin-start: 12;
++        margin-end: 12;
++        column-spacing: 12;
++        row-spacing: 12;
++        homogeneous: true;
++        halign: center;
++        min-children-per-line: 1;
++        max-children-per-line: 8;
++        activate-on-single-click: true;
++        selection-mode: single;
++        child-activated => $on_item_activated_cb(template);
+ 
+-    styles [
+-      "background-flowbox",
+-    ]
++        styles [
++          "background-flowbox",
++        ]
++      };
++    }
+   }
+ }
+diff --git a/panels/background/cc-background-chooser.c b/panels/background/cc-background-chooser.c
+index e1c4772de..06e3df462 100644
+--- a/panels/background/cc-background-chooser.c
++++ b/panels/background/cc-background-chooser.c
+@@ -30,20 +30,26 @@
+ #include "cc-background-chooser.h"
+ #include "cc-background-item.h"
+ #include "cc-background-paintable.h"
++#include "cc-plinius-ambient.h"
+ #include "cc-plinius-panorama.h"
+ 
+ #define THUMBNAIL_WIDTH 144
+ #define THUMBNAIL_HEIGHT (THUMBNAIL_WIDTH * 3 / 4)
+ 
+ struct _CcBackgroundChooser {
+-    GtkBox parent;
++    AdwPreferencesGroup parent;
+ 
+     GtkFlowBox *flowbox;
+     GtkWidget *recent_box;
+     GtkFlowBox *recent_flowbox;
+-    GtkWidget *panorama_box;
+-    GtkLabel *recent_heading;
+-    GtkLabel *wallpapers_heading;
++    /* Plinius: the sections, each opens on its own */
++    AdwExpanderRow *animated_row;
++    AdwExpanderRow *video_row;
++    AdwExpanderRow *panorama_row;
++    AdwExpanderRow *recent_row;
++    AdwExpanderRow *wallpapers_row;
++    gboolean recent_bound;
++    gboolean wallpapers_bound;
+ 
+     gboolean recent_selected;
+ 
+@@ -53,27 +59,16 @@ struct _CcBackgroundChooser {
+     CcBackgroundItem *active_item;
+ 
+     GnomeDesktopThumbnailFactory *thumbnail_factory;
+-
+-    AdwToastOverlay *toast_overlay;
+-    AdwToast *toast;
+-    GPtrArray *removed_backgrounds;
+ };
+ 
++/* Plinius: a picture to remove once the question is answered */
+ typedef struct {
++    CcBackgroundChooser *self;
+     BgRecentSource *recent_source;
+     CcBackgroundItem *item;
+-    GtkWidget *parent;
+-} UndoData;
++} RemoveData;
+ 
+-G_DEFINE_FINAL_TYPE (CcBackgroundChooser, cc_background_chooser, GTK_TYPE_BOX)
+-
+-enum {
+-    PROP_0,
+-    PROP_TOAST_OVERLAY,
+-    N_PROPS
+-};
+-
+-static GParamSpec *properties[N_PROPS];
++G_DEFINE_FINAL_TYPE (CcBackgroundChooser, cc_background_chooser, ADW_TYPE_PREFERENCES_GROUP)
+ 
+ enum {
+     BACKGROUND_CHOSEN,
+@@ -98,92 +93,101 @@ emit_background_chosen (CcBackgroundChooser *self)
+     g_signal_emit (self, signals[BACKGROUND_CHOSEN], 0, item);
+ }
+ 
+-static void
+-really_delete_background (gpointer data)
++/* Plinius: whether @item is the picture shown. The colors do not count: they are the background
++ * color of the Style page (cc-plinius-bgcolor.c), which a picture keeps (GNOME's wallpapers
++ * name colors of their own). None is shown while picture-options is 'none' (then the color
++ * shows, cc_plinius_background_clear_picture) or a 360° photo or a video covers it. */
++static gboolean
++item_is_shown (CcBackgroundItem *item, CcBackgroundItem *active_item)
+ {
+-    UndoData *undo_data = data;
+-
+-    bg_recent_source_remove_item (undo_data->recent_source, undo_data->item);
+-    g_free (undo_data);
++    CcBackgroundItemFlags flags = cc_background_item_get_flags (item);
++    const char *uri = cc_background_item_get_uri (item);
++    const char *active_uri;
++    g_autoptr(GFile) file = NULL;
++    g_autoptr(GFile) active_file = NULL;
++
++    if (!active_item || !(flags & CC_BACKGROUND_ITEM_HAS_URI) || !uri ||
++        cc_plinius_background_picture_off () || cc_plinius_background_replaced ())
++        return FALSE;
++    if ((flags & CC_BACKGROUND_ITEM_HAS_PLACEMENT) &&
++        cc_background_item_get_placement (item) != cc_background_item_get_placement (active_item))
++        return FALSE;
++
++    active_uri = cc_background_item_get_uri (active_item);
++    if (!active_uri)
++        return FALSE;
++    file = g_file_new_for_commandline_arg (uri);
++    active_file = g_file_new_for_commandline_arg (active_uri);
++    if (!g_file_equal (file, active_file))
++        return FALSE;
++
++    if (flags & CC_BACKGROUND_ITEM_HAS_URI_DARK) {
++        const char *dark = cc_background_item_get_uri_dark (item);
++        const char *active_dark = cc_background_item_get_uri_dark (active_item);
++        g_autoptr(GFile) dark_file = NULL;
++        g_autoptr(GFile) active_dark_file = NULL;
++
++        if (!dark || !active_dark)
++            return dark == active_dark;
++        dark_file = g_file_new_for_commandline_arg (dark);
++        active_dark_file = g_file_new_for_commandline_arg (active_dark);
++        return g_file_equal (dark_file, active_dark_file);
++    }
++    return TRUE;
+ }
+ 
+ static void
+-undo_remove (gpointer data)
++remove_data_free (gpointer data)
+ {
+-    UndoData *undo_data = data;
+-
+-    gtk_widget_set_visible (undo_data->parent, TRUE);
+-    g_free (undo_data);
+-}
++    RemoveData *remove_data = data;
+ 
+-static void
+-on_removed_backgrounds_undo (CcBackgroundChooser *self)
+-{
+-    g_ptr_array_set_free_func (self->removed_backgrounds, undo_remove);
+-    gtk_widget_set_visible (self->recent_box, TRUE);
++    g_object_unref (remove_data->self);
++    g_object_unref (remove_data->recent_source);
++    g_object_unref (remove_data->item);
++    g_free (remove_data);
+ }
+ 
+ static void
+-on_removed_backgrounds_dismissed (CcBackgroundChooser *self)
++on_remove_confirmed (gpointer data)
+ {
+-    self->toast = NULL;
+-    g_clear_pointer (&self->removed_backgrounds, g_ptr_array_unref);
++    RemoveData *remove_data = data;
++    CcBackgroundChooser *self = remove_data->self;
++    gboolean current = item_is_shown (remove_data->item, self->active_item);
++
++    /* The folder's monitor takes the tile away */
++    bg_recent_source_remove_item (remove_data->recent_source, remove_data->item);
++
++    /* The picture shown goes back to GNOME's default one. Under a 360° photo or a video, or with
++     * the background color shown instead, it is not shown: it stays set until another is chosen,
++     * or the photo or video is removed. */
++    if (current)
++        cc_plinius_background_reset_picture ();
+ }
+ 
++/* Plinius: removing asks first, instead of an undo toast */
+ static void
+ on_delete_background_clicked_cb (GtkButton *button, BgRecentSource *source)
+ {
+     GtkWidget *parent;
+     CcBackgroundChooser *self;
+     CcBackgroundItem *item;
+-    UndoData *undo_data;
+-    GListStore *store;
++    RemoveData *remove_data;
++    g_autofree gchar *path = NULL;
+ 
+     parent = gtk_widget_get_parent (gtk_widget_get_parent (GTK_WIDGET (button)));
+     g_assert (GTK_IS_FLOW_BOX_CHILD (parent));
+ 
+     item = g_object_get_data (G_OBJECT (parent), "item");
+     self = g_object_get_data (G_OBJECT (source), "background-chooser");
++    path = g_filename_from_uri (cc_background_item_get_uri (item), NULL, NULL);
+ 
+-    gtk_widget_set_visible (parent, FALSE);
+-
+-    /* Add background to the array of rows to be handled by the undo toast */
+-    if (!self->removed_backgrounds)
+-        self->removed_backgrounds = g_ptr_array_new_with_free_func (really_delete_background);
+-
+-    undo_data = g_new (UndoData, 1);
+-    undo_data->recent_source = source;
+-    undo_data->item = item;
+-    undo_data->parent = parent;
++    remove_data = g_new0 (RemoveData, 1);
++    remove_data->self = g_object_ref (self);
++    remove_data->recent_source = g_object_ref (source);
++    remove_data->item = g_object_ref (item);
+ 
+-    g_ptr_array_add (self->removed_backgrounds, undo_data);
+-
+-    /* Recent flowbox should be hidden if all backgrounds are to be removed */
+-    store = bg_source_get_liststore (BG_SOURCE (self->recent_source));
+-
+-    if (self->removed_backgrounds->len == g_list_model_get_n_items (G_LIST_MODEL (store)))
+-        gtk_widget_set_visible (self->recent_box, FALSE);
+-
+-    if (!self->toast) {
+-        self->toast = adw_toast_new (_("Background removed"));
+-        adw_toast_set_button_label (self->toast, _("_Undo"));
+-
+-        g_signal_connect_swapped (self->toast, "button-clicked", G_CALLBACK (on_removed_backgrounds_undo), self);
+-        g_signal_connect_swapped (self->toast, "dismissed", G_CALLBACK (on_removed_backgrounds_dismissed), self);
+-    } else {
+-        g_autofree gchar *message = NULL;
+-
+-        /* Translators: %d is the number of backgrounds deleted. */
+-        message = g_strdup_printf (
+-            ngettext ("%d background removed", "%d backgrounds removed", self->removed_backgrounds->len),
+-            self->removed_backgrounds->len);
+-
+-        adw_toast_set_title (self->toast, message);
+-
+-        g_object_ref (self->toast);
+-    }
+-
+-    adw_toast_overlay_add_toast (self->toast_overlay, self->toast);
++    cc_plinius_background_confirm_remove (GTK_WIDGET (button), path ? path : cc_background_item_get_uri (item),
++                                          on_remove_confirmed, remove_data, remove_data_free);
+ }
+ 
+ static GtkWidget *
+@@ -255,9 +259,9 @@ create_widget_func (gpointer model_item, gpointer user_data)
+ 
+     g_object_set_data_full (G_OBJECT (child), "item", g_object_ref (item), g_object_unref);
+ 
+-    /* Plinius: while a 360° photo is the background, none of these is */
+-    if (self->active_item && !cc_plinius_panorama_is_active () &&
+-        cc_background_item_compare (item, self->active_item)) {
++    /* Plinius: while a 360° photo, a video or the background color is the background, none of
++     * these is */
++    if (item_is_shown (item, self->active_item)) {
+         gtk_widget_add_css_class (GTK_WIDGET (child), "active-item");
+         gtk_accessible_update_state (GTK_ACCESSIBLE (child), GTK_ACCESSIBLE_STATE_CHECKED, TRUE, -1);
+     } else
+@@ -278,18 +282,39 @@ update_recent_visibility (CcBackgroundChooser *self)
+     gtk_widget_set_visible (self->recent_box, has_items);
+ }
+ 
++/* Plinius: the tiles (and their thumbnails) are made when their section is opened the first time */
+ static void
+-setup_flowbox (CcBackgroundChooser *self)
++on_section_expanded_cb (CcBackgroundChooser *self, GParamSpec *pspec, AdwExpanderRow *row)
+ {
+     GListStore *store;
+ 
+-    store = bg_source_get_liststore (BG_SOURCE (self->wallpapers_source));
++    if (!adw_expander_row_get_expanded (row))
++        return;
+ 
+-    gtk_flow_box_bind_model (self->flowbox, G_LIST_MODEL (store), create_widget_func, self->wallpapers_source, NULL);
++    if (row == self->wallpapers_row && !self->wallpapers_bound) {
++        self->wallpapers_bound = TRUE;
++        store = bg_source_get_liststore (BG_SOURCE (self->wallpapers_source));
++        gtk_flow_box_bind_model (self->flowbox, G_LIST_MODEL (store), create_widget_func, self->wallpapers_source,
++                                 NULL);
++    } else if (row == self->recent_row && !self->recent_bound) {
++        self->recent_bound = TRUE;
++        store = bg_source_get_liststore (BG_SOURCE (self->recent_source));
++        gtk_flow_box_bind_model (self->recent_flowbox, G_LIST_MODEL (store), create_widget_func, self->recent_source,
++                                 NULL);
++    }
++}
+ 
+-    store = bg_source_get_liststore (BG_SOURCE (self->recent_source));
++static void
++setup_flowbox (CcBackgroundChooser *self)
++{
++    GListStore *store;
+ 
+-    gtk_flow_box_bind_model (self->recent_flowbox, G_LIST_MODEL (store), create_widget_func, self->recent_source, NULL);
++    g_signal_connect_object (self->wallpapers_row, "notify::expanded", G_CALLBACK (on_section_expanded_cb), self,
++                             G_CONNECT_SWAPPED);
++    g_signal_connect_object (self->recent_row, "notify::expanded", G_CALLBACK (on_section_expanded_cb), self,
++                             G_CONNECT_SWAPPED);
++
++    store = bg_source_get_liststore (BG_SOURCE (self->recent_source));
+ 
+     update_recent_visibility (self);
+     g_signal_connect_object (store, "items-changed", G_CALLBACK (update_recent_visibility), self, G_CONNECT_SWAPPED);
+@@ -297,24 +322,35 @@ setup_flowbox (CcBackgroundChooser *self)
+ 
+ static void flow_box_set_active_item (GtkFlowBox *flowbox, CcBackgroundItem *active_item);
+ 
+-/* Plinius: a 360° photo switched on (from the 360° tiles or elsewhere) takes the check mark off
+- * these pictures; switched off, it goes back to the current one */
++/* Plinius: a 360° photo or a video switched on (from their tiles or elsewhere) takes the check
++ * mark off these pictures; with both off, it goes back to the current one (if it is shown) */
+ static void
+ on_panorama_changed (gboolean active, gpointer user_data)
+ {
+     CcBackgroundChooser *self = user_data;
+-    CcBackgroundItem *item = active ? NULL : self->active_item;
+ 
+-    flow_box_set_active_item (self->flowbox, item);
+-    flow_box_set_active_item (self->recent_flowbox, item);
++    flow_box_set_active_item (self->flowbox, self->active_item);
++    flow_box_set_active_item (self->recent_flowbox, self->active_item);
+ }
+ 
+ static void
+ on_item_activated_cb (CcBackgroundChooser *self, GtkFlowBoxChild *child, GtkFlowBox *flowbox)
+ {
+-    /* Plinius: one of these pictures instead of the 360° photo, even the one set already (whose
+-     * choice changes no key that plinius-ambient could notice) */
+-    cc_plinius_panorama_deactivate ();
++    /* Plinius: a tap on the picture shown takes it away without another one: the background
++     * color of the Style page shows, no tile has the check mark. Tapping it again shows it
++     * again (the panel sets its placement). */
++    if (item_is_shown (g_object_get_data (G_OBJECT (child), "item"), self->active_item)) {
++        gtk_flow_box_unselect_all (self->flowbox);
++        gtk_flow_box_unselect_all (self->recent_flowbox);
++        cc_plinius_background_clear_picture ();
++        flow_box_set_active_item (self->flowbox, NULL);
++        flow_box_set_active_item (self->recent_flowbox, NULL);
++        return;
++    }
++
++    /* Plinius: one of these pictures instead of the 360° photo or the video, even the one set
++     * already (whose choice changes no key that plinius-ambient could notice) */
++    cc_plinius_background_picture_chosen ();
+     self->recent_selected = flowbox == self->recent_flowbox;
+     if (self->recent_selected)
+         gtk_flow_box_unselect_all (self->flowbox);
+@@ -349,21 +385,6 @@ file_dialog_open_cb (GObject *source_object, GAsyncResult *res, gpointer user_da
+ 
+ /* GObject overrides */
+ 
+-static void
+-cc_background_chooser_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
+-{
+-    CcBackgroundChooser *self = CC_BACKGROUND_CHOOSER (object);
+-
+-    switch (prop_id) {
+-    case PROP_TOAST_OVERLAY:
+-        self->toast_overlay = g_value_get_object (value);
+-        break;
+-    default:
+-        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+-        break;
+-    }
+-}
+-
+ static void
+ cc_background_chooser_finalize (GObject *object)
+ {
+@@ -382,12 +403,8 @@ cc_background_chooser_class_init (CcBackgroundChooserClass *klass)
+     GObjectClass *object_class = G_OBJECT_CLASS (klass);
+     GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+ 
+-    object_class->set_property = cc_background_chooser_set_property;
+     object_class->finalize = cc_background_chooser_finalize;
+ 
+-    properties[PROP_TOAST_OVERLAY] = g_param_spec_object ("toast-overlay", NULL, NULL, ADW_TYPE_TOAST_OVERLAY,
+-                                                          G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
+-
+     signals[BACKGROUND_CHOSEN] = g_signal_new ("background-chosen", CC_TYPE_BACKGROUND_CHOOSER, G_SIGNAL_RUN_FIRST, 0,
+                                                NULL, NULL, NULL, G_TYPE_NONE, 1, CC_TYPE_BACKGROUND_ITEM);
+ 
+@@ -397,18 +414,20 @@ cc_background_chooser_class_init (CcBackgroundChooserClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, flowbox);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_box);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_flowbox);
+-    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, panorama_box);
+-    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_heading);
+-    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, wallpapers_heading);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, animated_row);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, video_row);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, panorama_row);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_row);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, wallpapers_row);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, on_item_activated_cb);
+-
+-    g_object_class_install_properties (object_class, N_PROPS, properties);
+ }
+ 
+ static void
+ cc_background_chooser_init (CcBackgroundChooser *self)
+ {
++    GtkWidget *add_row;
++
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
+     self->recent_source = bg_recent_source_new ();
+@@ -420,9 +439,26 @@ cc_background_chooser_init (CcBackgroundChooser *self)
+ 
+     setup_flowbox (self);
+ 
+-    gtk_label_set_label (self->recent_heading, cc_plinius_panorama_heading ("recent"));
+-    gtk_label_set_label (self->wallpapers_heading, cc_plinius_panorama_heading ("wallpapers"));
+-    gtk_box_append (GTK_BOX (self->panorama_box), cc_plinius_panorama_section_new (on_panorama_changed, self));
++    /* Plinius: the sections' titles in our gettext domain; the animated effect, the videos and the
++     * 360° photos from our files, each only with the plinius-ambient that has it */
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->animated_row), cc_plinius_panorama_heading ("animated"));
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->video_row), cc_plinius_panorama_heading ("video"));
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->panorama_row), cc_plinius_panorama_heading ("panorama"));
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->recent_row), cc_plinius_panorama_heading ("recent"));
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->wallpapers_row),
++                                   cc_plinius_panorama_heading ("wallpapers"));
++    gtk_widget_set_visible (GTK_WIDGET (self->animated_row), cc_plinius_ambient_fill (self->animated_row));
++    gtk_widget_set_visible (GTK_WIDGET (self->video_row),
++                            cc_plinius_panorama_fill (self->video_row, CC_PLINIUS_FILES_VIDEO, on_panorama_changed,
++                                                      self));
++    gtk_widget_set_visible (GTK_WIDGET (self->panorama_row),
++                            cc_plinius_panorama_fill (self->panorama_row, CC_PLINIUS_FILES_PANORAMA,
++                                                      on_panorama_changed, self));
++
++    add_row = cc_plinius_panorama_add_row_new ("add-picture");
++    g_signal_connect_object (add_row, "activated", G_CALLBACK (cc_background_chooser_select_file), self,
++                             G_CONNECT_SWAPPED);
++    adw_expander_row_add_row (self->recent_row, add_row);
+ }
+ 
+ void
+@@ -465,8 +501,8 @@ flow_box_set_active_item (GtkFlowBox *flowbox, CcBackgroundItem *active_item)
+     while ((child = gtk_flow_box_get_child_at_index (flowbox, idx++))) {
+         item = g_object_get_data (G_OBJECT (child), "item");
+ 
+-        /* Plinius: NULL while a 360° photo is the background */
+-        if (active_item && cc_background_item_compare (item, active_item)) {
++        /* Plinius: none while a 360° photo, a video or the background color is the background */
++        if (item_is_shown (item, active_item)) {
+             gtk_widget_add_css_class (GTK_WIDGET (child), "active-item");
+             gtk_accessible_update_state (GTK_ACCESSIBLE (child), GTK_ACCESSIBLE_STATE_CHECKED, TRUE, -1);
+         } else {
+@@ -484,8 +520,50 @@ cc_background_chooser_set_active_item (CcBackgroundChooser *self, CcBackgroundIt
+ 
+     self->active_item = active_item;
+ 
+-    if (cc_plinius_panorama_is_active ())
+-        active_item = NULL;
+     flow_box_set_active_item (self->flowbox, active_item);
+     flow_box_set_active_item (self->recent_flowbox, active_item);
+ }
++
++/* Plinius: whether the current picture is one of the own pictures */
++static gboolean
++active_item_is_recent (CcBackgroundChooser *self)
++{
++    GListModel *model = G_LIST_MODEL (bg_source_get_liststore (BG_SOURCE (self->recent_source)));
++    const char *uri;
++
++    if (!self->active_item || !(uri = cc_background_item_get_uri (self->active_item)))
++        return FALSE;
++
++    for (guint i = 0; i < g_list_model_get_n_items (model); i++) {
++        g_autoptr(CcBackgroundItem) item = g_list_model_get_item (model, i);
++
++        if (g_strcmp0 (cc_background_item_get_uri (item), uri) == 0)
++            return TRUE;
++    }
++    return FALSE;
++}
++
++/**
++ * cc_background_chooser_open_current:
++ *
++ * Plinius: opens the section of the current background (video, 360° photo, own or GNOME's
++ * picture) and closes the others; the animated effect's section is open while there is one.
++ * Called each time the page is shown.
++ */
++void
++cc_background_chooser_open_current (CcBackgroundChooser *self)
++{
++    gboolean video, photo, own;
++
++    g_return_if_fail (CC_IS_BACKGROUND_CHOOSER (self));
++
++    video = cc_plinius_video_is_active ();
++    photo = !video && cc_plinius_panorama_is_active ();
++    own = !video && !photo && active_item_is_recent (self);
++
++    adw_expander_row_set_expanded (self->animated_row, cc_plinius_ambient_effect_label () != NULL);
++    adw_expander_row_set_expanded (self->video_row, video);
++    adw_expander_row_set_expanded (self->panorama_row, photo);
++    adw_expander_row_set_expanded (self->recent_row, own);
++    adw_expander_row_set_expanded (self->wallpapers_row, !video && !photo && !own);
++}
+diff --git a/panels/background/cc-background-chooser.h b/panels/background/cc-background-chooser.h
+index 7e68f3075..9dfed3594 100644
+--- a/panels/background/cc-background-chooser.h
++++ b/panels/background/cc-background-chooser.h
+@@ -21,13 +21,14 @@
+ #pragma once
+ 
+ #include "cc-background-item.h"
+-#include <gtk/gtk.h>
++#include <adwaita.h>
+ 
+ G_BEGIN_DECLS
+ 
+ #define CC_TYPE_BACKGROUND_CHOOSER (cc_background_chooser_get_type ())
+-G_DECLARE_FINAL_TYPE (CcBackgroundChooser, cc_background_chooser, CC, BACKGROUND_CHOOSER, GtkBox);
++G_DECLARE_FINAL_TYPE (CcBackgroundChooser, cc_background_chooser, CC, BACKGROUND_CHOOSER, AdwPreferencesGroup);
+ void cc_background_chooser_select_file (CcBackgroundChooser *self);
+ void cc_background_chooser_set_active_item (CcBackgroundChooser *self, CcBackgroundItem *active_item);
++void cc_background_chooser_open_current (CcBackgroundChooser *self);
+ 
+ G_END_DECLS
+diff --git a/panels/background/cc-background-panel.blp b/panels/background/cc-background-panel.blp
+index 0403cd080..67c84d8da 100644
+--- a/panels/background/cc-background-panel.blp
++++ b/panels/background/cc-background-panel.blp
+@@ -6,37 +6,80 @@ template $CcBackgroundPanel: $CcPanel {
+     width-request: 346;
+     height-request: 200;
+ 
+-    Adw.Breakpoint {
+-      condition ("max-width: 420px")
+-
+-      setters {
+-        accent_box.spacing: 6;
+-        accent_box.margin-top: 6;
+-        accent_box.margin-bottom: 6;
+-      }
+-    }
+-
+-    // Plinius: ten buttons with the custom accent color, still in one row at 360 px
+-    Adw.Breakpoint {
+-      condition ("max-width: 390px")
+-
+-      setters {
+-        accent_box.spacing: 2;
+-        accent_box.margin-top: 6;
+-        accent_box.margin-bottom: 6;
+-      }
+-    }
+-
+     child: Adw.ToolbarView {
+       [top]
+       Adw.HeaderBar {}
+ 
+       content: Adw.ToastOverlay toast_overlay {
+-        // Plinius: the app overview group goes on top (cc_plinius_display_setup_app_overview)
++        // Plinius: Style and Background as pages of their own, their rows on top, the app
++        // overview group below them (cc_plinius_display_setup_app_overview); the rows say what is
++        // set (cc-plinius-appearance.c)
+         child: Adw.PreferencesPage appearance_page {
+-          Adw.PreferencesGroup {
+-            title: _("Style");
++          Adw.PreferencesGroup pages_group {
++            $CcListRow style_row {
++              title: _("Style");
++              show-arrow: true;
++              action-name: "navigation.push";
++              action-target: "'style'";
++            }
++
++            $CcListRow background_row {
++              title: _("Background");
++              show-arrow: true;
++              action-name: "navigation.push";
++              action-target: "'background'";
++            }
++          }
++        };
++      };
++    };
++  };
++
++  // Plinius: light or dark, the accent color and the background color
++  [subpage]
++  Adw.NavigationPage {
++    tag: "style";
++    title: _("Style");
++
++    child: Adw.BreakpointBin {
++      width-request: 346;
++      height-request: 200;
++
++      Adw.Breakpoint {
++        condition ("max-width: 420px")
++
++        setters {
++          accent_box.spacing: 6;
++          accent_box.margin-top: 6;
++          accent_box.margin-bottom: 6;
++          bgcolor_box.spacing: 6;
++          bgcolor_box.margin-top: 6;
++          bgcolor_box.margin-bottom: 6;
++        }
++      }
+ 
++      // Plinius: ten buttons with the custom accent color (and the background color), still in
++      // one row at 360 px
++      Adw.Breakpoint {
++        condition ("max-width: 390px")
++
++        setters {
++          accent_box.spacing: 2;
++          accent_box.margin-top: 6;
++          accent_box.margin-bottom: 6;
++          bgcolor_box.spacing: 2;
++          bgcolor_box.margin-top: 6;
++          bgcolor_box.margin-bottom: 6;
++        }
++      }
++
++      child: Adw.ToolbarView {
++        [top]
++        Adw.HeaderBar {}
++
++        content: Adw.PreferencesPage {
++          // The page has the title
++          Adw.PreferencesGroup {
+             Adw.PreferencesRow {
+               accessible-role: group;
+               activatable: false;
+@@ -145,41 +188,44 @@ template $CcBackgroundPanel: $CcPanel {
+             }
+           }
+ 
+-          Adw.PreferencesGroup {
+-            title: _("Background");
+-
+-            header-suffix: Button {
+-              Adw.ButtonContent {
+-                icon-name: "list-add-symbolic";
+-                label: _("_Add Picture…");
+-                use-underline: true;
+-              }
+-
+-              clicked => $on_add_picture_button_clicked_cb(template);
+-
+-              styles [
+-                "flat",
+-              ]
+-            };
+-
+-            Adw.Bin {
+-              styles [
+-                "card",
+-              ]
+-              accessibility {
+-                label: _("Background");
+-              }
++          // Plinius: the background color, shown when no background is chosen; title and
++          // buttons from cc-plinius-bgcolor.c (our gettext domain)
++          Adw.PreferencesGroup bgcolor_group {
++            Adw.PreferencesRow {
+               accessible-role: group;
++              activatable: false;
++              focusable: false;
+ 
+-              $CcBackgroundChooser background_chooser {
+-                hexpand: true;
+-                toast-overlay: toast_overlay;
+-                background-chosen => $on_chooser_background_chosen_cb(template);
++              Box bgcolor_box {
++                spacing: 12;
++                margin-top: 12;
++                margin-bottom: 12;
++                halign: center;
+               }
+             }
+           }
+         };
+       };
+     };
+-  };
++  }
++
++  // Plinius: the background in five sections (cc-background-chooser.blp), the one of the current
++  // background open
++  [subpage]
++  Adw.NavigationPage background_page {
++    tag: "background";
++    title: _("Background");
++    showing => $on_background_page_showing_cb(template);
++
++    child: Adw.ToolbarView {
++      [top]
++      Adw.HeaderBar {}
++
++      content: Adw.PreferencesPage {
++        $CcBackgroundChooser background_chooser {
++          background-chosen => $on_chooser_background_chosen_cb(template);
++        }
++      };
++    };
++  }
+ }
+diff --git a/panels/background/cc-background-panel.c b/panels/background/cc-background-panel.c
+index 23e84a78e..0e4b570ac 100644
+--- a/panels/background/cc-background-panel.c
++++ b/panels/background/cc-background-panel.c
+@@ -26,15 +26,19 @@
+ #include <string.h>
+ 
+ #include <gdesktop-enums.h>
++#include <libgnome-desktop/gnome-desktop-thumbnail.h>
+ 
+ #include "cc-background-panel.h"
+ 
+ #include "cc-background-chooser.h"
+ #include "cc-background-item.h"
++#include "cc-background-paintable.h"
+ #include "cc-background-preview.h"
++#include "panels/common/cc-list-row.h"
+ #include "panels/common/cc-plinius-display.h"
+ #include "cc-plinius-accent.h"
+-#include "cc-plinius-ambient.h"
++#include "cc-plinius-appearance.h"
++#include "cc-plinius-bgcolor.h"
+ #include "cc-background-resources.h"
+ 
+ #define WP_PATH_ID "org.gnome.desktop.background"
+@@ -65,7 +69,16 @@ struct _CcBackgroundPanel {
+ 
+     CcBackgroundItem *current_background;
+ 
++    /* Plinius: the rows that open the pages Style and Background */
++    AdwPreferencesGroup *pages_group;
++    AdwActionRow *style_row;
++    AdwActionRow *background_row;
++    GnomeDesktopThumbnailFactory *thumbnail_factory;
++
+     GtkWidget *accent_box;
++    /* Plinius: the background color, shown when no background is chosen */
++    AdwPreferencesGroup *bgcolor_group;
++    GtkWidget *bgcolor_box;
+     CcBackgroundChooser *background_chooser;
+     CcBackgroundPreview *default_preview;
+     CcBackgroundPreview *dark_preview;
+@@ -278,6 +291,17 @@ update_preview (CcBackgroundPanel *self)
+     current_background = self->current_background;
+     cc_background_preview_set_item (self->default_preview, current_background);
+     cc_background_preview_set_item (self->dark_preview, current_background);
++
++    /* Plinius: and small in front of the row Background, as the chooser's tiles draw it */
++    {
++        g_autoptr(CcBackgroundPaintable) paintable = NULL;
++
++        paintable = cc_background_paintable_new (self->thumbnail_factory, current_background,
++                                                 CC_BACKGROUND_PAINT_LIGHT_DARK, 64, 48,
++                                                 GTK_WIDGET (self->background_row));
++        cc_plinius_appearance_background_row_set_picture (self->background_row, GDK_PAINTABLE (paintable),
++                                                          cc_background_item_get_uri (current_background));
++    }
+ }
+ 
+ static void
+@@ -388,11 +412,8 @@ set_background (CcBackgroundPanel *self, GSettings *settings, CcBackgroundItem *
+             g_settings_set_enum (settings, WP_OPTIONS_KEY, cc_background_item_get_placement (item));
+     }
+ 
+-    if (flags & CC_BACKGROUND_ITEM_HAS_SHADING)
+-        g_settings_set_enum (settings, WP_SHADING_KEY, cc_background_item_get_shading (item));
+-
+-    g_settings_set_string (settings, WP_PCOLOR_KEY, cc_background_item_get_pcolor (item));
+-    g_settings_set_string (settings, WP_SCOLOR_KEY, cc_background_item_get_scolor (item));
++    /* Plinius: the colors stay, they are the background color of the Style page
++     * (cc-plinius-bgcolor.c); it shows when no picture is chosen */
+ 
+     /* Apply all changes */
+     g_settings_apply (settings);
+@@ -414,10 +435,11 @@ on_chooser_background_chosen_cb (CcBackgroundPanel *self, CcBackgroundItem *item
+     g_signal_handlers_unblock_by_func (self->settings, on_settings_changed, self);
+ }
+ 
++/* Plinius: the section of the current background opens with the page */
+ static void
+-on_add_picture_button_clicked_cb (CcBackgroundPanel *self)
++on_background_page_showing_cb (CcBackgroundPanel *self)
+ {
+-    cc_background_chooser_select_file (self->background_chooser);
++    cc_background_chooser_open_current (self->background_chooser);
+ }
+ 
+ static const char *
+@@ -445,6 +467,7 @@ cc_background_panel_finalize (GObject *object)
+     CcBackgroundPanel *self = CC_BACKGROUND_PANEL (object);
+ 
+     g_clear_object (&self->current_background);
++    g_clear_object (&self->thumbnail_factory);
+ 
+     G_OBJECT_CLASS (cc_background_panel_parent_class)->finalize (object);
+ }
+@@ -458,6 +481,7 @@ cc_background_panel_class_init (CcBackgroundPanelClass *klass)
+ 
+     g_type_ensure (CC_TYPE_BACKGROUND_CHOOSER);
+     g_type_ensure (CC_TYPE_BACKGROUND_PREVIEW);
++    g_type_ensure (CC_TYPE_LIST_ROW);
+ 
+     panel_class->get_help_uri = cc_background_panel_get_help_uri;
+ 
+@@ -468,16 +492,21 @@ cc_background_panel_class_init (CcBackgroundPanelClass *klass)
+                                                  "/org/gnome/control-center/background/cc-background-panel.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, accent_box);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, bgcolor_group);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, bgcolor_box);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, appearance_page);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, background_chooser);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, default_preview);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_preview);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, default_toggle);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_toggle);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, pages_group);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, style_row);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, background_row);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, on_color_scheme_toggle_active_cb);
+     gtk_widget_class_bind_template_callback (widget_class, on_chooser_background_chosen_cb);
+-    gtk_widget_class_bind_template_callback (widget_class, on_add_picture_button_clicked_cb);
++    gtk_widget_class_bind_template_callback (widget_class, on_background_page_showing_cb);
+ }
+ 
+ static void
+@@ -494,12 +523,17 @@ cc_background_panel_init (CcBackgroundPanel *self)
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
+-    /* Plinius: the animated effect over the background above Style; added first, so that the
+-     * app overview options below still go on top */
+-    cc_plinius_ambient_setup (self->appearance_page);
+-
+-    /* Plinius: the phone's app overview options first */
+-    cc_plinius_display_setup_app_overview (self->appearance_page);
++    /* Plinius: the phone's app overview options, below the rows Style and Background (the
++     * function puts its group first; the rows' group goes back on top) */
++    if (cc_plinius_display_setup_app_overview (self->appearance_page)) {
++        g_object_ref (self->pages_group);
++        adw_preferences_page_remove (self->appearance_page, self->pages_group);
++        adw_preferences_page_insert (self->appearance_page, self->pages_group, 0);
++        g_object_unref (self->pages_group);
++    }
++    cc_plinius_appearance_style_row_setup (self->style_row);
++    cc_plinius_appearance_background_row_setup (self->background_row);
++    self->thumbnail_factory = gnome_desktop_thumbnail_factory_new (GNOME_DESKTOP_THUMBNAIL_SIZE_LARGE);
+ 
+     self->connection = g_application_get_dbus_connection (g_application_get_default ());
+ 
+@@ -523,6 +557,8 @@ cc_background_panel_init (CcBackgroundPanel *self)
+     setup_accent_color_toggles (self);
+     /* Plinius: a custom accent color after GNOME's nine */
+     cc_plinius_accent_setup (self->accent_box);
++    /* Plinius: the background color below the accent color */
++    cc_plinius_bgcolor_setup (self->bgcolor_group, self->bgcolor_box);
+ 
+     g_signal_connect_object (self->interface_settings, "changed::" INTERFACE_COLOR_SCHEME_KEY,
+                              G_CALLBACK (reload_color_scheme), self, G_CONNECT_SWAPPED);
+diff --git a/panels/background/meson.build b/panels/background/meson.build
+index 35518cb2c..6e8b8ce1e 100644
+--- a/panels/background/meson.build
++++ b/panels/background/meson.build
+@@ -70,6 +70,8 @@ sources = common_sources + files(
+   'cc-background-xml.c',
+   'cc-plinius-accent.c',
+   'cc-plinius-ambient.c',
++  'cc-plinius-appearance.c',
++  'cc-plinius-bgcolor.c',
+   'cc-plinius-panorama.c',
+ )
+ 
+-- 
+2.55.0

@@ -1,0 +1,30 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-bootcheck\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-27 23:32+0100\n"
+"PO-Revision-Date: 2026-10-27 23:30+0100\n"
+"Last-Translator: plinius-bootcheck\n"
+"Language-Team: none\n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: notify:17
+msgid "Start system changed"
+msgstr "Sistema de arranque modificado"
+
+#: notify:19
+#, sh-printf-format
+msgid ""
+"Since the last start, these parts of the start system were changed: %s. If "
+"you did not update Volla OS or the start system yourself, someone may have "
+"tampered with the phone and may know your encryption password. Details and "
+"accepting the change: Settings → Security → Boot Chain"
+msgstr "Desde el último arranque se han modificado estas partes del sistema de arranque: %s. Si no has actualizado tú mismo Volla OS o el sistema de arranque, puede que alguien haya manipulado el teléfono y conozca tu contraseña de cifrado. Detalles y aceptar el cambio: Configuración → Seguridad → Cadena de arranque"
+
+#: notify:51
+msgid "Show Details"
+msgstr "Mostrar detalles"

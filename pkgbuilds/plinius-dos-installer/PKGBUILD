@@ -1,0 +1,140 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-dos-installer
+pkgver=0.1
+pkgrel=11
+pkgdesc="Installs MS-DOS games from floppy disk images, CDs, archives or GOG installers, each with a launcher and the game's icon"
+arch=(any)
+license=(MIT)
+# One app instead of ScummVM and DOSBox side by side: the user picks the disks, a CD, a ZIP, a GOG
+# installer or a folder, the rest happens by itself (docs/ROADMAP.md, Emulators).
+# - Games ScummVM knows run there; the others in DOSBox 0.74 with the phone settings (fullscreen
+#   in a 4:3 mode, usescancodes=false for Stevia's Terminal layout).
+# - The fullscreen mode is 1440x1080 instead of the desktop size: sdl12-compat scales a fixed
+#   mode into the window and DOSBox never hears of a turn, so a mode in the shape of the start
+#   orientation left the picture small in the other one (0.1-7).
+# - Doom and Wolfenstein 3D turn about 13 times faster by swiping, walk 4 times faster: DOSBox
+#   sensitivity 300, Doom's mouse speed 9 and, for turning alone, the mouse driver's sideways
+#   sensitivity at its highest (INT 33h 1Ah, set by a small program before the game; "mouse" in
+#   a preset). A swipe across the picture had turned Doom by 63 degrees; tried on the phone (0.1-7).
+# - A game's launcher starts plinius-touch-controls with DOSBox: stick and buttons beside the
+#   4:3 picture (upright below it, lying left and right of it) send the keys; a preset may set
+#   them ("touch": stick, buttons, small). The installers keep Stevia (0.1-7).
+# - The touch controls can be switched off per game: a DOSBox game's row in the library folds
+#   out a switch, kept as "controls" in plinius-game.json (on when missing); Remove moved from
+#   the side of the row in there, only Play stays at the side (0.1-8).
+# - Instead of folding out, a gear beside Play opens the game's own page: Touch Joystick, below
+#   it Uninstall Game (0.1-9).
+# - The game's page has more of DOSBox per game (0.1-10): under Controls the keys of the stick
+#   (arrows, WASD, number pad) and the mouse speed, DOSBox's sensitivity from 10 to 1000 percent
+#   (Doom and Wolfenstein 3D start at 300); under Game the CPU speed (auto, about a 286, 386 or
+#   486, max), sharp pixels (output openglnb) and, when there is one beside the game, its own
+#   setup (SETUP.EXE and the like), started with --setup. All of it is kept in plinius-game.json;
+#   DOSBox's own value leaves a setting out.
+# - Doom and Doom II get the keys 1 to 7 for their weapons below Esc and the keyboard button
+#   (plinius-touch-controls --keys, 0.1-11), unless the game's settings name keys of their own.
+# - Installers from floppies run with all disks unpacked into one folder (own FAT12/16 reader);
+#   DOSBox 0.74 can only swap CD images, so the files that differ between the disks are swapped
+#   once DOSBox read the current disk's own files (/proc/<pid>/fdinfo).
+# - Icons: ScummVM's icon for the game, fetched once from github.com/scummvm/scummvm-icons
+#   (GPL-2.0, the full packs are several hundred MB); DOS games get ScummVM's PC icon.
+# - plinius-scummvm-launchers writes a launcher for every ScummVM game, also those added in
+#   ScummVM itself; a user path unit runs it whenever ScummVM's game list or icons change.
+# - ISO images are read with 7-Zip, GOG installers unpacked with innoextract.
+# The modules lie flat next to this file (makepkg takes no local sources in subfolders) and go
+# into the package dosinstall below /usr/lib/plinius-dos-installer.
+# - DOSBox runs as app id "dosbox": Stevia keeps the Terminal layout for it (the only one SDL 1.2
+#   understands) and is unfolded over D-Bus while an installer runs (0.1-2).
+# - The search for a game starts in the home folder, later one level above the last game's
+#   folder (0.1-2).
+# The hook hides the launchers of ScummVM and DOSBox, also when they were installed first; they
+# come back on removal.
+depends=(python python-gobject gtk4 libadwaita dosbox scummvm 7zip innoextract
+	# The signed list of games: gpgv and the key of the package repository
+	gnupg plinius-keyring
+	# The hook uses its launcher hiding script
+	device-volla-ansuz
+	# Stick and buttons on the screen while a game runs
+	'plinius-touch-controls>=0.1-7')
+makedepends=(gettext python)
+install=plinius-dos-installer.install
+_langs=(de es fr it nl pl pt ru)
+_modules=(__init__.py __main__.py app.py dosbox.py dosgames.py fat.py finish.py floppies.py install.py
+	keyboard.py library.py presets.py scummvm.py sources.py)
+source=(plinius-dos-installer
+	"${_modules[@]}"
+	presets.json
+	plinius-scummvm-launchers
+	plinius-scummvm-launchers.service
+	plinius-scummvm-launchers.path
+	org.plinius.DOSInstaller.desktop
+	org.plinius.DOSInstaller.svg
+	org.plinius.DOSInstaller-symbolic.svg
+	plinius-dos-installer-hide.hook
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('1ff96fcd5a8c5e3f903f5be19767093564ad9f0baa1460889703efb9bd5e6069'
+	'a9d41717ac6d8ac4bcf6bb38300350453720199add4d7afa6b8dbde326ceebe2'
+	'fe723610d30ad277d4c78829f194481b4ccd598d5fd9ecfff3491c21769de6fd'
+	'a210355a9eedd8b1cdde025599212915ee63fd73e8ac23364f17018bcf64ab5f'
+	'378fd8c13440126b78a275fe72537cc8357f7b02e9d996a3221c853f0fbf95d0'
+	'e4605141778184c3dc9172686fdad0e3657a36c88571476663f263c2c5d50663'
+	'fa7193b8e7d2dd0d4dacb143dee318014936b0ddc5207351e9f493a60e784061'
+	'7edfbdd60453edbcdc345ff848b26b10ee4ef72b41d8a48507579de61545fd32'
+	'0c94470cbe1ab1e2030122d89a381cb660cd7dae5acbf6fc270030feb362a252'
+	'fba02c864f6ffaef5d1df5aa00d85c2061b4128c465e4d4adb55f51eb3fcac1f'
+	'7a0dd02e01fd7d3a14813aff47921060df8ec4351ec21429f9709cf5dada1499'
+	'9539c5955843d40560530d80e74069d58189a53a3481a2b1ac9af44f3e291004'
+	'c69f59f69f8d3533d820a3e713c568c448622e0ba173fa09452e6048ba7595f6'
+	'4f531341ada7f584a258b98b4b2c790b3a6475e38c1a892d6012d299b045daad'
+	'621326e1c3031b6801e968da478ac1956bc5f31d8c89b8869b0a2fbaf10f0e30'
+	'a351ae17b518a6e916ceb760685563e13a51c72d408aa91804863a93b720f53f'
+	'7ca471bc62da83004aca0336887b21f95ea98a5b81fe541a3c820f744ddbda30'
+	'6baf4fabf08326fa02ebe1dcdf928fca900b44c32ac6ac00a4a57d24fd52345f'
+	'264e7677a92d34cf5c970c7ded73a67ac1c620fa355a49ac1690ae8b4b4a5d9d'
+	'bda558dc8264db41ba1eb1c50dcd660a53542daa59bbcc7700d649f84c1c019e'
+	'e1aeac62cd18452235992aaaff0f281622b6a2c82d2add8d930dc9374dd19e15'
+	'fb0ac3fdf3a1b2b05dfe93f29328afb0e3a124a32d1d26bb43dd62939d1c3a3d'
+	'e4078bdef3914aff7cbcef4e32f38da036544ccd7e51293700d6a5d39ff009ec'
+	'67ff78bb766b98596a35131f67e870c5b0a71f0e075b8a76e4a380d6acf182f0'
+	'dc39e65afca05e5ec514042e01b09614747298a21ecec8b536ecbdd89ce5b8de'
+	'20a70f7d1c2f1c8e8cd56a529d023abb4b4a7f2a66ba2285eafafd0e054dd1fa'
+	'1208b543d6c58311680bb8a90909b247108ad66983726da905b3d40c969ec68f'
+	'ce07dd4b107463f6cd1f850455d8dac4089a0cf3eefbc60a74043b36aea78ef4'
+	'd00bd350653ee910af2d8c712eb8471e1aa93c07ff8e68fcbee1125a44fb0b08'
+	'53b6ce026371e5ae599819e5952781ff82a732107ddf0f362d40102f4855ab34'
+	'bced6d9e2aa6eb9ea9091cedaf4a0f1211cb32c9f98cd817b8978a17544bfa56'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	local lib="$pkgdir/usr/lib/plinius-dos-installer"
+	install -Dm755 plinius-dos-installer -t "$pkgdir/usr/bin"
+	for m in "${_modules[@]}"; do
+		install -Dm644 "$m" "$lib/dosinstall/$m"
+	done
+	# The list of games for installing without a network; a newer signed one is fetched
+	install -Dm644 presets.json -t "$lib/dosinstall"
+	python -m compileall -q -d /usr/lib/plinius-dos-installer "$lib"
+	install -Dm755 plinius-scummvm-launchers -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-scummvm-launchers.service plinius-scummvm-launchers.path \
+		-t "$pkgdir/usr/lib/systemd/user"
+	# Once per session, then on every change of the game list or the icon packs
+	install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../plinius-scummvm-launchers.service ../plinius-scummvm-launchers.path \
+		"$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	install -Dm644 org.plinius.DOSInstaller.desktop -t "$pkgdir/usr/share/applications"
+	install -Dm644 org.plinius.DOSInstaller.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+	install -Dm644 org.plinius.DOSInstaller-symbolic.svg \
+		-t "$pkgdir/usr/share/icons/hicolor/symbolic/apps"
+	install -Dm644 plinius-dos-installer-hide.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-dos-installer.mo"
+	done
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

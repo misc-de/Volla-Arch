@@ -1,0 +1,6 @@
+# Settings starts the filter's service when it is not running (it leaves while the filter is off)
+[D-BUS Service]
+Name=org.plinius.DnsFilter
+Exec=/bin/false
+User=root
+SystemdService=plinius-dnsfilter.service

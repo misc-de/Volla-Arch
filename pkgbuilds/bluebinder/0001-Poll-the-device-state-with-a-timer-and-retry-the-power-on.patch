@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 07:25:00 +0100
+Subject: [PATCH] Poll the device state with a timer and retry the power-on
+
+check_bt_state ran as an idle source and spun at 100 % CPU until the
+vhci device was up. On the first boot of the Volla Phone Plinius the
+HAL needs about 7 s to initialize (firmware download), longer than the
+kernel waits for the reset command of the automatic power-on (2 s). The
+power-on failed, nobody retried, and bluebinder burned a core until
+systemd killed it after TimeoutStartSec, slowing the whole boot.
+
+Poll every 100 ms instead and, once the HAL is initialized, power the
+device on again (HCIDEVUP on a thread, it waits for the reset answer
+that only arrives through the main loop). Needs CAP_NET_ADMIN.
+---
+--- a/bluebinder.c
++++ b/bluebinder.c
+@@ -92,6 +92,7 @@
+ #define PRIORITY_PROCESS_PACKETS_ONCE (G_PRIORITY_DEFAULT + 2)
+ #define PRIORITY_HOST_READ_PACKETS (G_PRIORITY_DEFAULT + 3) // HAL -> vhci
+ #define PRIORITY_CHECK_BT_STATE (G_PRIORITY_DEFAULT + 4)
++#define CHECK_BT_STATE_INTERVAL_MS 100
+ // This one is to be executed after the setup procedure to potentially turn bluetooth off
+ // after the setup is complete if it was off before reboot for example.
+ // Needs to be higher than the rfkill channel otherwise an event from the user
+@@ -245,6 +246,9 @@
+     const struct bluetooth_hal_protocol *protocol;
+ 
+     bool bluetooth_hal_initialized;
++    /* check_bt_state polls since the start; the last power-on retry happened at this poll */
++    unsigned int state_polls;
++    unsigned int last_power_on;
+ 
+     int death_id;
+ 
+@@ -819,6 +823,23 @@
+     return G_SOURCE_REMOVE;
+ }
+ 
++/* HCIDEVUP waits until the controller answered the reset, and the answer only arrives
++ * through our main loop: run it on its own thread */
++static gpointer
++power_on_thread(
++    gpointer user_data)
++{
++    int hci_index = GPOINTER_TO_INT(user_data);
++    int sk = socket(PF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
++
++    if (sk >= 0) {
++        if (ioctl(sk, HCIDEVUP, hci_index) < 0 && errno != EALREADY)
++            fprintf(stderr, "Powering on hci%d failed: %s\n", hci_index, strerror(errno));
++        close(sk);
++    }
++    return NULL;
++}
++
+ static gboolean
+ check_bt_state(
+     gpointer user_data)
+@@ -871,6 +892,18 @@
+         return G_SOURCE_REMOVE;
+     }
+ 
++    /* The kernel powers the new device on at once and waits 2 s for the reset. The first
++     * initialization of the HAL can take longer (firmware download); the power-on then
++     * fails and nobody retries, so the device would never come up. Retry once the HAL is
++     * ready, at most every 3 s. */
++    proxy->state_polls++;
++    if (proxy->bluetooth_hal_initialized && !hci_test_bit(HCI_RUNNING, &di.flags) &&
++        proxy->state_polls - proxy->last_power_on >= 3000 / CHECK_BT_STATE_INTERVAL_MS) {
++        fprintf(stderr, "hci%d did not come up, powering it on again\n", hci_index);
++        proxy->last_power_on = proxy->state_polls;
++        g_thread_unref(g_thread_new("power-on", power_on_thread, GINT_TO_POINTER(hci_index)));
++    }
++
+     return G_SOURCE_CONTINUE;
+ }
+ 
+@@ -1235,7 +1268,8 @@
+ 
+ 
+         g_idle_add_full(PRIORITY_CHECK_BT_STATE, turn_on_bt_after_startup, &proxy, NULL);
+-        g_idle_add_full(PRIORITY_CHECK_BT_STATE, check_bt_state, &proxy, NULL);
++        /* A timer, not an idle source: until the device is up an idle source spins at 100 % CPU */
++        g_timeout_add_full(PRIORITY_CHECK_BT_STATE, CHECK_BT_STATE_INTERVAL_MS, check_bt_state, &proxy, NULL);
+ 
+         proxy.rfkill_watch_id = g_io_add_watch_full(proxy.rfkill_channel,
+                                     PRIORITY_RFKILL_CHANNEL,

@@ -1,0 +1,242 @@
+From db487b71c69bf9a7b40daf8a3fdc227371c2e3a6 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 19:03:14 +0100
+Subject: [PATCH] quick-settings: Mobile data and the hotspot up among the
+ first tiles
+
+Plinius: the mobile data and hotspot tiles come from plugins, so they
+were added after all built-in tiles, far down in the quick settings.
+Mobile data now goes right after the Wi-Fi tile, with three columns at
+the end of the top row (Mobile Network, Wi-Fi, Mobile Data), and the
+hotspot in the place of Bluetooth, which moves one further. For that
+the quick settings box can insert a tile after or before another one
+(phosh_quick_settings_box_insert_after (), _insert_before ()).
+---
+ src/quick-settings-box.c        | 52 ++++++++++++++++++++++++++++++++++++++++-
+ src/quick-settings-box.h        |  6 +++++
+ src/quick-settings.c            | 18 +++++++++++++-
+ src/ui/quick-settings.ui        |  6 +++--
+ tests/test-quick-settings-box.c | 39 +++++++++++++++++++++++++++++++
+ 5 files changed, 117 insertions(+), 4 deletions(-)
+
+diff --git a/src/quick-settings-box.c b/src/quick-settings-box.c
+index 643b2d26..2e3fbc6e 100644
+--- a/src/quick-settings-box.c
++++ b/src/quick-settings-box.c
+@@ -865,10 +865,25 @@ phosh_quick_settings_box_hide_status (PhoshQuickSettingsBox *self)
+ void
+ phosh_quick_settings_box_add (PhoshQuickSettingsBox *self, PhoshQuickSetting *child)
+ {
++  phosh_quick_settings_box_insert_after (self, child, NULL);
++}
++
++/* Plinius: @child next to @sibling (after it or before it), at the end without @sibling */
++static void
++insert_next_to (PhoshQuickSettingsBox *self,
++                PhoshQuickSetting     *child,
++                PhoshQuickSetting     *sibling,
++                gboolean               after)
++{
++  guint index;
++
+   g_return_if_fail (PHOSH_QUICK_SETTINGS_BOX (self));
+   g_return_if_fail (PHOSH_IS_QUICK_SETTING (child));
+ 
+-  g_ptr_array_add (self->children, child);
++  if (sibling && g_ptr_array_find (self->children, sibling, &index))
++    g_ptr_array_insert (self->children, after ? index + 1 : index, child);
++  else
++    g_ptr_array_add (self->children, child);
+   gtk_widget_set_parent (GTK_WIDGET (child), GTK_WIDGET (self));
+ 
+   g_object_bind_property (self, "can-show-status",
+@@ -891,6 +906,41 @@ phosh_quick_settings_box_add (PhoshQuickSettingsBox *self, PhoshQuickSetting *ch
+ }
+ 
+ 
++/**
++ * phosh_quick_settings_box_insert_after:
++ * @self: The quick settings box
++ * @child: The quick setting to add
++ * @sibling: (nullable): The quick setting @child goes after
++ *
++ * Plinius: like phosh_quick_settings_box_add(), but in a given place: right after @sibling,
++ * at the end when @sibling is %NULL or not in the box.
++ */
++void
++phosh_quick_settings_box_insert_after (PhoshQuickSettingsBox *self,
++                                       PhoshQuickSetting     *child,
++                                       PhoshQuickSetting     *sibling)
++{
++  insert_next_to (self, child, sibling, TRUE);
++}
++
++/**
++ * phosh_quick_settings_box_insert_before:
++ * @self: The quick settings box
++ * @child: The quick setting to add
++ * @sibling: (nullable): The quick setting @child goes before
++ *
++ * Plinius: like phosh_quick_settings_box_insert_after(), but in the place of @sibling, which
++ * moves one further.
++ */
++void
++phosh_quick_settings_box_insert_before (PhoshQuickSettingsBox *self,
++                                        PhoshQuickSetting     *child,
++                                        PhoshQuickSetting     *sibling)
++{
++  insert_next_to (self, child, sibling, FALSE);
++}
++
++
+ void
+ phosh_quick_settings_box_remove (PhoshQuickSettingsBox *self, PhoshQuickSetting *child)
+ {
+diff --git a/src/quick-settings-box.h b/src/quick-settings-box.h
+index 3c60064f..d3ce8d47 100644
+--- a/src/quick-settings-box.h
++++ b/src/quick-settings-box.h
+@@ -23,6 +23,12 @@ void       phosh_quick_settings_box_set_can_show_status (PhoshQuickSettingsBox *
+ gboolean   phosh_quick_settings_box_get_can_show_status (PhoshQuickSettingsBox *self);
+ void       phosh_quick_settings_box_hide_status (PhoshQuickSettingsBox *self);
+ void       phosh_quick_settings_box_add (PhoshQuickSettingsBox *self, PhoshQuickSetting *child);
++void       phosh_quick_settings_box_insert_after (PhoshQuickSettingsBox *self,
++                                                 PhoshQuickSetting     *child,
++                                                 PhoshQuickSetting     *sibling);
++void       phosh_quick_settings_box_insert_before (PhoshQuickSettingsBox *self,
++                                                  PhoshQuickSetting     *child,
++                                                  PhoshQuickSetting     *sibling);
+ void       phosh_quick_settings_box_remove (PhoshQuickSettingsBox *self, PhoshQuickSetting *child);
+ 
+ G_END_DECLS
+diff --git a/src/quick-settings.c b/src/quick-settings.c
+index ab582d5d..75c8d1e3 100644
+--- a/src/quick-settings.c
++++ b/src/quick-settings.c
+@@ -26,6 +26,9 @@
+ 
+ #define INTERFACE_SETTINGS_SCHEMA "org.gnome.desktop.interface"
+ #define SHOW_BATTERY_PERCENTAGE_KEY "show-battery-percentage"
++/* Plinius: plugins whose tiles go next to the built-in ones instead of after all of them */
++#define MOBILE_DATA_QUICK_SETTING "mobile-data-quick-setting"
++#define HOTSPOT_QUICK_SETTING "wifi-hotspot-quick-setting"
+ 
+ /**
+  * PhoshQuickSettings:
+@@ -44,6 +47,8 @@ struct _PhoshQuickSettings {
+ 
+   PhoshQuickSettingsBox *box;
+   PhoshQuickSetting *battery_quick_setting;
++  PhoshQuickSetting *wifi_quick_setting;
++  PhoshQuickSetting *bt_quick_setting;
+ 
+   GSettings *interface_settings;
+   GSettings *plugin_settings;
+@@ -260,7 +265,16 @@ load_custom_quick_settings (PhoshQuickSettings *self, GSettings *settings, char
+     if (widget == NULL) {
+       g_warning ("Custom quick setting '%s' not found", plugins[i]);
+     } else {
+-      phosh_quick_settings_box_add (self->box, PHOSH_QUICK_SETTING (widget));
++      /* Plinius: mobile data right after Wi-Fi, the last tile of the top row with three
++       * columns, and the hotspot in the place of Bluetooth, which moves one further */
++      if (g_str_equal (plugins[i], MOBILE_DATA_QUICK_SETTING))
++        phosh_quick_settings_box_insert_after (self->box, PHOSH_QUICK_SETTING (widget),
++                                               self->wifi_quick_setting);
++      else if (g_str_equal (plugins[i], HOTSPOT_QUICK_SETTING))
++        phosh_quick_settings_box_insert_before (self->box, PHOSH_QUICK_SETTING (widget),
++                                                self->bt_quick_setting);
++      else
++        phosh_quick_settings_box_add (self->box, PHOSH_QUICK_SETTING (widget));
+       g_ptr_array_add (self->custom_quick_settings, widget);
+     }
+   }
+@@ -305,6 +319,8 @@ phosh_quick_settings_class_init (PhoshQuickSettingsClass *klass)
+ 
+   gtk_widget_class_bind_template_child (widget_class, PhoshQuickSettings, box);
+   gtk_widget_class_bind_template_child (widget_class, PhoshQuickSettings, battery_quick_setting);
++  gtk_widget_class_bind_template_child (widget_class, PhoshQuickSettings, wifi_quick_setting);
++  gtk_widget_class_bind_template_child (widget_class, PhoshQuickSettings, bt_quick_setting);
+ 
+   gtk_widget_class_bind_template_callback (widget_class, on_wwan_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_wifi_clicked);
+diff --git a/src/ui/quick-settings.ui b/src/ui/quick-settings.ui
+index ffc0ac3a..ed2f8191 100644
+--- a/src/ui/quick-settings.ui
++++ b/src/ui/quick-settings.ui
+@@ -18,7 +18,8 @@
+           </object>
+         </child>
+         <child>
+-          <object class="PhoshQuickSetting">
++          <!-- Plinius: the mobile data tile goes right after this one, see load_custom_quick_settings () -->
++          <object class="PhoshQuickSetting" id="wifi_quick_setting">
+             <property name="visible">1</property>
+             <property name="sensitive" bind-source="wifiinfo" bind-property="present" bind-flags="sync-create"/>
+             <property name="status-icon">wifiinfo</property>
+@@ -29,7 +30,8 @@
+           </object>
+         </child>
+         <child>
+-          <object class="PhoshQuickSetting">
++          <!-- Plinius: the hotspot tile goes in this one's place, see load_custom_quick_settings () -->
++          <object class="PhoshQuickSetting" id="bt_quick_setting">
+             <property name="visible">1</property>
+             <property name="sensitive" bind-source="btinfo" bind-property="present" bind-flags="sync-create"/>
+             <property name="status-icon">btinfo</property>
+diff --git a/tests/test-quick-settings-box.c b/tests/test-quick-settings-box.c
+index 062e4a95..baaca69a 100644
+--- a/tests/test-quick-settings-box.c
++++ b/tests/test-quick-settings-box.c
+@@ -64,6 +64,43 @@ test_phosh_quick_settings_box_add (void)
+ }
+ 
+ 
++static void
++test_phosh_quick_settings_box_insert_after (void)
++{
++  GtkContainer *box;
++  GtkWidget *first, *second, *inserted, *last, *before;
++  g_autoptr (GList) children = NULL;
++
++  box = GTK_CONTAINER (phosh_quick_settings_box_new (3, 0));
++  g_object_ref_sink (box);
++  first = phosh_quick_setting_new (NULL);
++  second = phosh_quick_setting_new (NULL);
++  inserted = phosh_quick_setting_new (NULL);
++  last = phosh_quick_setting_new (NULL);
++  before = phosh_quick_setting_new (NULL);
++
++  phosh_quick_settings_box_add (PHOSH_QUICK_SETTINGS_BOX (box), PHOSH_QUICK_SETTING (first));
++  phosh_quick_settings_box_add (PHOSH_QUICK_SETTINGS_BOX (box), PHOSH_QUICK_SETTING (second));
++  phosh_quick_settings_box_insert_after (PHOSH_QUICK_SETTINGS_BOX (box), PHOSH_QUICK_SETTING (inserted),
++                                         PHOSH_QUICK_SETTING (first));
++  /* No sibling: at the end */
++  phosh_quick_settings_box_insert_after (PHOSH_QUICK_SETTINGS_BOX (box), PHOSH_QUICK_SETTING (last), NULL);
++  /* In the place of second, which moves one further */
++  phosh_quick_settings_box_insert_before (PHOSH_QUICK_SETTINGS_BOX (box), PHOSH_QUICK_SETTING (before),
++                                          PHOSH_QUICK_SETTING (second));
++
++  children = gtk_container_get_children (box);
++  g_assert_cmpuint (g_list_length (children), ==, 5);
++  g_assert_true (g_list_nth_data (children, 0) == first);
++  g_assert_true (g_list_nth_data (children, 1) == inserted);
++  g_assert_true (g_list_nth_data (children, 2) == before);
++  g_assert_true (g_list_nth_data (children, 3) == second);
++  g_assert_true (g_list_nth_data (children, 4) == last);
++
++  g_assert_finalize_object (box);
++}
++
++
+ static void
+ test_phosh_quick_settings_box_remove (void)
+ {
+@@ -212,6 +249,8 @@ main (int argc, char *argv[])
+                    test_phosh_quick_settings_box_new);
+   g_test_add_func ("/phosh/quick-settings-box/add",
+                    test_phosh_quick_settings_box_add);
++  g_test_add_func ("/phosh/quick-settings-box/insert_after",
++                   test_phosh_quick_settings_box_insert_after);
+   g_test_add_func ("/phosh/quick-settings-box/remove",
+                    test_phosh_quick_settings_box_remove);
+   g_test_add_func ("/phosh/quick-settings-box/get_max_columns",

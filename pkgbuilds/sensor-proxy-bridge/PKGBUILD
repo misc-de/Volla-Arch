@@ -1,0 +1,33 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=sensor-proxy-bridge
+pkgver=0.9
+pkgrel=3
+pkgdesc="Android sensors HAL (AIDL ISensors over binder) as the iio-sensor-proxy D-Bus service"
+arch=(aarch64 x86_64)
+license=(MIT)
+# iio-sensor-proxy: its D-Bus policy for net.hadess.SensorProxy and monitor-sensor; its own
+# service stays off (it finds no IIO sensors, and the unit conflicts)
+depends=(glib2 libgbinder iio-sensor-proxy)
+source=(sensor-proxy-bridge.c
+	sensor-proxy-bridge.service
+	org.plinius.SensorProxyBridge.conf
+	LICENSE)
+sha256sums=('f4cb97cafe8d65a30b1188c0de4461651f6ad48e7064d1062a4ca033b798d40d'
+            'e853246a9bc8270e0821f5f9dac75ea33e0719b7b0a168ff076ddef9cd8b1366'
+            '28f1a00873f26ff143036454ab66ce96f311d1de1f591a7f0ee7da0a3926d7b2'
+            '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o sensor-proxy-bridge sensor-proxy-bridge.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 libgbinder) -lm $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 sensor-proxy-bridge -t "$pkgdir/usr/bin"
+	install -Dm644 sensor-proxy-bridge.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 org.plinius.SensorProxyBridge.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+}

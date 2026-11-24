@@ -1,0 +1,25 @@
+[Desktop Entry]
+Type=Application
+Name=Image Viewer
+Name[de]=Bildbetrachter
+Name[es]=Visor de imágenes
+Name[fr]=Visionneur d’images
+Name[it]=Visualizzatore immagini
+Name[nl]=Afbeeldingsweergave
+Name[pl]=Przeglądarka obrazów
+Name[pt]=Visualizador de imagens
+Name[ru]=Просмотрщик изображений
+GenericName=Photo Gallery
+GenericName[de]=Fotogalerie
+Comment=Browse photos and videos
+Comment[de]=Fotos und Videos ansehen
+Exec=muga %U
+TryExec=muga
+Icon=de.cais.Muga
+Terminal=false
+Categories=GNOME;GTK;Graphics;Photography;
+Keywords=Muga;photo;picture;gallery;camera;video;nextcloud;
+Keywords[de]=Muga;Bild;Foto;Galerie;Kamera;Video;Nextcloud;photo;picture;gallery;
+MimeType=image/jpeg;image/png;image/webp;image/gif;image/bmp;image/tiff;image/heif;image/avif;
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;

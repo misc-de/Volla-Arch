@@ -1,0 +1,754 @@
+From 75c40a6f1aedfa7b4bea078609b27907e6fae853 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 20:12:03 +0100
+Subject: [PATCH] osk: Microphone key for speech to text
+
+A key left of the space bar starts and stops dictation through the
+plinius-dictate session service (org.plinius.Dictate1). Recognized text
+is committed to the focused field like typed text. The key is only shown
+when dictation is switched on (org.plinius.dictate enabled) and the field
+is a normal text field: not for passwords, PINs, numbers, terminals or
+fields with sensitive data.
+
+The key is a generic action key (use 'action', property 'action-name')
+that activates an action in the 'win' group. It stays in the layout and
+gets a width of 0 while hidden, so switching it on or off needs no new
+layout.
+---
+ src/pos-enums.h         |   3 +
+ src/pos-input-surface.c | 258 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/pos-osk-key.c       |  56 ++++++++++-
+ src/pos-osk-key.h       |   2 +
+ src/pos-osk-widget.c    | 172 ++++++++++++++++++++++++++++++++
+ src/pos-osk-widget.h    |   2 +
+ 6 files changed, 490 insertions(+), 3 deletions(-)
+
+diff --git a/src/pos-enums.h b/src/pos-enums.h
+index 39ca280..2270aa9 100644
+--- a/src/pos-enums.h
++++ b/src/pos-enums.h
+@@ -47,6 +47,8 @@ typedef enum {
+  * @POS_OSK_KEY_USE_DELETE: A key to delete text
+  * @POS_OSK_KEY_USE_TOGGLE: a key that toggles another layer
+  * @POS_OSK_KEY_USE_MENU: a key that opens a popup menu
++ * @POS_OSK_KEY_USE_ACTION: a key that activates the action named by
++ *   [property@PosOskKey:action-name] in the widget's `win` action group
+  *
+  * The use (purpose) of a key.
+  */
+@@ -55,6 +57,7 @@ typedef enum  {
+   POS_OSK_KEY_USE_DELETE,
+   POS_OSK_KEY_USE_TOGGLE,
+   POS_OSK_KEY_USE_MENU,
++  POS_OSK_KEY_USE_ACTION,
+ } PosOskKeyUse;
+ 
+ /**
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index 374f33f..60dd9ac 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -176,10 +176,21 @@ struct _PosInputSurface {
+   gboolean                    layout_overriden;
+   /* Keymap handling */
+   guint                       keymap_delayed_id;
++
++  /* Speech to text through plinius-dictated (org.plinius.Dictate1) */
++  GSettings                  *dictate_settings;  /* NULL without plinius-dictate */
++  GDBusConnection            *session_bus;
++  guint                       dictate_text_id;
++  guint                       dictate_state_id;
++  GCancellable               *dictate_cancel;
++  gboolean                    dictate_shown;     /* microphone key visible */
++  gboolean                    dictating;         /* microphone on (or being switched on) */
++  gboolean                    dictate_accept;    /* text may still go to the focused field */
+ };
+ 
+ 
+ static void pos_input_surface_submit_symbol (PosInputSurface *self, const char *symbol);
++static void update_dictation (PosInputSurface *self);
+ static void select_layout_by_im_purpose (PosInputSurface *self);
+ 
+ static void pos_input_surface_action_group_iface_init (GActionGroupInterface *iface);
+@@ -1505,6 +1516,7 @@ on_im_purpose_changed (PosInputSurface *self, GParamSpec *pspec, PosInputMethod
+   g_assert (self->input_method == im);
+ 
+   select_layout_by_im_purpose (self);
++  update_dictation (self);
+ }
+ 
+ 
+@@ -1531,6 +1543,7 @@ on_im_hint_changed (PosInputSurface *self, GParamSpec *pspec, PosInputMethod *im
+   g_assert (POS_IS_INPUT_METHOD (im));
+ 
+   g_debug ("Hint changed: 0x%.2x", pos_input_method_get_hint (im));
++  update_dictation (self);
+   if ((self->completion_mode & PHOSH_OSK_COMPLETION_MODE_HINT) == 0)
+     return;
+ 
+@@ -1567,6 +1580,231 @@ on_im_surrounding_text_changed (PosInputSurface *self, GParamSpec *pspec, PosInp
+ }
+ 
+ 
++/* ---- speech to text ------------------------------------------------------------------ */
++
++#define DICTATE_BUS_NAME "org.plinius.Dictate1"
++#define DICTATE_PATH "/org/plinius/Dictate1"
++#define DICTATE_IFACE "org.plinius.Dictate1"
++#define DICTATE_SCHEMA "org.plinius.dictate"
++/* zwp_text_input_v3 content hints (PosInputMethodHint lists them as plain values) */
++#define CONTENT_HINT_HIDDEN_TEXT 0x40
++#define CONTENT_HINT_SENSITIVE_DATA 0x80
++
++static void
++set_dictation_active (PosInputSurface *self, gboolean active)
++{
++  for (guint i = 0; i < self->osks->len; i++)
++    pos_osk_widget_set_dictation_active (g_ptr_array_index (self->osks, i), active);
++}
++
++
++static void
++on_dictate_stop_done (GObject *source, GAsyncResult *res, gpointer data)
++{
++  g_autoptr (GVariant) ret = NULL;
++  g_autoptr (GError) err = NULL;
++
++  ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (ret == NULL && !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    g_debug ("Stopping dictation failed: %s", err->message);
++}
++
++
++static void
++dictate_stop (PosInputSurface *self)
++{
++  if (!self->dictating)
++    return;
++
++  self->dictating = FALSE;
++  g_cancellable_cancel (self->dictate_cancel);
++  g_clear_object (&self->dictate_cancel);
++  set_dictation_active (self, FALSE);
++  /* Text of the last utterance may still follow; it goes to the same field */
++  g_dbus_connection_call (self->session_bus, DICTATE_BUS_NAME, DICTATE_PATH, DICTATE_IFACE,
++                          "Stop", NULL, NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START, -1,
++                          NULL, on_dictate_stop_done, NULL);
++}
++
++
++static void
++on_dictate_start_done (GObject *source, GAsyncResult *res, gpointer data)
++{
++  PosInputSurface *self;
++  g_autoptr (GVariant) ret = NULL;
++  g_autoptr (GError) err = NULL;
++
++  ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (ret != NULL)
++    return;
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  self = POS_INPUT_SURFACE (data);
++  g_warning ("Starting dictation failed: %s", err->message);
++  self->dictating = FALSE;
++  self->dictate_accept = FALSE;
++  set_dictation_active (self, FALSE);
++}
++
++
++static void
++dictate_start (PosInputSurface *self)
++{
++  if (self->dictating || self->session_bus == NULL)
++    return;
++
++  self->dictating = TRUE;
++  self->dictate_accept = TRUE;
++  /* Light the key at once; the service confirms with StateChanged or the call fails */
++  set_dictation_active (self, TRUE);
++  g_clear_object (&self->dictate_cancel);
++  self->dictate_cancel = g_cancellable_new ();
++  /* The first start activates the service; it loads the model while the user speaks */
++  g_dbus_connection_call (self->session_bus, DICTATE_BUS_NAME, DICTATE_PATH, DICTATE_IFACE,
++                          "Start", NULL, NULL, G_DBUS_CALL_FLAGS_NONE, 30000,
++                          self->dictate_cancel, on_dictate_start_done, self);
++}
++
++
++static void
++dictate_activated (GSimpleAction *action, GVariant *parameter, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  if (self->dictating)
++    dictate_stop (self);
++  else if (self->dictate_shown)
++    dictate_start (self);
++}
++
++
++/* Recognized text: commit it to the focused field, with a space to the previous word */
++static void
++on_dictate_text (GDBusConnection *bus, const char *sender, const char *path, const char *iface,
++                 const char *signal, GVariant *params, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++  g_autofree char *before = NULL;
++  g_autofree char *text = NULL;
++  const char *recognized;
++  const char *surrounding;
++  guint anchor, cursor;
++  gboolean space = FALSE;
++
++  if (!g_variant_is_of_type (params, G_VARIANT_TYPE ("(s)")))
++    return;
++  g_variant_get (params, "(&s)", &recognized);
++
++  /* The field lost focus since dictation started: drop the text */
++  if (!self->dictate_accept || !pos_input_method_get_active (self->input_method))
++    return;
++
++  pos_input_surface_submit_current_preedit (self);
++
++  surrounding = pos_input_method_get_surrounding_text (self->input_method, &anchor, &cursor);
++  if (surrounding != NULL && cursor > 0) {
++    before = g_strndup (surrounding, cursor);
++    space = !g_unichar_isspace (g_utf8_get_char (g_utf8_prev_char (before + strlen (before))));
++  }
++  /* No space before punctuation the model put at the start */
++  if (g_unichar_ispunct (g_utf8_get_char (recognized)))
++    space = FALSE;
++
++  text = g_strconcat (space ? " " : "", recognized, NULL);
++  g_debug ("Dictated: '%s'", text);
++  pos_input_method_send_string (self->input_method, text, TRUE);
++}
++
++
++static void
++on_dictate_state (GDBusConnection *bus, const char *sender, const char *path, const char *iface,
++                  const char *signal, GVariant *params, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++  const char *state;
++
++  if (!g_variant_is_of_type (params, G_VARIANT_TYPE ("(s)")))
++    return;
++  g_variant_get (params, "(&s)", &state);
++
++  /* The service stopped by itself (long silence, microphone gone) */
++  if (g_strcmp0 (state, "listening") != 0 && self->dictating) {
++    self->dictating = FALSE;
++    set_dictation_active (self, FALSE);
++  }
++}
++
++
++/* Microphone key only where speech makes sense: not in passwords, PINs, numbers, terminals */
++static gboolean
++dictation_allowed (PosInputSurface *self)
++{
++  PosInputMethodPurpose purpose;
++  guint hint;
++
++  if (self->dictate_settings == NULL || self->session_bus == NULL ||
++      !g_settings_get_boolean (self->dictate_settings, "enabled"))
++    return FALSE;
++
++  purpose = pos_input_method_get_purpose (self->input_method);
++  if (purpose != POS_INPUT_METHOD_PURPOSE_NORMAL &&
++      purpose != POS_INPUT_METHOD_PURPOSE_ALPHA &&
++      purpose != POS_INPUT_METHOD_PURPOSE_NAME)
++    return FALSE;
++
++  hint = pos_input_method_get_hint (self->input_method);
++  return !(hint & (CONTENT_HINT_HIDDEN_TEXT | CONTENT_HINT_SENSITIVE_DATA));
++}
++
++
++static void
++update_dictation (PosInputSurface *self)
++{
++  self->dictate_shown = dictation_allowed (self);
++
++  for (guint i = 0; i < self->osks->len; i++)
++    pos_osk_widget_set_dictation (g_ptr_array_index (self->osks, i), self->dictate_shown);
++
++  if (!self->dictate_shown)
++    dictate_stop (self);
++}
++
++
++static void
++setup_dictation (PosInputSurface *self)
++{
++  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++  g_autoptr (GSettingsSchema) schema = NULL;
++  g_autoptr (GError) err = NULL;
++
++  /* Optional: only with plinius-dictate installed */
++  if (source)
++    schema = g_settings_schema_source_lookup (source, DICTATE_SCHEMA, TRUE);
++  if (schema == NULL)
++    return;
++
++  self->session_bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &err);
++  if (self->session_bus == NULL) {
++    g_warning ("No session bus for dictation: %s", err->message);
++    return;
++  }
++
++  self->dictate_settings = g_settings_new (DICTATE_SCHEMA);
++  g_signal_connect_swapped (self->dictate_settings, "changed::enabled",
++                            G_CALLBACK (update_dictation), self);
++  /* The service sends its signals to the caller only */
++  self->dictate_text_id =
++    g_dbus_connection_signal_subscribe (self->session_bus, DICTATE_BUS_NAME, DICTATE_IFACE,
++                                        "Text", DICTATE_PATH, NULL, G_DBUS_SIGNAL_FLAGS_NONE,
++                                        on_dictate_text, self, NULL);
++  self->dictate_state_id =
++    g_dbus_connection_signal_subscribe (self->session_bus, DICTATE_BUS_NAME, DICTATE_IFACE,
++                                        "StateChanged", DICTATE_PATH, NULL,
++                                        G_DBUS_SIGNAL_FLAGS_NONE, on_dictate_state, self, NULL);
++}
++
++
+ static void
+ on_im_active_changed (PosInputSurface *self, GParamSpec *pspec, PosInputMethod *im)
+ {
+@@ -1578,6 +1816,14 @@ on_im_active_changed (PosInputSurface *self, GParamSpec *pspec, PosInputMethod *
+   active = pos_input_method_get_active (im);
+   g_debug ("IM active: %d", active);
+ 
++  if (active) {
++    /* Purpose and hints of the new field may equal the old ones (no notify) */
++    update_dictation (self);
++  } else {
++    dictate_stop (self);
++    self->dictate_accept = FALSE;
++  }
++
+   if (active) {
+     /* TODO: Reset buffered commit_string, delete_surrounding_text */
+     if (pos_input_surface_is_completer_active (self))
+@@ -1676,6 +1922,14 @@ pos_input_surface_finalize (GObject *object)
+   g_clear_object (&self->input_settings);
+   g_clear_object (&self->osk_settings);
+   g_clear_object (&self->xkbinfo);
++  if (self->session_bus) {
++    g_dbus_connection_signal_unsubscribe (self->session_bus, self->dictate_text_id);
++    g_dbus_connection_signal_unsubscribe (self->session_bus, self->dictate_state_id);
++  }
++  g_cancellable_cancel (self->dictate_cancel);
++  g_clear_object (&self->dictate_cancel);
++  g_clear_object (&self->dictate_settings);
++  g_clear_object (&self->session_bus);
+   g_clear_object (&self->clipboard_manager);
+   g_clear_object (&self->completer);
+   pos_input_surface_set_completer_manager (self, NULL);
+@@ -2064,6 +2318,8 @@ insert_osk (PosInputSurface   *self,
+                           (GDestroyNotify)pos_completion_info_free);
+ 
+   g_debug ("Adding osk for layout '%s'", name);
++  pos_osk_widget_set_dictation (osk_widget, self->dictate_shown);
++  pos_osk_widget_set_dictation_active (osk_widget, self->dictating);
+   gtk_widget_set_visible (GTK_WIDGET (osk_widget), TRUE);
+   g_object_connect (osk_widget,
+                     "swapped-signal::key-cancelled", G_CALLBACK (on_osk_key_cancelled), self,
+@@ -2357,6 +2613,7 @@ static GActionEntry entries[] =
+     .change_state = select_layout_change_state },
+   { .name = "menu", .parameter_type = "(ii)", .activate = menu_activated },
+   { .name = "speech-input", .state = "false", .change_state = speech_input_change_state },
++  { .name = "dictate", .activate = dictate_activated },
+ };
+ 
+ 
+@@ -2395,6 +2652,7 @@ pos_input_surface_init (PosInputSurface *self)
+   self->xkbinfo = gnome_xkb_info_new ();
+   self->input_settings = g_settings_new ("org.gnome.desktop.input-sources");
+   self->osk_settings = g_settings_new ("mobi.phosh.osk");
++  setup_dictation (self);
+   g_signal_connect_swapped (self->osk_settings, "changed::completion-mode",
+                             G_CALLBACK (on_completion_mode_changed),
+                             self);
+diff --git a/src/pos-osk-key.c b/src/pos-osk-key.c
+index e8af83c..f7e3738 100644
+--- a/src/pos-osk-key.c
++++ b/src/pos-osk-key.c
+@@ -24,6 +24,7 @@ enum {
+   PROP_LAYER,
+   PROP_EXPAND,
+   PROP_PRESSED,
++  PROP_ACTION_NAME,
+   PROP_LAST_PROP
+ };
+ static GParamSpec *props[PROP_LAST_PROP];
+@@ -47,6 +48,7 @@ struct _PosOskKey {
+   GdkRectangle      box;
+   gboolean          expand;
+   gboolean          pressed;
++  char             *action_name;
+ };
+ G_DEFINE_TYPE (PosOskKey, pos_osk_key, G_TYPE_OBJECT)
+ 
+@@ -91,6 +93,9 @@ pos_osk_key_set_property (GObject      *object,
+   case PROP_PRESSED:
+     pos_osk_key_set_pressed (self, g_value_get_boolean (value));
+     break;
++  case PROP_ACTION_NAME:
++    g_set_str (&self->action_name, g_value_get_string (value));
++    break;
+   default:
+     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+     break;
+@@ -137,6 +142,9 @@ pos_osk_key_get_property (GObject    *object,
+   case PROP_PRESSED:
+     g_value_set_boolean (value, self->pressed);
+     break;
++  case PROP_ACTION_NAME:
++    g_value_set_string (value, self->action_name);
++    break;
+   default:
+     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+     break;
+@@ -153,6 +161,7 @@ pos_osk_key_finalize (GObject *object)
+   g_clear_pointer (&self->label, g_free);
+   g_clear_pointer (&self->icon, g_free);
+   g_clear_pointer (&self->style, g_free);
++  g_clear_pointer (&self->action_name, g_free);
+ 
+   G_OBJECT_CLASS (pos_osk_key_parent_class)->finalize (object);
+ }
+@@ -184,7 +193,7 @@ pos_osk_key_class_init (PosOskKeyClass *klass)
+    */
+   props[PROP_WIDTH] =
+     g_param_spec_double ("width", "", "",
+-                         1.0, 10.0, 1.0,
++                         0.0, 10.0, 1.0,
+                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+   /**
+    * PosOskKey:symbol
+@@ -260,6 +269,17 @@ pos_osk_key_class_init (PosOskKeyClass *klass)
+                           FALSE,
+                           G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+ 
++  /**
++   * PosOskKey:action-name
++   *
++   * For keys of use [enum@Pos.OskKeyUse.ACTION]: the action in the widget's `win` action
++   * group to activate on release, without the group prefix.
++   */
++  props[PROP_ACTION_NAME] =
++    g_param_spec_string ("action-name", "", "",
++                         NULL,
++                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
++
+   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
+ }
+ 
+@@ -284,13 +304,13 @@ pos_osk_key_new (const char *symbol)
+  * @self: The key
+  * @width: The key's width
+  *
+- * Sets the key's width in key units.
++ * Sets the key's width in key units. A width of 0 hides the key.
+  */
+ void
+ pos_osk_key_set_width (PosOskKey *self, double width)
+ {
+   g_return_if_fail (POS_IS_OSK_KEY (self));
+-  g_return_if_fail (width > 0.0);
++  g_return_if_fail (width >= 0.0);
+ 
+   self->width = width;
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_WIDTH]);
+@@ -492,3 +512,33 @@ pos_osk_key_get_expand (PosOskKey *self)
+ 
+   return self->expand;
+ }
++
++
++/**
++ * pos_osk_key_get_action_name:
++ * @self: The key
++ *
++ * Returns: The action a key of use [enum@Pos.OskKeyUse.ACTION] activates
++ */
++const char *
++pos_osk_key_get_action_name (PosOskKey *self)
++{
++  g_return_val_if_fail (POS_IS_OSK_KEY (self), NULL);
++
++  return self->action_name;
++}
++
++/**
++ * pos_osk_key_set_style:
++ * @self: The key
++ * @style: The style class, e.g. `sys` or `return`
++ *
++ * Changes how a key looks, e.g. to show that the function behind it is on.
++ */
++void
++pos_osk_key_set_style (PosOskKey *self, const char *style)
++{
++  g_return_if_fail (POS_IS_OSK_KEY (self));
++
++  g_set_str (&self->style, style);
++}
+diff --git a/src/pos-osk-key.h b/src/pos-osk-key.h
+index e8f3738..6d7de97 100644
+--- a/src/pos-osk-key.h
++++ b/src/pos-osk-key.h
+@@ -40,5 +40,7 @@ GStrv               pos_osk_key_get_symbols (PosOskKey *self);
+ void                pos_osk_key_set_box (PosOskKey *self, const GdkRectangle *box);
+ const GdkRectangle *pos_osk_key_get_box (PosOskKey *self);
+ gboolean            pos_osk_key_get_expand (PosOskKey *self);
++const char         *pos_osk_key_get_action_name (PosOskKey *self);
++void                pos_osk_key_set_style (PosOskKey *self, const char *style);
+ 
+ G_END_DECLS
+diff --git a/src/pos-osk-widget.c b/src/pos-osk-widget.c
+index 7cd3aa9..1495774 100644
+--- a/src/pos-osk-widget.c
++++ b/src/pos-osk-widget.c
+@@ -158,6 +158,10 @@ struct _PosOskWidget {
+ 
+   PosIndicatorPopup   *indicator_popup;
+ 
++  /* Speech to text: the microphone key is shown and/or on */
++  gboolean             dictation;
++  gboolean             dictation_active;
++
+   /* Cursor movement */
+   GtkGesture          *cursor_drag;
+   double               last_x, last_y;
+@@ -519,6 +523,89 @@ add_common_keys_pre (PosOskWidget      *self,
+ }
+ 
+ 
++/* Width of the microphone key while it is shown */
++#define DICTATION_KEY_WIDTH 1.0
++
++static gboolean
++is_dictation_key (PosOskKey *key)
++{
++  return pos_osk_key_get_use (key) == POS_OSK_KEY_USE_ACTION &&
++    g_strcmp0 (pos_osk_key_get_action_name (key), "dictate") == 0;
++}
++
++/*
++ * The microphone key for speech to text goes left of the space key in the bottom row.
++ * It is always part of the layout so that switching dictation on and off does not need
++ * a new layout: while off it has a width of 0 and the space key gets its room
++ * (see apply_dictation()). Rows without an expanding space key get none.
++ */
++static void
++add_dictation_key (PosOskWidgetRow *row, gint rownum, guint max_rows)
++{
++  PosOskKey *key;
++
++  if (rownum != max_rows - 1)
++    return;
++
++  for (guint k = 0; k < row->keys->len; k++) {
++    PosOskKey *space = g_ptr_array_index (row->keys, k);
++
++    if (!pos_osk_key_get_expand (space))
++      continue;
++
++    key = g_object_new (POS_TYPE_OSK_KEY,
++                        "use", POS_OSK_KEY_USE_ACTION,
++                        "action-name", "dictate",
++                        "icon", "audio-input-microphone-symbolic",
++                        "width", DICTATION_KEY_WIDTH,
++                        "style", "sys",
++                        NULL);
++    row->width += pos_osk_key_get_width (key);
++    g_ptr_array_insert (row->keys, k, key);
++    return;
++  }
++}
++
++
++/* Show or hide the microphone key: its width moves to or from the space key */
++static void
++apply_dictation (PosOskWidget *self)
++{
++  for (int l = 0; l <= POS_OSK_WIDGET_LAST_LAYER; l++) {
++    PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_keyboard_layer (self, l);
++    PosOskWidgetRow *row;
++    PosOskKey *mic = NULL, *space = NULL;
++    double width;
++
++    if (layer->n_rows == 0)
++      continue;
++
++    row = pos_osk_widget_get_layer_row (self, l, layer->n_rows - 1);
++    if (row->keys == NULL)
++      continue;
++
++    for (guint k = 0; k < row->keys->len; k++) {
++      PosOskKey *key = g_ptr_array_index (row->keys, k);
++
++      if (is_dictation_key (key))
++        mic = key;
++      else if (pos_osk_key_get_expand (key) && space == NULL)
++        space = key;
++    }
++    if (mic == NULL || space == NULL)
++      continue;
++
++    width = self->dictation ? DICTATION_KEY_WIDTH : 0.0;
++    if (pos_osk_key_get_width (mic) == width)
++      continue;
++    pos_osk_key_set_width (space, pos_osk_key_get_width (space) + pos_osk_key_get_width (mic) - width);
++    pos_osk_key_set_width (mic, width);
++  }
++
++  gtk_widget_queue_resize (GTK_WIDGET (self));
++}
++
++
+ static PosOskKey *
+ get_key (PosOskWidget *self, const char *symbol, GStrv symbols, const char *label,
+          const char *style, guint num_keys)
+@@ -606,6 +693,7 @@ parse_row (PosOskWidget     *self,
+ 
+   add_common_keys_pre (self, row, l, r, max_rows);
+   add_common_keys_post (row, l, r, max_rows);
++  add_dictation_key (row, r, max_rows);
+ }
+ 
+ 
+@@ -1066,6 +1154,22 @@ pos_osk_widget_show_menu (PosOskWidget *self, PosOskKey *key)
+ }
+ 
+ 
++/* Keys of use ACTION activate their action in the `win` group (like the menu key) */
++static void
++pos_osk_widget_activate_key_action (PosOskWidget *self, PosOskKey *key)
++{
++  GActionGroup *group = gtk_widget_get_action_group (GTK_WIDGET (self), "win");
++  const char *action = pos_osk_key_get_action_name (key);
++
++  pos_osk_widget_set_key_pressed (self, key, FALSE);
++  if (group == NULL || action == NULL || !g_action_group_has_action (group, action)) {
++    g_warning ("Key action '%s' not available", action);
++    return;
++  }
++  g_action_group_activate_action (group, action, NULL);
++}
++
++
+ static void
+ pos_osk_widget_key_release_action (PosOskWidget *self, PosOskKey *key)
+ {
+@@ -1087,6 +1191,10 @@ pos_osk_widget_key_release_action (PosOskWidget *self, PosOskKey *key)
+   case POS_OSK_KEY_USE_MENU:
+     pos_osk_widget_show_menu (self, key);
+     break;
++
++  case POS_OSK_KEY_USE_ACTION:
++    pos_osk_widget_activate_key_action (self, key);
++    break;
+   default:
+     g_assert_not_reached ();
+   }
+@@ -1603,6 +1711,9 @@ pos_osk_widget_draw (GtkWidget *widget, cairo_t *cr)
+     for (int k = 0; k < pos_osk_widget_row_get_num_keys (row); k++) {
+       PosOskKey *key = pos_osk_widget_row_get_key (row, k);
+ 
++      /* Hidden keys (e.g. the microphone with dictation off) */
++      if (pos_osk_key_get_width (key) <= 0.0)
++        continue;
+       draw_key (self, key, cr);
+     }
+   }
+@@ -2023,6 +2134,7 @@ pos_osk_widget_set_layout (PosOskWidget *self,
+ 
+   json = (char*) g_bytes_get_data (data, &size);
+   ret = parse_layout (self, json, size);
++  apply_dictation (self);
+ 
+   parse_lang (self, layout, variant);
+ 
+@@ -2193,3 +2305,63 @@ pos_osk_widget_max_rows (PosOskWidget *self)
+ 
+   return self->layout.n_rows;
+ }
++
++
++/**
++ * pos_osk_widget_set_dictation:
++ * @self: The osk widget
++ * @dictation: Whether to show the microphone key
++ *
++ * Shows or hides the key for speech to text left of the space key.
++ */
++void
++pos_osk_widget_set_dictation (PosOskWidget *self, gboolean dictation)
++{
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
++
++  dictation = !!dictation;
++  if (self->dictation == dictation)
++    return;
++
++  self->dictation = dictation;
++  apply_dictation (self);
++}
++
++/**
++ * pos_osk_widget_set_dictation_active:
++ * @self: The osk widget
++ * @active: Whether speech to text is listening
++ *
++ * Highlights the microphone key (in the accent color, like the return key) while the
++ * microphone is on.
++ */
++void
++pos_osk_widget_set_dictation_active (PosOskWidget *self, gboolean active)
++{
++  g_return_if_fail (POS_IS_OSK_WIDGET (self));
++
++  active = !!active;
++  if (self->dictation_active == active)
++    return;
++  self->dictation_active = active;
++
++  for (int l = 0; l <= POS_OSK_WIDGET_LAST_LAYER; l++) {
++    PosOskWidgetKeyboardLayer *layer = pos_osk_widget_get_keyboard_layer (self, l);
++    PosOskWidgetRow *row;
++
++    if (layer->n_rows == 0)
++      continue;
++    row = pos_osk_widget_get_layer_row (self, l, layer->n_rows - 1);
++    if (row->keys == NULL)
++      continue;
++
++    for (guint k = 0; k < row->keys->len; k++) {
++      PosOskKey *key = g_ptr_array_index (row->keys, k);
++
++      if (is_dictation_key (key))
++        pos_osk_key_set_style (key, active ? "return" : "sys");
++    }
++  }
++
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
+diff --git a/src/pos-osk-widget.h b/src/pos-osk-widget.h
+index b006eb6..2ada367 100644
+--- a/src/pos-osk-widget.h
++++ b/src/pos-osk-widget.h
+@@ -38,6 +38,8 @@ const char       *pos_osk_widget_get_layout_id (PosOskWidget *self);
+ const char       *pos_osk_widget_get_lang   (PosOskWidget *self);
+ const char       *pos_osk_widget_get_region (PosOskWidget *self);
+ void              pos_osk_widget_set_features (PosOskWidget *self, PhoshOskFeatures features);
++void              pos_osk_widget_set_dictation (PosOskWidget *self, gboolean dictation);
++void              pos_osk_widget_set_dictation_active (PosOskWidget *self, gboolean active);
+ const char *const *pos_osk_widget_get_symbols (PosOskWidget *self);
+ void              pos_osk_widget_set_key_height (PosOskWidget *self, guint key_height);
+ guint             pos_osk_widget_max_rows (PosOskWidget *self);

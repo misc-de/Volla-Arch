@@ -1,0 +1,23 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] background: Video thumbnails through GStreamer
+
+The video section of the Background page showed an icon and the name
+for every video but GIFs. cc-plinius-panorama.c now takes one frame of
+each video through playbin (on the phone plinius-vdec, as
+plinius-ambient plays it) and keeps the thumbnail in the cache; for
+that the panel links GStreamer.
+
+---
+diff --git a/panels/background/meson.build b/panels/background/meson.build
+--- a/panels/background/meson.build
++++ b/panels/background/meson.build
+@@ -81,6 +81,7 @@
+   gnome_bg_dep,
+   libxml_dep,
+   dependency('cairo-gobject'),
++  dependency('gstreamer-1.0'),
+ ]
+ 
+ cflags += [
+-- 
+2.55.0

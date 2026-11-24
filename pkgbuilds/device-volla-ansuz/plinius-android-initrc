@@ -1,0 +1,25 @@
+#!/bin/sh
+# Android's init.rc calls 'vdc keymaster earlyBootEnded' in post-fs-data. vold passes it on to
+# keystore2, which the Halium system image does not run, and gives up after 5 s. It holds its
+# lock meanwhile, so even with the call in the background apexd (which asks vold about
+# checkpoints first) and with it the container start and the login wait as long. Besides
+# keystore2 the call only sets up IncFS for streamed app installs, which nothing here uses, so
+# this drops it. The file is derived from the image at every start, so it follows Android
+# updates; without the line it changes nothing.
+# Usage: plinius-android-initrc   (ExecStartPre of lxc-android-config.service)
+set -eu
+# lxc-android-config.service runs with UMask=0000: init skips a group- or world-writable init.rc
+# as insecure, mounts no APEXes, and the container shuts itself down.
+umask 022
+
+rc=/android/system/etc/init/hw/init.rc
+out=/run/plinius/init.rc
+call='exec - system system -- /system/bin/vdc keymaster earlyBootEnded'
+
+# Already in place (container restarted)
+! findmnt -n "$rc" >/dev/null || exit 0
+grep -q "^ *$call\$" "$rc" || exit 0
+
+mkdir -p "${out%/*}"
+sed "\\|^ *$call\$|d" "$rc" > "$out"
+mount --bind "$out" "$rc"

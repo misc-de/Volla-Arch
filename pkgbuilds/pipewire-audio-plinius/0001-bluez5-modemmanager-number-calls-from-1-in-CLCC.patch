@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 11:32:43 +0100
+Subject: [PATCH] bluez5: modemmanager: number calls from 1 in +CLCC
+
+The native HFP AG answered AT+CLCC with call index 0: modemmanager.c
+never set call->index, and calloc left it at 0. 3GPP TS 27.007 numbers
+calls from 1, and a car kit that polls AT+CLCC drops a call with index
+0: no call on its display and no audio either way, although the SCO
+link stands. Give each new call the lowest free index from 1, as a
+modem does.
+
+Found and confirmed in a car by furios_audio (FuriOS on a Volla phone).
+---
+ spa/plugins/bluez5/modemmanager.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/spa/plugins/bluez5/modemmanager.c b/spa/plugins/bluez5/modemmanager.c
+index a01e575..b1003cc 100644
+--- a/spa/plugins/bluez5/modemmanager.c
++++ b/spa/plugins/bluez5/modemmanager.c
+@@ -457,6 +457,23 @@ static bool mm_get_managed_objects(struct impl *this)
+ 	return true;
+ }
+ 
++static unsigned int mm_next_call_index(struct impl *this)
++{
++	/* 3GPP TS 27.007 +CLCC: call identification numbers start at 1. Reuse the
++	 * lowest free one, like a modem does. */
++	unsigned int index = 1;
++	struct call *call;
++
++again:
++	spa_list_for_each(call, &this->call_list, link) {
++		if (call->index == index) {
++			index++;
++			goto again;
++		}
++	}
++	return index;
++}
++
+ static void call_free(struct call *call)
+ {
+ 	spa_list_remove(&call->link);
+@@ -641,6 +658,7 @@ static DBusHandlerResult mm_filter_cb(DBusConnection *bus, DBusMessage *m, void
+ 			free(call_object);
+ 			return DBUS_HANDLER_RESULT_NEED_MEMORY;
+ 		}
++		call_object->index = mm_next_call_index(this);
+ 		spa_list_append(&this->call_list, &call_object->link);
+ 
+ 		m2 = dbus_message_new_method_call(MM_DBUS_SERVICE, path, DBUS_INTERFACE_PROPERTIES, "GetAll");

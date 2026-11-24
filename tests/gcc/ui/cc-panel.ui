@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- shell/cc-panel.blp of the pinned gnome-control-center, as GtkBuilder XML (tests/gcc: the host
+     has no blueprint-compiler; the template is empty) -->
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <template class="CcPanel" parent="AdwNavigationPage"/>
+</interface>

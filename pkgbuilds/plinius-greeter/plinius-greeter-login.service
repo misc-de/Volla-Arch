@@ -1,0 +1,25 @@
+# Starts the session of the account picked in plinius-greeter: checks the name, notes it for
+# greetd's next start and restarts greetd (plinius-greeter-config login)
+[Unit]
+Description=Start the session of the account picked in the greeter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius-greeter/plinius-greeter-config login
+StateDirectory=plinius-greeter
+StateDirectoryMode=0755
+ProtectSystem=strict
+ReadWritePaths=/run
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native

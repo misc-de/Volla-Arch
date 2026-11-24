@@ -1,0 +1,1194 @@
+From e79e54580e7071cec3632c5d1913a32daf4b2974 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 09:19:15 +0100
+Subject: [PATCH 3/3] wayland: Optionally show the running scene and the result on
+ screen
+
+With --winsys-options wayland-overlay=true, a small bar at the bottom
+shows the running scene with its frame rate, frame time and position,
+updated twice a second, and at the end a card shows the score with the
+frame rate of every scene until a tap, a click or a key. Useful where
+vkmark is started without a terminal, e.g. from a launcher on a phone.
+
+The overlay is a desynchronized sub-surface with shm buffers drawn by
+cairo, so the compositor blends it and the scenes' GPU work stays the
+same. It follows the window's scale (wp_viewporter or buffer scale).
+Without cairo the option has no effect.
+
+The window system gets show_status() and show_result(), which do
+nothing by default; MainLoop counts the scenes and keeps each scene's
+result.
+---
+ meson.build                             |   2 +
+ src/benchmark.h                         |   1 +
+ src/main.cpp                            |   3 +
+ src/main_loop.cpp                       |  53 ++++
+ src/main_loop.h                         |   5 +
+ src/meson.build                         |  13 +-
+ src/window_system.h                     |  10 +
+ src/ws/native_system.h                  |  10 +
+ src/ws/swapchain_window_system.cpp      |  12 +
+ src/ws/swapchain_window_system.h        |   6 +
+ src/ws/wayland_native_system.cpp        | 217 +++++++++++++++-
+ src/ws/wayland_native_system.h          |  32 ++-
+ src/ws/wayland_overlay.cpp              | 322 ++++++++++++++++++++++++
+ src/ws/wayland_overlay.h                |  84 +++++++
+ src/ws/wayland_window_system_plugin.cpp |  29 ++-
+ 15 files changed, 789 insertions(+), 10 deletions(-)
+ create mode 100644 src/ws/wayland_overlay.cpp
+ create mode 100644 src/ws/wayland_overlay.h
+
+diff --git a/meson.build b/meson.build
+index e7bdb18..9dbc4cf 100644
+--- a/meson.build
++++ b/meson.build
+@@ -30,6 +30,8 @@ wayland_client_dep = dependency('wayland-client', required : get_option('wayland
+ wayland_protocols_dep = dependency('wayland-protocols', version : '>= 1.12',
+                                    required : get_option('wayland') == 'true')
+ wayland_scanner_dep = dependency('wayland-scanner', required : get_option('wayland') == 'true')
++# For the Wayland overlay (scene and result on screen)
++cairo_dep = dependency('cairo', required : false)
+ libdrm_dep = dependency('libdrm', required : get_option('kms') == 'true')
+ gbm_dep = dependency('gbm', required : get_option('kms') == 'true')
+ 
+diff --git a/src/benchmark.h b/src/benchmark.h
+index 3e45d06..96afb5a 100644
+--- a/src/benchmark.h
++++ b/src/benchmark.h
+@@ -35,6 +35,7 @@ public:
+     Benchmark(Scene &scene, const std::vector<OptionPair> &options);
+ 
+     Scene& prepare_scene();
++    Scene const& scene() const { return scene_; }
+ 
+ private:
+     void load_options();
+diff --git a/src/main.cpp b/src/main.cpp
+index 8a88a6c..2b9c905 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -152,6 +152,9 @@ try
+     Log::info("                                   vkmark Score: %u\n",
+               main_loop.score());
+     Log::info("=======================================================\n");
++    Log::flush();
++
++    ws.show_result(main_loop.score(), main_loop.results());
+ 
+ }
+ catch (std::exception const& e)
+diff --git a/src/main_loop.cpp b/src/main_loop.cpp
+index 5a6383b..7d3e71d 100644
+--- a/src/main_loop.cpp
++++ b/src/main_loop.cpp
+@@ -62,6 +62,27 @@ void log_scene_fps(unsigned int fps)
+ }
+ 
+ 
++// The scene with the options the benchmark set, e.g. "shading phong"
++// (an option named as its scene) or "texture anisotropy=16"
++std::string scene_label(Scene const& scene)
++{
++    std::string label = scene.name();
++
++    for (auto const& kv : scene.options())
++    {
++        if (!kv.second.set || kv.first == "duration")
++            continue;
++        label += " ";
++        if (kv.first != scene.name())
++            label += kv.first + "=";
++        label += kv.second.value;
++    }
++
++    return label;
++}
++
++uint64_t constexpr status_interval_us = 500000;
++
+ template <typename T>
+ void advance_iter(T& iter, T const& start, T const& end, bool run_forever)
+ {
+@@ -87,6 +108,14 @@ void MainLoop::run()
+ {
+     auto const& benchmarks = bc.benchmarks();
+ 
++    unsigned int scene_count = 0;
++    for (auto const& b : benchmarks)
++    {
++        if (!b->scene().name().empty() && b->scene().is_valid())
++            ++scene_count;
++    }
++    unsigned int scene_index = 0;
++
+     for (auto iter = benchmarks.begin();
+          iter != benchmarks.end();
+          advance_iter(iter, benchmarks.begin(), benchmarks.end(), options.run_forever))
+@@ -117,8 +146,16 @@ void MainLoop::run()
+ 
+         bool should_quit = false;
+ 
++        auto const label = scene_label(scene);
++        // Counting again with --run-forever
++        scene_index = scene_count ? scene_index % scene_count + 1 : scene_index + 1;
++        ws.show_status(label, 0, scene_index, scene_count);
++
+         scene.start();
+ 
++        auto status_time = Util::get_timestamp_us();
++        unsigned int status_frames = 0;
++
+         while (scene.is_running() &&
+                !(should_quit = ws.should_quit()) &&
+                !should_stop)
+@@ -126,6 +163,16 @@ void MainLoop::run()
+             ws.present_vulkan_image(
+                 scene.draw(ws.next_vulkan_image()));
+             scene.update();
++
++            ++status_frames;
++            auto const now = Util::get_timestamp_us();
++            if (now - status_time >= status_interval_us)
++            {
++                ws.show_status(label, status_frames * 1000000ull / (now - status_time),
++                               scene_index, scene_count);
++                status_time = now;
++                status_frames = 0;
++            }
+         }
+ 
+         auto const scene_fps = scene.average_fps();
+@@ -134,6 +181,7 @@ void MainLoop::run()
+ 
+         total_fps += scene_fps;
+         ++total_benchmarks;
++        results_.emplace_back(label, scene_fps);
+ 
+         if (should_quit || should_stop)
+             break;
+@@ -153,3 +201,8 @@ unsigned int MainLoop::score()
+ {
+     return total_benchmarks == 0 ? 0 : (total_fps / total_benchmarks);
+ }
++
++std::vector<std::pair<std::string, unsigned int>> const& MainLoop::results() const
++{
++    return results_;
++}
+diff --git a/src/main_loop.h b/src/main_loop.h
+index 698f8b6..485ee5c 100644
+--- a/src/main_loop.h
++++ b/src/main_loop.h
+@@ -23,6 +23,9 @@
+ #pragma once
+ 
+ #include <atomic>
++#include <string>
++#include <utility>
++#include <vector>
+ 
+ class VulkanState;
+ class WindowSystem;
+@@ -42,6 +45,7 @@ public:
+     void stop();
+ 
+     unsigned int score();
++    std::vector<std::pair<std::string, unsigned int>> const& results() const;
+ 
+ private:
+     VulkanState& vulkan;
+@@ -52,4 +56,5 @@ private:
+     std::atomic<bool> should_stop;
+     unsigned int total_fps;
+     unsigned int total_benchmarks;
++    std::vector<std::pair<std::string, unsigned int>> results_;
+ };
+diff --git a/src/meson.build b/src/meson.build
+index a8cef22..36e5546 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -140,16 +140,27 @@ if build_wayland_ws
+         output: 'viewporter-protocol.c',
+         )
+ 
++    wayland_ws_sources = []
++    wayland_ws_args = []
++    wayland_ws_deps = [vulkan_dep, wayland_client_dep]
++    if cairo_dep.found()
++        wayland_ws_sources += 'ws/wayland_overlay.cpp'
++        wayland_ws_args += '-DVKMARK_WAYLAND_OVERLAY'
++        wayland_ws_deps += cairo_dep
++    endif
++
+     wayland_ws = shared_module(
+         'wayland',
+         'ws/wayland_window_system_plugin.cpp',
+         'ws/wayland_native_system.cpp',
+         'ws/swapchain_window_system.cpp',
++        wayland_ws_sources,
+         xdg_shell_client_header,
+         xdg_shell_private_code,
+         viewporter_client_header,
+         viewporter_private_code,
+-        dependencies : [vulkan_dep, wayland_client_dep],
++        cpp_args : wayland_ws_args,
++        dependencies : wayland_ws_deps,
+         name_prefix : '',
+         install : true,
+         install_dir : ws_dir
+diff --git a/src/window_system.h b/src/window_system.h
+index a6a55f6..21e7abc 100644
+--- a/src/window_system.h
++++ b/src/window_system.h
+@@ -24,6 +24,8 @@
+ 
+ #include <vector>
+ #include <cstdint>
++#include <string>
++#include <utility>
+ 
+ class VulkanState;
+ struct VulkanImage;
+@@ -44,6 +46,14 @@ public:
+ 
+     virtual bool should_quit() = 0;
+ 
++    // For a window system that can show them on screen: the running scene,
++    // and at the end the result, which stays until dismissed
++    virtual void show_status(std::string const& /*scene*/, unsigned int /*fps*/,
++                             unsigned int /*index*/, unsigned int /*count*/) {}
++    virtual void show_result(
++        unsigned int /*score*/,
++        std::vector<std::pair<std::string, unsigned int>> const& /*results*/) {}
++
+ protected:
+     WindowSystem() = default;
+     WindowSystem(WindowSystem const&) = delete;
+diff --git a/src/ws/native_system.h b/src/ws/native_system.h
+index 6c42f8e..e1c4f11 100644
+--- a/src/ws/native_system.h
++++ b/src/ws/native_system.h
+@@ -27,6 +27,9 @@
+ 
+ #include <vulkan/vulkan.hpp>
+ #include <cstdint>
++#include <string>
++#include <utility>
++#include <vector>
+ 
+ class VulkanState;
+ 
+@@ -41,6 +44,13 @@ public:
+     virtual vk::Extent2D get_vk_extent() = 0;
+     virtual ManagedResource<vk::SurfaceKHR> create_vk_surface(VulkanState& vulkan) = 0;
+ 
++    // See WindowSystem
++    virtual void show_status(std::string const& /*scene*/, unsigned int /*fps*/,
++                             unsigned int /*index*/, unsigned int /*count*/) {}
++    virtual void show_result(
++        unsigned int /*score*/,
++        std::vector<std::pair<std::string, unsigned int>> const& /*results*/) {}
++
+     static uint32_t constexpr invalid_queue_family_index = static_cast<uint32_t>(-1);
+ 
+ protected:
+diff --git a/src/ws/swapchain_window_system.cpp b/src/ws/swapchain_window_system.cpp
+index 0c70e8d..8bf3bfc 100644
+--- a/src/ws/swapchain_window_system.cpp
++++ b/src/ws/swapchain_window_system.cpp
+@@ -198,6 +198,18 @@ std::vector<VulkanImage> SwapchainWindowSystem::vulkan_images()
+     return vulkan_images;
+ }
+ 
++void SwapchainWindowSystem::show_status(
++    std::string const& scene, unsigned int fps, unsigned int index, unsigned int count)
++{
++    native->show_status(scene, fps, index, count);
++}
++
++void SwapchainWindowSystem::show_result(
++    unsigned int score, std::vector<std::pair<std::string, unsigned int>> const& results)
++{
++    native->show_result(score, results);
++}
++
+ bool SwapchainWindowSystem::should_quit()
+ {
+     return native->should_quit();
+diff --git a/src/ws/swapchain_window_system.h b/src/ws/swapchain_window_system.h
+index d33b95d..660303a 100644
+--- a/src/ws/swapchain_window_system.h
++++ b/src/ws/swapchain_window_system.h
+@@ -50,6 +50,12 @@ public:
+ 
+     bool should_quit() override;
+ 
++    void show_status(std::string const& scene, unsigned int fps,
++                     unsigned int index, unsigned int count) override;
++    void show_result(
++        unsigned int score,
++        std::vector<std::pair<std::string, unsigned int>> const& results) override;
++
+     // VulkanWSI
+     Extensions required_extensions() override;
+     bool is_physical_device_supported(vk::PhysicalDevice const& pd) override;
+diff --git a/src/ws/wayland_native_system.cpp b/src/ws/wayland_native_system.cpp
+index 431f561..ad05765 100644
+--- a/src/ws/wayland_native_system.cpp
++++ b/src/ws/wayland_native_system.cpp
+@@ -21,8 +21,15 @@
+  */
+ 
+ #include "wayland_native_system.h"
++#ifdef VKMARK_WAYLAND_OVERLAY
++#include "wayland_overlay.h"
++#else
++// Built without cairo: never created
++class WaylandOverlay {};
++#endif
+ 
+ #include "vulkan_state.h"
++#include "log.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -81,6 +88,51 @@ void handle_keyboard_repeat_info(
+ {
+ }
+ 
++void handle_pointer_enter(
++    void* /*data*/, wl_pointer* /*wl_pointer*/, uint32_t /*serial*/,
++    wl_surface* /*surface*/, wl_fixed_t /*x*/, wl_fixed_t /*y*/)
++{
++}
++
++void handle_pointer_leave(
++    void* /*data*/, wl_pointer* /*wl_pointer*/, uint32_t /*serial*/,
++    wl_surface* /*surface*/)
++{
++}
++
++void handle_pointer_motion(
++    void* /*data*/, wl_pointer* /*wl_pointer*/, uint32_t /*time*/,
++    wl_fixed_t /*x*/, wl_fixed_t /*y*/)
++{
++}
++
++void handle_pointer_axis(
++    void* /*data*/, wl_pointer* /*wl_pointer*/, uint32_t /*time*/,
++    uint32_t /*axis*/, wl_fixed_t /*value*/)
++{
++}
++
++void handle_touch_down(
++    void* /*data*/, wl_touch* /*wl_touch*/, uint32_t /*serial*/,
++    uint32_t /*time*/, wl_surface* /*surface*/, int32_t /*id*/,
++    wl_fixed_t /*x*/, wl_fixed_t /*y*/)
++{
++}
++
++void handle_touch_motion(
++    void* /*data*/, wl_touch* /*wl_touch*/, uint32_t /*time*/,
++    int32_t /*id*/, wl_fixed_t /*x*/, wl_fixed_t /*y*/)
++{
++}
++
++void handle_touch_frame(void* /*data*/, wl_touch* /*wl_touch*/)
++{
++}
++
++void handle_touch_cancel(void* /*data*/, wl_touch* /*wl_touch*/)
++{
++}
++
+ void handle_xdg_wm_base_ping(
+     void* /*data*/, xdg_wm_base* xdg_wm_base, uint32_t serial)
+ {
+@@ -122,10 +174,33 @@ wl_keyboard_listener const WaylandNativeSystem::keyboard_listener{
+     handle_keyboard_repeat_info
+ };
+ 
+-WaylandNativeSystem::WaylandNativeSystem(int width, int height)
++// wl_seat version 1: only the version 1 events
++wl_pointer_listener const WaylandNativeSystem::pointer_listener{
++    handle_pointer_enter,
++    handle_pointer_leave,
++    handle_pointer_motion,
++    WaylandNativeSystem::handle_pointer_button,
++    handle_pointer_axis,
++    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
++};
++
++wl_touch_listener const WaylandNativeSystem::touch_listener{
++    handle_touch_down,
++    WaylandNativeSystem::handle_touch_up,
++    handle_touch_motion,
++    handle_touch_frame,
++    handle_touch_cancel,
++    nullptr, nullptr
++};
++
++WaylandNativeSystem::WaylandNativeSystem(int width, int height, bool overlay)
+     : requested_width{width},
+       requested_height{height},
++      overlay_requested{overlay},
+       should_quit_{false},
++      showing_result{false},
++      dismissed{false},
++      overlay_failed{false},
+       display_fd{0},
+       output_width{0},
+       output_height{0},
+@@ -135,11 +210,15 @@ WaylandNativeSystem::WaylandNativeSystem(int width, int height)
+       configured_width{0},
+       configured_height{0},
+       logical_width{0},
+-      logical_height{0}
++      logical_height{0},
++      buffer_scale{1}
+ {
+     create_native_window();
+ }
+ 
++// Here, where WaylandOverlay is complete
++WaylandNativeSystem::~WaylandNativeSystem() = default;
++
+ VulkanWSI::Extensions WaylandNativeSystem::required_extensions()
+ {
+     return {{VK_KHR_SURFACE_EXTENSION_NAME,
+@@ -205,6 +284,67 @@ ManagedResource<vk::SurfaceKHR> WaylandNativeSystem::create_vk_surface(VulkanSta
+         [vptr=&vulkan] (vk::SurfaceKHR& s) { vptr->instance().destroySurfaceKHR(s); }};
+ }
+ 
++void WaylandNativeSystem::show_status(
++    std::string const& scene, unsigned int fps, unsigned int index, unsigned int count)
++{
++#ifdef VKMARK_WAYLAND_OVERLAY
++    if (create_overlay())
++        overlay->show_status(scene, fps, index, count);
++#else
++    (void)scene; (void)fps; (void)index; (void)count;
++#endif
++}
++
++void WaylandNativeSystem::show_result(
++    unsigned int score, std::vector<std::pair<std::string, unsigned int>> const& results)
++{
++#ifdef VKMARK_WAYLAND_OVERLAY
++    if (!create_overlay())
++        return;
++
++    overlay->show_result(score, results);
++    showing_result = true;
++
++    // Until a tap, a click or a key, or the window is closed
++    while (!dismissed && !should_quit_)
++    {
++        if (wl_display_dispatch(display) < 0)
++            break;
++    }
++#else
++    (void)score; (void)results;
++#endif
++}
++
++bool WaylandNativeSystem::create_overlay()
++{
++#ifdef VKMARK_WAYLAND_OVERLAY
++    if (overlay)
++        return true;
++    if (!overlay_requested || overlay_failed)
++        return false;
++
++    if (!subcompositor || !shm || logical_width <= 0 || logical_height <= 0)
++    {
++        Log::warning("Wayland overlay: the compositor lacks wl_subcompositor or wl_shm\n");
++        overlay_failed = true;
++        return false;
++    }
++
++    // Buffer pixels per logical pixel, as the benchmark's
++    auto const pixel_ratio = viewport ?
++        static_cast<double>(vk_extent.width) / logical_width :
++        static_cast<double>(buffer_scale);
++
++    overlay = std::make_unique<WaylandOverlay>(
++        compositor, subcompositor, shm, viewporter, surface,
++        logical_width, logical_height, pixel_ratio);
++    return true;
++#else
++    return false;
++#endif
++}
++
+ void WaylandNativeSystem::create_native_window()
+ {
+     display = ManagedResource<wl_display*>{
+@@ -301,6 +441,7 @@ void WaylandNativeSystem::create_native_window()
+             static_cast<uint32_t>(configured_width * output_scale),
+             static_cast<uint32_t>(configured_height * output_scale)};
+         wl_surface_set_buffer_scale(surface, output_scale);
++        buffer_scale = output_scale;
+         logical_width = configured_width;
+         logical_height = configured_height;
+     }
+@@ -339,6 +480,7 @@ void WaylandNativeSystem::set_buffer_size(vk::Extent2D extent)
+     if (extent.width % scale == 0 && extent.height % scale == 0)
+     {
+         wl_surface_set_buffer_scale(surface, output_scale);
++        buffer_scale = output_scale;
+         logical_width = extent.width / scale;
+         logical_height = extent.height / scale;
+     }
+@@ -395,6 +537,19 @@ void WaylandNativeSystem::handle_registry_global(
+         wws->viewporter = ManagedResource<struct wp_viewporter*>{
+             std::move(viewporter_raw), wp_viewporter_destroy};
+     }
++    else if (interface == "wl_subcompositor")
++    {
++        auto subcompositor_raw = static_cast<wl_subcompositor*>(
++            wl_registry_bind(registry, id, &wl_subcompositor_interface, 1));
++        wws->subcompositor = ManagedResource<wl_subcompositor*>{
++            std::move(subcompositor_raw), wl_subcompositor_destroy};
++    }
++    else if (interface == "wl_shm")
++    {
++        auto shm_raw = static_cast<wl_shm*>(
++            wl_registry_bind(registry, id, &wl_shm_interface, 1));
++        wws->shm = ManagedResource<wl_shm*>{std::move(shm_raw), wl_shm_destroy};
++    }
+     else if (interface == "wl_seat")
+     {
+         auto seat_raw = static_cast<wl_seat*>(
+@@ -467,6 +622,32 @@ void WaylandNativeSystem::handle_seat_capabilities(
+     {
+         wws->keyboard = {};
+     }
++
++    // A tap or a click closes the result
++    if (!wws->overlay_requested)
++        return;
++
++    if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !wws->pointer)
++    {
++        wws->pointer = ManagedResource<wl_pointer*>{
++            wl_seat_get_pointer(seat), wl_pointer_destroy};
++        wl_pointer_add_listener(wws->pointer, &pointer_listener, wws);
++    }
++    else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && wws->pointer)
++    {
++        wws->pointer = {};
++    }
++
++    if ((capabilities & WL_SEAT_CAPABILITY_TOUCH) && !wws->touch)
++    {
++        wws->touch = ManagedResource<wl_touch*>{
++            wl_seat_get_touch(seat), wl_touch_destroy};
++        wl_touch_add_listener(wws->touch, &touch_listener, wws);
++    }
++    else if (!(capabilities & WL_SEAT_CAPABILITY_TOUCH) && wws->touch)
++    {
++        wws->touch = {};
++    }
+ }
+ 
+ void WaylandNativeSystem::handle_output_mode(
+@@ -494,9 +675,33 @@ void WaylandNativeSystem::handle_keyboard_key(
+     uint32_t /*serial*/, uint32_t /*time*/,
+     uint32_t key, uint32_t state)
+ {
+-    if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED)
+-    {
+-        auto const wws = static_cast<WaylandNativeSystem*>(data);
++    auto const wws = static_cast<WaylandNativeSystem*>(data);
++
++    if (state != WL_KEYBOARD_KEY_STATE_PRESSED)
++        return;
++
++    if (key == KEY_ESC)
+         wws->should_quit_ = true;
+-    }
++    else if (wws->showing_result)
++        wws->dismissed = true;
++}
++
++void WaylandNativeSystem::handle_pointer_button(
++    void* data, wl_pointer* /*wl_pointer*/, uint32_t /*serial*/,
++    uint32_t /*time*/, uint32_t /*button*/, uint32_t state)
++{
++    auto const wws = static_cast<WaylandNativeSystem*>(data);
++
++    if (wws->showing_result && state == WL_POINTER_BUTTON_STATE_RELEASED)
++        wws->dismissed = true;
++}
++
++void WaylandNativeSystem::handle_touch_up(
++    void* data, wl_touch* /*wl_touch*/, uint32_t /*serial*/,
++    uint32_t /*time*/, int32_t /*id*/)
++{
++    auto const wws = static_cast<WaylandNativeSystem*>(data);
++
++    if (wws->showing_result)
++        wws->dismissed = true;
+ }
+diff --git a/src/ws/wayland_native_system.h b/src/ws/wayland_native_system.h
+index dd5aa9b..9de5059 100644
+--- a/src/ws/wayland_native_system.h
++++ b/src/ws/wayland_native_system.h
+@@ -29,12 +29,16 @@
+ 
+ #include <wayland-client.h>
+ 
++#include <memory>
++
+ struct Options;
++class WaylandOverlay;
+ 
+ class WaylandNativeSystem : public NativeSystem
+ {
+ public:
+-    WaylandNativeSystem(int width, int height);
++    WaylandNativeSystem(int width, int height, bool overlay);
++    ~WaylandNativeSystem() override;
+ 
+     VulkanWSI::Extensions required_extensions() override;
+     uint32_t get_presentation_queue_family_index(vk::PhysicalDevice const& pd) override;
+@@ -42,7 +46,15 @@ public:
+     vk::Extent2D get_vk_extent() override;
+     ManagedResource<vk::SurfaceKHR> create_vk_surface(VulkanState& vulkan) override;
+ 
++    void show_status(std::string const& scene, unsigned int fps,
++                     unsigned int index, unsigned int count) override;
++    void show_result(
++        unsigned int score,
++        std::vector<std::pair<std::string, unsigned int>> const& results) override;
++
+ private:
++    bool create_overlay();
++
+     void create_native_window();
+     bool fullscreen_requested();
+     void set_buffer_size(vk::Extent2D extent);
+@@ -68,9 +80,17 @@ private:
+         void* data, wl_keyboard* wl_keyboard,
+         uint32_t serial, uint32_t time,
+         uint32_t key, uint32_t state);
++    static void handle_pointer_button(
++        void* data, wl_pointer* wl_pointer, uint32_t serial,
++        uint32_t time, uint32_t button, uint32_t state);
++    static void handle_touch_up(
++        void* data, wl_touch* wl_touch, uint32_t serial,
++        uint32_t time, int32_t id);
+ 
+     static wl_seat_listener const seat_listener;
+     static wl_keyboard_listener const keyboard_listener;
++    static wl_pointer_listener const pointer_listener;
++    static wl_touch_listener const touch_listener;
+     static wl_output_listener const output_listener;
+     static struct xdg_wm_base_listener const xdg_wm_base_listener;
+     static struct xdg_toplevel_listener const xdg_toplevel_listener;
+@@ -78,19 +98,28 @@ private:
+ 
+     int const requested_width;
+     int const requested_height;
++    bool const overlay_requested;
+     bool should_quit_;
++    bool showing_result;
++    bool dismissed;
+ 
+     ManagedResource<wl_display*> display;
+     ManagedResource<wl_compositor*> compositor;
+     ManagedResource<struct xdg_wm_base*> xdg_wm_base;
+     ManagedResource<struct wp_viewporter*> viewporter;
++    ManagedResource<wl_subcompositor*> subcompositor;
++    ManagedResource<wl_shm*> shm;
+     ManagedResource<wl_seat*> seat;
+     ManagedResource<wl_output*> output;
+     ManagedResource<wl_keyboard*> keyboard;
++    ManagedResource<wl_pointer*> pointer;
++    ManagedResource<wl_touch*> touch;
+     ManagedResource<wl_surface*> surface;
+     ManagedResource<struct xdg_surface*> xdg_surface;
+     ManagedResource<struct xdg_toplevel*> xdg_toplevel;
+     ManagedResource<struct wp_viewport*> viewport;
++    std::unique_ptr<WaylandOverlay> overlay;
++    bool overlay_failed;
+     int display_fd;
+     int32_t output_width;
+     int32_t output_height;
+@@ -101,5 +130,6 @@ private:
+     int32_t configured_height;
+     int32_t logical_width;
+     int32_t logical_height;
++    int32_t buffer_scale;
+     vk::Extent2D vk_extent;
+ };
+diff --git a/src/ws/wayland_overlay.cpp b/src/ws/wayland_overlay.cpp
+new file mode 100644
+index 0000000..c2f2c83
+--- /dev/null
++++ b/src/ws/wayland_overlay.cpp
+@@ -0,0 +1,322 @@
++/*
++ * Copyright © 2026 misc-de
++ *
++ * This file is part of vkmark.
++ *
++ * vkmark is free software: you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation, either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * vkmark is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with vkmark. If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "wayland_overlay.h"
++
++#include "log.h"
++
++#include <cairo.h>
++
++#include <algorithm>
++#include <cmath>
++#include <cstdio>
++#include <sys/mman.h>
++#include <unistd.h>
++
++namespace
++{
++
++char const* const font_family = "sans-serif";
++
++// Logical pixels
++double constexpr status_bar_height = 52.0;
++double constexpr status_pill_height = 28.0;
++double constexpr status_margin = 14.0;
++double constexpr status_font_size = 13.0;
++
++void rounded_rectangle(cairo_t* cr, double x, double y, double w, double h, double r)
++{
++    r = std::min({r, w / 2, h / 2});
++    cairo_new_sub_path(cr);
++    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
++    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
++    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
++    cairo_arc(cr, x + r, y + r, r, M_PI, 3 * M_PI / 2);
++    cairo_close_path(cr);
++}
++
++void set_font(cairo_t* cr, double size, bool bold = false)
++{
++    cairo_select_font_face(cr, font_family, CAIRO_FONT_SLANT_NORMAL,
++                           bold ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
++    cairo_set_font_size(cr, size);
++}
++
++double text_width(cairo_t* cr, std::string const& text)
++{
++    cairo_text_extents_t e;
++    cairo_text_extents(cr, text.c_str(), &e);
++    return e.x_advance;
++}
++
++// The text cut to max_width, with an ellipsis where it was cut
++std::string fit_text(cairo_t* cr, std::string text, double max_width)
++{
++    if (text_width(cr, text) <= max_width)
++        return text;
++
++    std::string const ellipsis = "…";
++    while (!text.empty() && text_width(cr, text + ellipsis) > max_width)
++    {
++        // Drop the last character, all bytes of its UTF-8 sequence
++        while ((static_cast<unsigned char>(text.back()) & 0xc0) == 0x80 && text.size() > 1)
++            text.pop_back();
++        text.pop_back();
++    }
++    return text + ellipsis;
++}
++
++// Text whose vertical middle is at y
++void show_text_centered_v(cairo_t* cr, double x, double y, std::string const& text)
++{
++    cairo_font_extents_t fe;
++    cairo_font_extents(cr, &fe);
++    cairo_move_to(cr, x, y + (fe.ascent - fe.descent) / 2);
++    cairo_show_text(cr, text.c_str());
++}
++
++
++// The bar at the bottom: width x height logical pixels
++void paint_status(cairo_t* cr, double width, double height, std::string const& scene,
++                  unsigned int fps, unsigned int index, unsigned int count)
++{
++    char numbers[96];
++    if (fps > 0)
++        snprintf(numbers, sizeof numbers, "  ·  %u fps  ·  %.1f ms  ·  %u/%u",
++                 fps, 1000.0 / fps, index, count);
++    else
++        snprintf(numbers, sizeof numbers, "  ·  – fps  ·  %u/%u", index, count);
++
++    set_font(cr, status_font_size);
++    auto const padding = status_pill_height / 2;
++    auto const max_text = width - 2 * status_margin - 2 * padding;
++    auto const tail = std::string{numbers};
++    auto const head = fit_text(cr, scene, std::max(0.0, max_text - text_width(cr, tail)));
++    auto const text = head + tail;
++
++    auto const pill_w = text_width(cr, text) + 2 * padding;
++    auto const pill_x = (width - pill_w) / 2;
++    auto const pill_y = height - status_margin - status_pill_height;
++
++    rounded_rectangle(cr, pill_x, pill_y, pill_w, status_pill_height, status_pill_height / 2);
++    cairo_set_source_rgba(cr, 0, 0, 0, 0.45);
++    cairo_fill(cr);
++
++    cairo_set_source_rgba(cr, 1, 1, 1, 0.92);
++    show_text_centered_v(cr, pill_x + padding, pill_y + status_pill_height / 2, text);
++}
++
++// The result over the whole window
++void paint_result(cairo_t* cr, double width, double height, unsigned int score,
++                  std::vector<std::pair<std::string, unsigned int>> const& results)
++{
++    cairo_set_source_rgba(cr, 0, 0, 0, 0.6);
++    cairo_paint(cr);
++
++    auto const card_w = std::min(width - 32, 360.0);
++    auto const pad = 24.0;
++    auto const head_h = 28.0 + 18.0 + 68.0 + 20.0;
++    auto const foot_h = 20.0 + 18.0 + 22.0;
++    auto row_h = 22.0;
++    auto const rows = static_cast<double>(results.size());
++    // Rows closer together where the card would not fit
++    if (head_h + rows * row_h + foot_h > height - 32 && rows > 0)
++        row_h = std::max(12.0, (height - 32 - head_h - foot_h) / rows);
++    auto const row_font = std::min(13.0, row_h * 0.62);
++    auto const card_h = std::min(height - 16, head_h + rows * row_h + foot_h);
++    auto const card_x = (width - card_w) / 2;
++    auto const card_y = (height - card_h) / 2;
++
++    rounded_rectangle(cr, card_x, card_y, card_w, card_h, 22);
++    cairo_set_source_rgba(cr, 0.11, 0.11, 0.13, 0.94);
++    cairo_fill(cr);
++
++    auto y = card_y + 28.0;
++
++    set_font(cr, 14);
++    cairo_set_source_rgba(cr, 1, 1, 1, 0.6);
++    std::string const title = "vkmark Score";
++    show_text_centered_v(cr, card_x + (card_w - text_width(cr, title)) / 2, y + 9, title);
++    y += 18;
++
++    set_font(cr, 60, true);
++    auto const score_text = std::to_string(score);
++    cairo_set_source_rgb(cr, 0x17 / 255.0, 0x93 / 255.0, 0xd1 / 255.0);
++    show_text_centered_v(cr, card_x + (card_w - text_width(cr, score_text)) / 2, y + 34, score_text);
++    y += 68 + 10;
++
++    cairo_set_source_rgba(cr, 1, 1, 1, 0.12);
++    cairo_rectangle(cr, card_x + pad, y, card_w - 2 * pad, 1);
++    cairo_fill(cr);
++    y += 10;
++
++    set_font(cr, row_font);
++    for (auto const& r : results)
++    {
++        char fps[32];
++        snprintf(fps, sizeof fps, "%u fps", r.second);
++        auto const fps_w = text_width(cr, fps);
++        auto const name = fit_text(cr, r.first, card_w - 2 * pad - fps_w - 12);
++
++        cairo_set_source_rgba(cr, 1, 1, 1, 0.75);
++        show_text_centered_v(cr, card_x + pad, y + row_h / 2, name);
++        cairo_set_source_rgba(cr, 1, 1, 1, 0.95);
++        show_text_centered_v(cr, card_x + card_w - pad - fps_w, y + row_h / 2, fps);
++        y += row_h;
++    }
++
++    set_font(cr, 12);
++    cairo_set_source_rgba(cr, 1, 1, 1, 0.45);
++    std::string const hint = "Tap to close";
++    show_text_centered_v(cr, card_x + (card_w - text_width(cr, hint)) / 2,
++                         card_y + card_h - 22 - 9, hint);
++}
++
++}
++
++wl_buffer_listener const WaylandOverlay::buffer_listener{
++    WaylandOverlay::handle_buffer_release
++};
++
++WaylandOverlay::WaylandOverlay(
++    wl_compositor* compositor, wl_subcompositor* subcompositor,
++    wl_shm* shm, wp_viewporter* viewporter, wl_surface* parent,
++    int32_t logical_width, int32_t logical_height, double pixel_ratio)
++    : compositor{compositor}, shm{shm}, parent{parent},
++      logical_width{logical_width}, logical_height{logical_height},
++      pixel_ratio{pixel_ratio},
++      surface{wl_compositor_create_surface(compositor)},
++      subsurface{wl_subcompositor_get_subsurface(subcompositor, surface, parent)},
++      viewport{viewporter ? wp_viewporter_get_viewport(viewporter, surface) : nullptr},
++      position_y{0}
++{
++    // Updated on its own, not with the parent's frames
++    wl_subsurface_set_desync(subsurface);
++    wl_subsurface_place_above(subsurface, parent);
++
++    if (!viewport)
++        wl_surface_set_buffer_scale(surface, std::max(1, static_cast<int>(std::lround(pixel_ratio))));
++
++    // Touches go through to the benchmark until the result is shown
++    auto const empty = wl_compositor_create_region(compositor);
++    wl_surface_set_input_region(surface, empty);
++    wl_region_destroy(empty);
++}
++
++WaylandOverlay::~WaylandOverlay()
++{
++    for (auto b : std::set<Buffer*>{buffers})
++        free_buffer(b);
++    if (viewport)
++        wp_viewport_destroy(viewport);
++    wl_subsurface_destroy(subsurface);
++    wl_surface_destroy(surface);
++}
++
++void WaylandOverlay::show_status(
++    std::string const& scene, unsigned int fps, unsigned int index, unsigned int count)
++{
++    draw(static_cast<int32_t>(logical_height - status_bar_height),
++         static_cast<int32_t>(status_bar_height),
++         [&] (cairo_t* cr, double width, double height)
++         { paint_status(cr, width, height, scene, fps, index, count); });
++}
++
++void WaylandOverlay::show_result(
++    unsigned int score, std::vector<std::pair<std::string, unsigned int>> const& results)
++{
++    // The whole window now takes the touch that closes it
++    wl_surface_set_input_region(surface, nullptr);
++
++    draw(0, logical_height,
++         [&] (cairo_t* cr, double width, double height)
++         { paint_result(cr, width, height, score, results); });
++
++    // The position is the parent's state, and the parent shows no more frames
++    wl_surface_commit(parent);
++}
++
++void WaylandOverlay::draw(int32_t y, int32_t height, Painter const& paint)
++{
++    auto const width_px = std::max(1, static_cast<int>(std::ceil(logical_width * pixel_ratio)));
++    auto const height_px = std::max(1, static_cast<int>(std::ceil(height * pixel_ratio)));
++    auto const stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width_px);
++    auto const size = static_cast<size_t>(stride) * height_px;
++
++    auto const fd = memfd_create("vkmark-overlay", MFD_CLOEXEC);
++    if (fd < 0 || ftruncate(fd, size) < 0)
++    {
++        if (fd >= 0)
++            close(fd);
++        Log::debug("WaylandOverlay: no shm buffer\n");
++        return;
++    }
++    auto const data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++    if (data == MAP_FAILED)
++    {
++        close(fd);
++        Log::debug("WaylandOverlay: no shm mapping\n");
++        return;
++    }
++
++    auto const cs = cairo_image_surface_create_for_data(
++        static_cast<unsigned char*>(data), CAIRO_FORMAT_ARGB32, width_px, height_px, stride);
++    auto const cr = cairo_create(cs);
++    cairo_scale(cr, static_cast<double>(width_px) / logical_width,
++                static_cast<double>(height_px) / height);
++    paint(cr, logical_width, height);
++    cairo_destroy(cr);
++    cairo_surface_flush(cs);
++    cairo_surface_destroy(cs);
++
++    auto const pool = wl_shm_create_pool(shm, fd, size);
++    auto const buffer = new Buffer{
++        this,
++        wl_shm_pool_create_buffer(pool, 0, width_px, height_px, stride, WL_SHM_FORMAT_ARGB8888),
++        data, size};
++    wl_shm_pool_destroy(pool);
++    close(fd);
++    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
++    buffers.insert(buffer);
++
++    if (y != position_y)
++    {
++        wl_subsurface_set_position(subsurface, 0, y);
++        position_y = y;
++    }
++    if (viewport)
++        wp_viewport_set_destination(viewport, logical_width, height);
++    wl_surface_attach(surface, buffer->buffer, 0, 0);
++    wl_surface_damage(surface, 0, 0, logical_width, height);
++    wl_surface_commit(surface);
++}
++
++void WaylandOverlay::free_buffer(Buffer* buffer)
++{
++    buffers.erase(buffer);
++    wl_buffer_destroy(buffer->buffer);
++    munmap(buffer->data, buffer->size);
++    delete buffer;
++}
++
++void WaylandOverlay::handle_buffer_release(void* data, wl_buffer* /*buffer*/)
++{
++    auto const b = static_cast<Buffer*>(data);
++    b->overlay->free_buffer(b);
++}
+diff --git a/src/ws/wayland_overlay.h b/src/ws/wayland_overlay.h
+new file mode 100644
+index 0000000..24aa5c1
+--- /dev/null
++++ b/src/ws/wayland_overlay.h
+@@ -0,0 +1,84 @@
++/*
++ * Copyright © 2026 misc-de
++ *
++ * This file is part of vkmark.
++ *
++ * vkmark is free software: you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation, either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * vkmark is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with vkmark. If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#pragma once
++
++#include "viewporter-client-protocol.h"
++
++#include <wayland-client.h>
++
++#include <functional>
++#include <set>
++#include <string>
++#include <utility>
++#include <vector>
++
++typedef struct _cairo cairo_t;
++
++/*
++ * Text on top of the benchmark: the running scene with its frame rate in a
++ * small bar at the bottom, and the result at the end. It is a sub-surface
++ * with shm buffers drawn by cairo, so the compositor blends it and the
++ * scenes' GPU work stays the same.
++ */
++class WaylandOverlay
++{
++public:
++    // pixel_ratio: buffer pixels per logical pixel, as the parent's
++    WaylandOverlay(wl_compositor* compositor, wl_subcompositor* subcompositor,
++                   wl_shm* shm, wp_viewporter* viewporter, wl_surface* parent,
++                   int32_t logical_width, int32_t logical_height,
++                   double pixel_ratio);
++    ~WaylandOverlay();
++
++    void show_status(std::string const& scene, unsigned int fps,
++                     unsigned int index, unsigned int count);
++    // Covers the whole window, which then takes input to be dismissed
++    void show_result(unsigned int score,
++                     std::vector<std::pair<std::string, unsigned int>> const& results);
++
++private:
++    struct Buffer
++    {
++        WaylandOverlay* overlay;
++        wl_buffer* buffer;
++        void* data;
++        size_t size;
++    };
++
++    using Painter = std::function<void(cairo_t*, double width, double height)>;
++
++    void draw(int32_t y, int32_t height, Painter const& paint);
++    void free_buffer(Buffer* buffer);
++    static void handle_buffer_release(void* data, wl_buffer* buffer);
++    static wl_buffer_listener const buffer_listener;
++
++    wl_compositor* const compositor;
++    wl_shm* const shm;
++    wl_surface* const parent;
++    int32_t const logical_width;
++    int32_t const logical_height;
++    double const pixel_ratio;
++
++    wl_surface* surface;
++    wl_subsurface* subsurface;
++    wp_viewport* viewport;
++    int32_t position_y;
++    std::set<Buffer*> buffers;
++};
+diff --git a/src/ws/wayland_window_system_plugin.cpp b/src/ws/wayland_window_system_plugin.cpp
+index b055d4f..7be95f1 100644
+--- a/src/ws/wayland_window_system_plugin.cpp
++++ b/src/ws/wayland_window_system_plugin.cpp
+@@ -29,8 +29,32 @@
+ 
+ #include <wayland-client.h>
+ 
+-void vkmark_window_system_load_options(Options&)
++#include <algorithm>
++
++namespace
++{
++
++std::string const overlay_opt{"wayland-overlay"};
++
++bool get_overlay_option(Options const& options)
++{
++    auto iter = std::find_if(
++        options.window_system_options.begin(),
++        options.window_system_options.end(),
++        [] (auto opt) { return opt.name == overlay_opt; });
++    return iter != options.window_system_options.end() &&
++           (iter->value == "true" || iter->value == "1");
++}
++
++}
++
++void vkmark_window_system_load_options(Options& options)
+ {
++    options.add_window_system_help(
++        "Wayland window system options (pass in --winsys-options)\n"
++        "  wayland-overlay=true|false  Show the scene and its frame rate at the bottom,\n"
++        "                              and the result at the end until a tap (default: false)\n"
++        );
+ }
+ 
+ int vkmark_window_system_probe(Options const&)
+@@ -64,7 +88,8 @@ int vkmark_window_system_probe(Options const&)
+ std::unique_ptr<WindowSystem> vkmark_window_system_create(Options const& options)
+ {
+     return std::make_unique<SwapchainWindowSystem>(
+-        std::make_unique<WaylandNativeSystem>(options.size.first, options.size.second),
++        std::make_unique<WaylandNativeSystem>(
++            options.size.first, options.size.second, get_overlay_option(options)),
+         options.present_mode,
+         options.pixel_format);
+ }
+-- 
+2.56.0
+

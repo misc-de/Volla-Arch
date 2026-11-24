@@ -1,0 +1,20 @@
+[Desktop Entry]
+Name=NFC
+Comment=Switch NFC on and off
+Comment[de]=NFC ein- und ausschalten
+Comment[fr]=Activer et désactiver le NFC
+Comment[es]=Activar y desactivar NFC
+Comment[it]=Attivare e disattivare NFC
+Comment[pt]=Ligar e desligar o NFC
+Comment[nl]=NFC in- en uitschakelen
+Comment[pl]=Włączanie i wyłączanie NFC
+Comment[ru]=Включение и выключение NFC
+Exec=gnome-control-center nfc
+Icon=plinius-nfc-symbolic
+Terminal=false
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=GNOME;GTK;Settings;DesktopSettings;X-GNOME-Settings-Panel;X-GNOME-ConnectivitySettings;
+OnlyShowIn=GNOME;Unity;
+Keywords=NFC;Near Field;Tag;Contactless;

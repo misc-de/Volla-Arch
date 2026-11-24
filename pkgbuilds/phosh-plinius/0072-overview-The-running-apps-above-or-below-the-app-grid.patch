@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 02:00:00 +0100
+Subject: [PATCH] overview: The running apps above or below the app grid
+
+Plinius: org.plinius.display overview-running-apps (GNOME Settings >
+Appearance > App Overview) puts the cards of the running apps above the
+app grid ("top", as shipped) or below it ("bottom"), closer to the thumb.
+The overview follows the key at once. Without the key (an older schema)
+nothing changes.
+---
+ src/overview.c | 60 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 60 insertions(+)
+
+diff --git a/src/overview.c b/src/overview.c
+index be76ec5d..084053a7 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -64,6 +64,9 @@ typedef struct {
+   PhoshSplashManager *splash_manager;  /* unowned */
+ 
+   int has_activities;
++
++  /* Plinius: org.plinius.display, for the edge of the running apps (NULL without the schema) */
++  GSettings          *plinius_settings;
+ } PhoshOverviewPrivate;
+ 
+ 
+@@ -715,6 +718,60 @@ on_page_changed (PhoshOverview *self, guint index, HdyCarousel *carousel)
+ }
+ 
+ 
++/* Plinius: the cards of the running apps above the app grid (as shipped) or below it */
++#define PLINIUS_DISPLAY_SCHEMA "org.plinius.display"
++#define PLINIUS_RUNNING_APPS_KEY "overview-running-apps"
++
++static void
++on_running_apps_position_changed (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  g_autofree char *position = g_settings_get_string (priv->plinius_settings,
++                                                     PLINIUS_RUNNING_APPS_KEY);
++  gboolean bottom = g_strcmp0 (position, "bottom") == 0;
++  GtkWidget *carousel = GTK_WIDGET (priv->carousel_running_activities);
++
++  /* The box keeps its children in order: the carousel first or last */
++  gtk_box_reorder_child (GTK_BOX (self), carousel, bottom ? -1 : 0);
++  /* The gap the template puts below the cards goes between them and the app grid */
++  gtk_widget_set_margin_bottom (carousel, bottom ? 0 : 6);
++  gtk_widget_set_margin_top (carousel, bottom ? 6 : 0);
++}
++
++
++static void
++setup_running_apps_position (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++  g_autoptr (GSettingsSchema) schema = NULL;
++
++  if (source)
++    schema = g_settings_schema_source_lookup (source, PLINIUS_DISPLAY_SCHEMA, TRUE);
++  /* An older phosh-plinius schema or none: the overview stays as shipped */
++  if (schema == NULL || !g_settings_schema_has_key (schema, PLINIUS_RUNNING_APPS_KEY))
++    return;
++
++  priv->plinius_settings = g_settings_new_full (schema, NULL, NULL);
++  g_signal_connect_object (priv->plinius_settings, "changed::" PLINIUS_RUNNING_APPS_KEY,
++                           G_CALLBACK (on_running_apps_position_changed), self,
++                           G_CONNECT_SWAPPED);
++  on_running_apps_position_changed (self);
++}
++
++
++static void
++phosh_overview_dispose (GObject *object)
++{
++  PhoshOverview *self = PHOSH_OVERVIEW (object);
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++
++  g_clear_object (&priv->plinius_settings);
++
++  G_OBJECT_CLASS (phosh_overview_parent_class)->dispose (object);
++}
++
++
+ static void
+ phosh_overview_constructed (GObject *object)
+ {
+@@ -741,6 +798,7 @@ phosh_overview_class_init (PhoshOverviewClass *klass)
+   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+ 
+   object_class->constructed = phosh_overview_constructed;
++  object_class->dispose = phosh_overview_dispose;
+   object_class->get_property = phosh_overview_get_property;
+   widget_class->size_allocate = phosh_overview_size_allocate;
+ 
+@@ -838,6 +896,8 @@ phosh_overview_init (PhoshOverview *self)
+   }
+ 
+   priv->splash_manager = phosh_shell_get_splash_manager (shell);
++
++  setup_running_apps_position (self);
+ }
+ 
+ 

@@ -1,0 +1,351 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 08:00:00 +0100
+Subject: [PATCH] wwan: The settings of an access point in the list style
+
+Plinius: Mobile Network > Access Points, the page of one access point
+looks like the other pages of Settings: Name and APN, Username and
+Password as entry rows (the password as a password row), APN Type and
+Auth Type as combo rows, each pair a boxed list of its own, instead of
+a grid with labels left of the fields. "Save" is a pill below the form,
+where the thumb is, not in the header bar. Back on the list after
+saving, the add button shows again (it stayed hidden).
+---
+diff --git a/panels/wwan/cc-wwan-apn-dialog.blp b/panels/wwan/cc-wwan-apn-dialog.blp
+index 33fac8de6..30c88c873 100644
+--- a/panels/wwan/cc-wwan-apn-dialog.blp
++++ b/panels/wwan/cc-wwan-apn-dialog.blp
+@@ -30,18 +30,6 @@ template $CcWwanApnDialog: Adw.Dialog {
+           label: _("Add");
+         }
+       }
+-
+-      [end]
+-      Button save_button {
+-        visible: false;
+-        use-underline: true;
+-        label: _("_Save");
+-        clicked => $cc_wwan_apn_save_clicked_cb(template);
+-
+-        styles [
+-          "default",
+-        ]
+-      }
+     }
+ 
+     content: Stack apn_settings_stack {
+@@ -61,181 +49,73 @@ template $CcWwanApnDialog: Adw.Dialog {
+         }
+       }
+ 
++      // Plinius: the settings of an access point in the list style of the other pages, Save
++      // below the form, where the thumb is
+       Adw.PreferencesPage apn_edit_view {
+         Adw.PreferencesGroup {
+-          Grid {
+-            orientation: vertical;
+-            hexpand: true;
+-            vexpand: true;
+-            row-spacing: 6;
+-            column-spacing: 12;
+-
+-            Label {
+-              halign: end;
+-              valign: center;
+-              label: _("Name");
+-              mnemonic-widget: name_entry;
+-
+-              styles [
+-                "dim-label",
+-              ]
++          Adw.EntryRow name_entry {
++            title: _("Name");
++            changed => $cc_wwan_apn_entry_changed_cb(template);
++          }
+ 
+-              layout {
+-                column: 0;
+-                row: 0;
+-              }
+-            }
+-
+-            Entry name_entry {
+-              hexpand: true;
+-              changed => $cc_wwan_apn_entry_changed_cb(template);
+-
+-              layout {
+-                column: 1;
+-                row: 0;
+-              }
+-            }
+-
+-            Label {
+-              halign: end;
+-              valign: center;
+-              label: _("APN");
+-              mnemonic-widget: apn_entry;
+-
+-              styles [
+-                "dim-label",
+-              ]
++          Adw.EntryRow apn_entry {
++            title: _("APN");
++            input-hints: no_spellcheck | no_emoji;
++            changed => $cc_wwan_apn_entry_changed_cb(template);
++          }
++        }
+ 
+-              layout {
+-                column: 0;
+-                row: 1;
+-              }
+-            }
+-
+-            Entry apn_entry {
+-              margin-bottom: 12;
+-              changed => $cc_wwan_apn_entry_changed_cb(template);
+-
+-              layout {
+-                column: 1;
+-                row: 1;
+-              }
+-            }
+-
+-            Label {
+-              halign: end;
+-              valign: center;
+-              label: _("Username");
+-              mnemonic-widget: username_entry;
+-
+-              styles [
+-                "dim-label",
+-              ]
++        Adw.PreferencesGroup {
++          Adw.EntryRow username_entry {
++            title: _("Username");
++            input-hints: no_spellcheck | no_emoji;
++          }
+ 
+-              layout {
+-                column: 0;
+-                row: 2;
+-              }
+-            }
+-
+-            Entry username_entry {
+-              layout {
+-                column: 1;
+-                row: 2;
+-              }
+-            }
+-
+-            Label {
+-              halign: end;
+-              valign: center;
+-              label: _("Password");
+-              mnemonic-widget: password_entry;
+-
+-              styles [
+-                "dim-label",
+-              ]
++          Adw.PasswordEntryRow password_entry {
++            title: _("Password");
++          }
++        }
+ 
+-              layout {
+-                column: 0;
+-                row: 3;
+-              }
+-            }
+-
+-            Entry password_entry {
+-              margin-bottom: 12;
+-
+-              layout {
+-                column: 1;
+-                row: 3;
+-              }
+-            }
+-
+-            Label {
+-              halign: end;
+-              valign: center;
+-              label: _("APN Type");
+-              mnemonic-widget: lte_attach_combo;
+-
+-              styles [
+-                "dim-label",
++        Adw.PreferencesGroup {
++          Adw.ComboRow lte_attach_combo {
++            title: _("APN Type");
++
++            model: StringList {
++              strings [
++                _("Internet"),
++                _("Attach"),
+               ]
++            };
++          }
+ 
+-              layout {
+-                column: 0;
+-                row: 4;
+-              }
+-            }
+-
+-            DropDown lte_attach_combo {
+-              model: StringList {
+-                strings [
+-                  _("Internet"),
+-                  _("Attach"),
+-                ]
+-              };
+-
+-              layout {
+-                column: 1;
+-                row: 4;
+-              }
+-            }
+-
+-            Label {
+-              visible: bind lte_attach_combo.selected bidirectional;
+-              halign: end;
+-              valign: center;
+-              label: _("Auth Type");
+-              mnemonic-widget: lte_auth_combo;
+-
+-              styles [
+-                "dim-label",
++          Adw.ComboRow lte_auth_combo {
++            title: _("Auth Type");
++            visible: bind lte_attach_combo.selected;
++
++            model: StringList {
++              strings [
++                _("None"),
++                "PAP",
++                "CHAP",
++                "EAP",
++                "MSCHAP",
++                "MSCHAPV2",
+               ]
++            };
++          }
++        }
++
++        Adw.PreferencesGroup {
++          Button save_button {
++            halign: center;
++            use-underline: true;
++            label: _("_Save");
++            clicked => $cc_wwan_apn_save_clicked_cb(template);
+ 
+-              layout {
+-                column: 0;
+-                row: 5;
+-              }
+-            }
+-
+-            DropDown lte_auth_combo {
+-              visible: bind lte_attach_combo.selected bidirectional;
+-
+-              model: StringList {
+-                strings [
+-                  _("None"),
+-                  "PAP",
+-                  "CHAP",
+-                  "EAP",
+-                  "MSCHAP",
+-                  "MSCHAPV2",
+-                ]
+-              };
+-
+-              layout {
+-                column: 1;
+-                row: 5;
+-              }
+-            }
++            styles [
++              "pill",
++              "suggested-action",
++            ]
+           }
+         }
+       }
+diff --git a/panels/wwan/cc-wwan-apn-dialog.c b/panels/wwan/cc-wwan-apn-dialog.c
+index 5b8a744a0..f28cab667 100644
+--- a/panels/wwan/cc-wwan-apn-dialog.c
++++ b/panels/wwan/cc-wwan-apn-dialog.c
+@@ -44,17 +44,17 @@ struct _CcWwanApnDialog {
+     GtkButton *add_button;
+     GtkButton *back_button;
+     GtkButton *save_button;
+-    GtkEntry *apn_entry;
+-    GtkEntry *name_entry;
+-    GtkEntry *password_entry;
+-    GtkEntry *username_entry;
+-    GtkGrid *apn_edit_view;
++    AdwEntryRow *apn_entry;
++    AdwEntryRow *name_entry;
++    AdwPasswordEntryRow *password_entry;
++    AdwEntryRow *username_entry;
++    AdwPreferencesPage *apn_edit_view;
+     GtkListBox *apn_list;
+     GtkCheckButton *apn_radio_button;
+     GtkScrolledWindow *apn_list_view;
+     GtkStack *apn_settings_stack;
+-    GtkDropDown *lte_auth_combo;
+-    GtkDropDown *lte_attach_combo;
++    AdwComboRow *lte_auth_combo;
++    AdwComboRow *lte_attach_combo;
+ 
+     CcWwanData *wwan_data;
+     CcWwanDataApn *apn_to_save; /* The APN currently being edited */
+@@ -169,21 +169,23 @@ cc_wwan_apn_save_clicked_cb (CcWwanApnDialog *self)
+     cc_wwan_data_apn_set_username (apn, gtk_editable_get_text (GTK_EDITABLE (self->username_entry)));
+     cc_wwan_data_apn_set_password (apn, gtk_editable_get_text (GTK_EDITABLE (self->password_entry)));
+ 
+-    if (gtk_drop_down_get_selected (self->lte_attach_combo) == 1) {
++    if (adw_combo_row_get_selected (self->lte_attach_combo) == 1) {
+         cc_wwan_data_apn_set_name (apn, name);
+         cc_wwan_data_apn_set_apn (apn, apn_name);
+ 
+         cc_wwan_data_apn_set_initial_eps_apn (apn, apn_name);
+         cc_wwan_data_apn_set_initial_eps_username (apn, gtk_editable_get_text (GTK_EDITABLE (self->username_entry)));
+         cc_wwan_data_apn_set_initial_eps_password (apn, gtk_editable_get_text (GTK_EDITABLE (self->password_entry)));
+-        cc_wwan_data_apn_set_initial_eps_auth_method (apn, gtk_drop_down_get_selected (self->lte_auth_combo));
++        cc_wwan_data_apn_set_initial_eps_auth_method (apn, adw_combo_row_get_selected (self->lte_auth_combo));
+     }
+ 
+-    cc_wwan_data_apn_set_should_configure_initial_eps_bearer (apn, gtk_drop_down_get_selected (self->lte_attach_combo));
++    cc_wwan_data_apn_set_should_configure_initial_eps_bearer (apn, adw_combo_row_get_selected (self->lte_attach_combo));
+ 
+     cc_wwan_data_save_apn (self->wwan_data, apn, NULL, NULL, NULL);
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->save_button), FALSE);
++    /* Plinius: back on the list, Add is offered again */
++    gtk_widget_set_visible (GTK_WIDGET (self->add_button), TRUE);
+     gtk_stack_set_visible_child (self->apn_settings_stack, GTK_WIDGET (self->apn_list_view));
+ }
+ 
+@@ -258,15 +260,15 @@ cc_wwan_apn_edit_clicked_cb (CcWwanApnDialog *self, GtkButton *button)
+         username = cc_wwan_data_apn_get_initial_eps_username (apn);
+         password = cc_wwan_data_apn_get_initial_eps_password (apn);
+ 
+-        gtk_drop_down_set_selected (self->lte_auth_combo, cc_wwan_data_apn_get_initial_eps_auth_method (apn));
+-        gtk_drop_down_set_selected (self->lte_attach_combo, 1);
++        adw_combo_row_set_selected (self->lte_auth_combo, cc_wwan_data_apn_get_initial_eps_auth_method (apn));
++        adw_combo_row_set_selected (self->lte_attach_combo, 1);
+     } else {
+         apn_name = cc_wwan_data_apn_get_apn (apn);
+         username = cc_wwan_data_apn_get_username (apn);
+         password = cc_wwan_data_apn_get_password (apn);
+ 
+-        gtk_drop_down_set_selected (self->lte_auth_combo, 0);
+-        gtk_drop_down_set_selected (self->lte_attach_combo, 0);
++        adw_combo_row_set_selected (self->lte_auth_combo, 0);
++        adw_combo_row_set_selected (self->lte_attach_combo, 0);
+     }
+ 
+     gtk_editable_set_text (GTK_EDITABLE (self->apn_entry), apn_name ? apn_name : "");

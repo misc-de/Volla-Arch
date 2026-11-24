@@ -1,0 +1,94 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-appaccess
+pkgver=0.2
+pkgrel=7
+pkgdesc="Per app: cameras, security keys, network and microphone allowed, refused or asked for, with the attempts counted (cgroup BPF, WirePlumber), for GNOME Settings"
+arch=(aarch64 x86_64)
+# The daemon and the agent are MIT; the BPF programs are GPL-2.0-only (the kernel's helpers ask for it)
+license=(MIT GPL-2.0-only)
+# Kernel: CONFIG_CGROUP_BPF, CONFIG_BPF_SYSCALL, ring buffers (5.8), cgroup v2; no BPF LSM (on
+# arm64, 6.1 cannot attach BPF to kernel functions). The app pages of gnome-control-center-plinius
+# ask over D-Bus (org.plinius.AppAccess1); the agent asks the user in the session. The microphone
+# is decided in WirePlumber (find-plinius-microphone-access.lua: permission managers, ProcUtils,
+# Conf of a single file, file-monitor-api).
+depends=(glib2 libbpf systemd)
+# The questions in Phosh's access dialog with its three buttons (0109); without it notifications
+optdepends=("phosh-plinius>=0.59.0-21: the questions in Phosh's access dialog"
+	"wireplumber>=0.5.19: the microphone per app")
+makedepends=(clang llvm)
+_langs=(de es fr it nl pl pt ru)
+source=(appaccess.h
+	appaccess.bpf.c
+	plinius-appaccessd.c
+	plinius-appaccess-agent.c
+	plinius-appaccessd.service
+	plinius-appaccess-agent.service
+	org.plinius.AppAccess1.conf
+	org.plinius.AppAccess1.service
+	plinius-appaccess-microphone.lua
+	find-plinius-microphone-access.lua
+	70-plinius-microphone-access.conf
+	LICENSE
+	"${_langs[@]/%/.po}")
+sha256sums=('032858997d14510200c52add27e5d065c08342a3ee83d587e316f347c4af451a'
+	'09cb4e0cb3a27e2f76c216d26d61f6e6ba2d9e59873255542df1d349f1a27b0c'
+	'7fe57890e0d2f98105bfd0da1a856937d841cf1c7239b45c4e87b3c8cc364ccf'
+	'ee9e3438833e51ca6437942218f8ec54e5849e8a7f7c20ca3c5ec92922966ec0'
+	'1db38f12dbb45bb8b7020a5ba151b8d3eac74f33f05024f23efe7b1f4ed88c18'
+	'27be798178a0f4cd90e8a988e2c33e3e559d3697d1344c6e78d0f34baa8edd0f'
+	'038c19e571cf9dfbf045a4d9ec0bb81c1dd2ce0a4d3d0848c9160ea2627021be'
+	'd70007d74bf1885397cb1e4994fd5a07ce70996045f7db79825b7ad5cd8e3e41'
+	'e4788fc7152d3450fb5da53650e4eaa1b2a3f1213d020d825f8b9c7d698a4ed1'
+	'75f55466adfceefead77f46c93f771756275b46ff5617f44890b6bf12a5df98b'
+	'92afd5acca56fdbeb243da3b6a0cb48480039cc3c5c9232391cb4895e608ad27'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
+	'fa4e639f10c3fabb21bb8ae422033faad01ac9b15fa35e163003422692e7f7a2'
+	'e663a577438f28d164149e3c6b5cb13dbd35b8706dace0dcc3d7cd6815322592'
+	'f1248ca672640e5d2142cfd00f82431c4ca2088b5c95bd067b4ca45d6c4a6dc4'
+	'a70d4acc3394de8b1ce7ac535fcc1918968b706bb6e0a419c10a996343fb02e1'
+	'2bd4f2f43f005a7de2f55a9a854b78211f56f56fb4c91c27d5f31e88cf57431c'
+	'feac7dc03f183bdd6fbeb4c87ebb969f171a90ae3ff771ee10b540657eabdafb'
+	'cae8edf429978a696d6f1cf06bdc8f6741eee67781b1620a99e720b11d3ea266'
+	'8f117f1d4ff47de167dba002852f56a3d57328471a558b117b578526ccc911da')
+
+build() {
+	# -g: libbpf reads the map definitions from the BTF
+	# The BTF's line info names the source without the build directory
+	clang -target bpf -O2 -g -fdebug-prefix-map="$srcdir"=. -Wall -I. \
+		-c appaccess.bpf.c -o appaccess.bpf.o
+	# Without DWARF, only the BTF is needed
+	llvm-strip -g appaccess.bpf.o
+	# shellcheck disable=SC2086,SC2046
+	${CC:-cc} $CPPFLAGS $CFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter -I. \
+		-o plinius-appaccessd plinius-appaccessd.c $(pkg-config --cflags --libs gio-unix-2.0 libbpf) $LDFLAGS
+	# shellcheck disable=SC2086,SC2046
+	${CC:-cc} $CPPFLAGS $CFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-appaccess-agent plinius-appaccess-agent.c $(pkg-config --cflags --libs gio-unix-2.0) $LDFLAGS
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm755 plinius-appaccessd plinius-appaccess-agent -t "$pkgdir/usr/lib/plinius-appaccess"
+	install -Dm644 appaccess.bpf.o -t "$pkgdir/usr/lib/plinius-appaccess"
+	install -Dm644 plinius-appaccessd.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-appaccessd.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	# The question, in the session of whoever is signed in
+	install -Dm644 plinius-appaccess-agent.service -t "$pkgdir/usr/lib/systemd/user"
+	install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../plinius-appaccess-agent.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	install -Dm644 org.plinius.AppAccess1.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 org.plinius.AppAccess1.service -t "$pkgdir/usr/share/dbus-1/system-services"
+	install -d -m755 "$pkgdir/etc/plinius-appaccess"
+	# The microphone: the hook in WirePlumber, its decisions as a library (require)
+	install -Dm644 plinius-appaccess-microphone.lua -t "$pkgdir/usr/share/wireplumber/scripts/lib"
+	install -Dm644 find-plinius-microphone-access.lua -t "$pkgdir/usr/share/wireplumber/scripts/plinius"
+	install -Dm644 70-plinius-microphone-access.conf -t "$pkgdir/usr/share/wireplumber/wireplumber.conf.d"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-appaccess.mo"
+	done
+}

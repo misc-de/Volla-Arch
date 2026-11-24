@@ -1,0 +1,147 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-crypt
+pkgver=0.13
+pkgrel=15
+pkgdesc="Optional full-disk encryption for Plinius: initramfs hook with unl0kr and plinius-progress, offline in-place encryption on request"
+# Native for pam_plinius_crypt.so (a new PIN must differ from the encryption password)
+arch=(aarch64 x86_64)
+# glass-background.bin is derived from GNOME's "blobs" wallpaper (gnome-backgrounds)
+license=(MIT CC-BY-SA-3.0)
+# Messages are English, translated in *.po (template plinius-crypt.pot): plinius-encrypt uses
+# gettext; the initramfs has no gettext, so the hook gets a plain lookup table per language.
+# xgettext takes only one text argument per keyword, so the template is extracted twice
+# (title and explanation of show_message) and merged:
+#   x="xgettext -L Shell --from-code=UTF-8 --package-name=plinius-crypt -k -kt -kgettext -ktr_msg -kask_pass
+#      -kwith_progress -kset_hint"
+#   $x -kshow_message:1 -o a.pot plinius-encrypt hook halium-unlock; $x -kshow_message:2 -o b.pot plinius-encrypt hook
+#   msgcat --use-first -o plinius-crypt.pot a.pot b.pot
+# python-gobject, gdk-pixbuf2, polkit: background-sync and background-install (the wallpaper as
+# background of the password prompt); python, libxcrypt: login-password-check (encryption
+# password differs from the screen lock PIN); polkit also for GNOME Settings (plinius-encrypt)
+# buffybox 3.6.0-9: themes plinius-original and plinius-glass with an accent color
+# lz4: halium-rebuild packs the prompt's part of the phone's Halium ramdisk
+depends=(cryptsetup "buffybox>=3.6.0-9" "plinius-progress>=0.1-7" e2fsprogs mkinitcpio util-linux gettext
+	python python-gobject gdk-pixbuf2 polkit libxcrypt pam lz4)
+# The glass background is made from Phosh's wallpaper when the package is built
+makedepends=(gettext gnome-backgrounds librsvg python-pillow)
+_langs=(de es fr it nl pl pt ru)
+# On the phone: the programs of the prompt for its Halium ramdisk, which an update brings along
+depends_aarch64=(plinius-crypt-ramdisk)
+# plinius-security: the strength of the encryption password for GNOME Settings
+optdepends=('plinius-security: rate the encryption password for the Device Security page')
+backup=(etc/unl0kr.conf.d/50-plinius.conf)
+# Lists pam_plinius_crypt.so in /etc/pam.d/passwd
+install=plinius-crypt.install
+source=(hook install mkinitcpio.conf 50-plinius.conf plinius-encrypt glass-background.py
+	background-sync background-install look-install org.plinius.crypt.background.policy
+	org.plinius.CryptBackground.desktop plinius-crypt-initramfs.service
+	rebuild-initramfs look-files halium-rebuild boot-image plinius-crypt-locale.path login-password-check org.plinius.crypt.manage.policy
+	plinius-crypt-strength.service halium-unlock plinius-crypt-halium.service
+	pam_plinius_crypt.c
+	"${_langs[@]/%/.po}"
+	LICENSE
+	96-plinius-crypt-scripts.hook)
+sha256sums=('60925324f9058721c5124f9d9ab26ca73bd61811e605815fc892ff9a71b4bca3'
+            '4cbee7a52fc6aa8385df6bfa4fbb08ab0580d08b2d79c717622cdc2bbc848805'
+            'b6ec0041aa3d508b50416de60ca77eb83570703c4910fbe453d0eb3469d1fd72'
+            'aeee93b0f413e23e96f4067294a979914c5892c80b98a52f363fa82f3a477818'
+            '452a88d6c1d8a9450d05cd136f7ec37f032daf7860cbe62c67cec60ee135dacb'
+            'd6b25124f705780f5d7a8c60cec6f71bda78f933d8fecb6f02d286b5bfd79cee'
+            '2c281f387799272a47081bc75b2fdbd77c11485fb8ae0ac85242084ced63a05d'
+            'b1a96b8bbd40f2f377e5c9a2af3972d3f33bf24c385b446700184aac1189ebc8'
+            'd7bc4e8cf7191b9a0d6a1b05090406dd822245ceb3424a0ee9aba130ed31f08a'
+            'aabba985c62168cbbc3b224d77fa5b4d845974e5299357d3ec5d412a65770aea'
+            'fa10221c4eb683257faec05a4dff01237bb38baf5441e71746d844a9e3ae0d01'
+            '189699c2073f8a08f6c5141e71b51cbb210b76da1b9589556f52db32f81b4636'
+            '934a633c4add9e5dfa4453eb384d2812d1d9445be128435aa528221fdd382afb'
+            '486a0e19da8bcfd40f5ec12da3ab8c190bdb3178256d61619011388f2b1b6a53'
+            '6c8dfc27aa40b821aa0079180f11bd7480485238ba0b247e3a3e54f6092d10fd'
+            '9a2dd966230574fa8691695848f39f01c9f693666882ce0a2e268b2c5fbbffea'
+            'bb75bb725311434ca6582fce8338e7d7598642d9661041a46d84171da3898ee4'
+            '07e74df521d36563b411792151970060f24f33268b2253046f9ab19a2d96a14f'
+            '8ef530b2d4361f0b509a32cd3de86790f015a9803180c8ccba2baad1c417fe68'
+            '29b3245472b82f063ad18e7efa35bf250993ce15fa66b5fae2c8a19924c9d6f0'
+            '29f0083183461ac587dbca74da95ff7dd7719d24734e0239f0f0ad736ef5af09'
+            '7df50de7975f57e7eabecb43764a2de622a50b70389d2b11b3aedb09fe746a32'
+            '3593839829ec10105a6dddb7e753b0291852401d4aab92eb20eae4f99d9363b4'
+            '42b729e5554bfa997f2a653437f429e2790ba48a6d6729f70664f54cf5ab2a3b'
+            '71353037c38aa03c584ac01dcc619ee87f02d1fd1ffe0bdc4ed61510ad0bc950'
+            '353f7caf26c38e4a027a8665dd429a91b87a75d9c2f59a6cac9458d5b361c811'
+            '23bd2a836c55fee5e3fe4f85959a1d1eae6f104e66baba2cb1524bb7be3ea1bb'
+            '917e2973fae678ab56afe49241fe6a4500a8c76848a2a2bedb0070f36d22b673'
+            '4fe833e77e3c0883c3105aa65d4b08d778612ba4e079a0cf41e8f54b0ec2f0ce'
+            '8f100ed039f5caf713257d1840e3fadeba7fbe1b2ce9bc47b049ef4cc3bb0dff'
+            'a8ea209c4aacba8114fbfd98a8bdd014d7b9cb55ed28ca35f6452f0cdf265d23'
+            '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
+            'f5af7b4578ffb393a0e1984fb8f80506005a7c777510596238eac9a6870c8acc')
+
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+		# Lookup table for the hook: English text TAB translation, one message per line
+		msgcat --no-wrap "$l.po" | awk '
+			function unq(s) { s = substr(s, 2, length(s) - 2); gsub(/\\"/, "\"", s); return s }
+			/^msgid "/  { id = unq(substr($0, 7)) }
+			/^msgstr "/ { tr = unq(substr($0, 8)); if (id != "" && tr != "") print id "\t" tr }
+		' > "l10n-$l"
+	done
+
+	# shellcheck disable=SC2086
+	cc $CPPFLAGS $CFLAGS -fPIC -shared -o pam_plinius_crypt.so pam_plinius_crypt.c $LDFLAGS -lpam -lcryptsetup
+
+	# Background of the glass theme: Phosh's wallpaper (dark variant), blurred
+	python3 glass-background.py /usr/share/backgrounds/gnome/blobs-d.svg glass-background.bin
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm644 hook "$pkgdir/usr/lib/initcpio/hooks/plinius-crypt"
+	install -Dm644 install "$pkgdir/usr/lib/initcpio/install/plinius-crypt"
+	install -Dm644 mkinitcpio.conf -t "$pkgdir/usr/share/plinius-crypt"
+	install -Dm644 50-plinius.conf -t "$pkgdir/etc/unl0kr.conf.d"
+	install -Dm755 plinius-encrypt -t "$pkgdir/usr/bin"
+	install -Dm644 glass-background.bin -t "$pkgdir/usr/share/plinius-crypt"
+	# Wallpaper and look of the keyboard for the password prompt: watcher in the session, root
+	# helpers, initramfs rebuild
+	install -Dm755 background-sync background-install look-install -t "$pkgdir/usr/lib/plinius-crypt"
+	install -Dm644 org.plinius.crypt.background.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	install -Dm644 org.plinius.CryptBackground.desktop -t "$pkgdir/etc/xdg/autostart"
+	# look-files: what the prompt takes from the system, for mkinitcpio and the Halium ramdisk;
+	# halium-rebuild renews that part of the Halium ramdisk (configured in /var/lib/plinius-crypt/halium),
+	# on the card or in vendor_boot (boot-image takes that apart and puts it together)
+	install -Dm755 rebuild-initramfs look-files halium-rebuild boot-image -t "$pkgdir/usr/lib/plinius-crypt"
+	# New ramdisk scripts (boot-image) go through a trial start like new programs
+	install -Dm644 96-plinius-crypt-scripts.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	# The unlock script that scripts/halium calls in the phone's Halium ramdisk; plinius-crypt-ramdisk
+	# takes it into its archive
+	install -Dm644 halium-unlock -t "$pkgdir/usr/lib/plinius-crypt"
+	install -Dm644 plinius-crypt-initramfs.service plinius-crypt-locale.path plinius-crypt-strength.service \
+		plinius-crypt-halium.service -t "$pkgdir/usr/lib/systemd/system"
+	# A new password prompt from plinius-crypt-ramdisk starts on trial; confirmed or dropped at the
+	# next start (the unit runs only while there is one)
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-crypt-halium.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	# Rating of a password set in the initramfs, from /run into /var/lib
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-crypt-strength.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	# Rebuild the initramfs when the system language or keyboard layout changes: enabled by the
+	# package (the unit itself only runs if the initramfs runs the hook)
+	install -d "$pkgdir/usr/lib/systemd/system/paths.target.wants"
+	ln -s ../plinius-crypt-locale.path "$pkgdir/usr/lib/systemd/system/paths.target.wants/"
+	# plinius-encrypt for GNOME Settings (pkexec) and its check against the screen lock PIN
+	install -Dm644 org.plinius.crypt.manage.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	install -Dm755 login-password-check -t "$pkgdir/usr/lib/plinius-crypt"
+	# The other way round: a new PIN (passwd) must differ from the encryption password
+	install -Dm755 pam_plinius_crypt.so -t "$pkgdir/usr/lib/security"
+	install -Dm644 /dev/stdin "$pkgdir/usr/share/licenses/$pkgname/glass-background" <<-EOF
+		usr/share/plinius-crypt/glass-background.bin is derived from blobs-d.svg of
+		gnome-backgrounds (GNOME Design Team, https://gitlab.gnome.org/GNOME/gnome-backgrounds):
+		cropped, blurred and darkened by glass-background.py. Licensed under CC-BY-SA-3.0,
+		https://creativecommons.org/licenses/by-sa/3.0/
+	EOF
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-crypt.mo"
+		install -Dm644 "l10n-$l" "$pkgdir/usr/share/plinius-crypt/l10n/$l"
+	done
+}

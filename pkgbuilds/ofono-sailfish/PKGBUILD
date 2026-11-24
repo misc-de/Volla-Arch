@@ -1,0 +1,58 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=ofono-sailfish
+pkgver=1.29.20261109
+pkgrel=3
+pkgdesc="Mobile telephony daemon, Sailfish OS fork (required by ofono-binder-plugin)"
+arch=(aarch64 x86_64)
+url="https://github.com/sailfishos/ofono"
+license=(GPL-2.0-only)
+depends=(glib2 dbus dbus-glib libglibutil libdbusaccess systemd-libs mobile-broadband-provider-info)
+makedepends=(git)
+provides=(ofono)
+conflicts=(ofono)
+# Upstream ofono 2.x lacks the headers (slot.h, cell-info.h, …) that ofono-binder-plugin needs.
+# No release tags: commit pin on master; pkgver = version from configure.ac + commit date
+_commit=aba0679088e9ceea0404579efb5114eabce66a91
+source=("git+$url.git#commit=$_commit"
+	0001-ofono-Add-logical-channels-to-the-eUICC-s-ISD-R.patch
+	0002-cbs-Never-take-a-public-warning-for-a-base-station-I.patch
+	plinius-euicc.conf)
+sha256sums=('SKIP'
+	'09454db31c8e147585fff33221178c14b09d725154328068b5dce96c2e192ab6'
+	'7cf30b7b36d64bb323939abd95acd0fb6de40dab42d05b8370587ffca0cf5b54'
+	'e2b96c923ba48b61e17cdfe72acc8e3da73f977ac72f6723f3f606d99d714227')
+
+prepare() {
+	# eSIM management: lpac sends its APDUs through oFono (org.plinius.ofono.EuiccChannel)
+	patch -d ofono -Np1 -i "$srcdir/0001-ofono-Add-logical-channels-to-the-eUICC-s-ISD-R.patch"
+	# A public warning (DE-Alert) sent with the "cell wide, immediate" scope was taken for the
+	# cell's name and never reported
+	patch -d ofono -Np1 -i "$srcdir/0002-cbs-Never-take-a-public-warning-for-a-base-station-I.patch"
+	cd ofono/ofono
+	autoreconf --force --install
+}
+
+build() {
+	cd ofono/ofono
+	# As in Sailfish (rpm/ofono.spec), without the parts that need further Sailfish packages
+	# (debuglog, pushforwarder, sailfish-bt); APN provisioning and access control stay
+	./configure --prefix=/usr --sbindir=/usr/bin --sysconfdir=/etc --localstatedir=/var \
+		--with-dbusconfdir=/usr/share --with-systemdunitdir=/usr/lib/systemd/system \
+		--disable-static \
+		--enable-sailfish-provision \
+		--enable-sailfish-access \
+		--disable-add-remove-context \
+		--disable-rilmodem \
+		--disable-isimodem \
+		--disable-qmimodem
+	make
+}
+
+package() {
+	cd ofono/ofono
+	make DESTDIR="$pkgdir" install
+	install -d "$pkgdir/var/lib/ofono"
+	# The phone's user (group radio) may use the eUICC channels, nothing else of oFono
+	install -Dm644 "$srcdir/plinius-euicc.conf" -t "$pkgdir/usr/share/dbus-1/system.d"
+}

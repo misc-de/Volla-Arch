@@ -1,0 +1,126 @@
+From 721e1e1ce0fb1e1b78bc03529212966c9941f490 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 22:12:32 +0100
+Subject: [PATCH] mouse: Videos load when their row shows
+
+Plinius: every video illustration (a CcMaskPaintable with a .webm) was
+a GStreamer pipeline from the moment its row was built, also in rows
+that never show. On the phone, Mouse & Touchpad shows nothing but the
+primary button, yet built nine pipelines first, which held the page up
+~420 ms.
+
+A video now loads when its row is mapped, 400 ms later, after the
+page's slide-in. Its size changes then, just as it did when GStreamer
+had prepared the video.
+---
+ panels/common/cc-mask-paintable.c | 65 +++++++++++++++++++++++++++++--
+ 1 file changed, 61 insertions(+), 4 deletions(-)
+
+diff --git a/panels/common/cc-mask-paintable.c b/panels/common/cc-mask-paintable.c
+index d029632eb..0743aba4f 100644
+--- a/panels/common/cc-mask-paintable.c
++++ b/panels/common/cc-mask-paintable.c
+@@ -44,8 +44,15 @@ struct _CcMaskPaintable {
+     gboolean reloading_resource;
+     char *resource_path;
+     GtkWidget *parent_widget;
++
++    /* Plinius: a video loads once its row shows (load_media_cb()) */
++    GtkWidget *media_widget;
++    guint media_timeout_id;
+ };
+ 
++/* After the page's slide-in animation */
++#define MEDIA_LOAD_DELAY_MS 400
++
+ static void cc_mask_paintable_iface_init (GdkPaintableInterface *iface);
+ 
+ G_DEFINE_FINAL_TYPE_WITH_CODE (CcMaskPaintable, cc_mask_paintable, G_TYPE_OBJECT,
+@@ -115,12 +122,52 @@ clear_parent_widget (CcMaskPaintable *self)
+     g_clear_weak_pointer (&self->parent_widget);
+ }
+ 
++/*
++ * Plinius: every video illustration was a GStreamer pipeline from the moment its row was built,
++ * also in rows that never show (the touchpad's on a phone). Mouse & Touchpad waited ~0.5 s for
++ * nine of them before it could open. Now a video loads when its row is mapped, a moment later,
++ * so that the page has slid in. The size changes then just as when GStreamer had prepared the
++ * video before.
++ */
++static gboolean
++load_media_cb (gpointer user_data)
++{
++    CcMaskPaintable *self = user_data;
++    g_autoptr(GtkMediaStream) media_stream = NULL;
++
++    self->media_timeout_id = 0;
++    media_stream = gtk_media_file_new_for_resource (self->resource_path);
++    cc_mask_paintable_set_paintable (self, GDK_PAINTABLE (media_stream));
++
++    return G_SOURCE_REMOVE;
++}
++
++static void
++on_media_widget_map_cb (CcMaskPaintable *self)
++{
++    g_signal_handlers_disconnect_by_func (self->media_widget, on_media_widget_map_cb, self);
++
++    if (self->media_timeout_id == 0 && self->paintable == NULL)
++        self->media_timeout_id = g_timeout_add (MEDIA_LOAD_DELAY_MS, load_media_cb, self);
++}
++
++static void
++clear_media_widget (CcMaskPaintable *self)
++{
++    if (self->media_widget)
++        g_signal_handlers_disconnect_by_func (self->media_widget, on_media_widget_map_cb, self);
++
++    g_clear_weak_pointer (&self->media_widget);
++    g_clear_handle_id (&self->media_timeout_id, g_source_remove);
++}
++
+ static void
+ cc_mask_paintable_dispose (GObject *object)
+ {
+     CcMaskPaintable *self = CC_MASK_PAINTABLE (object);
+ 
+     clear_parent_widget (self);
++    clear_media_widget (self);
+ 
+     if (self->paintable) {
+         g_signal_handlers_disconnect_by_func (self->paintable, gdk_paintable_invalidate_size, self);
+@@ -388,6 +435,7 @@ cc_mask_paintable_set_resource_scaled (CcMaskPaintable *self, const char *resour
+     g_return_if_fail (GTK_IS_WIDGET (parent_widget));
+ 
+     clear_parent_widget (self);
++    clear_media_widget (self);
+ 
+     g_set_str (&self->resource_path, resource_path);
+ 
+@@ -404,10 +452,19 @@ cc_mask_paintable_set_resource_scaled (CcMaskPaintable *self, const char *resour
+     resource_is_scalable = g_str_has_suffix (self->resource_path, ".svg");
+ 
+     if (!resource_is_scalable) {
+-        g_autoptr(GtkMediaStream) media_stream = NULL;
+-
+-        media_stream = gtk_media_file_new_for_resource (self->resource_path);
+-        cc_mask_paintable_set_paintable (self, GDK_PAINTABLE (media_stream));
++        /* Plinius: the video when the row shows (load_media_cb()); a previous one goes now */
++        if (self->paintable) {
++            g_signal_handlers_disconnect_by_func (self->paintable, gdk_paintable_invalidate_size, self);
++            g_signal_handlers_disconnect_by_func (self->paintable, gdk_paintable_invalidate_contents, self);
++            g_clear_object (&self->paintable);
++            gdk_paintable_invalidate_size (GDK_PAINTABLE (self));
++        }
++
++        g_set_weak_pointer (&self->media_widget, parent_widget);
++        if (gtk_widget_get_mapped (parent_widget))
++            on_media_widget_map_cb (self);
++        else
++            g_signal_connect_swapped (parent_widget, "map", G_CALLBACK (on_media_widget_map_cb), self);
+ 
+         return;
+     }
+-- 
+2.55.0
+

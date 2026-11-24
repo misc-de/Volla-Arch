@@ -1,0 +1,74 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+# AppArmor profiles of the phone, loaded by a service of their own (plinius-apparmor-load), not
+# by Arch's apparmor.service with its ~150 untried profiles. Each service enters its profile
+# through AppArmorProfile= in a drop-in; "-" before the name: a missing profile never keeps a
+# service from starting. Profiles start in complain mode and go to enforce one by one, once
+# the logged accesses are in their rules (tools/aa-denials.sh).
+pkgname=plinius-apparmor
+pkgver=0.1
+pkgrel=9
+pkgdesc="AppArmor profiles for the network and radio services of Volla Phone Plinius"
+arch=(any)
+license=(MIT)
+depends=(apparmor systemd)
+install=plinius-apparmor.install
+_profiles=(avahi-daemon bluetoothd cupsd dnsfilter geoclue gnss-nmea-bridge mmsd netlogd nfcd obexd ofono2mm
+	ofonod wpa_supplicant)
+# systemd unit -> profile
+_units=(avahi-daemon:avahi-daemon bluetooth:bluetoothd cups:cupsd plinius-dnsfilter:dnsfilter
+	geoclue:geoclue gnss-nmea-bridge:gnss-nmea-bridge plinius-netlogd:netlogd nfcd:nfcd
+	ModemManager:ofono2mm ofono:ofonod wpa_supplicant:wpa_supplicant)
+# systemd user unit -> profile: services of the session that take data from outside (an MMS by
+# SMS, a paired Bluetooth device); a user unit can enter a profile too (AppArmorProfile=)
+_user_units=(mmsd:mmsd obex:obexd)
+source=(plinius-apparmor-load
+	plinius-apparmor.service
+	expected
+	LICENSE
+	"${_profiles[@]/#/plinius.}")
+sha256sums=('ee75f535458a2ae8130ad49e05aa4d82ee8dd0f876a389c3246318657cfee41e'
+	'bcf7b16a1d3df228bad36fc376da30922f26a17132bd2acc0e48751f291b8114'
+	'a3eb1c94c7b027e32ef8a8d7c053d4b174f1ccc09a0422629d1fd53e4e1f1135'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
+	'192c405e21faf5ba2b3abdfd33a5a16d7c6229e31cf5e1e44256b11acc8bc4ba'
+	'1d85673f3f3d0c8bb9b89552b475bed4256a186ea2457fb7d785ad1119c98787'
+	'8158bb4e4e04cf6e64895e814e73964c0ec9769ed7d689f3cc2c0028d725f472'
+	'4518b1f3d021a3af90c6fd8d309b4c7e4eb79d527bf8fe06fc4c48a5674ec8ac'
+	'4acb6873ad0d167044fea5a388b8a9c80ef9730ab73c0f6cf551189c42e980b3'
+	'663fd134dc62cfc657ab489f8a3136ae32a416dd099dcf37a4b49fc480391b2d'
+	'99ce9484d460b7dbf7dfc853dfe818e374a1889d00f9b5cab0ac1dd0bb5d0e43'
+	'057a065b6615a4cee8c70e2894e0f08b4e03743f43d09ad82e3e6741da082ce1'
+	'c7b3161b92a2940f2c665811d3ffebeb83e6b859e31f6d5554777a95937022c9'
+	'584bad7385576bfa4b3e53f86f196d431521ba69ecbf7479e15d8c577ea691f0'
+	'fa8345aebc4705c4200f18f1c06afe3e3472e0962c3669902c3f6a4c23e2cd87'
+	'd6f053c2621c8dff6a1ca63c7cb6196b0f253cb61e699477b69064b96e6a4705'
+	'338968b250406c3b28bc82ec323ba8888eadf31fbd542f60f0a32f8a0408c764')
+
+
+package() {
+	install -Dm755 plinius-apparmor-load -t "$pkgdir/usr/lib/plinius-apparmor"
+	install -Dm644 plinius-apparmor.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+	ln -s ../plinius-apparmor.service "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/"
+	# Names of the profiles that should be loaded (GNOME Settings › Device Security compares)
+	install -Dm644 expected "$pkgdir/usr/share/plinius-apparmor/expected"
+	local p u
+	for p in "${_profiles[@]}"; do
+		install -Dm644 "plinius.$p" -t "$pkgdir/usr/share/plinius-apparmor/profiles"
+	done
+	for u in "${_units[@]}"; do
+		install -d "$pkgdir/usr/lib/systemd/system/${u%%:*}.service.d"
+		printf '%s\n' "# plinius-apparmor: the service runs in its AppArmor profile (\"-\": none loaded, none used)" \
+			'[Service]' "AppArmorProfile=-plinius.${u#*:}" \
+			> "$pkgdir/usr/lib/systemd/system/${u%%:*}.service.d/80-plinius-apparmor.conf"
+	done
+	for u in "${_user_units[@]}"; do
+		install -d "$pkgdir/usr/lib/systemd/user/${u%%:*}.service.d"
+		printf '%s\n' "# plinius-apparmor: the service runs in its AppArmor profile (\"-\": none loaded, none used)" \
+			'[Service]' "AppArmorProfile=-plinius.${u#*:}" \
+			> "$pkgdir/usr/lib/systemd/user/${u%%:*}.service.d/80-plinius-apparmor.conf"
+	done
+	install -d -m755 "$pkgdir/etc/plinius-apparmor"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

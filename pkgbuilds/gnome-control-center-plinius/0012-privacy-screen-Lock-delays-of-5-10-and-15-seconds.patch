@@ -1,0 +1,30 @@
+From 1ae10d7d9174c80359092a323e91e821c6ce1354 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 18:01:23 +0100
+Subject: [PATCH] privacy/screen: Lock delays of 5, 10 and 15 seconds, no subtitle
+
+Plinius: a phone is put away often and for a short while, so the automatic
+screen lock also offers 5, 10 and 15 seconds after the screen blanks, next to
+GNOME's 30 seconds and longer. The row has no subtitle: the title says it.
+---
+ panels/privacy/screen/cc-screen-page.blp | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/panels/privacy/screen/cc-screen-page.blp b/panels/privacy/screen/cc-screen-page.blp
+index 6367683e3..609f76c73 100644
+--- a/panels/privacy/screen/cc-screen-page.blp
++++ b/panels/privacy/screen/cc-screen-page.blp
+@@ -39,10 +39,10 @@ template $CcScreenPage: Adw.NavigationPage {
+ 
+         $CcNumberRow lock_after_row {
+           title: _("Automatic _Screen Lock Delay");
+-          subtitle: _("Time from screen blank to screen lock");
+-          subtitle-lines: 2;
++          // Plinius: no subtitle, the title says it
+           use-underline: true;
+-          values: "[30, 60, 120, 180, 300, 1800, 3600]";
++          // Plinius: a phone wants a short delay too (lock a moment after the screen blanks)
++          values: "[5, 10, 15, 30, 60, 120, 180, 300, 1800, 3600]";
+ 
+           special-value: $CcNumberObject {
+             value: 0;

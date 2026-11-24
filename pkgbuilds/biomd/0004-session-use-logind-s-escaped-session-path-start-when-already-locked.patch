@@ -1,0 +1,108 @@
+From ba13cddff734b6a313a4cf6b7effb8bf1f33b231 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 18:08:35 +0100
+Subject: [PATCH] session: use logind's escaped session path, start when
+ already locked
+
+biomd-session built the session's object path from the bare id. logind
+escapes ids like sd_bus_path_encode() does, so session "1" (greetd) is
+.../session/_31: the path built from the id named nothing and the
+LockedHint changes never arrived. Encode the id the same way.
+
+Also start an unlock attempt right away when the session is already
+locked at startup; otherwise nothing happens until the next lock.
+---
+ src/session/biomd_session.c | 42 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 38 insertions(+), 4 deletions(-)
+
+diff --git a/src/session/biomd_session.c b/src/session/biomd_session.c
+index f8c2a6b..018c761 100644
+--- a/src/session/biomd_session.c
++++ b/src/session/biomd_session.c
+@@ -37,6 +37,31 @@ typedef struct {
+ static void
+ setup_dbus_connection(BiometricSession *session);
+ 
++/*
++ * The object path logind gives a session, as sd_bus_path_encode() makes it:
++ * every character other than a letter or digit, and a leading digit, becomes
++ * _XX. Session "1" (greetd) is .../session/_31; a path built from the bare id
++ * names nothing and its PropertiesChanged signals never come.
++ */
++static gchar *
++session_object_path(const gchar *session_id)
++{
++    GString *path = g_string_new("/org/freedesktop/login1/session/");
++
++    if (!session_id || !*session_id) {
++        g_string_append_c(path, '_');
++        return g_string_free(path, FALSE);
++    }
++
++    for (const gchar *c = session_id; *c; c++) {
++        if (g_ascii_isalpha(*c) || (g_ascii_isdigit(*c) && c != session_id))
++            g_string_append_c(path, *c);
++        else
++            g_string_append_printf(path, "_%02x", (guchar)*c);
++    }
++    return g_string_free(path, FALSE);
++}
++
+ static gboolean
+ screen_is_on(BiometricSession *session)
+ {
+@@ -301,7 +326,7 @@ is_screen_locked(BiometricSession *session)
+         session->session_id = get_session_id(session);
+ 
+     if (session->session_proxy == NULL) {
+-        session_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
++        session_path = session_object_path(session->session_id);
+ 
+         session->session_proxy = g_dbus_proxy_new_for_bus_sync(
+             G_BUS_TYPE_SYSTEM,
+@@ -344,7 +369,7 @@ is_screen_locked(BiometricSession *session)
+         if (session->session_id != NULL) {
+             g_debug("New session id: %s", session->session_id);
+ 
+-            session_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
++            session_path = session_object_path(session->session_id);
+             session->session_proxy = g_dbus_proxy_new_for_bus_sync(
+                 G_BUS_TYPE_SYSTEM,
+                 G_DBUS_PROXY_FLAGS_NONE,
+@@ -851,7 +876,7 @@ setup_dbus_connection(BiometricSession *session)
+ 
+     cleanup_signal_subscriptions(session);
+ 
+-    session_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
++    session_path = session_object_path(session->session_id);
+     g_debug("Setting up D-Bus connection for session path: %s", session_path);
+ 
+     if (session->session_proxy != NULL) {
+@@ -923,7 +948,7 @@ setup_dbus_connection(BiometricSession *session)
+         update_face_agent_policy(session);
+     }
+ 
+-    subscription_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
++    subscription_path = session_object_path(session->session_id);
+ 
+     session->properties_changed_id = g_dbus_connection_signal_subscribe(
+         session->connection,
+@@ -969,6 +994,15 @@ main(void)
+ 
+     g_debug("Initial listener setup complete for session: %s", session->session_id);
+ 
++    /*
++     * Already locked when we come up (restarted, or Phosh locked before we
++     * started): there will be no LockedHint change to start the attempt.
++     */
++    if (is_screen_locked(session) && screen_is_on(session)) {
++        g_debug("Session already locked, starting biometric unlock attempt");
++        start_unlock_attempt(session);
++    }
++
+     loop = g_main_loop_new(NULL, FALSE);
+     g_main_loop_run(loop);
+ 
+-- 
+2.56.0
+

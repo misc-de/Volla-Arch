@@ -1,0 +1,22 @@
+# pacman install script of plinius-desktop: the firewall rules apply right away, so the port is
+# closed to other networks before anybody can switch it on. On removal the chain goes.
+
+post_install() {
+	/usr/lib/plinius-desktop/plinius-desktop-set apply || true
+}
+
+post_upgrade() {
+	post_install
+}
+
+pre_remove() {
+	local t
+	for t in iptables-legacy ip6tables-legacy; do
+		command -v "$t" >/dev/null || continue
+		"$t" -w -D INPUT -p tcp --dport 5900 -j plinius-desktop 2>/dev/null || true
+		"$t" -w -F plinius-desktop 2>/dev/null || true
+		"$t" -w -X plinius-desktop 2>/dev/null || true
+	done
+	rm -f /run/plinius-desktop-firewall
+	return 0
+}

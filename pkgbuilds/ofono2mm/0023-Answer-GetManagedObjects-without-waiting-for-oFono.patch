@@ -1,0 +1,164 @@
+From 834a6a6310e270a487024368f4b34bc52acafecc Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 07:08:44 +0100
+Subject: [PATCH] Answer GetManagedObjects without waiting for oFono
+
+The USSD State getter was async: it asked oFono's SupplementaryServices
+for its properties on every read. dbus-next sends the GetManagedObjects
+answer (and the InterfacesAdded of a new modem) only when every getter
+returned, while it takes the values of the other interfaces at once. A
+PropertiesChanged sent during that round trip went out before the
+answer that held the older values.
+
+GLib's object manager client calls GetManagedObjects asynchronously
+when the name owner appears after it started, and drops signals for
+objects it doesn't know yet. At boot Phosh starts before ofono2mm owns
+ModemManager1: it kept the modem from before the SIM was read ("Sim"
+"/", UnlockRequired unknown) and showed "no SIM" until ofono2mm was
+restarted, while the SIM was registered and had mobile data.
+
+The USSD state now comes from the SupplementaryServices properties
+oFono2MM reads and follows anyway, so no getter waits and the answer
+is built in one go. The notification and request signals are
+subscribed once per oFono proxy instead of on every read, and a network
+request lands in NetworkRequest instead of NetworkNotification.
+---
+ ofono2mm/mm_modem.py           | 11 +++++++
+ ofono2mm/mm_modem_3gpp_ussd.py | 54 ++++++++++++++++++++++------------
+ 2 files changed, 46 insertions(+), 19 deletions(-)
+
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index f0d5de9..e876195 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -55,6 +55,7 @@ class MMModemInterface(ServiceInterface):
+         self.ofono_interface_props = {}
+         self.mm_cell_type = ModemManagerCellType.UNKNOWN
+         self.mm_modem3gpp_interface = None
++        self.mm_modem3gpp_ussd_interface = None
+         self.mm_modem_messaging_interface = None
+         self.mm_modem_cell_broadcast_interface = None
+         self.mm_sim_interface = None
+@@ -153,6 +154,9 @@ class MMModemInterface(ServiceInterface):
+         if self.mm_modem_messaging_interface is not None and iface == "org.ofono.MessageManager":
+             self.mm_modem_messaging_interface.set_props()
+             await self.mm_modem_messaging_interface.init_messages()
++        if self.mm_modem3gpp_ussd_interface is not None and iface == "org.ofono.SupplementaryServices":
++            self.mm_modem3gpp_ussd_interface.connect_ofono()
++            self.mm_modem3gpp_ussd_interface.set_props()
+         # oFono offers CellBroadcast only once the SIM is ready, mostly after the modem was exported
+         if self.mm_modem_cell_broadcast_interface is not None and iface == "org.ofono.CellBroadcast":
+             await self.mm_modem_cell_broadcast_interface.init_cell_broadcast()
+@@ -183,6 +187,8 @@ class MMModemInterface(ServiceInterface):
+         if self.mm_sim_interface is not None:
+             self.mm_sim_interface.ofono_interface_props = self.ofono_interface_props.copy()
+             self.mm_sim_interface.set_props()
++        if self.mm_modem3gpp_ussd_interface is not None and iface == "org.ofono.SupplementaryServices":
++            self.mm_modem3gpp_ussd_interface.set_props()
+ 
+     async def init_mm_sim_interface(self):
+         self.mm_sim_interface = MMSimInterface(self.index, self.bus, self.ofono_client, self.modem_name, self.ofono_modem, self.ofono_props, self.ofono_interfaces, self.ofono_interface_props)
+@@ -197,6 +203,8 @@ class MMModemInterface(ServiceInterface):
+ 
+     async def init_mm_3gpp_ussd_interface(self):
+         self.mm_modem3gpp_ussd_interface = MMModem3gppUssdInterface(self.index, self.bus, self.ofono_client, self.modem_name, self.ofono_modem, self.ofono_props, self.ofono_interfaces, self.ofono_interface_props)
++        self.mm_modem3gpp_ussd_interface.connect_ofono()
++        self.mm_modem3gpp_ussd_interface.set_props()
+         self.bus.export(f'/org/freedesktop/ModemManager1/Modem/{self.index}', self.mm_modem3gpp_ussd_interface)
+ 
+     async def init_mm_3gpp_profile_manager_interface(self):
+@@ -941,6 +949,9 @@ class MMModemInterface(ServiceInterface):
+                     self.mm_modem3gpp_interface.ofono_interface_changed(iface)(name, varval)
+                 if self.mm_sim_interface is not None:
+                     self.mm_sim_interface.ofono_interface_changed(iface)(name, varval)
++                if self.mm_modem3gpp_ussd_interface is not None and \
++                        iface == "org.ofono.SupplementaryServices" and name == "State":
++                    self.mm_modem3gpp_ussd_interface.set_props()
+                 if self.mm_modem_cell_broadcast_interface is not None and \
+                         iface == "org.ofono.CellBroadcast" and name == "Topics":
+                     self.mm_modem_cell_broadcast_interface.update_channels()
+diff --git a/ofono2mm/mm_modem_3gpp_ussd.py b/ofono2mm/mm_modem_3gpp_ussd.py
+index 3583963..db35787 100644
+--- a/ofono2mm/mm_modem_3gpp_ussd.py
++++ b/ofono2mm/mm_modem_3gpp_ussd.py
+@@ -19,6 +19,8 @@ class MMModem3gppUssdInterface(ServiceInterface):
+             'NetworkNotification': Variant('s', ''),
+             'NetworkRequest': Variant('s', ''),
+         }
++        # The SupplementaryServices proxy whose signals reach us
++        self.ofono_connected = None
+ 
+     @method()
+     async def Initiate(self, command: 's') -> 's':
+@@ -37,26 +39,40 @@ class MMModem3gppUssdInterface(ServiceInterface):
+         except Exception as e:
+             pass
+ 
+-    @dbus_property(access=PropertyAccess.READ)
+-    async def State(self) -> 'u':
+-        try:
+-            result = await self.ofono_interfaces['org.ofono.SupplementaryServices'].call_get_properties()
+-            result_str = result['State'].value
++    # oFono's session states, MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE, _ACTIVE, _USER_RESPONSE;
++    # anything else (or no SupplementaryServices) is _UNKNOWN (0)
++    OFONO_USSD_STATES = {'idle': 1, 'active': 2, 'user-response': 3}
+ 
+-            if result_str == 'idle':
+-                self.props['State'] = Variant('u', 1) # idle MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE
+-            elif result_str == "active":
+-                self.props['State'] = Variant('u', 2) # active MM_MODEM_3GPP_USSD_SESSION_STATE_ACTIVE
+-            elif result_str == "user-response":
+-                self.props['State'] = Variant('u', 3) # user response MM_MODEM_3GPP_USSD_SESSION_STATE_USER_RESPONSE
+-            else:
+-                self.props['State'] = Variant('u', 0) # unknown MM_MODEM_3GPP_USSD_SESSION_STATE_UNKNOWN
++    # The getters only read what is cached here, no getter waits for oFono. dbus-next answers
++    # GetManagedObjects (and builds InterfacesAdded) once every getter of every interface has
++    # returned. An async State getter held that answer back for a round trip to oFono, while the
++    # Modem interface's values had been taken already; a PropertiesChanged sent meanwhile went
++    # out before the answer. A GLib client that started before ofono2mm calls GetManagedObjects
++    # asynchronously and drops signals for objects it doesn't know yet. At boot Phosh kept the
++    # modem as it was before the SIM was read ("Sim" "/") and showed "no SIM" until the next
++    # restart of ofono2mm, while the SIM was registered and had mobile data.
++    def set_props(self):
++        old_state = self.props['State'].value
++        ofono_state = self.ofono_interface_props.get('org.ofono.SupplementaryServices', {}).get('State')
++        state = self.OFONO_USSD_STATES.get(ofono_state.value, 0) if ofono_state is not None else 0
++        self.props['State'] = Variant('u', state)
++        if state != old_state:
++            self.emit_properties_changed({'State': state})
+ 
+-            self.ofono_interfaces['org.ofono.SupplementaryServices'].on_notification_received(self.save_notification_received)
+-            self.ofono_interfaces['org.ofono.SupplementaryServices'].on_request_received(self.save_request_received)
+-        except Exception as e:
+-            self.props['State'] = Variant('u', 0) # unknown MM_MODEM_3GPP_USSD_SESSION_STATE_UNKNOWN
++    # Once per oFono proxy: the getter subscribed again on every read
++    def connect_ofono(self):
++        supplementary_services = self.ofono_interfaces.get('org.ofono.SupplementaryServices')
++        if supplementary_services is None or supplementary_services is self.ofono_connected:
++            return
++        try:
++            supplementary_services.on_notification_received(self.save_notification_received)
++            supplementary_services.on_request_received(self.save_request_received)
++            self.ofono_connected = supplementary_services
++        except AttributeError:
++            pass
+ 
++    @dbus_property(access=PropertyAccess.READ)
++    def State(self) -> 'u':
+         return self.props['State'].value
+ 
+     def save_notification_received(self, message):
+@@ -67,8 +83,8 @@ class MMModem3gppUssdInterface(ServiceInterface):
+         return self.props['NetworkNotification'].value
+ 
+     def save_request_received(self, message):
+-        self.props['NetworkNotification'] = Variant('s', message)
++        self.props['NetworkRequest'] = Variant('s', message)
+ 
+     @dbus_property(access=PropertyAccess.READ)
+-    async def NetworkRequest(self) -> 's':
++    def NetworkRequest(self) -> 's':
+         return self.props['NetworkRequest'].value
+-- 
+2.56.0
+

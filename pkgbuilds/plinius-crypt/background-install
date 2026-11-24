@@ -1,0 +1,32 @@
+#!/bin/bash
+# Root part of the automatic background of the password prompt at startup, called by
+# background-sync via pkexec (polkit action org.plinius.crypt.background). Reads the rendered
+# image from stdin, accepts only exactly the expected format (LVGL XRGB8888, 108x240) and never
+# opens a path given by the caller. Stores it for the mkinitcpio install hook plinius-crypt and
+# rebuilds the initramfs.
+set -euo pipefail
+
+dir=/var/lib/plinius-crypt
+dest=$dir/glass-background.bin
+# lv_image_header_t: magic 0x19, XRGB8888 (0x11), flags 0, 108 x 240, stride 432
+header=191100006c00f000b0010000
+size=$((12 + 108 * 240 * 4))
+
+mkdir -p "$dir"
+tmp=$(mktemp "$dir/.glass-background.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+# One byte more than allowed, so that longer input is noticed
+head -c $((size + 1)) > "$tmp"
+if [[ $(stat -c %s "$tmp") -ne $size || $(head -c 12 "$tmp" | od -An -tx1 | tr -d ' \n') != "$header" ]]; then
+	echo "background-install: input is not a 108x240 XRGB8888 LVGL image" >&2
+	exit 1
+fi
+cmp -s "$tmp" "$dest" && exit 0
+chmod 644 "$tmp"
+mv "$tmp" "$dest"
+
+# Rebuild now only if this system's initramfs runs the plinius-crypt hook; otherwise the next
+# mkinitcpio run picks the image up
+if [[ -d /run/plinius-crypt ]]; then
+	systemctl start --no-block plinius-crypt-initramfs.service
+fi

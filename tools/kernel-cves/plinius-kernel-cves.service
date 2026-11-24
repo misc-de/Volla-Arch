@@ -1,0 +1,45 @@
+# Builds the kernel vulnerability lists for the phones (plinius-kernel-cves) from the kernel
+# CNA's repository; installed on the project server by tools/publish-kernel-cves.sh.
+[Unit]
+Description=Build the kernel vulnerability lists for the phones
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/plinius-kernel-cves/plinius-kernel-cves --fetch \
+	/var/lib/plinius-kernel-cves/vulns /etc/plinius-kernel-cves/manifests \
+	/var/www/plinius/security/kernel
+User=plinius-kcve
+Group=plinius-kcve
+# Holds the shallow clone of the CNA repository (about 600 MB)
+StateDirectory=plinius-kernel-cves
+ReadWritePaths=/var/www/plinius/security/kernel
+UMask=0022
+Nice=10
+IOSchedulingClass=idle
+# git gc of the clone needs some memory; the mail and web services on this host come first
+MemoryHigh=1G
+MemoryMax=2G
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources

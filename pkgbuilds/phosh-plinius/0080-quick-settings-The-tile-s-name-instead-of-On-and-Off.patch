@@ -1,0 +1,555 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 14:30:00 +0100
+Subject: [PATCH] quick settings: The tile's name instead of On and Off
+
+Plinius: a tile shows whether it is on in the accent color already, a
+label "On", "Off", "Location Off" or "NFC On" said it a second time and
+hid what the tile is. The tiles say their name: Bluetooth (while no
+device is connected), Auto Rotate (sensor mode), Sound (the full
+feedback profile; Quiet and Silent stay), Location, Mobile Data,
+Hotspot, Night Light, Caffeine and NFC. Labels that say more than on or
+off stay: the Wi-Fi network, the connected Bluetooth device, Portrait
+or Landscape without the sensor, the torch's brightness.
+
+Bluetooth's "One device" and "%d devices" were not marked for
+translation; they are now, the latter with plural forms. Translations
+for de, es, fr, it, nl, pl, pt, pt_BR and ru.
+---
+ .../caffeine-quick-setting.c                       |  5 ++--
+ .../location-quick-setting.c                       |  4 ++-
+ .../mobile-data-quick-setting.c                    |  4 ++-
+ plugins/nfc-quick-setting/nfc-quick-setting.c      |  3 ++-
+ .../night-light-quick-setting.c                    |  4 ++-
+ .../wifi-hotspot-quick-setting.c                   |  6 ++---
+ po/de.po                                           | 30 +++++++++++++++++++++
+ po/es.po                                           | 30 +++++++++++++++++++++
+ po/fr.po                                           | 30 +++++++++++++++++++++
+ po/it.po                                           | 30 +++++++++++++++++++++
+ po/nl.po                                           | 30 +++++++++++++++++++++
+ po/pl.po                                           | 31 ++++++++++++++++++++++
+ po/pt.po                                           | 30 +++++++++++++++++++++
+ po/pt_BR.po                                        | 30 +++++++++++++++++++++
+ po/ru.po                                           | 31 ++++++++++++++++++++++
+ src/bt-info.c                                      |  7 ++---
+ src/feedbackinfo.c                                 |  3 ++-
+ src/rotateinfo.c                                   | 11 +++-----
+ 18 files changed, 298 insertions(+), 21 deletions(-)
+
+diff --git a/plugins/caffeine-quick-setting/caffeine-quick-setting.c b/plugins/caffeine-quick-setting/caffeine-quick-setting.c
+index e60845cd..8e387032 100644
+--- a/plugins/caffeine-quick-setting/caffeine-quick-setting.c
++++ b/plugins/caffeine-quick-setting/caffeine-quick-setting.c
+@@ -302,12 +302,13 @@ transform_to_label (GBinding     *binding,
+   gboolean inhibited = g_value_get_boolean (from_value);
+ 
+   if (!inhibited) {
+-    g_value_set_string (to_value, C_("caffeine-disabled", "Off"));
++    /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++    g_value_set_string (to_value, _("Caffeine"));
+   } else if (self->update_id) {
+     g_autofree char *label = cui_call_format_duration ((uint) self->remaining);
+     g_value_set_string (to_value, label);
+   } else {
+-    g_value_set_string (to_value, C_("caffeine-enabled", "On"));
++    g_value_set_string (to_value, _("Caffeine"));
+   }
+ 
+   return TRUE;
+diff --git a/plugins/location-quick-setting/location-quick-setting.c b/plugins/location-quick-setting/location-quick-setting.c
+index 40a32bd0..2b4afb88 100644
+--- a/plugins/location-quick-setting/location-quick-setting.c
++++ b/plugins/location-quick-setting/location-quick-setting.c
+@@ -88,7 +88,9 @@ transform_to_label (GBinding     *binding,
+   gboolean enabled = g_value_get_boolean (from_value);
+   const char *label;
+ 
+-  label = enabled ? _("Location On") : _("Location Off");
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++  (void) enabled;
++  label = _("Location");
+   g_value_set_string (to_value, label);
+   return TRUE;
+ }
+diff --git a/plugins/mobile-data-quick-setting/mobile-data-quick-setting.c b/plugins/mobile-data-quick-setting/mobile-data-quick-setting.c
+index ec7b095f..ce8fcb4a 100644
+--- a/plugins/mobile-data-quick-setting/mobile-data-quick-setting.c
++++ b/plugins/mobile-data-quick-setting/mobile-data-quick-setting.c
+@@ -76,7 +76,9 @@ transform_to_label (GBinding     *binding,
+   gboolean enabled = g_value_get_boolean (from_value);
+   const char *label;
+ 
+-  label = enabled ? _("Mobile Data On") : _("Mobile Data Off");
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++  (void) enabled;
++  label = _("Mobile Data");
+   g_value_set_string (to_value, label);
+   return TRUE;
+ }
+diff --git a/plugins/nfc-quick-setting/nfc-quick-setting.c b/plugins/nfc-quick-setting/nfc-quick-setting.c
+index 0951fc3c..87f2a790 100644
+--- a/plugins/nfc-quick-setting/nfc-quick-setting.c
++++ b/plugins/nfc-quick-setting/nfc-quick-setting.c
+@@ -35,7 +35,8 @@ update (PhoshNfcQuickSetting *self, gboolean enabled)
+ {
+   phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), enabled);
+   phosh_status_icon_set_icon_name (self->info, enabled ? "nfc-symbolic" : "nfc-disabled-symbolic");
+-  phosh_status_icon_set_info (self->info, enabled ? _("NFC On") : _("NFC Off"));
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++  phosh_status_icon_set_info (self->info, _("NFC"));
+ }
+ 
+ 
+diff --git a/plugins/night-light-quick-setting/night-light-quick-setting.c b/plugins/night-light-quick-setting/night-light-quick-setting.c
+index f4120593..c8d26dd2 100644
+--- a/plugins/night-light-quick-setting/night-light-quick-setting.c
++++ b/plugins/night-light-quick-setting/night-light-quick-setting.c
+@@ -60,7 +60,9 @@ transform_to_label (GBinding     *binding,
+   gboolean enabled = g_value_get_boolean (from_value);
+   const char *label;
+ 
+-  label = enabled ? _("Night Light On") : _("Night Light Off");
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++  (void) enabled;
++  label = _("Night Light");
+   g_value_set_string (to_value, label);
+   return TRUE;
+ }
+diff --git a/plugins/wifi-hotspot-quick-setting/wifi-hotspot-quick-setting.c b/plugins/wifi-hotspot-quick-setting/wifi-hotspot-quick-setting.c
+index 5439ff97..07fb0f2f 100644
+--- a/plugins/wifi-hotspot-quick-setting/wifi-hotspot-quick-setting.c
++++ b/plugins/wifi-hotspot-quick-setting/wifi-hotspot-quick-setting.c
+@@ -75,11 +75,9 @@ update_info_cb (PhoshWifiHotspotQuickSetting *self)
+ 
+   g_debug ("State: %d, Hotspot: %d Wi-Fi: %d", state, hotspot_enabled, wifi_enabled);
+ 
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
+   /* Translators: A Wi-Fi hotspot */
+-  if (hotspot_enabled)
+-    info = _("Hotspot On");
+-  else
+-    info = _("Hotspot Off");
++  info = _("Hotspot");
+ 
+   /* Show the acquiring icon only if the state change occurred
+    * through user clicking the quick setting */
+diff --git a/po/de.po b/po/de.po
+index 3dbfe847..b1d4e13c 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1603,3 +1603,33 @@ msgstr "„%s“ zu Kontakten hinzugefügt"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Deine Karte wurde gelesen"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Standort"
++
++msgid "Mobile Data"
++msgstr "Mobile Daten"
++
++msgid "Hotspot"
++msgstr "Hotspot"
++
++msgid "Night Light"
++msgstr "Nachtmodus"
++
++msgid "Auto Rotate"
++msgstr "Automatisch drehen"
++
++msgid "Sound"
++msgstr "Ton"
++
++msgid "Caffeine"
++msgstr "Koffein"
++
++msgid "One device"
++msgstr "Ein Gerät"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d Gerät"
++msgstr[1] "%d Geräte"
+diff --git a/po/es.po b/po/es.po
+index f70107c5..396adfca 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -917,3 +917,33 @@ msgstr "«%s» añadido a Contactos"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Se ha leído tu tarjeta"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Ubicación"
++
++msgid "Mobile Data"
++msgstr "Datos móviles"
++
++msgid "Hotspot"
++msgstr "Punto de acceso"
++
++msgid "Night Light"
++msgstr "Luz nocturna"
++
++msgid "Auto Rotate"
++msgstr "Rotación automática"
++
++msgid "Sound"
++msgstr "Sonido"
++
++msgid "Caffeine"
++msgstr "Cafeína"
++
++msgid "One device"
++msgstr "Un dispositivo"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d dispositivo"
++msgstr[1] "%d dispositivos"
+diff --git a/po/fr.po b/po/fr.po
+index f566a982..b8985e74 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1265,3 +1265,33 @@ msgstr "« %s » ajouté aux contacts"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Votre carte a été lue"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Localisation"
++
++msgid "Mobile Data"
++msgstr "Données mobiles"
++
++msgid "Hotspot"
++msgstr "Point d’accès"
++
++msgid "Night Light"
++msgstr "Mode nuit"
++
++msgid "Auto Rotate"
++msgstr "Rotation automatique"
++
++msgid "Sound"
++msgstr "Son"
++
++msgid "Caffeine"
++msgstr "Caféine"
++
++msgid "One device"
++msgstr "Un appareil"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d appareil"
++msgstr[1] "%d appareils"
+diff --git a/po/it.po b/po/it.po
+index 6ac43357..1f121cbb 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -999,3 +999,33 @@ msgstr "«%s» aggiunto ai contatti"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Il tuo biglietto è stato letto"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Posizione"
++
++msgid "Mobile Data"
++msgstr "Dati mobili"
++
++msgid "Hotspot"
++msgstr "Hotspot"
++
++msgid "Night Light"
++msgstr "Luce notturna"
++
++msgid "Auto Rotate"
++msgstr "Rotazione automatica"
++
++msgid "Sound"
++msgstr "Suono"
++
++msgid "Caffeine"
++msgstr "Caffeina"
++
++msgid "One device"
++msgstr "Un dispositivo"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d dispositivo"
++msgstr[1] "%d dispositivi"
+diff --git a/po/nl.po b/po/nl.po
+index 814d1291..914c9f3e 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1610,3 +1610,33 @@ msgstr "‘%s’ toegevoegd aan Contacten"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Je kaartje is gelezen"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Locatie"
++
++msgid "Mobile Data"
++msgstr "Mobiele gegevens"
++
++msgid "Hotspot"
++msgstr "Hotspot"
++
++msgid "Night Light"
++msgstr "Nachtlicht"
++
++msgid "Auto Rotate"
++msgstr "Automatisch draaien"
++
++msgid "Sound"
++msgstr "Geluid"
++
++msgid "Caffeine"
++msgstr "Cafeïne"
++
++msgid "One device"
++msgstr "Eén apparaat"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d apparaat"
++msgstr[1] "%d apparaten"
+diff --git a/po/pl.po b/po/pl.po
+index 4887e0c8..fea14d34 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1574,3 +1574,34 @@ msgstr "Dodano „%s” do kontaktów"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Twoja wizytówka została odczytana"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Położenie"
++
++msgid "Mobile Data"
++msgstr "Dane mobilne"
++
++msgid "Hotspot"
++msgstr "Hotspot"
++
++msgid "Night Light"
++msgstr "Nocne światło"
++
++msgid "Auto Rotate"
++msgstr "Automatyczne obracanie"
++
++msgid "Sound"
++msgstr "Dźwięk"
++
++msgid "Caffeine"
++msgstr "Kofeina"
++
++msgid "One device"
++msgstr "Jedno urządzenie"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d urządzenie"
++msgstr[1] "%d urządzenia"
++msgstr[2] "%d urządzeń"
+diff --git a/po/pt.po b/po/pt.po
+index 355ba144..37da6bac 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1560,3 +1560,33 @@ msgstr "«%s» adicionado aos contactos"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "O seu cartão foi lido"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Localização"
++
++msgid "Mobile Data"
++msgstr "Dados móveis"
++
++msgid "Hotspot"
++msgstr "Ponto de acesso"
++
++msgid "Night Light"
++msgstr "Luz noturna"
++
++msgid "Auto Rotate"
++msgstr "Rotação automática"
++
++msgid "Sound"
++msgstr "Som"
++
++msgid "Caffeine"
++msgstr "Cafeína"
++
++msgid "One device"
++msgstr "Um dispositivo"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d dispositivo"
++msgstr[1] "%d dispositivos"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 86d2282b..9932df0f 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1652,3 +1652,33 @@ msgstr "“%s” adicionado aos contatos"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Seu cartão foi lido"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Localização"
++
++msgid "Mobile Data"
++msgstr "Dados móveis"
++
++msgid "Hotspot"
++msgstr "Ponto de acesso"
++
++msgid "Night Light"
++msgstr "Luz noturna"
++
++msgid "Auto Rotate"
++msgstr "Rotação automática"
++
++msgid "Sound"
++msgstr "Som"
++
++msgid "Caffeine"
++msgstr "Cafeína"
++
++msgid "One device"
++msgstr "Um dispositivo"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d dispositivo"
++msgstr[1] "%d dispositivos"
+diff --git a/po/ru.po b/po/ru.po
+index b3a01c48..7992ab82 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1671,3 +1671,34 @@ msgstr "«%s» добавлен в контакты"
+ #: plugins/cardshare-quick-setting/cardshare-quick-setting.c
+ msgid "Your card was read"
+ msgstr "Ваша визитка прочитана"
++
++# Plinius: quick settings show their name, the accent color says whether they are on
++msgid "Location"
++msgstr "Геолокация"
++
++msgid "Mobile Data"
++msgstr "Моб. данные"
++
++msgid "Hotspot"
++msgstr "Точка доступа"
++
++msgid "Night Light"
++msgstr "Ночной свет"
++
++msgid "Auto Rotate"
++msgstr "Автоповорот"
++
++msgid "Sound"
++msgstr "Звук"
++
++msgid "Caffeine"
++msgstr "Кофеин"
++
++msgid "One device"
++msgstr "Одно устройство"
++
++msgid "%d device"
++msgid_plural "%d devices"
++msgstr[0] "%d устройство"
++msgstr[1] "%d устройства"
++msgstr[2] "%d устройств"
+diff --git a/src/bt-info.c b/src/bt-info.c
+index f904f137..13e54772 100644
+--- a/src/bt-info.c
++++ b/src/bt-info.c
+@@ -104,7 +104,7 @@ update_info (PhoshBtInfo *self)
+     const char *info = phosh_bt_manager_get_info (self->bt);
+     if (gm_str_is_null_or_empty (info)) {
+       /* Translators: One connected Bluetooth device */
+-      msg = g_strdup_printf ("One device");
++      msg = g_strdup (_("One device"));
+     } else {
+       msg = g_strdup (info);
+     }
+@@ -112,7 +112,7 @@ update_info (PhoshBtInfo *self)
+   }
+   default:
+     /* Translators: The number of currently connected Bluetooth devices */
+-    msg = g_strdup_printf ("%d devices", n_connected);
++    msg = g_strdup_printf (ngettext ("%d device", "%d devices", n_connected), n_connected);
+   }
+ 
+   if (msg) {
+@@ -120,7 +120,8 @@ update_info (PhoshBtInfo *self)
+     return;
+   }
+ 
+-  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), C_("bluetooth:enabled", "On"));
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), _("Bluetooth"));
+ }
+ 
+ 
+diff --git a/src/feedbackinfo.c b/src/feedbackinfo.c
+index 17d75bcf..2b2720a2 100644
+--- a/src/feedbackinfo.c
++++ b/src/feedbackinfo.c
+@@ -104,8 +104,9 @@ on_profile_changed (PhoshFeedbackInfo *self, GParamSpec *psepc, gpointer unused)
+     name = _("Silent");
+     muted = TRUE;
+   } else {
++    /* Plinius: the tile's name for the full profile instead of "On"; quiet and silent say more */
+     /* Translators: Enable LED, haptic and audio feedback */
+-    name = C_("feedback:enabled", "On");
++    name = _("Sound");
+     enabled = TRUE;
+   }
+ 
+diff --git a/src/rotateinfo.c b/src/rotateinfo.c
+index 7d0f3a17..22b0749a 100644
+--- a/src/rotateinfo.c
++++ b/src/rotateinfo.c
+@@ -120,10 +120,8 @@ on_orientation_lock_changed (PhoshRotateInfo *self)
+ 
+   icon_name = locked ? "rotation-locked-symbolic" : "rotation-allowed-symbolic";
+   phosh_status_icon_set_icon_name (PHOSH_STATUS_ICON (self), icon_name);
+-  /* Translators: Automatic screen orientation is either on (enabled) or off (locked/disabled) */
+-  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), locked ?
+-                              C_("automatic-screen-rotation-disabled", "Off") :
+-                              C_("automatic-screen-rotation-enabled", "On"));
++  /* Plinius: the tile's name; whether it is on shows in the accent color, not in words */
++  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), _("Auto Rotate"));
+   phosh_rotation_info_check_enabled (self);
+ 
+   return;
+@@ -225,9 +223,8 @@ phosh_rotate_info_init (PhoshRotateInfo *self)
+   self->manager = phosh_shell_get_rotation_manager (phosh_shell_get_default());
+ 
+   phosh_status_icon_set_icon_name (PHOSH_STATUS_ICON (self), "rotation-locked-symbolic");
+-  /* Translators: Automatic screen orientation is off (locked/disabled) */
+-  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self),
+-                              C_("automatic-screen-rotation-disabled", "Off"));
++  /* Plinius: the tile's name, see on_orientation_lock_changed () */
++  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), _("Auto Rotate"));
+ 
+   /* We don't use property bindings since we flip info/icon based on rotation and lock */
+   g_signal_connect_object (self->manager,

@@ -1,0 +1,72 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-ambient
+pkgver=0.5
+pkgrel=6
+pkgdesc="Animated effects over the Phosh background: snow, dust in the light, fireflies, rain, balls rolling with the tilt, water running with the tilt, a 360° photo turning with the phone or a looping video or GIF as the background under them"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# libglvnd: EGL/GLES 2 (on the phone through libhybris). gdk-pixbuf2: the 360° photo and animated GIFs (through glycin).
+# phoc-plinius draws the effect with Phosh's background (without it, the surface would lie hidden under the app grid's
+# background). The video: gstreamer and gst-plugins-base-libs (libgstapp, libgstvideo; uridecodebin, typefind,
+# videoconvert, appsink), gst-plugins-good (qtdemux for MP4/MOV, matroskademux for MKV/WebM, vp9dec in software).
+depends=(glib2 gdk-pixbuf2 wayland libglvnd 'phoc-plinius>=0.57.0-14' gstreamer gst-plugins-base-libs gst-plugins-good)
+makedepends=(wayland-protocols wlr-protocols)
+optdepends=('sensor-proxy-bridge>=0.9: balls and water follow the tilt, water also the movement, the 360° photo the orientation (with 0.8 through the magnetometer, lagging)'
+	'muga: setting a 360° photo as the background'
+	'gnome-control-center-plinius: choosing the effect, the 360° photo and the video'
+	'plinius-vdec: videos in H.264, H.265 and VP9 decoded in hardware'
+	'gst-plugins-bad-libs: h264parse, h265parse and vp9parse, which hand the videos to plinius-vdec (without them H.264 and H.265 do not play at all on the phone)'
+	'gst-libav: software decoding of further video formats')
+source=(plinius-ambient.c
+	effects.c
+	effects.h
+	render.c
+	render.h
+	panorama.c
+	panorama.h
+	layered.c
+	layered.h
+	video.c
+	video.h
+	plinius-ambient.desktop
+	org.plinius.ambient.gschema.xml
+	LICENSE)
+sha256sums=('7d427e81b1847efff3a59645d7a9fd78697fbb111a4ac54eefe452cdf0b62f34'
+            '1d3f7a03b9fec9a1efd81f3ce75793fee9413adbb4beaed3e4f1c2d9eec0e891'
+            '5fdfd57004e62b31ef91b10d25fe671eaa74f8749660ec6716d52c301e18484c'
+            '6dc1090b318eb92437618bbc5df6a81724e2acb4eedadb791be428699aed0a92'
+            '60833ac5ada8d9ca4d450bf19237d8b33c498e56796d5aeb6f984c7868e4a8d3'
+            '38750c4d1bd2d542f1afaa9b1085097b6c5371265e4eebe895f8e048945e4dcc'
+            'b908b5fd59372203e19137737655ffb0432957ddfd1caa41bff85db0ba23cf11'
+            'a2c126cd54899295096ec644c3a9c987179fbf68b770dc653f8bddc433c0e1bb'
+            '3ffe49046f9343396083f3edfea2a1d44290df23a6d5c60db9c93ca3d37468fd'
+            '9830377cdbd2017b1a2b10f7a08468546d146b985d50d351657e517962584a1a'
+            '00fa29d2a2c04fc91c418166fe3dbf5275e80a23c00dcd7bff871fd3cc3b2343'
+            '0ed454cc6d9bf44ad4e4ae2cdf618d18fb9de3663768da3a51d6592604be8755'
+            'bca596b9354c845b0b95c72c99ee351e144008c77633582ca84075c7fd0003ad'
+            '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	local wlr=/usr/share/wlr-protocols/unstable wp=/usr/share/wayland-protocols/stable
+	local xml
+	for xml in "$wlr/wlr-layer-shell-unstable-v1.xml" \
+		"$wp/viewporter/viewporter.xml" \
+		"$wp/xdg-shell/xdg-shell.xml"; do  # layer-shell refers to xdg_popup
+		wayland-scanner client-header "$xml" "$(basename "$xml" .xml)-client-protocol.h"
+		wayland-scanner private-code "$xml" "$(basename "$xml" .xml)-protocol.c"
+	done
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter -I. \
+		-o plinius-ambient plinius-ambient.c effects.c render.c panorama.c layered.c video.c ./*-protocol.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 gdk-pixbuf-2.0 gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 \
+			wayland-client wayland-egl egl glesv2) -lm $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-ambient -t "$pkgdir/usr/bin"
+	# Runs in the session, next to Phosh
+	install -Dm644 plinius-ambient.desktop -t "$pkgdir/etc/xdg/autostart"
+	install -Dm644 org.plinius.ambient.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"
+}

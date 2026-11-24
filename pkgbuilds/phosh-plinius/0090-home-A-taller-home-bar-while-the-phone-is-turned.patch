@@ -1,0 +1,258 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] home: A taller home bar while the phone is turned
+
+Plinius: the touchscreen of the Volla Phone reports a finger at its long
+edges 20-25 px further in than at its short edges. Measured with raw
+evdev data in landscape: of three long presses on the home bar, one came
+in 5 px from the edge and opened the keyboard, the other two came in at
+23 and 24 px and went to the window above the 15 px bar. Taps missed it
+the same way; swiping up worked, as a swipe starts at the very edge.
+Further in the panel is accurate (±6 px down to 23 px from the edge).
+
+While the phone's portrait panel is turned to landscape the home bar is
+32 px high: the bar, its long-press area, the exclusive zone and the
+usable area all follow. The pill moves up to 2 px below the bar's top
+edge. The home surface decides by its own size, since
+after turning the phone the new size comes before the new transform.
+
+---
+ src/home.c                | 49 +++++++++++++++++++++++++++++++++++++++++------
+ src/home.h                |  2 ++
+ src/shell-priv.h          |  1 +
+ src/shell.c               | 42 +++++++++++++++++++++++++++++++++++++---
+ src/stylesheet/common.css | 20 +++++++++++++++++++
+ 5 files changed, 105 insertions(+), 9 deletions(-)
+
+diff --git a/src/home.c b/src/home.c
+index 30197ede..499ecd8b 100644
+--- a/src/home.c
++++ b/src/home.c
+@@ -39,6 +39,7 @@
+ 
+ #define POWERBAR_ACTIVE_CLASS "p-active"
+ #define POWERBAR_FAILED_CLASS "p-failed"
++#define POWERBAR_TURNED_CLASS "p-turned"
+ 
+ /**
+  * PhoshHome:
+@@ -68,6 +69,7 @@ struct _PhoshHome {
+   GtkWidget             *rev_powerbar;
+   GtkWidget             *powerbar;
+   GtkWidget             *evbox_home_bar;
++  guint                  bar_height;
+ 
+   guint debounce_handle;
+   gboolean               focus_app_search;
+@@ -182,7 +184,7 @@ update_drag_handle (PhoshHome *self, gboolean queue_draw)
+                                               0, 0, NULL, &handle);
+   if (!success) {
+     g_warning ("Failed to get handle position");
+-    handle = PHOSH_HOME_BAR_HEIGHT;
++    handle = self->bar_height;
+   }
+ 
+   g_debug ("Drag Handle: %d", handle);
+@@ -194,9 +196,42 @@ update_drag_handle (PhoshHome *self, gboolean queue_draw)
+ 
+ 
+ static int
+-get_margin (gint height)
++get_margin (PhoshHome *self, gint height)
+ {
+-  return (-1 * height) + PHOSH_HOME_BAR_HEIGHT;
++  return (-1 * height) + self->bar_height;
++}
++
++
++/*
++ * Plinius: the touchscreen of the Volla Phone reports a finger at its long edges 20-25 px
++ * further in than at its short edges (measured in landscape: long presses on the home bar
++ * came in 5, 23 and 24 px from the edge). The 15 px home bar sits on such a long edge when
++ * the phone is turned, so most taps and long presses (the keyboard) went to the window
++ * above it. The bar gets taller then. Decided by the surface's size, not by the monitor's
++ * transform: after turning the phone the new size comes before the new transform.
++ */
++static void
++update_bar_height (PhoshHome *self, int width, int height)
++{
++  PhoshMonitor *monitor = phosh_shell_get_primary_monitor (phosh_shell_get_default ());
++  PhoshMonitorMode *mode = monitor ? phosh_monitor_get_current_mode (monitor) : NULL;
++  guint bar_height = PHOSH_HOME_BAR_HEIGHT;
++
++  if (mode && phosh_monitor_is_builtin (monitor) && mode->width < mode->height && width > height)
++    bar_height = PHOSH_HOME_BAR_HEIGHT_TURNED;
++
++  if (self->bar_height == bar_height)
++    return;
++
++  g_debug ("Home bar height: %u", bar_height);
++  self->bar_height = bar_height;
++  gtk_widget_set_size_request (self->evbox_home_bar, -1, bar_height);
++  gtk_widget_set_size_request (self->powerbar, 200, bar_height);
++  /* The pill sits near the top of the taller bar, see common.css */
++  phosh_util_toggle_style_class (self->home_bar, POWERBAR_TURNED_CLASS,
++                                 bar_height == PHOSH_HOME_BAR_HEIGHT_TURNED);
++  phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), bar_height);
++  phosh_drag_surface_set_exclusive (PHOSH_DRAG_SURFACE (self), bar_height);
+ }
+ 
+ 
+@@ -205,12 +240,13 @@ on_configure_event (PhoshHome *self, GdkEventConfigure *event)
+ {
+   guint margin;
+ 
+-  margin = get_margin (event->height);
+-
+   /* ignore popovers like the power menu */
+   if (gtk_widget_get_window (GTK_WIDGET (self)) != event->window)
+     return FALSE;
+ 
++  update_bar_height (self, event->width, event->height);
++  margin = get_margin (self, event->height);
++
+   g_debug ("home: %dx%d, margin: %d", event->width, event->height, margin);
+ 
+   /* If the size changes we need to update the folded margin */
+@@ -605,7 +641,7 @@ phosh_home_dragged (PhoshDragSurface *drag_surface, int margin)
+   double progress, alpha;
+ 
+   gtk_window_get_size (GTK_WINDOW (self), &width, &height);
+-  progress = 1.0 - (-margin / (double)(height - PHOSH_HOME_BAR_HEIGHT));
++  progress = 1.0 - (-margin / (double)(height - self->bar_height));
+   /* Avoid negative values when resizing the surface */
+   progress = MAX (0, progress);
+ 
+@@ -892,6 +928,7 @@ phosh_home_init (PhoshHome *self)
+ 
+   self->use_background = TRUE;
+   self->state = PHOSH_HOME_STATE_FOLDED;
++  self->bar_height = PHOSH_HOME_BAR_HEIGHT;
+   self->settings = g_settings_new (KEYBINDINGS_SCHEMA_ID);
+ 
+   /* Adjust margins and folded state on size changes */
+diff --git a/src/home.h b/src/home.h
+index f049a7f4..e00cbdb8 100644
+--- a/src/home.h
++++ b/src/home.h
+@@ -14,6 +14,8 @@
+ #define PHOSH_TYPE_HOME (phosh_home_get_type())
+ 
+ #define PHOSH_HOME_BAR_HEIGHT 15
++/* Plinius: the home bar while the phone's portrait panel is turned to landscape */
++#define PHOSH_HOME_BAR_HEIGHT_TURNED 32
+ 
+ /**
+  * PhoshHomeState:
+diff --git a/src/shell-priv.h b/src/shell-priv.h
+index b4e62c27..efbd6490 100644
+--- a/src/shell-priv.h
++++ b/src/shell-priv.h
+@@ -61,6 +61,7 @@ typedef enum {
+ 
+ PhoshShellDebugFlags phosh_shell_get_debug_flags (void);
+ void                 phosh_shell_get_area        (PhoshShell *self, int *width, int *height);
++guint                phosh_shell_get_home_bar_height (PhoshShell *self);
+ void                 phosh_shell_set_locked      (PhoshShell *self, gboolean locked);
+ void                 phosh_shell_lock            (PhoshShell *self);
+ void                 phosh_shell_unlock          (PhoshShell *self);
+diff --git a/src/shell.c b/src/shell.c
+index b3d73b22..949daecd 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -2645,6 +2645,42 @@ phosh_shell_get_wwan (PhoshShell *self)
+   return priv->wwan;
+ }
+ 
++/**
++ * phosh_shell_get_home_bar_height:
++ * @self: The shell
++ *
++ * Plinius: the home bar is taller while the phone's portrait panel is turned to
++ * landscape, see `update_bar_height ()` in home.c.
++ *
++ * Returns: The height of the home bar on the primary display
++ */
++guint
++phosh_shell_get_home_bar_height (PhoshShell *self)
++{
++  PhoshMonitor *monitor;
++  PhoshMonitorMode *mode;
++
++  g_return_val_if_fail (PHOSH_IS_SHELL (self), PHOSH_HOME_BAR_HEIGHT);
++
++  monitor = phosh_shell_get_primary_monitor (self);
++  if (!monitor || !phosh_monitor_is_builtin (monitor))
++    return PHOSH_HOME_BAR_HEIGHT;
++
++  mode = phosh_monitor_get_current_mode (monitor);
++  if (!mode || mode->width >= mode->height)
++    return PHOSH_HOME_BAR_HEIGHT;
++
++  switch (phosh_monitor_get_transform (monitor)) {
++  case PHOSH_MONITOR_TRANSFORM_90:
++  case PHOSH_MONITOR_TRANSFORM_270:
++  case PHOSH_MONITOR_TRANSFORM_FLIPPED_90:
++  case PHOSH_MONITOR_TRANSFORM_FLIPPED_270:
++    return PHOSH_HOME_BAR_HEIGHT_TURNED;
++  default:
++    return PHOSH_HOME_BAR_HEIGHT;
++  }
++}
++
+ /**
+  * phosh_shell_get_usable_area:
+  * @self: The shell
+@@ -2686,11 +2722,11 @@ phosh_shell_get_usable_area (PhoshShell *self, int *x, int *y, int *width, int *
+   case PHOSH_MONITOR_TRANSFORM_FLIPPED:
+   case PHOSH_MONITOR_TRANSFORM_FLIPPED_180:
+     w = mode->width / scale;
+-    h = mode->height / scale - PHOSH_TOP_BAR_HEIGHT - PHOSH_HOME_BAR_HEIGHT;
++    h = mode->height / scale - PHOSH_TOP_BAR_HEIGHT - phosh_shell_get_home_bar_height (self);
+     break;
+   default:
+     w = mode->height / scale;
+-    h = mode->width / scale - PHOSH_TOP_BAR_HEIGHT - PHOSH_HOME_BAR_HEIGHT;
++    h = mode->width / scale - PHOSH_TOP_BAR_HEIGHT - phosh_shell_get_home_bar_height (self);
+     break;
+   }
+ 
+@@ -2723,7 +2759,7 @@ phosh_shell_get_area (PhoshShell *self, int *width, int *height)
+     *width = w;
+ 
+   if (height)
+-    *height = h + PHOSH_TOP_BAR_HEIGHT + PHOSH_HOME_BAR_HEIGHT;
++    *height = h + PHOSH_TOP_BAR_HEIGHT + phosh_shell_get_home_bar_height (self);
+ }
+ 
+ static PhoshShell *instance;
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 05805934..e0d831bf 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -299,6 +299,26 @@ phosh-status-page-placeholder > box > label.title {
+  100% {background-position: center;}
+ }
+ 
++/* Plinius: the taller home bar in landscape keeps the pill near its top edge */
++.p-turned #powerbar {
++  background-position: center 2px;
++}
++
++.p-turned.p-failed #powerbar {
++  animation-name: error-shake-turned;
++}
++
++@keyframes error-shake-turned {
++   0% {background-position: center 2px; opacity: .5;}
++  10% {background-position: center 2px; opacity: .7;}
++  15% {background-position: left 2px; opacity: 1;}
++  30% {background-position: right 2px;}
++  45% {background-position: left 2px;}
++  60% {background-position: right 2px;}
++  80% {background-position: center 2px;}
++ 100% {background-position: center 2px;}
++}
++
+ /*
+  * Overview (app grid with favorites and activities)
+  */

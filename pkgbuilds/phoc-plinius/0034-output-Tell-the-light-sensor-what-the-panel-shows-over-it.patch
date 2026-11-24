@@ -1,0 +1,988 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 09:04:48 +0100
+Subject: [PATCH] output: Tell the light sensor what the panel shows over it
+
+Plinius: the light sensor sits behind the OLED panel and sees its light.
+Its firmware takes that off, from the brightness and from the colour
+shown over the sensor, which the system has to tell it. Without that a
+white page read as a brighter room and a black one as a darker room,
+and auto brightness followed the picture.
+
+An output can now have a light sensor in phoc.ini: the part of the
+screen it sees (light-sensor = x,y,width,height in buffer pixels), how
+much each cell of a grid over that part counts (light-sensor-weights,
+rows separated by ";") and the colour value its firmware wants for full
+white (light-sensor-gain). After a frame whose damage touches that
+part, phoc reads it back, at most four times a second, averages it in
+linear light with the weights and writes the colour in the driver's own
+format to $XDG_RUNTIME_DIR/plinius-als-color. When a client's buffer is
+scanned out directly nothing is read, the file goes and the device's
+default applies.
+---
+ src/light-sensor.c        | 445 ++++++++++++++++++++++++++++++++++++++
+ src/light-sensor.h        |  67 ++++++
+ src/meson.build           |   2 +
+ src/output.c              |  39 +++-
+ src/output.h              |   1 +
+ src/settings.c            |  10 +
+ src/settings.h            |   3 +
+ tests/meson.build         |   1 +
+ tests/test-light-sensor.c | 237 ++++++++++++++++++++
+ 9 files changed, 804 insertions(+), 1 deletion(-)
+ create mode 100644 src/light-sensor.c
+ create mode 100644 src/light-sensor.h
+ create mode 100644 tests/test-light-sensor.c
+
+diff --git a/src/light-sensor.c b/src/light-sensor.c
+new file mode 100644
+index 00000000..b6a01ac6
+--- /dev/null
++++ b/src/light-sensor.c
+@@ -0,0 +1,445 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++/*
++ * Plinius: the light sensor behind the panel sees the panel's own light. Its firmware takes the
++ * panel's light off, from the brightness and from the colour shown over the sensor; under
++ * Android the system tells it that colour. Without it a white page read as a brighter room and
++ * a black one as a darker room, and auto brightness followed the picture.
++ *
++ * After a frame whose damage touches the sensor's part of the screen, this reads that part back
++ * (at most four times a second) and averages it the way the sensor does: in linear light, each
++ * cell of a grid weighted by how much the sensor sees of it. The colour goes to a file in the
++ * runtime directory; a service of the device writes it to the driver.
++ */
++
++#define G_LOG_DOMAIN "phoc-light-sensor"
++
++#include "phoc-config.h"
++
++#include "light-sensor.h"
++#include "output.h"
++
++#include <drm_fourcc.h>
++#include <errno.h>
++#include <glib/gstdio.h>
++#include <math.h>
++#include <stdlib.h>
++#include <string.h>
++#include <wlr/render/wlr_renderer.h>
++#include <wlr/render/wlr_texture.h>
++
++/* At most this often: the sensor's firmware takes about half a second itself (measured) */
++#define LIGHT_SENSOR_INTERVAL_MS 250
++/* sRGB is close enough: the firmware's own correction follows (c/255)^2.2 (measured) */
++#define LIGHT_SENSOR_GAMMA 2.2
++
++struct _PhocLightSensor {
++  PhocOutput           *output; /* (unowned): owns this */
++  PhocLightSensorConfig config;
++  char                 *path;
++  guint8               *pixels;
++
++  gint64                last_us;
++  gboolean              dirty;
++  guint                 timeout_id;
++  int                   color[3]; /* last published, -1: none */
++  gboolean              warned;
++};
++
++
++void
++phoc_light_sensor_config_init (PhocLightSensorConfig *config)
++{
++  *config = (PhocLightSensorConfig) {
++    .cols = 1,
++    .rows = 1,
++    .weights = { 1.0 },
++    .gain = 1.0,
++  };
++}
++
++/**
++ * phoc_light_sensor_config_parse_box:
++ * @config: The config
++ * @value: `x,y,width,height` in buffer pixels
++ *
++ * Returns: Whether @value was a box
++ */
++gboolean
++phoc_light_sensor_config_parse_box (PhocLightSensorConfig *config, const char *value)
++{
++  g_auto (GStrv) parts = g_strsplit (value, ",", -1);
++  int v[4];
++
++  if (g_strv_length (parts) != 4)
++    return FALSE;
++
++  for (int i = 0; i < 4; i++) {
++    char *end;
++    long n = strtol (parts[i], &end, 10);
++
++    while (g_ascii_isspace (*end))
++      end++;
++    if (end == parts[i] || *end || n < 0 || n > G_MAXINT16)
++      return FALSE;
++    v[i] = n;
++  }
++  if (v[2] == 0 || v[3] == 0)
++    return FALSE;
++
++  config->box = (struct wlr_box) { .x = v[0], .y = v[1], .width = v[2], .height = v[3] };
++  return TRUE;
++}
++
++/**
++ * phoc_light_sensor_config_parse_weights:
++ * @config: The config
++ * @value: The weights of the cells, a row's cells separated by `,`, the rows by `;`
++ *
++ * Every row needs the same number of cells. The weights need not add up to anything.
++ *
++ * Returns: Whether @value was a grid of weights
++ */
++gboolean
++phoc_light_sensor_config_parse_weights (PhocLightSensorConfig *config, const char *value)
++{
++  g_auto (GStrv) rows = g_strsplit (value, ";", -1);
++  float weights[PHOC_LIGHT_SENSOR_MAX_CELLS];
++  guint n_rows = g_strv_length (rows), n_cols = 0, n = 0;
++  float sum = 0;
++
++  if (n_rows == 0)
++    return FALSE;
++
++  for (guint r = 0; r < n_rows; r++) {
++    g_auto (GStrv) cells = g_strsplit (rows[r], ",", -1);
++    guint len = g_strv_length (cells);
++
++    if (r == 0)
++      n_cols = len;
++    if (len == 0 || len != n_cols || n + len > PHOC_LIGHT_SENSOR_MAX_CELLS)
++      return FALSE;
++
++    for (guint c = 0; c < len; c++) {
++      char *end;
++      double w = g_ascii_strtod (cells[c], &end);
++
++      while (g_ascii_isspace (*end))
++        end++;
++      if (end == cells[c] || *end || !isfinite (w) || w < 0)
++        return FALSE;
++      weights[n++] = w;
++      sum += w;
++    }
++  }
++  if (sum <= 0)
++    return FALSE;
++
++  config->cols = n_cols;
++  config->rows = n_rows;
++  for (guint i = 0; i < n; i++)
++    config->weights[i] = weights[i] / sum;
++  return TRUE;
++}
++
++/**
++ * phoc_light_sensor_config_parse_gain:
++ * @config: The config
++ * @value: The colour value for a full white over 255, more than 0 and at most 1
++ *
++ * Returns: Whether @value was a gain
++ */
++gboolean
++phoc_light_sensor_config_parse_gain (PhocLightSensorConfig *config, const char *value)
++{
++  char *end;
++  double gain = g_ascii_strtod (value, &end);
++
++  while (g_ascii_isspace (*end))
++    end++;
++  if (end == value || *end || !isfinite (gain) || gain <= 0 || gain > 1)
++    return FALSE;
++
++  config->gain = gain;
++  return TRUE;
++}
++
++
++static const float *
++get_linear_table (void)
++{
++  static float table[256];
++  static gsize done;
++
++  if (g_once_init_enter (&done)) {
++    for (int i = 0; i < 256; i++)
++      table[i] = pow (i / 255.0, LIGHT_SENSOR_GAMMA);
++    g_once_init_leave (&done, 1);
++  }
++  return table;
++}
++
++/**
++ * phoc_light_sensor_color_from_pixels:
++ * @config: The sensor
++ * @pixels: The pixels of the sensor's box
++ * @format: Their format: DRM_FORMAT_[AX]RGB8888 or DRM_FORMAT_[AX]BGR8888
++ * @stride: Bytes from one row to the next
++ * @color:(out): The colour for the sensor's firmware, red, green and blue, each 0 to 255
++ *
++ * Returns: Whether @format is one of those
++ */
++gboolean
++phoc_light_sensor_color_from_pixels (const PhocLightSensorConfig *config,
++                                     const guint8                *pixels,
++                                     guint32                      format,
++                                     int                          stride,
++                                     int                          color[3])
++{
++  const float *linear = get_linear_table ();
++  const int width = config->box.width, height = config->box.height;
++  double sums[PHOC_LIGHT_SENSOR_MAX_CELLS][3] = { 0 };
++  guint counts[PHOC_LIGHT_SENSOR_MAX_CELLS] = { 0 };
++  double light[3] = { 0 }, weight = 0;
++  int r, g, b;
++
++  switch (format) {
++  case DRM_FORMAT_ARGB8888:
++  case DRM_FORMAT_XRGB8888:
++    /* Little endian: blue first */
++    r = 2, g = 1, b = 0;
++    break;
++  case DRM_FORMAT_ABGR8888:
++  case DRM_FORMAT_XBGR8888:
++    r = 0, g = 1, b = 2;
++    break;
++  default:
++    return FALSE;
++  }
++
++  for (int y = 0; y < height; y++) {
++    const guint8 *row = pixels + (gsize)y * stride;
++    guint cell_row = (guint)y * config->rows / height;
++
++    for (int x = 0; x < width; x++) {
++      const guint8 *p = row + x * 4;
++      guint cell = cell_row * config->cols + (guint)x * config->cols / width;
++
++      sums[cell][0] += linear[p[r]];
++      sums[cell][1] += linear[p[g]];
++      sums[cell][2] += linear[p[b]];
++      counts[cell]++;
++    }
++  }
++
++  /* A cell smaller than a pixel has none: the others count for it */
++  for (guint i = 0; i < config->cols * config->rows; i++) {
++    if (!counts[i])
++      continue;
++    for (int ch = 0; ch < 3; ch++)
++      light[ch] += config->weights[i] * sums[i][ch] / counts[i];
++    weight += config->weights[i];
++  }
++
++  for (int ch = 0; ch < 3; ch++) {
++    double l = weight > 0 ? light[ch] / weight : 0;
++
++    color[ch] = CLAMP (lround (config->gain * 255.0 * pow (l, 1 / LIGHT_SENSOR_GAMMA)), 0, 255);
++  }
++  return TRUE;
++}
++
++
++/**
++ * phoc_light_sensor_new:
++ * @output: The output whose panel the sensor is behind
++ * @config: The sensor
++ * @path: Where the colour goes
++ *
++ * Returns: (transfer full): The sensor
++ */
++PhocLightSensor *
++phoc_light_sensor_new (PhocOutput *output, const PhocLightSensorConfig *config, const char *path)
++{
++  PhocLightSensor *self = g_new0 (PhocLightSensor, 1);
++
++  self->output = output;
++  self->config = *config;
++  self->path = g_strdup (path);
++  self->pixels = g_malloc ((gsize)config->box.width * config->box.height * 4);
++  self->color[0] = self->color[1] = self->color[2] = -1;
++  /* The first frame tells it */
++  self->dirty = TRUE;
++
++  return self;
++}
++
++
++void
++phoc_light_sensor_free (PhocLightSensor *self)
++{
++  g_clear_handle_id (&self->timeout_id, g_source_remove);
++  /* Nobody tells the colour any more: the device's default applies again */
++  phoc_light_sensor_forget (self);
++  g_free (self->path);
++  g_free (self->pixels);
++  g_free (self);
++}
++
++/**
++ * phoc_light_sensor_damage:
++ * @self: The sensor
++ * @damage: The damage of the frame about to be drawn, in buffer pixels
++ *
++ * Notes whether the frame changes what the sensor sees.
++ */
++void
++phoc_light_sensor_damage (PhocLightSensor *self, const pixman_region32_t *damage)
++{
++  pixman_box32_t box = {
++    .x1 = self->config.box.x,
++    .y1 = self->config.box.y,
++    .x2 = self->config.box.x + self->config.box.width,
++    .y2 = self->config.box.y + self->config.box.height,
++  };
++
++  if (pixman_region32_contains_rectangle ((pixman_region32_t *)damage, &box) != PIXMAN_REGION_OUT)
++    self->dirty = TRUE;
++}
++
++
++static gboolean
++on_interval_over (gpointer data)
++{
++  PhocLightSensor *self = data;
++
++  self->timeout_id = 0;
++  /* Draws the sensor's part again, the frame then reads it */
++  phoc_output_damage_buffer_box (self->output, &self->config.box);
++
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++warn_once (PhocLightSensor *self, const char *what)
++{
++  if (self->warned)
++    return;
++
++  g_warning ("Light sensor: %s", what);
++  self->warned = TRUE;
++}
++
++/**
++ * phoc_light_sensor_rendered:
++ * @self: The sensor
++ * @buffer: The frame just drawn, before it goes out
++ *
++ * Reads what the sensor sees from @buffer if that changed and it is time.
++ */
++void
++phoc_light_sensor_rendered (PhocLightSensor *self, struct wlr_buffer *buffer)
++{
++  struct wlr_renderer *renderer = self->output->wlr_output->renderer;
++  const struct wlr_box *box = &self->config.box;
++  struct wlr_texture *texture;
++  guint32 format;
++  gint64 now, wait_ms;
++  int color[3];
++  gboolean ok;
++
++  if (!self->dirty)
++    return;
++
++  now = g_get_monotonic_time ();
++  wait_ms = LIGHT_SENSOR_INTERVAL_MS - (now - self->last_us) / 1000;
++  if (self->last_us && wait_ms > 0) {
++    /* Too soon: the last change must not get lost when nothing draws later */
++    if (!self->timeout_id)
++      self->timeout_id = g_timeout_add (wait_ms, on_interval_over, self);
++    return;
++  }
++
++  if (box->x + box->width > buffer->width || box->y + box->height > buffer->height) {
++    warn_once (self, "its box lies outside the screen");
++    self->dirty = FALSE;
++    return;
++  }
++
++  texture = wlr_texture_from_buffer (renderer, buffer);
++  if (!texture) {
++    warn_once (self, "cannot read the screen");
++    return;
++  }
++
++  format = wlr_texture_preferred_read_format (texture);
++  if (format != DRM_FORMAT_ARGB8888 && format != DRM_FORMAT_XRGB8888 &&
++      format != DRM_FORMAT_XBGR8888)
++    format = DRM_FORMAT_ABGR8888;
++
++  ok = wlr_texture_read_pixels (texture, &(struct wlr_texture_read_pixels_options) {
++      .data = self->pixels,
++      .format = format,
++      .stride = box->width * 4,
++      .src_box = *box,
++    });
++  wlr_texture_destroy (texture);
++
++  self->dirty = FALSE;
++  self->last_us = now;
++
++  if (!ok) {
++    warn_once (self, "reading the screen failed");
++    return;
++  }
++
++  if (phoc_light_sensor_color_from_pixels (&self->config, self->pixels, format, box->width * 4, color))
++    phoc_light_sensor_publish (self, color);
++}
++
++/**
++ * phoc_light_sensor_publish:
++ * @self: The sensor
++ * @color: Red, green and blue for the sensor's firmware
++ *
++ * Writes the colour in the driver's own format (`A:255R:<r>G:<g>B:<b>`, without a newline) to
++ * the sensor's file, if it changed. The file is replaced as a whole, never seen half written.
++ */
++void
++phoc_light_sensor_publish (PhocLightSensor *self, const int color[3])
++{
++  g_autoptr (GError) err = NULL;
++  g_autofree char *text = NULL;
++
++  if (memcmp (color, self->color, sizeof (self->color)) == 0)
++    return;
++
++  text = g_strdup_printf ("A:255R:%dG:%dB:%d", color[0], color[1], color[2]);
++  if (!g_file_set_contents (self->path, text, -1, &err)) {
++    warn_once (self, err->message);
++    return;
++  }
++  memcpy (self->color, color, sizeof (self->color));
++}
++
++/**
++ * phoc_light_sensor_forget:
++ * @self: The sensor
++ *
++ * What the panel shows is not known (a client's buffer goes out directly): the device's default
++ * colour applies until a frame is drawn again.
++ */
++void
++phoc_light_sensor_forget (PhocLightSensor *self)
++{
++  self->dirty = TRUE;
++  if (self->color[0] < 0)
++    return;
++
++  if (g_unlink (self->path) < 0 && errno != ENOENT)
++    warn_once (self, g_strerror (errno));
++  self->color[0] = self->color[1] = self->color[2] = -1;
++}
+diff --git a/src/light-sensor.h b/src/light-sensor.h
+new file mode 100644
+index 00000000..21f9ed3f
+--- /dev/null
++++ b/src/light-sensor.h
+@@ -0,0 +1,67 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include <glib.h>
++#include <pixman.h>
++#include <wlr/types/wlr_buffer.h>
++#include <wlr/util/box.h>
++
++G_BEGIN_DECLS
++
++#define PHOC_LIGHT_SENSOR_MAX_CELLS 64
++/* In the runtime directory */
++#define PHOC_LIGHT_SENSOR_FILE "plinius-als-color"
++
++/**
++ * PhocLightSensorConfig:
++ * @box: The part of the screen the light sensor behind the panel sees, in buffer pixels
++ * @cols: Columns of the grid @box is split into
++ * @rows: Rows of that grid
++ * @weights: How much each cell of the grid counts, row by row
++ * @gain: The colour value the sensor's firmware wants for a full white, over 255
++ *
++ * A light sensor behind an OLED panel sees the panel's own light too. Its firmware takes that
++ * off when it knows the brightness and the colour of what the panel shows over it.
++ */
++typedef struct _PhocLightSensorConfig {
++  struct wlr_box box;
++  guint          cols, rows;
++  float          weights[PHOC_LIGHT_SENSOR_MAX_CELLS];
++  float          gain;
++} PhocLightSensorConfig;
++
++typedef struct _PhocLightSensor PhocLightSensor;
++typedef struct _PhocOutput PhocOutput;
++
++void             phoc_light_sensor_config_init          (PhocLightSensorConfig *config);
++gboolean         phoc_light_sensor_config_parse_box     (PhocLightSensorConfig *config,
++                                                         const char            *value);
++gboolean         phoc_light_sensor_config_parse_weights (PhocLightSensorConfig *config,
++                                                         const char            *value);
++gboolean         phoc_light_sensor_config_parse_gain    (PhocLightSensorConfig *config,
++                                                         const char            *value);
++
++gboolean         phoc_light_sensor_color_from_pixels    (const PhocLightSensorConfig *config,
++                                                         const guint8          *pixels,
++                                                         guint32                format,
++                                                         int                    stride,
++                                                         int                    color[3]);
++
++PhocLightSensor *phoc_light_sensor_new                  (PhocOutput            *output,
++                                                         const PhocLightSensorConfig *config,
++                                                         const char            *path);
++void             phoc_light_sensor_free                 (PhocLightSensor       *self);
++void             phoc_light_sensor_damage               (PhocLightSensor       *self,
++                                                         const pixman_region32_t *damage);
++void             phoc_light_sensor_rendered             (PhocLightSensor       *self,
++                                                         struct wlr_buffer     *buffer);
++void             phoc_light_sensor_publish              (PhocLightSensor       *self,
++                                                         const int              color[3]);
++void             phoc_light_sensor_forget               (PhocLightSensor       *self);
++
++G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhocLightSensor, phoc_light_sensor_free)
++
++G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index 914c841d..69e811a4 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -79,6 +79,8 @@ sources = files(
+   'layer-surface.h',
+   'layout-transaction.c',
+   'layout-transaction.h',
++  'light-sensor.c',
++  'light-sensor.h',
+   'output-cutouts.c',
+   'output-cutouts.h',
+   'output-shield.c',
+diff --git a/src/output.c b/src/output.c
+index abcc3eb5..85c2752f 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -10,6 +10,7 @@
+ #include "layer-shell-effects.h"
+ #include "layer-shell.h"
+ #include "layout-transaction.h"
++#include "light-sensor.h"
+ #include "output-cutouts.h"
+ #include "output-shield.h"
+ #include "output.h"
+@@ -84,6 +85,8 @@ typedef struct _PhocOutputPrivate {
+   struct wlr_damage_ring damage_ring;
+   /* Plinius: this doze has shown the always-on display, see doze_holds_frame() */
+   gboolean doze_showed_aod;
++  /* Plinius: tells the light sensor behind the panel what is shown over it */
++  PhocLightSensor *light_sensor;
+ } PhocOutputPrivate;
+ 
+ static void phoc_output_initable_iface_init (GInitableIface *iface);
+@@ -658,6 +661,9 @@ phoc_output_draw (PhocOutput *self)
+   if (!needs_frame)
+     return;
+ 
++  if (priv->light_sensor)
++    phoc_light_sensor_damage (priv->light_sensor, &priv->damage_ring.current);
++
+   if (G_UNLIKELY (priv->gamma_lut_changed))
+     phoc_output_set_gamma_lut (self, &pending);
+ 
+@@ -668,8 +674,12 @@ phoc_output_draw (PhocOutput *self)
+   if (self->fullscreen_view && !priv->color_transform)
+     scanned_out = scan_out_fullscreen_view (self, self->fullscreen_view, &pending);
+ 
+-  if (scanned_out)
++  if (scanned_out) {
++    /* The client's buffer goes out as it is: nothing is drawn that could be read */
++    if (priv->light_sensor)
++      phoc_light_sensor_forget (priv->light_sensor);
+     goto out;
++  }
+ 
+   if (!wlr_output_configure_primary_swapchain (wlr_output, &pending, &wlr_output->swapchain))
+     goto out;
+@@ -708,6 +718,9 @@ phoc_output_draw (PhocOutput *self)
+     goto out;
+   }
+ 
++  if (priv->light_sensor)
++    phoc_light_sensor_rendered (priv->light_sensor, buffer);
++
+   wlr_output_state_set_buffer (&pending, buffer);
+   wlr_buffer_unlock (buffer);
+ 
+@@ -1178,6 +1191,13 @@ phoc_output_initable_init (GInitable    *initable,
+   }
+   phoc_output_fill_state (self, output_config, &pending);
+   phoc_output_set_layout_pos (self, output_config);
++
++  if (output_config && output_config->light_sensor.box.width) {
++    g_autofree char *path = g_build_filename (g_get_user_runtime_dir (),
++                                              PHOC_LIGHT_SENSOR_FILE, NULL);
++
++    priv->light_sensor = phoc_light_sensor_new (self, &output_config->light_sensor, path);
++  }
+   wlr_output_commit_state (self->wlr_output, &pending);
+   wlr_output_state_finish (&pending);
+ 
+@@ -1253,6 +1273,7 @@ phoc_output_finalize (GObject *object)
+ 
+   g_clear_object (&priv->cutouts);
+   g_clear_object (&priv->shield);
++  g_clear_pointer (&priv->light_sensor, phoc_light_sensor_free);
+   g_clear_pointer (&priv->color_transform, wlr_color_transform_unref);
+ 
+   G_OBJECT_CLASS (phoc_output_parent_class)->finalize (object);
+@@ -2048,6 +2069,22 @@ phoc_output_damage_box (PhocOutput *self, const struct wlr_box *box)
+   return TRUE;
+ }
+ 
++/**
++ * phoc_output_damage_buffer_box:
++ * @self: The output
++ * @box: The damage box in buffer pixels, whatever the output's transform
++ *
++ * Adds the damage and schedules a frame.
++ */
++void
++phoc_output_damage_buffer_box (PhocOutput *self, const struct wlr_box *box)
++{
++  PhocOutputPrivate *priv = phoc_output_get_instance_private (self);
++
++  wlr_damage_ring_add_box (&priv->damage_ring, box);
++  wlr_output_schedule_frame (self->wlr_output);
++}
++
+ 
+ static PhocOutputConfig *
+ phoc_output_config_head_to_output_config (PhocOutput                              *self,
+diff --git a/src/output.h b/src/output.h
+index 7cbd0842..e0dfef4c 100644
+--- a/src/output.h
++++ b/src/output.h
+@@ -159,6 +159,7 @@ void        phoc_output_damage_from_surface (PhocOutput         *self,
+                                              double              oy,
+                                              gboolean            whole);
+ gboolean    phoc_output_damage_box (PhocOutput *self, const struct wlr_box *box);
++void        phoc_output_damage_buffer_box (PhocOutput *self, const struct wlr_box *box);
+ gboolean    phoc_output_damage_region (PhocOutput *self, const pixman_region32_t *region);
+ 
+ void        phoc_output_update_shell_reveal (PhocOutput *self);
+diff --git a/src/settings.c b/src/settings.c
+index 5d22e467..af726d43 100644
+--- a/src/settings.c
++++ b/src/settings.c
+@@ -133,6 +133,7 @@ phoc_output_config_new (const char *name)
+   oc->y = -1;
+   oc->scale_filter = PHOC_OUTPUT_SCALE_FILTER_AUTO;
+   oc->drm_panel_orientation = false;
++  phoc_light_sensor_config_init (&oc->light_sensor);
+ 
+   return oc;
+ }
+@@ -250,6 +251,15 @@ config_ini_handler (PhocConfig *config, const char *section, const char *name, c
+       oc->phys_height = strtol (value, NULL, 10);
+     } else if (g_str_equal (name, "adaptive-sync")) {
+       oc->adaptive_sync = parse_adapative_sync (value);
++    } else if (g_str_equal (name, "light-sensor")) {
++      if (!phoc_light_sensor_config_parse_box (&oc->light_sensor, value))
++        g_critical ("Invalid light sensor box: %s", value);
++    } else if (g_str_equal (name, "light-sensor-weights")) {
++      if (!phoc_light_sensor_config_parse_weights (&oc->light_sensor, value))
++        g_critical ("Invalid light sensor weights: %s", value);
++    } else if (g_str_equal (name, "light-sensor-gain")) {
++      if (!phoc_light_sensor_config_parse_gain (&oc->light_sensor, value))
++        g_critical ("Invalid light sensor gain: %s", value);
+     } else {
+       g_warning ("Unknown key '%s' in section '%s'", name, section);
+     }
+diff --git a/src/settings.h b/src/settings.h
+index 64c12f5d..bcad0651 100644
+--- a/src/settings.h
++++ b/src/settings.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include "light-sensor.h"
+ #include "output.h"
+ 
+ #include <xf86drmMode.h>
+@@ -37,6 +38,8 @@ typedef struct _PhocOutputConfig {
+ 
+   guint                    phys_width, phys_height;
+   gboolean                 adaptive_sync;
++  /* Plinius: the light sensor behind the panel, if any (light-sensor.c) */
++  PhocLightSensorConfig    light_sensor;
+ } PhocOutputConfig;
+ 
+ typedef struct _PhocConfig {
+diff --git a/tests/meson.build b/tests/meson.build
+index 639ebcbc..47611268 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -40,6 +40,7 @@ tests = [
+   'keybindings',
+   'layer-shell',
+   'layer-shell-effects',
++  'light-sensor',
+   'outputs-states',
+   'phosh-private',
+   'property-easer',
+diff --git a/tests/test-light-sensor.c b/tests/test-light-sensor.c
+new file mode 100644
+index 00000000..3dd12720
+--- /dev/null
++++ b/tests/test-light-sensor.c
+@@ -0,0 +1,237 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "light-sensor.h"
++#include "settings.h"
++
++#include <drm_fourcc.h>
++#include <glib/gstdio.h>
++
++
++static void
++test_phoc_light_sensor_parse (void)
++{
++  PhocLightSensorConfig config;
++
++  phoc_light_sensor_config_init (&config);
++  g_assert_cmpint (config.box.width, ==, 0);
++  g_assert_cmpuint (config.cols, ==, 1);
++  g_assert_cmpuint (config.rows, ==, 1);
++  g_assert_cmpfloat (config.weights[0], ==, 1.0);
++  g_assert_cmpfloat (config.gain, ==, 1.0);
++
++  g_assert_true (phoc_light_sensor_config_parse_box (&config, "608, 0, 136 ,150"));
++  g_assert_cmpint (config.box.x, ==, 608);
++  g_assert_cmpint (config.box.y, ==, 0);
++  g_assert_cmpint (config.box.width, ==, 136);
++  g_assert_cmpint (config.box.height, ==, 150);
++  g_assert_false (phoc_light_sensor_config_parse_box (&config, "1,2,3"));
++  g_assert_false (phoc_light_sensor_config_parse_box (&config, "1,2,3,4,5"));
++  g_assert_false (phoc_light_sensor_config_parse_box (&config, "1,2,0,4"));
++  g_assert_false (phoc_light_sensor_config_parse_box (&config, "-1,2,3,4"));
++  g_assert_false (phoc_light_sensor_config_parse_box (&config, "1,2,3,x"));
++  g_assert_false (phoc_light_sensor_config_parse_box (&config, "1,2,3,"));
++  g_assert_false (phoc_light_sensor_config_parse_box (&config, "1,2,3,99999"));
++  /* A refused value changes nothing */
++  g_assert_cmpint (config.box.x, ==, 608);
++
++  g_assert_true (phoc_light_sensor_config_parse_weights (&config, "15,35;44,106"));
++  g_assert_cmpuint (config.cols, ==, 2);
++  g_assert_cmpuint (config.rows, ==, 2);
++  g_assert_cmpfloat_with_epsilon (config.weights[0], 0.075, 1e-6);
++  g_assert_cmpfloat_with_epsilon (config.weights[3], 0.53, 1e-6);
++  g_assert_false (phoc_light_sensor_config_parse_weights (&config, "1,2;3"));
++  g_assert_false (phoc_light_sensor_config_parse_weights (&config, "1,-2"));
++  g_assert_false (phoc_light_sensor_config_parse_weights (&config, "0,0"));
++  g_assert_false (phoc_light_sensor_config_parse_weights (&config, "1,x"));
++  g_assert_false (phoc_light_sensor_config_parse_weights (&config, "1;;2"));
++  g_assert_false (phoc_light_sensor_config_parse_weights (&config, ""));
++  g_assert_false (phoc_light_sensor_config_parse_weights (&config, "nan"));
++  {
++    /* 65 cells: more than fit */
++    g_autoptr (GString) many = g_string_new ("1");
++
++    for (int i = 0; i < PHOC_LIGHT_SENSOR_MAX_CELLS; i++)
++      g_string_append (many, ",1");
++    g_assert_false (phoc_light_sensor_config_parse_weights (&config, many->str));
++  }
++  g_assert_cmpuint (config.cols, ==, 2);
++
++  g_assert_true (phoc_light_sensor_config_parse_gain (&config, " 0.88 "));
++  g_assert_cmpfloat_with_epsilon (config.gain, 0.88, 1e-6);
++  g_assert_false (phoc_light_sensor_config_parse_gain (&config, "0"));
++  g_assert_false (phoc_light_sensor_config_parse_gain (&config, "1.5"));
++  g_assert_false (phoc_light_sensor_config_parse_gain (&config, "x"));
++  g_assert_false (phoc_light_sensor_config_parse_gain (&config, "inf"));
++}
++
++
++static void
++test_phoc_light_sensor_config_file (void)
++{
++  PhocOutputConfig *oc;
++
++  g_autoptr (PhocConfig) config = phoc_config_new_from_data (
++    "[output:DSI-1]\n"
++    "light-sensor = 608,0,136,150\n"
++    "light-sensor-weights = 15,35;44,106\n"
++    "light-sensor-gain = 0.88\n"
++    "[output:DSI-2]\n"
++    "scale = 2\n");
++
++  for (GSList *l = config->outputs; l; l = l->next) {
++    oc = l->data;
++    if (g_str_equal (oc->name, "DSI-1")) {
++      g_assert_cmpint (oc->light_sensor.box.width, ==, 136);
++      g_assert_cmpuint (oc->light_sensor.rows, ==, 2);
++      g_assert_cmpfloat_with_epsilon (oc->light_sensor.gain, 0.88, 1e-6);
++    } else {
++      /* No sensor */
++      g_assert_cmpint (oc->light_sensor.box.width, ==, 0);
++      g_assert_cmpfloat (oc->light_sensor.gain, ==, 1.0);
++    }
++  }
++}
++
++
++static guint8 *
++fill (const PhocLightSensorConfig *config, guint8 r, guint8 g, guint8 b, gboolean bgr_order)
++{
++  int n = config->box.width * config->box.height;
++  guint8 *pixels = g_malloc (n * 4);
++
++  for (int i = 0; i < n; i++) {
++    pixels[i * 4 + 0] = bgr_order ? b : r;
++    pixels[i * 4 + 1] = g;
++    pixels[i * 4 + 2] = bgr_order ? r : b;
++    pixels[i * 4 + 3] = 0xff;
++  }
++  return pixels;
++}
++
++
++static void
++test_phoc_light_sensor_color (void)
++{
++  PhocLightSensorConfig config;
++  g_autofree guint8 *white = NULL, *grey = NULL, *red = NULL, *half = NULL;
++  int color[3];
++
++  phoc_light_sensor_config_init (&config);
++  config.box = (struct wlr_box) { .width = 8, .height = 6 };
++
++  /* Uniform: the value itself, times the gain */
++  white = fill (&config, 255, 255, 255, FALSE);
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, white, DRM_FORMAT_ABGR8888, 32, color));
++  g_assert_cmpint (color[0], ==, 255);
++  g_assert_cmpint (color[2], ==, 255);
++  config.gain = 0.88;
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, white, DRM_FORMAT_XBGR8888, 32, color));
++  g_assert_cmpint (color[1], ==, 224);
++  grey = fill (&config, 128, 128, 128, FALSE);
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, grey, DRM_FORMAT_ABGR8888, 32, color));
++  g_assert_cmpint (color[0], ==, 113);
++
++  /* Byte order: red is the third byte for [AX]RGB8888 */
++  config.gain = 1.0;
++  red = fill (&config, 255, 0, 0, TRUE);
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, red, DRM_FORMAT_ARGB8888, 32, color));
++  g_assert_cmpint (color[0], ==, 255);
++  g_assert_cmpint (color[1], ==, 0);
++  g_assert_cmpint (color[2], ==, 0);
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, red, DRM_FORMAT_XRGB8888, 32, color));
++  g_assert_cmpint (color[0], ==, 255);
++  g_assert_false (phoc_light_sensor_color_from_pixels (&config, red, DRM_FORMAT_RGB565, 32, color));
++
++  /* Half white, half black, averaged in linear light: brighter than 128 */
++  half = fill (&config, 0, 0, 0, FALSE);
++  for (int y = 0; y < 6; y++)
++    memset (half + y * 32, 255, 16);
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, half, DRM_FORMAT_ABGR8888, 32, color));
++  g_assert_cmpint (color[0], ==, 186);
++
++  /* Weighted: only the left column counts, which is white */
++  g_assert_true (phoc_light_sensor_config_parse_weights (&config, "1,0;1,0"));
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, half, DRM_FORMAT_ABGR8888, 32, color));
++  g_assert_cmpint (color[0], ==, 255);
++  g_assert_true (phoc_light_sensor_config_parse_weights (&config, "0,1"));
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, half, DRM_FORMAT_ABGR8888, 32, color));
++  g_assert_cmpint (color[0], ==, 0);
++
++  /* More cells than pixels: the empty ones don't count */
++  config.box.width = 1;
++  g_assert_true (phoc_light_sensor_config_parse_weights (&config, "1,1"));
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, white, DRM_FORMAT_ABGR8888, 4, color));
++  g_assert_cmpint (color[0], ==, 255);
++  g_assert_true (phoc_light_sensor_config_parse_weights (&config, "0,1"));
++  g_assert_true (phoc_light_sensor_color_from_pixels (&config, white, DRM_FORMAT_ABGR8888, 4, color));
++  g_assert_cmpint (color[0], ==, 0);
++}
++
++
++static void
++test_phoc_light_sensor_publish (void)
++{
++  PhocLightSensorConfig config;
++  g_autofree char *dir = g_dir_make_tmp ("phoc-light-sensor-XXXXXX", NULL);
++  g_autofree char *path = g_build_filename (dir, PHOC_LIGHT_SENSOR_FILE, NULL);
++  g_autofree char *text = NULL;
++  PhocLightSensor *sensor;
++
++  phoc_light_sensor_config_init (&config);
++  config.box = (struct wlr_box) { .width = 4, .height = 4 };
++  sensor = phoc_light_sensor_new (NULL, &config, path);
++
++  /* Nothing told yet: forgetting leaves no file behind */
++  phoc_light_sensor_forget (sensor);
++  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
++
++  phoc_light_sensor_publish (sensor, (int[3]) { 224, 113, 0 });
++  g_assert_true (g_file_get_contents (path, &text, NULL, NULL));
++  /* The driver's format, without a newline */
++  g_assert_cmpstr (text, ==, "A:255R:224G:113B:0");
++
++  /* The same again: not written */
++  g_assert_cmpint (g_unlink (path), ==, 0);
++  phoc_light_sensor_publish (sensor, (int[3]) { 224, 113, 0 });
++  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
++  phoc_light_sensor_publish (sensor, (int[3]) { 1, 2, 3 });
++  g_clear_pointer (&text, g_free);
++  g_assert_true (g_file_get_contents (path, &text, NULL, NULL));
++  g_assert_cmpstr (text, ==, "A:255R:1G:2B:3");
++
++  /* Forgotten: the file goes, the device's default applies */
++  phoc_light_sensor_forget (sensor);
++  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
++  phoc_light_sensor_publish (sensor, (int[3]) { 1, 2, 3 });
++  g_assert_true (g_file_test (path, G_FILE_TEST_EXISTS));
++
++  /* Freeing removes the file */
++  phoc_light_sensor_free (sensor);
++  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
++
++  /* A directory that isn't there: a warning once, nothing else */
++  sensor = phoc_light_sensor_new (NULL, &config, "/nonexistent/dir/" PHOC_LIGHT_SENSOR_FILE);
++  g_test_expect_message ("phoc-light-sensor", G_LOG_LEVEL_WARNING, "Light sensor: *");
++  phoc_light_sensor_publish (sensor, (int[3]) { 1, 2, 3 });
++  phoc_light_sensor_publish (sensor, (int[3]) { 4, 5, 6 });
++  g_test_assert_expected_messages ();
++  phoc_light_sensor_free (sensor);
++
++  g_assert_cmpint (g_rmdir (dir), ==, 0);
++}
++
++
++int
++main (int argc, char *argv[])
++{
++  g_test_init (&argc, &argv, NULL);
++
++  g_test_add_func ("/phoc/light-sensor/parse", test_phoc_light_sensor_parse);
++  g_test_add_func ("/phoc/light-sensor/config-file", test_phoc_light_sensor_config_file);
++  g_test_add_func ("/phoc/light-sensor/color", test_phoc_light_sensor_color);
++  g_test_add_func ("/phoc/light-sensor/publish", test_phoc_light_sensor_publish);
++
++  return g_test_run ();
++}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The torch's own brightness: Phosh (phosh-plinius patch 0029) keeps the brightness picked
+     with its torch slider here and switches the torch on with it, as does the assistant button
+     (plinius-assist). The camera app lights the same LED with a brightness of its own. -->
+<schemalist gettext-domain="plinius-torch">
+  <schema id="org.plinius.torch" path="/org/plinius/torch/">
+    <key name="brightness" type="i">
+      <default>0</default>
+      <summary>Torch brightness</summary>
+      <description>The brightness the torch switches on with, in the levels of the LED (its max_brightness); 0 for the brightest.</description>
+    </key>
+  </schema>
+</schemalist>

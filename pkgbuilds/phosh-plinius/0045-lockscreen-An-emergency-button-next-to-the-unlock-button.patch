@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 03 Nov 2026 23:00:00 +0100
+Subject: [PATCH] lockscreen: An emergency button next to the unlock button
+
+The emergency menu could only be reached by holding the power button, which
+nobody finds in a hurry, least of all someone else using the phone. Swiping up
+to the unlock page now offers it right next to the unlock button. It only opens
+the menu and dials nothing, and it follows the availability of the menu.
+
+The button shares the row with the unlock button, so the page in PIN mode needs
+no more height and the keypad keeps its size. In pattern mode only the unlock
+button goes away and the row stays.
+---
+ src/lockscreen.c          | 45 ++++++++++++++++++++++++++++++++++++++++++++-
+ src/stylesheet/common.css |  6 ++++++
+ src/ui/lockscreen.ui      | 13 +++++++++++++
+ 3 files changed, 63 insertions(+), 1 deletion(-)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index 3ffd6452..83503477 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -164,6 +164,8 @@ typedef struct {
+   guint               center_unlock_id;
+   GtkWidget          *btn_submit;
+   GtkWidget          *btn_keyboard;
++  GtkWidget          *btn_emergency;
++  guint               emergency_bind_id;
+   guint               idle_timer;
+   gint64              last_input;
+   PhoshAuth          *auth;
+@@ -524,6 +526,38 @@ delete_button_clicked_cb (PhoshLockscreen *self,
+   clear_input (self, FALSE);
+ }
+ 
++/* Opens the emergency menu, which lists the numbers; nothing is dialed from here */
++static void
++emergency_clicked_cb (PhoshLockscreen *self)
++{
++  g_action_group_activate_action (G_ACTION_GROUP (phosh_shell_get_default ()),
++                                  "emergency.toggle-menu", NULL);
++}
++
++
++/*
++ * The button is only as available as the emergency menu, which depends on Calls running. The
++ * emergency calls manager and its action can come up after the lock screen, so keep looking.
++ */
++static gboolean
++bind_emergency_action (gpointer user_data)
++{
++  PhoshLockscreen *self = PHOSH_LOCKSCREEN (user_data);
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++  GAction *action;
++
++  action = g_action_map_lookup_action (G_ACTION_MAP (phosh_shell_get_default ()),
++                                       "emergency.toggle-menu");
++  if (action == NULL)
++    return G_SOURCE_CONTINUE;
++
++  g_object_bind_property (action, "enabled", priv->btn_emergency, "sensitive",
++                          G_BINDING_SYNC_CREATE);
++  priv->emergency_bind_id = 0;
++  return G_SOURCE_REMOVE;
++}
++
++
+ static void
+ osk_button_clicked_cb (PhoshLockscreen *self,
+                        GtkWidget       *widget)
+@@ -1193,7 +1227,8 @@ setup_pattern (PhoshLockscreen *self)
+ 
+   gtk_widget_hide (priv->entry_pin);
+   gtk_widget_hide (priv->keypad_revealer);
+-  gtk_widget_hide (gtk_widget_get_parent (priv->btn_submit));
++  /* The row stays: emergency calls don't depend on how the phone unlocks */
++  gtk_widget_hide (priv->btn_submit);
+   phosh_lockscreen_set_unlock_status (self, g_dgettext (PLINIUS_DOMAIN, "Draw Pattern"));
+ }
+ 
+@@ -1353,6 +1388,11 @@ phosh_lockscreen_constructed (GObject *object)
+ 
+   phosh_lockscreen_add_background (self);
+   setup_pattern (self);
++  if (bind_emergency_action (self) == G_SOURCE_CONTINUE) {
++    gtk_widget_set_sensitive (priv->btn_emergency, FALSE);
++    priv->emergency_bind_id = g_timeout_add_seconds (1, bind_emergency_action, self);
++  }
++
+   g_signal_connect_object (priv->box_unlock, "size-allocate",
+                            G_CALLBACK (on_box_unlock_size_allocate), self, G_CONNECT_SWAPPED);
+ 
+@@ -1401,6 +1441,7 @@ phosh_lockscreen_dispose (GObject *object)
+   g_clear_handle_id (&priv->pattern_status_id, g_source_remove);
+   g_clear_object (&priv->keypad_css);
+   g_clear_handle_id (&priv->center_unlock_id, g_source_remove);
++  g_clear_handle_id (&priv->emergency_bind_id, g_source_remove);
+   g_clear_handle_id (&priv->idle_timer, g_source_remove);
+   g_clear_object (&priv->calls_manager);
+   g_clear_pointer (&priv->active, g_free);
+@@ -1632,6 +1673,8 @@ phosh_lockscreen_class_init (PhoshLockscreenClass *klass)
+                                                 long_press_del_gesture);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, btn_submit);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, btn_keyboard);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshLockscreen, btn_emergency);
++  gtk_widget_class_bind_template_callback (widget_class, emergency_clicked_cb);
+ 
+   gtk_widget_class_bind_template_callback (widget_class, delete_button_clicked_cb);
+   gtk_widget_class_bind_template_callback (widget_class, input_changed_cb);
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index cb39358c..5d571c8d 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -593,6 +593,12 @@ phosh-lockscreen button.pin-submit:focus {
+   background-color: alpha(@phosh_fg_color,.3);
+ }
+ 
++phosh-lockscreen button.pin-emergency {
++  font-size: 16px;
++  font-weight: bold;
++  padding: 16px 20px;
++}
++
+ phosh-lockscreen button.pin-submit > label {
+   /* We have contrast due to the fb-color mixin above so 0.3 is enough */
+   text-shadow: 1px 1px 1.1px rgba(0, 0, 0, 0.3);
+diff --git a/src/ui/lockscreen.ui b/src/ui/lockscreen.ui
+index 3bde5a95..abab877d 100644
+--- a/src/ui/lockscreen.ui
++++ b/src/ui/lockscreen.ui
+@@ -324,6 +324,19 @@
+                 <property name="margin-start">16</property>
+                 <property name="margin-end">16</property>
+                 <property name="halign">center</property>
++                <property name="spacing">12</property>
++                <child>
++                  <object class="GtkButton" id="btn_emergency">
++                    <property name="visible">1</property>
++                    <property name="label" translatable="yes">Emergency</property>
++                    <signal name="clicked" handler="emergency_clicked_cb" swapped="yes"/>
++                    <style>
++                      <class name="emergency-button"/>
++                      <class name="pin-emergency"/>
++                      <class name="circular"/>
++                    </style>
++                  </object>
++                </child>
+                 <child>
+                   <object class="GtkButton" id="btn_submit">
+                     <property name="visible">1</property>

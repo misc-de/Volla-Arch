@@ -1,0 +1,49 @@
+[Unit]
+Description=Estimated battery use per app (Settings > Battery > Battery Usage)
+# The energy model is in debugfs
+After=sys-kernel-debug.mount
+ConditionPathIsDirectory=/sys/kernel/debug/energy_model
+
+[Service]
+ExecStart=/usr/bin/plinius-energy
+Restart=on-failure
+RestartSec=10
+# The run file is read by Settings and tells a restart from a new boot, so it stays
+RuntimeDirectory=plinius-energy
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StateDirectory=plinius-energy
+Nice=10
+IOSchedulingClass=idle
+
+# Sandbox (docs/DIENSTE-HAERTEN.md): reads /proc/<tid>/time_in_state and cmdline of all
+# processes (hence no ProtectProc=invisible), cgroups, the energy model and the battery;
+# writes only its own files. As root it may read debugfs without capabilities; CAP_CHOWN only
+# gives the file for Settings to the group wheel (0640, not readable by other accounts).
+CapabilityBoundingSet=CAP_CHOWN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateIPC=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

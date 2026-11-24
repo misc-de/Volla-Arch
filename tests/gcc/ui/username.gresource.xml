@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The templates of cc-username-dialog.c and GNOME's cc-entry-feedback.c it uses
+     (tests/gcc/test_gcc_username_dialog.py) -->
+<gresources>
+  <gresource prefix="/org/gnome/control-center/system/users">
+    <file>cc-username-dialog.ui</file>
+    <file>cc-entry-feedback.ui</file>
+  </gresource>
+</gresources>

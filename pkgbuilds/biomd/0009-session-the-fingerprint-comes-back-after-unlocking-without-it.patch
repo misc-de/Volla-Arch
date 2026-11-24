@@ -1,0 +1,72 @@
+From 73e9578634e8b00d5598742ddc061e912c5b05ec Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 13:13:06 +0100
+Subject: [PATCH] session: the fingerprint comes back after unlocking without
+ it
+
+When the screen was unlocked with the PIN (or a pattern) while the
+fingerprint was being identified, biomd had already ended the
+identification and answered StopIdentify with FALSE. The session kept
+in_progress set, so every later lock skipped Identify and the fingerprint
+stayed off until biomd-session restarted.
+
+Clear in_progress after any stop attempt and when the identification
+reports ERROR_CANCELED.
+---
+ src/session/session_fingerprint.c | 20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/src/session/session_fingerprint.c b/src/session/session_fingerprint.c
+index e7453c1..835199e 100644
+--- a/src/session/session_fingerprint.c
++++ b/src/session/session_fingerprint.c
+@@ -3,6 +3,7 @@
+  * Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
+  */
+ 
++#include "biomd_enums.h"
+ #include "session_fingerprint.h"
+ 
+ #define BIOMD_SERVICE "io.FuriOS.Biomd"
+@@ -165,6 +166,10 @@ on_fp_signal(GDBusConnection *connection,
+         gint error_code = 0;
+         g_variant_get(parameters, "(i)", &error_code);
+ 
++        /* A canceled identification is over, whoever canceled it */
++        if (error_code == ERROR_CANCELED)
++            fp->in_progress = FALSE;
++
+         if (fp->error_cb)
+             fp->error_cb(error_code, fp->user_data);
+ 
+@@ -340,6 +345,13 @@ session_fingerprint_stop(SessionFingerprint *fp)
+         &error
+     );
+ 
++    /*
++     * Not ours any more, whatever biomd answers: it answers FALSE when the identification has
++     * already ended (e.g. canceled as the screen was unlocked with the PIN). Keeping in_progress
++     * then made every later start a no-op, and the fingerprint never came back until restart.
++     */
++    fp->in_progress = FALSE;
++
+     if (error) {
+         g_debug("Fingerprint StopIdentify failed: %s", error->message);
+         return;
+@@ -347,10 +359,8 @@ session_fingerprint_stop(SessionFingerprint *fp)
+ 
+     g_variant_get(ret, "(b)", &success);
+ 
+-    if (success) {
++    if (success)
+         g_debug("Fingerprint identification stopped successfully");
+-        fp->in_progress = FALSE;
+-    } else {
+-        g_debug("Failed to stop fingerprint identification");
+-    }
++    else
++        g_debug("Fingerprint identification was not running any more");
+ }
+-- 
+2.56.0
+

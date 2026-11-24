@@ -1,0 +1,562 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 09:30:00 +0100
+Subject: [PATCH] users: Local Accounts with one's own account first, Add in
+ the header bar
+
+Plinius: the Users panel (a row on Accounts, next to Online Accounts) is
+called Local Accounts and is a list: Your Account with a row named
+after one's username, Other Accounts below, each opening its page. One's
+own page keeps the account part only (the ways to unlock are on Lock &
+Unlock) and is called by the username.
+
+"Add" in the header bar opens Add User as a page. The account comes from
+plinius-add-user (plinius-account) through pkexec instead of
+AccountsService's CreateUser: useradd would hand out the user IDs 1000
+and up, which are Android's on the phone. The helper takes 32012 and up,
+adds the groups of the phone's devices and sets the password in the same
+step, so there is a single password prompt. The password is always set
+in the dialog (no "User sets password on first login"): the screen lock
+needs it, and plinius-greeter cannot set one at the first login.
+---
+ panels/system/users/cc-add-user-dialog.blp |   2 +
+ panels/system/users/cc-add-user-dialog.c   | 129 ++++++++++-----------
+ panels/system/users/cc-users-page.blp      |  69 ++++++-----
+ panels/system/users/cc-users-page.c        | 116 +++++++++++-------
+ shell/cc-panel-loader.c                    |   2 +-
+ 5 files changed, 180 insertions(+), 138 deletions(-)
+
+diff --git a/panels/system/users/cc-add-user-dialog.blp b/panels/system/users/cc-add-user-dialog.blp
+index 388e281c2..0ed7b086d 100644
+--- a/panels/system/users/cc-add-user-dialog.blp
++++ b/panels/system/users/cc-add-user-dialog.blp
+@@ -85,7 +85,9 @@ template $CcAddUserDialog: Adw.Dialog {
+             }
+           }
+ 
++          // Plinius: always "Set password now" (cc_add_user_dialog_init)
+           Adw.PreferencesGroup {
++            visible: false;
+             title: _("Password");
+ 
+             Adw.ActionRow {
+diff --git a/panels/system/users/cc-add-user-dialog.c b/panels/system/users/cc-add-user-dialog.c
+index 05cae06f6..36e07ef57 100644
+--- a/panels/system/users/cc-add-user-dialog.c
++++ b/panels/system/users/cc-add-user-dialog.c
+@@ -104,6 +104,7 @@ begin_action (CcAddUserDialog *self)
+     g_debug ("Beginning action, disabling dialog controls");
+ 
+     gtk_widget_set_sensitive (GTK_WIDGET (self->add_button), FALSE);
++    gtk_widget_set_sensitive (self->password_page_add_button, FALSE);
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->spinner), TRUE);
+ }
+@@ -114,76 +115,83 @@ finish_action (CcAddUserDialog *self)
+     g_debug ("Completed domain action");
+ 
+     gtk_widget_set_sensitive (GTK_WIDGET (self->add_button), TRUE);
++    gtk_widget_set_sensitive (self->password_page_add_button, TRUE);
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->spinner), FALSE);
+ }
+ 
+-static void
+-user_loaded_cb (CcAddUserDialog *self, GParamSpec *pspec, ActUser *user)
+-{
+-    const gchar *password;
+-
+-    finish_action (self);
+-
+-    /* Set a password for the user */
+-    password = gtk_editable_get_text (GTK_EDITABLE (self->password_row));
+-    act_user_set_password_mode (user, self->password_mode);
+-    if (self->password_mode == ACT_USER_PASSWORD_MODE_REGULAR)
+-        act_user_set_password (user, password, "");
+-
+-    self->user = g_object_ref (user);
+-    g_signal_emit (self, signals[USER_ADDED], 0, user);
+-
+-    adw_dialog_close (ADW_DIALOG (self));
+-}
++/*
++ * Plinius: the account comes from plinius-add-user (plinius-account) through pkexec, not from
++ * AccountsService's CreateUser. useradd would give it the user ID 1000 and up, which are
++ * Android's IDs on the phone; the helper takes 32012 and up, adds the groups of the phone's
++ * devices and sets the password (the PIN of the screen lock) in the same step, so there is one
++ * password prompt. The users page shows the new account once AccountsService sees it.
++ */
++#define PLINIUS_ADD_USER "/usr/bin/plinius-add-user"
+ 
+ static void
+-create_user_done (ActUserManager *manager, GAsyncResult *res, CcAddUserDialog *self)
++create_user_done (GObject *source, GAsyncResult *res, gpointer user_data)
+ {
+-    ActUser *user;
++    g_autoptr(CcAddUserDialog) self = CC_ADD_USER_DIALOG (user_data);
++    GSubprocess *subprocess = G_SUBPROCESS (source);
+     g_autoptr(GError) error = NULL;
++    g_autofree gchar *err = NULL;
++    gint status;
+ 
+-    /* Note that user is returned without an extra reference */
+-
+-    user = act_user_manager_create_user_finish (manager, res, &error);
+-
+-    if (user == NULL) {
++    if (!g_subprocess_communicate_utf8_finish (subprocess, res, NULL, &err, &error)) {
++        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++            return;
+         finish_action (self);
+-        g_debug ("Failed to create user: %s", error->message);
+-        if (!g_error_matches (error, ACT_USER_MANAGER_ERROR, ACT_USER_MANAGER_ERROR_PERMISSION_DENIED))
+-            show_error_dialog (self, _("Failed to add account"), error);
+-        gtk_widget_grab_focus (GTK_WIDGET (self->name_row));
+-    } else {
+-        g_debug ("Created user: %s", act_user_get_user_name (user));
++        show_error_dialog (self, _("Failed to add account"), error);
++        return;
++    }
+ 
+-        /* Check if the returned object is fully loaded before returning it */
+-        if (act_user_is_loaded (user))
+-            user_loaded_cb (self, NULL, user);
+-        else
+-            g_signal_connect_object (user, "notify::is-loaded", G_CALLBACK (user_loaded_cb), self, G_CONNECT_SWAPPED);
++    finish_action (self);
++    status = g_subprocess_get_exit_status (subprocess);
++    if (status == 0) {
++        adw_dialog_close (ADW_DIALOG (self));
++        return;
+     }
++    /* pkexec: 126 = the password prompt was dismissed or refused, nothing to say */
++    if (status == 126)
++        return;
++
++    g_strstrip (err);
++    if (g_str_has_prefix (err, "plinius-add-user: "))
++        memmove (err, err + strlen ("plinius-add-user: "), strlen (err) - strlen ("plinius-add-user: ") + 1);
++    error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_FAILED, *err ? err : _("Failed to add account"));
++    show_error_dialog (self, _("Failed to add account"), error);
+ }
+ 
+ static void
+ create_user (CcAddUserDialog *self)
+ {
+-    ActUserManager *manager;
++    g_autoptr(GSubprocess) subprocess = NULL;
++    g_autoptr(GError) error = NULL;
++    g_autofree gchar *input = NULL;
+     const gchar *username;
+     const gchar *name;
+-    gint account_type;
+-
+-    begin_action (self);
++    gboolean admin;
+ 
+     name = gtk_editable_get_text (GTK_EDITABLE (self->name_row));
+     username = gtk_editable_get_text (GTK_EDITABLE (self->username_row));
+-    account_type = gtk_switch_get_active (self->account_type_switch) ? ACT_USER_ACCOUNT_TYPE_ADMINISTRATOR
+-                                                                     : ACT_USER_ACCOUNT_TYPE_STANDARD;
++    admin = gtk_switch_get_active (self->account_type_switch);
+ 
+     g_debug ("Creating local user: %s", username);
+ 
+-    manager = act_user_manager_get_default ();
+-    act_user_manager_create_user_async (manager, username, name, account_type, self->cancellable,
+-                                        (GAsyncReadyCallback) create_user_done, self);
++    subprocess = g_subprocess_new (G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
++                                       G_SUBPROCESS_FLAGS_STDERR_PIPE,
++                                   &error, "pkexec", PLINIUS_ADD_USER, username, name, admin ? "--admin" : NULL,
++                                   NULL);
++    if (subprocess == NULL) {
++        show_error_dialog (self, _("Failed to add account"), error);
++        return;
++    }
++
++    begin_action (self);
++    /* The password on stdin, never on the command line */
++    input = g_strconcat (gtk_editable_get_text (GTK_EDITABLE (self->password_row)), "\n", NULL);
++    g_subprocess_communicate_utf8_async (subprocess, input, self->cancellable, create_user_done, g_object_ref (self));
+ }
+ 
+ static gboolean
+@@ -391,38 +399,19 @@ cc_add_user_dialog_init (CcAddUserDialog *self)
+ 
+     self->cancellable = g_cancellable_new ();
+ 
+-    self->password_mode = ACT_USER_PASSWORD_MODE_SET_AT_LOGIN;
++    /* Plinius: the password is set now; the screen lock needs one, and the greeter has no way to set
++     * it at the first login */
++    self->password_mode = ACT_USER_PASSWORD_MODE_REGULAR;
++    gtk_check_button_set_active (self->password_radio, TRUE);
++    gtk_button_set_label (self->add_button, _("_Next"));
+     dialog_validate (self);
+     update_password_strength (self);
+ }
+ 
+-static void
+-on_permission_acquired (GObject *source_object, GAsyncResult *res, gpointer user_data)
+-{
+-    g_autoptr(CcAddUserDialog) self = CC_ADD_USER_DIALOG (user_data);
+-    g_autoptr(GError) error = NULL;
+-
+-    /* Paired with begin_action in cc_add_user_dialog_response () */
+-    finish_action (self);
+-
+-    if (g_permission_acquire_finish (self->permission, res, &error)) {
+-        g_return_if_fail (g_permission_get_allowed (self->permission));
+-        add_button_clicked_cb (self);
+-    } else if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+-        g_warning ("Failed to acquire permission: %s", error->message);
+-    }
+-}
+-
+ static void
+ add_button_clicked_cb (CcAddUserDialog *self)
+ {
+-    /* We don't (or no longer) have necessary permissions */
+-    if (self->permission && !g_permission_get_allowed (self->permission)) {
+-        begin_action (self);
+-        g_permission_acquire_async (self->permission, self->cancellable, on_permission_acquired, g_object_ref (self));
+-        return;
+-    }
+-
++    /* Plinius: no permission here, plinius-add-user asks for it through pkexec */
+     if (self->password_mode == ACT_USER_PASSWORD_MODE_REGULAR) {
+         adw_navigation_view_push_by_tag (self->navigation, "password-page");
+ 
+diff --git a/panels/system/users/cc-users-page.blp b/panels/system/users/cc-users-page.blp
+index 844d5cdc9..ecb7b439b 100644
+--- a/panels/system/users/cc-users-page.blp
++++ b/panels/system/users/cc-users-page.blp
+@@ -5,38 +5,51 @@ template $CcUsersPage: $CcPanel {
+   tag: "users";
+   title: _("Users");
+ 
+-  child: $CcUserPage current_user_page {
+-    title: _("Users");
+-
+-    Adw.PreferencesGroup other_users_group {
+-      visible: false;
+-      title: _("Other Users");
++  // Plinius: Local Accounts, a list with one's own account first; each account opens its page
++  child: Adw.ToolbarView {
++    [top]
++    Adw.HeaderBar {
++      [end]
++      Button add_user_button {
++        valign: center;
++        clicked => $add_user(template);
++      }
++    }
+ 
+-      ListBox user_list {
+-        selection-mode: none;
+-        row-activated => $on_user_row_activated(template);
++    content: Adw.PreferencesPage {
++      Adw.PreferencesGroup own_group {
++        ListBox own_list {
++          selection-mode: none;
++          row-activated => $on_user_row_activated(template);
+ 
+-        styles [
+-          "boxed-list",
+-        ]
++          styles [
++            "boxed-list",
++          ]
++        }
+       }
+-    }
+ 
+-    // Plinius: a phone has one user; no "Add User"
+-    Adw.ButtonRow add_user_button_row {
+-      visible: false;
+-      title: _("_Add User");
+-      end-icon-name: "go-next-symbolic";
+-      use-underline: true;
+-      activated => $add_user(template);
+-    }
++      Adw.PreferencesGroup other_users_group {
++        visible: false;
+ 
+-    Adw.ButtonRow add_enterprise_user_button_row {
+-      visible: false;
+-      title: _("Add _Enterprise Login");
+-      use-underline: true;
+-      end-icon-name: "go-next-symbolic";
+-      activated => $add_enterprise_user(template);
+-    }
++        ListBox user_list {
++          selection-mode: none;
++          row-activated => $on_user_row_activated(template);
++
++          styles [
++            "boxed-list",
++          ]
++        }
++      }
++
++      Adw.PreferencesGroup {
++        Adw.ButtonRow add_enterprise_user_button_row {
++          visible: false;
++          title: _("Add _Enterprise Login");
++          use-underline: true;
++          end-icon-name: "go-next-symbolic";
++          activated => $add_enterprise_user(template);
++        }
++      }
++    };
+   };
+ }
+diff --git a/panels/system/users/cc-users-page.c b/panels/system/users/cc-users-page.c
+index 1377c94a7..ea192ad6b 100644
+--- a/panels/system/users/cc-users-page.c
++++ b/panels/system/users/cc-users-page.c
+@@ -47,17 +47,22 @@
+ #include <polkit/polkit.h>
+ 
+ #define USER_ACCOUNTS_PERMISSION "org.gnome.controlcenter.user-accounts.administration"
++#define PLINIUS_DOMAIN "plinius-control-center"
++#define P_(String) g_dgettext (PLINIUS_DOMAIN, String)
+ 
+ struct _CcUsersPage {
+     CcPanel parent_instance;
+ 
+-    AdwButtonRow *add_user_button_row;
++    GtkButton *add_user_button;
+     AdwButtonRow *add_enterprise_user_button_row;
+-    CcUserPage *current_user_page;
+     AdwNavigationView *navigation;
++    AdwPreferencesGroup *own_group;
++    GtkListBox *own_list;
+     GtkWidget *other_users_group;
+     GtkListBox *user_list;
+ 
++    /* Plinius: one's own account (none until AccountsService has it), the others by name */
++    GListStore *own_model;
+     GListStore *model;
+     GPermission *permission;
+     ActUserManager *user_manager;
+@@ -90,28 +95,21 @@ add_enterprise_user (CcUsersPage *self)
+ }
+ 
+ static void
+-update_new_user_avatar_cb (CcUsersPage *self, ActUser *user)
++add_user (CcUsersPage *self)
+ {
+-    CcUserPage *page;
+-    AdwNavigationPage *visible;
+-
+-    visible = adw_navigation_view_get_visible_page (self->navigation);
+-    if (CC_IS_USER_PAGE (visible))
+-        page = CC_USER_PAGE (visible);
+-    else
+-        page = self->current_user_page;
++    CcAddUserDialog *dialog = cc_add_user_dialog_new (self->permission);
+ 
+-    cc_user_page_util_ensure_avatar (page, user);
++    adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
+ }
+ 
++/* Plinius: one's own page shows the account (the ways to unlock are on Lock & Unlock) and is
++ * called by the username, as its row */
+ static void
+-add_user (CcUsersPage *self)
++set_user_on_page (CcUsersPage *self, CcUserPage *page, ActUser *user)
+ {
+-    CcAddUserDialog *dialog = cc_add_user_dialog_new (self->permission);
+-
+-    g_signal_connect_swapped (dialog, "user-added", G_CALLBACK (update_new_user_avatar_cb), self);
+-
+-    adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
++    cc_user_page_set_user (page, user, self->permission);
++    if (act_user_get_uid (user) == getuid ())
++        adw_navigation_page_set_title (ADW_NAVIGATION_PAGE (page), act_user_get_user_name (user));
+ }
+ 
+ static void
+@@ -123,9 +121,13 @@ on_user_row_activated (CcUsersPage *self, AdwActionRow *row)
+ 
+     uid = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (row), "uid"));
+     user = act_user_manager_get_user_by_id (act_user_manager_get_default (), uid);
++    if (user == NULL)
++        return;
+ 
+     user_page = cc_user_page_new ();
+-    cc_user_page_set_user (user_page, user, self->permission);
++    if (uid == getuid ())
++        cc_user_page_set_section (user_page, CC_USER_PAGE_SECTION_ACCOUNT);
++    set_user_on_page (self, user_page, user);
+     adw_navigation_view_push (self->navigation, ADW_NAVIGATION_PAGE (user_page));
+ }
+ 
+@@ -147,8 +149,19 @@ create_user_row (gpointer item, gpointer user_data)
+ 
+     user = item;
+     g_object_set_data (G_OBJECT (row), "uid", GINT_TO_POINTER (act_user_get_uid (user)));
+-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), get_real_or_user_name (user));
+-    user_image = adw_avatar_new (32, NULL, TRUE);
++    /* Plinius: one's own row is the username with the full name below, the others the other way round */
++    if (act_user_get_uid (user) == getuid ()) {
++        const char *real_name = act_user_get_real_name (user);
++
++        adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), act_user_get_user_name (user));
++        if (real_name != NULL && *real_name != '\0' && g_strcmp0 (real_name, act_user_get_user_name (user)) != 0)
++            adw_action_row_set_subtitle (ADW_ACTION_ROW (row), real_name);
++    } else {
++        adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), get_real_or_user_name (user));
++        if (g_strcmp0 (get_real_or_user_name (user), act_user_get_user_name (user)) != 0)
++            adw_action_row_set_subtitle (ADW_ACTION_ROW (row), act_user_get_user_name (user));
++    }
++    user_image = adw_avatar_new (40, NULL, TRUE);
+     setup_avatar_for_user (ADW_AVATAR (user_image), user);
+     adw_action_row_add_prefix (ADW_ACTION_ROW (row), user_image);
+ 
+@@ -178,23 +191,32 @@ sort_users (gconstpointer a, gconstpointer b, gpointer user_data)
+     return strcmp (name1, name2);
+ }
+ 
++/* Plinius: a row is made once; a changed name or picture needs a new one */
++static void
++refresh_row (GListStore *store, ActUser *user)
++{
++    guint position;
++
++    if (g_list_store_find (store, user, &position))
++        g_list_store_splice (store, position, 1, (gpointer *) &user, 1);
++}
++
+ static void
+ on_user_changed (CcUsersPage *self, ActUser *user)
+ {
+-    CcUserPage *page;
++    AdwNavigationPage *page;
+ 
+     /* Refresh the users list */
++    refresh_row (self->own_model, user);
++    refresh_row (self->model, user);
+     g_list_store_sort (self->model, sort_users, self);
+ 
+     /* If the user has a page open, refresh that page */
+-    if (act_user_get_uid (user) == getuid ()) {
+-        cc_user_page_set_user (self->current_user_page, user, self->permission);
++    if (self->navigation == NULL)
+         return;
+-    }
+-
+-    page = CC_USER_PAGE (adw_navigation_view_find_page (self->navigation, act_user_get_user_name (user)));
+-    if (page != NULL)
+-        cc_user_page_set_user (page, user, self->permission);
++    page = adw_navigation_view_find_page (self->navigation, act_user_get_user_name (user));
++    if (page != NULL && CC_IS_USER_PAGE (page))
++        set_user_on_page (self, CC_USER_PAGE (page), user);
+ }
+ 
+ static void
+@@ -206,9 +228,16 @@ on_user_added (CcUsersPage *self, ActUser *user)
+         return;
+     }
+ 
++    if (act_user_get_uid (user) == getuid ()) {
++        if (g_list_model_get_n_items (G_LIST_MODEL (self->own_model)) == 0)
++            g_list_store_append (self->own_model, user);
++        return;
++    }
++
+     g_list_store_insert_sorted (self->model, user, sort_users, self);
+ 
+-    if (adw_navigation_view_get_visible_page (self->navigation) != ADW_NAVIGATION_PAGE (self))
++    if (self->navigation == NULL ||
++        adw_navigation_view_get_visible_page (self->navigation) != ADW_NAVIGATION_PAGE (self))
+         return;
+ 
+     /* We're on the current user's page and a new user was just created. It's very likely the user
+@@ -228,6 +257,8 @@ on_user_removed (CcUsersPage *self, ActUser *user)
+     if (g_list_store_find (self->model, user, &position))
+         g_list_store_remove (self->model, position);
+ 
++    if (self->navigation == NULL)
++        return;
+     page = adw_navigation_view_find_page (self->navigation, act_user_get_user_name (user));
+     if (page != NULL)
+         adw_navigation_view_pop_to_page (self->navigation, ADW_NAVIGATION_PAGE (self));
+@@ -250,12 +281,14 @@ users_loaded (CcUsersPage *self)
+         }
+ 
+         if (act_user_get_uid (user) == getuid ()) {
+-            cc_user_page_set_user (self->current_user_page, user, self->permission);
++            if (g_list_model_get_n_items (G_LIST_MODEL (self->own_model)) == 0)
++                g_list_store_append (self->own_model, user);
+ 
+             continue;
+         }
+ 
+-        g_list_store_insert_sorted (self->model, user, sort_users, self);
++        if (!g_list_store_find (self->model, user, NULL))
++            g_list_store_insert_sorted (self->model, user, sort_users, self);
+     }
+ }
+ 
+@@ -305,6 +338,7 @@ cc_users_page_dispose (GObject *object)
+ {
+     CcUsersPage *self = CC_USERS_PAGE (object);
+ 
++    g_clear_object (&self->own_model);
+     g_clear_object (&self->model);
+     g_clear_object (&self->permission);
+ 
+@@ -319,11 +353,14 @@ cc_users_page_init (CcUsersPage *self)
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
+-    /* Plinius: one's own page is Your Account, the ways to unlock are on Lock & Unlock */
+-    cc_user_page_set_section (self->current_user_page, CC_USER_PAGE_SECTION_ACCOUNT);
+-    adw_navigation_page_set_title (ADW_NAVIGATION_PAGE (self->current_user_page),
+-                                   g_dgettext ("plinius-control-center", "Your Account"));
++    /* Plinius: Local Accounts, Your Account on top, the others below, "Add" in the header bar */
++    gtk_button_set_label (self->add_user_button, P_("Add"));
++    adw_preferences_group_set_title (self->own_group, P_("Your Account"));
++    adw_preferences_group_set_title (ADW_PREFERENCES_GROUP (self->other_users_group), P_("Other Accounts"));
+ 
++    self->own_model = g_list_store_new (ACT_TYPE_USER);
++    gtk_list_box_bind_model (self->own_list, G_LIST_MODEL (self->own_model), (GtkListBoxCreateWidgetFunc) create_user_row,
++                             self, NULL);
+     self->model = g_list_store_new (ACT_TYPE_USER);
+     gtk_list_box_bind_model (self->user_list, G_LIST_MODEL (self->model), (GtkListBoxCreateWidgetFunc) create_user_row,
+                              self, NULL);
+@@ -334,7 +371,7 @@ cc_users_page_init (CcUsersPage *self)
+         g_warning ("Cannot create '%s' permission: %s", USER_ACCOUNTS_PERMISSION, error->message);
+     }
+ 
+-    g_object_bind_property (self->permission, "allowed", self->add_user_button_row, "sensitive", G_BINDING_SYNC_CREATE);
++    /* Plinius: no binding of "Add" to the permission: plinius-add-user asks for it itself */
+ 
+     self->user_manager = act_user_manager_get_default ();
+     g_signal_connect_object (self->user_manager, "notify::is-loaded", G_CALLBACK (users_loaded), self,
+@@ -368,8 +405,9 @@ cc_users_page_class_init (CcUsersPageClass *klass)
+     widget_class->map = cc_users_page_map;
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcUsersPage, add_enterprise_user_button_row);
+-    gtk_widget_class_bind_template_child (widget_class, CcUsersPage, add_user_button_row);
+-    gtk_widget_class_bind_template_child (widget_class, CcUsersPage, current_user_page);
++    gtk_widget_class_bind_template_child (widget_class, CcUsersPage, add_user_button);
++    gtk_widget_class_bind_template_child (widget_class, CcUsersPage, own_group);
++    gtk_widget_class_bind_template_child (widget_class, CcUsersPage, own_list);
+     gtk_widget_class_bind_template_child (widget_class, CcUsersPage, other_users_group);
+     gtk_widget_class_bind_template_child (widget_class, CcUsersPage, user_list);
+ 
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index c3d48cfc0..f59bafb26 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -283,7 +283,7 @@ static const PanelLabels panel_labels[] = {
+     { "power", N_("Battery"), NULL, NULL },
+     { "display", N_("Display"), NULL, N_("Brightness;Dim;Blank;Screen Off;Timeout;") },
+     { "keyboard", N_("Keyboard & Buttons"), NULL, NULL },
+-    { "users", N_("Your Account"), N_("Your name, picture and username"), NULL },
++    { "users", N_("Local Accounts"), N_("Your account and the other accounts on this phone"), N_("Users;Add User;Other Accounts;") },
+ };
+ 
+ static void

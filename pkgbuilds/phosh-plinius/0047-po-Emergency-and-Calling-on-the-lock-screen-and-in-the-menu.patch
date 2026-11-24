@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 07:40:00 +0100
+Subject: [PATCH] po: Emergency and Calling… on the lock screen and in the menu
+
+The emergency button on the unlock page and the state of the emergency menu are
+new or newly visible: "Calling…" had no translation at all, "Emergency" none in
+Spanish and Italian.
+---
+ po/de.po    | 4 ++++
+ po/es.po    | 8 ++++++--
+ po/fr.po    | 4 ++++
+ po/it.po    | 8 ++++++++
+ po/nl.po    | 4 ++++
+ po/pl.po    | 4 ++++
+ po/pt.po    | 4 ++++
+ po/pt_BR.po | 4 ++++
+ po/ru.po    | 3 +++
+ 9 files changed, 41 insertions(+), 2 deletions(-)
+
+diff --git a/po/de.po b/po/de.po
+index 43ecc0ec..65e3d1db 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1461,3 +1461,7 @@ msgstr "_Oberfläche neu starten"
+ 
+ #~ msgid "Unknown Song"
+ #~ msgstr "Unbekannter Titel"
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Anruf wird aufgebaut …"
+diff --git a/po/es.po b/po/es.po
+index 175f1d84..e114783e 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -768,5 +768,9 @@ msgstr "Reiniciar la interfaz"
+ msgid "Restart _UI"
+ msgstr "Reiniciar la _interfaz"
+ 
+-#~ msgid "Emergency"
+-#~ msgstr "Emergencia"
++msgid "Emergency"
++msgstr "Emergencia"
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Llamando…"
+diff --git a/po/fr.po b/po/fr.po
+index 0eec2da5..84a7b4d6 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1123,3 +1123,7 @@ msgstr "Redémarrer l’_interface"
+ 
+ #~ msgid "Number"
+ #~ msgstr "Numéro"
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Appel en cours…"
+diff --git a/po/it.po b/po/it.po
+index 7bfb275a..4cb8a743 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -848,3 +848,11 @@ msgstr "Riavvia l'interfaccia"
+ msgid "Restart _UI"
+ msgstr "Riavvia l'_interfaccia"
+ 
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Chiamata in corso…"
++
++#: src/emergency-menu.c
++msgid "Emergency"
++msgstr "Emergenza"
+diff --git a/po/nl.po b/po/nl.po
+index df58807d..8f15b4ac 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1468,3 +1468,7 @@ msgstr "_Interface herstarten"
+ #~ "in inches could not be calculated, e.g. Dell U2414H"
+ #~ msgid "%s %sn"
+ #~ msgstr "%s %sn"
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Bezig met bellen…"
+diff --git a/po/pl.po b/po/pl.po
+index 7e0eab3f..aa908a9b 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1432,3 +1432,7 @@ msgstr "Uruchom ponownie interfejs"
+ msgid "Restart _UI"
+ msgstr "Uruchom ponownie _interfejs"
+ 
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Łączenie…"
+diff --git a/po/pt.po b/po/pt.po
+index 44e387c6..044f583c 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1418,3 +1418,7 @@ msgstr "Reiniciar a interface"
+ msgid "Restart _UI"
+ msgstr "Reiniciar a _interface"
+ 
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "A ligar…"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 4cd58bb2..3be862a6 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1510,3 +1510,7 @@ msgstr "Reiniciar a _interface"
+ 
+ #~ msgid "Unknown Song"
+ #~ msgstr "Música desconhecida"
++
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Ligando…"
+diff --git a/po/ru.po b/po/ru.po
+index 541e39bf..db7f210e 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1530,3 +1530,6 @@ msgstr "Перезапустить _интерфейс"
+ #~ msgid "On %A"
+ #~ msgstr "В(о) %A"
+ 
++#: src/emergency-menu.c
++msgid "Calling…"
++msgstr "Вызов…"

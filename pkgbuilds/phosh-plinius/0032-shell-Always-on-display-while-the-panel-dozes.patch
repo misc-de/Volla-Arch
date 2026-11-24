@@ -1,0 +1,695 @@
+From cc4f097cf93388e3b3bf82bb5563b1a88d3c40ca Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 14:48:38 +0100
+Subject: [PATCH] shell: Always-on display while the panel dozes
+
+With the setting org.plinius.display always-on-display, the built-in
+panel no longer goes off when the screen blanks: it dozes in the OLED's
+low-power mode (phoc-plinius' power mode "doze") and shows a black
+overlay with the time, the date, the battery and an icon per app with
+notifications. Not during calls, the proximity sensor blanks the screen
+then; a call that starts while dozing switches the panel off.
+
+For the shell a dozing panel is a blanked screen: lock, screen saver,
+rotation and ambient light behave as with the panel off.
+
+Nothing animates on the overlay, so that phoc can switch the CRTC off
+between the minutes; the content moves a little each minute against
+burn-in. While it is shown, $XDG_RUNTIME_DIR/plinius-aod tells
+plinius-suspend to wake the phone at each full minute for the clock.
+---
+ .../wlr-output-power-management-unstable-v1.xml    |   3 +
+ src/aod.c                                          | 337 +++++++++++++++++++++
+ src/aod.h                                          |  21 ++
+ src/meson.build                                    |   2 +
+ src/monitor-manager.c                              |  40 ++-
+ src/monitor-manager.h                              |   2 +
+ src/monitor/monitor.c                              |   7 +
+ src/monitor/monitor.h                              |   3 +
+ src/screen-saver-manager.c                         |   3 +-
+ src/shell.c                                        |  65 +++-
+ 10 files changed, 479 insertions(+), 4 deletions(-)
+
+diff --git a/protocol/wlr-output-power-management-unstable-v1.xml b/protocol/wlr-output-power-management-unstable-v1.xml
+index a9778399..d62b3558 100644
+--- a/protocol/wlr-output-power-management-unstable-v1.xml
++++ b/protocol/wlr-output-power-management-unstable-v1.xml
+@@ -76,6 +76,9 @@
+              summary="Output is turned off."/>
+       <entry name="on" value="1"
+              summary="Output is turned on, no power saving"/>
++      <!-- Plinius extension (phoc-plinius, phosh-plinius), not in the upstream protocol -->
++      <entry name="doze" value="2"
++             summary="Output in a low-power mode that keeps showing a picture (always-on display)"/>
+     </enum>
+ 
+     <enum name="error">
+diff --git a/src/aod.c b/src/aod.c
+new file mode 100644
+index 00000000..5c038143
+--- /dev/null
++++ b/src/aod.c
+@@ -0,0 +1,337 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++/*
++ * PhoshAod: the always-on display (Plinius). While the built-in OLED dozes in its
++ * low-power mode (phoc's power mode "doze", MediaTek DOZE_ACTIVE), this black overlay
++ * shows the time, the date, the battery and the apps with notifications.
++ *
++ * Power: an OLED only spends power on lit pixels, so almost everything stays black and
++ * the text is grey. Nothing animates: phoc switches the CRTC off a second after the last
++ * frame and the panel keeps the picture on its own, so a new frame should only come
++ * once a minute with the clock. Against burn-in the content moves a little each minute.
++ *
++ * While it is shown, $XDG_RUNTIME_DIR/plinius-aod exists: plinius-suspend then wakes the
++ * phone at each full minute for the clock.
++ */
++
++#define G_LOG_DOMAIN "phosh-aod"
++
++#include "phosh-config.h"
++#include "aod.h"
++#include "battery-info.h"
++#include "layersurface-priv.h"
++#include "notifications/notify-manager.h"
++#include "notifications/notification-source.h"
++#include "shell-priv.h"
++#include "wall-clock-priv.h"
++
++#include <glib/gstdio.h>
++
++/* Most app icons shown before a "+N" */
++#define AOD_MAX_ICONS 5
++/* How far the content moves against burn-in, in logical pixels */
++#define AOD_SHIFT_X 24
++#define AOD_SHIFT_Y 40
++/* Where the content starts, as fraction of the height */
++#define AOD_TOP 0.22
++
++enum {
++  PROP_0,
++  PROP_MONITOR,
++  PROP_LAST_PROP,
++};
++static GParamSpec *props[PROP_LAST_PROP];
++
++struct _PhoshAod {
++  PhoshLayerSurface      parent;
++
++  PhoshMonitor          *monitor;
++  GtkWidget             *box;
++  GtkWidget             *lbl_clock;
++  GtkWidget             *lbl_date;
++  GtkWidget             *box_icons;
++
++  PhoshNotificationList *notifications;
++  char                  *flag_file;
++};
++
++G_DEFINE_TYPE (PhoshAod, phosh_aod, PHOSH_TYPE_LAYER_SURFACE)
++
++static const char aod_css[] =
++  "window.phosh-aod { background-color: black; }\n"
++  ".phosh-aod-clock { color: #b4b4b4; font-size: 76px; font-weight: 300;"
++  "  font-feature-settings: \"tnum\"; }\n"
++  ".phosh-aod-date { color: #8c8c8c; font-size: 17px; }\n"
++  ".phosh-aod-info { color: #8c8c8c; font-size: 15px; }\n"
++  ".phosh-aod-info image { color: #8c8c8c; -gtk-icon-effect: dim; }\n";
++
++
++static void
++move_content (PhoshAod *self)
++{
++  int height, dx, dy;
++
++  /* A new random place each minute, within a small box around the middle */
++  dx = g_random_int_range (-AOD_SHIFT_X, AOD_SHIFT_X + 1);
++  dy = g_random_int_range (0, AOD_SHIFT_Y + 1);
++
++  height = gtk_widget_get_allocated_height (GTK_WIDGET (self));
++  if (height <= 1 && self->monitor)
++    height = self->monitor->logical.height;
++
++  /* halign center: an uneven start and end margin moves the box sideways */
++  gtk_widget_set_margin_start (self->box, MAX (dx, 0) * 2);
++  gtk_widget_set_margin_end (self->box, MAX (-dx, 0) * 2);
++  gtk_widget_set_margin_top (self->box, (int)(height * AOD_TOP) + dy);
++}
++
++
++static void
++on_wall_clock_changed (PhoshAod *self, GParamSpec *pspec, PhoshWallClock *wall_clock)
++{
++  g_autofree char *stripped = NULL;
++  g_autofree char *date = NULL;
++  const char *time;
++
++  time = phosh_wall_clock_get_clock (wall_clock, TRUE);
++  stripped = phosh_wall_clock_strip_am_pm (wall_clock, time);
++  gtk_label_set_text (GTK_LABEL (self->lbl_clock), stripped);
++
++  date = phosh_wall_clock_local_date (wall_clock);
++  gtk_label_set_text (GTK_LABEL (self->lbl_date), date);
++
++  move_content (self);
++}
++
++
++static void
++on_notifications_changed (PhoshAod *self)
++{
++  g_autoptr (GPtrArray) names = g_ptr_array_new_with_free_func (g_free);
++  guint n_sources, n_icons = 0, n_more = 0;
++  GList *children;
++
++  children = gtk_container_get_children (GTK_CONTAINER (self->box_icons));
++  for (GList *l = children; l; l = l->next)
++    gtk_widget_destroy (l->data);
++  g_list_free (children);
++
++  if (!self->notifications)
++    return;
++
++  /* One icon per app (source), the newest apps first */
++  n_sources = g_list_model_get_n_items (G_LIST_MODEL (self->notifications));
++  for (guint i = 0; i < n_sources; i++) {
++    g_autoptr (PhoshNotificationSource) source =
++      g_list_model_get_item (G_LIST_MODEL (self->notifications), i);
++    g_autoptr (PhoshNotification) notification = NULL;
++    GIcon *icon;
++    GtkWidget *image;
++
++    if (g_list_model_get_n_items (G_LIST_MODEL (source)) == 0)
++      continue;
++
++    if (n_icons == AOD_MAX_ICONS) {
++      n_more++;
++      continue;
++    }
++
++    notification = g_list_model_get_item (G_LIST_MODEL (source), 0);
++    icon = phosh_notification_get_app_icon (notification);
++    if (icon)
++      image = gtk_image_new_from_gicon (icon, GTK_ICON_SIZE_LARGE_TOOLBAR);
++    else
++      image = gtk_image_new_from_icon_name ("preferences-system-notifications-symbolic",
++                                            GTK_ICON_SIZE_LARGE_TOOLBAR);
++    gtk_image_set_pixel_size (GTK_IMAGE (image), 22);
++    gtk_widget_show (image);
++    gtk_container_add (GTK_CONTAINER (self->box_icons), image);
++    n_icons++;
++  }
++
++  if (n_more) {
++    g_autofree char *more = g_strdup_printf ("+%u", n_more);
++    GtkWidget *label = gtk_label_new (more);
++
++    gtk_widget_show (label);
++    gtk_container_add (GTK_CONTAINER (self->box_icons), label);
++  }
++  gtk_widget_set_visible (self->box_icons, n_icons > 0);
++}
++
++
++static void
++phosh_aod_set_property (GObject      *obj,
++                        guint         prop_id,
++                        const GValue *value,
++                        GParamSpec   *pspec)
++{
++  PhoshAod *self = PHOSH_AOD (obj);
++
++  switch (prop_id) {
++  case PROP_MONITOR:
++    g_set_object (&self->monitor, g_value_get_object (value));
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (obj, prop_id, pspec);
++    break;
++  }
++}
++
++
++static void
++phosh_aod_get_property (GObject    *obj,
++                        guint       prop_id,
++                        GValue     *value,
++                        GParamSpec *pspec)
++{
++  PhoshAod *self = PHOSH_AOD (obj);
++
++  switch (prop_id) {
++  case PROP_MONITOR:
++    g_value_set_object (value, self->monitor);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (obj, prop_id, pspec);
++    break;
++  }
++}
++
++
++static void
++phosh_aod_dispose (GObject *object)
++{
++  PhoshAod *self = PHOSH_AOD (object);
++
++  if (self->flag_file) {
++    g_unlink (self->flag_file);
++    g_clear_pointer (&self->flag_file, g_free);
++  }
++  g_clear_object (&self->notifications);
++  g_clear_object (&self->monitor);
++
++  G_OBJECT_CLASS (phosh_aod_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_aod_constructed (GObject *object)
++{
++  PhoshAod *self = PHOSH_AOD (object);
++  PhoshWayland *wl = phosh_wayland_get_default ();
++  PhoshWallClock *wall_clock = phosh_wall_clock_get_default ();
++  PhoshNotifyManager *notify_manager = phosh_notify_manager_get_default ();
++  const char *runtime_dir;
++  GtkWidget *info, *battery;
++
++  if (self->monitor == NULL)
++    self->monitor = g_object_ref (phosh_shell_get_primary_monitor (phosh_shell_get_default ()));
++
++  g_object_set (PHOSH_LAYER_SURFACE (self),
++                "layer-shell", phosh_wayland_get_zwlr_layer_shell_v1 (wl),
++                "wl-output", phosh_monitor_get_wl_output (self->monitor),
++                "anchor", ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
++                ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
++                ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
++                ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
++                "layer", ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
++                "kbd-interactivity", FALSE,
++                "exclusive-zone", -1,
++                "namespace", "phosh aod",
++                NULL);
++
++  G_OBJECT_CLASS (phosh_aod_parent_class)->constructed (object);
++
++  gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (self)), "phosh-aod");
++
++  self->box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
++  gtk_widget_set_halign (self->box, GTK_ALIGN_CENTER);
++  gtk_widget_set_valign (self->box, GTK_ALIGN_START);
++
++  self->lbl_clock = gtk_label_new (NULL);
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->lbl_clock), "phosh-aod-clock");
++  gtk_container_add (GTK_CONTAINER (self->box), self->lbl_clock);
++
++  self->lbl_date = gtk_label_new (NULL);
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->lbl_date), "phosh-aod-date");
++  gtk_container_add (GTK_CONTAINER (self->box), self->lbl_date);
++
++  /* Battery and the apps with notifications in one row under the date */
++  info = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 14);
++  gtk_widget_set_halign (info, GTK_ALIGN_CENTER);
++  gtk_widget_set_margin_top (info, 18);
++  gtk_style_context_add_class (gtk_widget_get_style_context (info), "phosh-aod-info");
++  battery = phosh_battery_info_new ();
++  g_object_set (battery, "show-detail", TRUE, NULL);
++  gtk_container_add (GTK_CONTAINER (info), battery);
++  self->box_icons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 10);
++  gtk_widget_set_no_show_all (self->box_icons, TRUE);
++  gtk_container_add (GTK_CONTAINER (info), self->box_icons);
++  gtk_container_add (GTK_CONTAINER (self->box), info);
++
++  gtk_widget_show_all (self->box);
++  gtk_container_add (GTK_CONTAINER (self), self->box);
++
++  g_signal_connect_object (wall_clock, "notify::time",
++                           G_CALLBACK (on_wall_clock_changed), self, G_CONNECT_SWAPPED);
++  on_wall_clock_changed (self, NULL, wall_clock);
++
++  if (notify_manager) {
++    self->notifications = g_object_ref (phosh_notify_manager_get_list (notify_manager));
++    g_signal_connect_object (self->notifications, "items-changed",
++                             G_CALLBACK (on_notifications_changed), self, G_CONNECT_SWAPPED);
++  }
++  on_notifications_changed (self);
++
++  /* Tell plinius-suspend to wake the phone for the clock */
++  runtime_dir = g_get_user_runtime_dir ();
++  if (runtime_dir) {
++    g_autoptr (GError) err = NULL;
++
++    self->flag_file = g_build_filename (runtime_dir, "plinius-aod", NULL);
++    if (!g_file_set_contents (self->flag_file, "", 0, &err))
++      g_warning ("Failed to create %s: %s", self->flag_file, err->message);
++  }
++}
++
++
++static void
++phosh_aod_class_init (PhoshAodClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
++
++  object_class->get_property = phosh_aod_get_property;
++  object_class->set_property = phosh_aod_set_property;
++  object_class->constructed = phosh_aod_constructed;
++  object_class->dispose = phosh_aod_dispose;
++
++  props[PROP_MONITOR] =
++    g_param_spec_object ("monitor", "", "",
++                         PHOSH_TYPE_MONITOR,
++                         G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
++  g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
++
++  /* Above Phosh's own style sheet, which has no rules for these classes */
++  gtk_css_provider_load_from_data (provider, aod_css, -1, NULL);
++  gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
++                                             GTK_STYLE_PROVIDER (provider),
++                                             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
++}
++
++
++static void
++phosh_aod_init (PhoshAod *self)
++{
++}
++
++
++PhoshAod *
++phosh_aod_new (PhoshMonitor *monitor)
++{
++  return g_object_new (PHOSH_TYPE_AOD, "monitor", monitor, NULL);
++}
+diff --git a/src/aod.h b/src/aod.h
+new file mode 100644
+index 00000000..68776188
+--- /dev/null
++++ b/src/aod.h
+@@ -0,0 +1,21 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "monitor/monitor.h"
++
++#include <layersurface.h>
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_AOD (phosh_aod_get_type ())
++
++G_DECLARE_FINAL_TYPE (PhoshAod, phosh_aod, PHOSH, AOD, PhoshLayerSurface)
++
++PhoshAod *phosh_aod_new (PhoshMonitor *monitor);
++
++G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index 037eaad3..63197387 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -336,6 +336,7 @@ phosh_headers = files(
+   'cell-broadcast-prompt.h',
+   'contrib/shell-network-agent.h',
+   'emergency-calls-manager.h',
++  'aod.h',
+   'fader.h',
+   'thumbnail-overlay.h',
+   'fake-clock.h',
+@@ -407,6 +408,7 @@ phosh_sources = files(
+   'bt-status-page.c',
+   'contrib/shell-network-agent.c',
+   'emergency-calls-manager.c',
++  'aod.c',
+   'fader.c',
+   'thumbnail-overlay.c',
+   'fake-clock.c',
+diff --git a/src/monitor-manager.c b/src/monitor-manager.c
+index c80cfff4..eb2854dc 100644
+--- a/src/monitor-manager.c
++++ b/src/monitor-manager.c
+@@ -86,6 +86,8 @@ typedef struct _PhoshMonitorManager
+   uint32_t zwlr_output_serial;
+ 
+   GCancellable            *cancel;
++
++  gboolean                 doze_allowed; /* Plinius: always-on display instead of off */
+ } PhoshMonitorManager;
+ 
+ G_DEFINE_TYPE_WITH_CODE (PhoshMonitorManager,
+@@ -1680,10 +1682,46 @@ phosh_monitor_manager_set_power_save_mode (PhoshMonitorManager       *self,
+ {
+   g_return_if_fail (PHOSH_IS_MONITOR_MANAGER (self));
+ 
++  for (int i = 0; i < self->monitors->len; i++) {
++    PhoshMonitor *monitor = g_ptr_array_index (self->monitors, i);
++    PhoshMonitorPowerSaveMode m = mode;
++
++    /* Plinius: the built-in panel dozes as always-on display instead of going off */
++    if (m == PHOSH_MONITOR_POWER_SAVE_MODE_OFF && self->doze_allowed &&
++        phosh_monitor_is_builtin (monitor))
++      m = PHOSH_MONITOR_POWER_SAVE_MODE_DOZE;
++
++    phosh_monitor_set_power_save_mode (monitor, m);
++  }
++}
++
++/**
++ * phosh_monitor_manager_set_doze_allowed:
++ * @self: a #PhoshMonitorManager
++ * @allowed: Whether the built-in panel may doze
++ *
++ * Whether a built-in panel that is to go off shows the always-on display in a
++ * low-power mode instead (Plinius). Takes effect with the next power save mode.
++ * A dozing panel goes off right away when it is no longer allowed.
++ */
++void
++phosh_monitor_manager_set_doze_allowed (PhoshMonitorManager *self, gboolean allowed)
++{
++  g_return_if_fail (PHOSH_IS_MONITOR_MANAGER (self));
++
++  if (self->doze_allowed == allowed)
++    return;
++  self->doze_allowed = allowed;
++
++  if (allowed)
++    return;
++
+   for (int i = 0; i < self->monitors->len; i++) {
+     PhoshMonitor *monitor = g_ptr_array_index (self->monitors, i);
+ 
+-    phosh_monitor_set_power_save_mode (monitor, mode);
++    if (phosh_monitor_is_configured (monitor) &&
++        phosh_monitor_get_power_save_mode (monitor) == PHOSH_MONITOR_POWER_SAVE_MODE_DOZE)
++      phosh_monitor_set_power_save_mode (monitor, PHOSH_MONITOR_POWER_SAVE_MODE_OFF);
+   }
+ }
+ 
+diff --git a/src/monitor-manager.h b/src/monitor-manager.h
+index f55a09bf..ebc263bc 100644
+--- a/src/monitor-manager.h
++++ b/src/monitor-manager.h
+@@ -53,6 +53,8 @@ void                  phosh_monitor_manager_set_sensor_proxy_manager  (PhoshMoni
+ gboolean              phosh_monitor_manager_enable_fallback           (PhoshMonitorManager *self);
+ void                  phosh_monitor_manager_set_power_save_mode       (PhoshMonitorManager *self,
+                                                                        PhoshMonitorPowerSaveMode mode);
++void                  phosh_monitor_manager_set_doze_allowed          (PhoshMonitorManager *self,
++                                                                       gboolean             allowed);
+ gboolean              phosh_monitor_manager_get_night_light_supported (PhoshMonitorManager *self);
+ guint32               phosh_monitor_manager_get_night_light_temp      (PhoshMonitorManager *self);
+ 
+diff --git a/src/monitor/monitor.c b/src/monitor/monitor.c
+index 413e7002..1a606879 100644
+--- a/src/monitor/monitor.c
++++ b/src/monitor/monitor.c
+@@ -252,6 +252,10 @@ wlr_output_power_handle_mode(void *data,
+     g_debug ("Monitor %s enabled", self->name);
+     m = PHOSH_MONITOR_POWER_SAVE_MODE_ON;
+     break;
++  case ZWLR_OUTPUT_POWER_V1_MODE_DOZE:
++    g_debug ("Monitor %s dozing", self->name);
++    m = PHOSH_MONITOR_POWER_SAVE_MODE_DOZE;
++    break;
+   default:
+     g_return_if_reached ();
+   }
+@@ -634,6 +638,9 @@ phosh_monitor_set_power_save_mode (PhoshMonitor *self, PhoshMonitorPowerSaveMode
+   case PHOSH_MONITOR_POWER_SAVE_MODE_ON:
+     wl_mode = ZWLR_OUTPUT_POWER_V1_MODE_ON;
+     break;
++  case PHOSH_MONITOR_POWER_SAVE_MODE_DOZE:
++    wl_mode = ZWLR_OUTPUT_POWER_V1_MODE_DOZE;
++    break;
+   default:
+     g_return_if_reached ();
+   }
+diff --git a/src/monitor/monitor.h b/src/monitor/monitor.h
+index 30763dd8..530a2511 100644
+--- a/src/monitor/monitor.h
++++ b/src/monitor/monitor.h
+@@ -98,12 +98,15 @@ typedef struct _PhoshMonitorMode
+  * PhoshMonitorPowerSaveMode:
+  * @PHOSH_MONITOR_POWER_SAVE_MODE_ON: The monitor is on
+  * @PHOSH_MONITOR_POWER_SAVE_MODE_OFF: The monitor is off (saving power)
++ * @PHOSH_MONITOR_POWER_SAVE_MODE_DOZE: The monitor shows the always-on display in a
++ *   low-power mode (Plinius). For the shell the screen is blanked then.
+  *
+  * The power save mode of a monitor
+  */
+ typedef enum _PhoshMonitorPowerSaveMode {
+   PHOSH_MONITOR_POWER_SAVE_MODE_OFF = 0,
+   PHOSH_MONITOR_POWER_SAVE_MODE_ON  = 1,
++  PHOSH_MONITOR_POWER_SAVE_MODE_DOZE = 2,
+ } PhoshMonitorPowerSaveMode;
+ 
+ #define PHOSH_TYPE_MONITOR                 (phosh_monitor_get_type ())
+diff --git a/src/screen-saver-manager.c b/src/screen-saver-manager.c
+index 63a8c6e6..543da843 100644
+--- a/src/screen-saver-manager.c
++++ b/src/screen-saver-manager.c
+@@ -820,7 +820,8 @@ on_primary_monitor_power_mode_changed (PhoshScreenSaverManager *self,
+ 
+   mode = phosh_monitor_get_power_save_mode (monitor);
+ 
+-  active = (mode == PHOSH_MONITOR_POWER_SAVE_MODE_OFF);
++  /* Plinius: the always-on display (doze) is a blanked screen too */
++  active = (mode != PHOSH_MONITOR_POWER_SAVE_MODE_ON);
+   g_debug ("Screensaver marked as %sactive", active ? "" : "in");
+   if (active != self->active) {
+     self->active = active;
+diff --git a/src/shell.c b/src/shell.c
+index da2d957a..6d2d5cf5 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -46,6 +46,7 @@
+ #include "docked-manager.h"
+ #include "emergency-calls-manager.h"
+ #include "fader.h"
++#include "aod.h"
+ #include "feedbackinfo.h"
+ #include "feedback-manager.h"
+ #include "gnome-shell-manager.h"
+@@ -152,6 +153,7 @@ typedef struct {
+   PhoshDragSurface           *top_panel;
+   PhoshDragSurface           *home;
+   GtkWidget                  *notch_search; /* Plinius: weak, destroys itself when closed */
++  GtkWidget                  *aod; /* Plinius: weak, the always-on display while dozing */
+   GSettings                  *plinius_display; /* Plinius: whether a tap on the notch searches */
+   PhoshCameraGlow            *camera_glow; /* Plinius: lights the notch while a camera is on */
+   gboolean                    overview_visible;
+@@ -419,7 +421,47 @@ on_primary_monitor_power_mode_changed (PhoshShell *self, GParamSpec *pspec, Phos
+ 
+   g_object_get (monitor, "power-mode", &mode, NULL);
+ 
+-  phosh_shell_set_state (self, PHOSH_STATE_BLANKED, mode == PHOSH_MONITOR_POWER_SAVE_MODE_OFF);
++  /* Plinius: the always-on display (doze) is a blanked screen too */
++  phosh_shell_set_state (self, PHOSH_STATE_BLANKED, mode != PHOSH_MONITOR_POWER_SAVE_MODE_ON);
++}
++
++
++/* Plinius: always-on display. Shown while the built-in panel dozes, allowed by the
++ * setting and outside of calls (the proximity sensor blanks the screen then) */
++static void
++on_builtin_monitor_power_mode_changed (PhoshShell *self, GParamSpec *pspec, PhoshMonitor *monitor)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++  PhoshMonitorPowerSaveMode mode;
++
++  g_object_get (monitor, "power-mode", &mode, NULL);
++
++  if (mode == PHOSH_MONITOR_POWER_SAVE_MODE_DOZE) {
++    if (!priv->aod) {
++      priv->aod = GTK_WIDGET (phosh_aod_new (monitor));
++      g_object_add_weak_pointer (G_OBJECT (priv->aod), (gpointer *)&priv->aod);
++      gtk_widget_show (priv->aod);
++    }
++  } else if (priv->aod) {
++    gtk_widget_destroy (priv->aod);
++  }
++}
++
++
++static void
++update_doze_allowed (PhoshShell *self)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++  gboolean allowed = FALSE;
++
++  if (priv->plinius_display &&
++      g_settings_get_boolean (priv->plinius_display, "always-on-display")) {
++    allowed = !(priv->calls_manager &&
++                phosh_calls_manager_get_active_call_handle (priv->calls_manager));
++  }
++
++  if (priv->monitor_manager)
++    phosh_monitor_manager_set_doze_allowed (priv->monitor_manager, allowed);
+ }
+ 
+ 
+@@ -701,6 +743,8 @@ phosh_shell_dispose (GObject *object)
+   g_clear_object (&priv->osk_manager);
+   g_clear_object (&priv->idle_manager);
+   g_clear_object (&priv->lockscreen_manager);
++  if (priv->aod)
++    gtk_widget_destroy (priv->aod);
+   g_clear_object (&priv->monitor_manager);
+   g_clear_object (&priv->builtin_monitor);
+   g_clear_object (&priv->primary_monitor);
+@@ -1042,6 +1086,9 @@ phosh_shell_set_builtin_monitor (PhoshShell *self, PhoshMonitor *monitor)
+     return;
+ 
+   if (priv->builtin_monitor) {
++    g_signal_handlers_disconnect_by_func (priv->builtin_monitor,
++                                          G_CALLBACK (on_builtin_monitor_power_mode_changed),
++                                          self);
+     g_clear_object (&priv->builtin_monitor);
+ 
+     if (priv->rotation_manager)
+@@ -1054,7 +1101,12 @@ phosh_shell_set_builtin_monitor (PhoshShell *self, PhoshMonitor *monitor)
+   if (monitor) {
+     if (priv->rotation_manager)
+       phosh_rotation_manager_set_monitor (priv->rotation_manager, monitor);
++    g_signal_connect_object (monitor, "notify::power-mode",
++                             G_CALLBACK (on_builtin_monitor_power_mode_changed),
++                             self, G_CONNECT_SWAPPED);
+   }
++  if (priv->aod)
++    gtk_widget_destroy (priv->aod);
+ 
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_BUILTIN_MONITOR]);
+ }
+@@ -1220,6 +1272,14 @@ phosh_shell_constructed (GObject *object)
+   }
+ 
+   priv->calls_manager = phosh_calls_manager_new ();
++  /* Plinius: no always-on display during calls */
++  g_signal_connect_object (priv->calls_manager, "notify::active-call",
++                           G_CALLBACK (update_doze_allowed), self, G_CONNECT_SWAPPED);
++  if (priv->plinius_display) {
++    g_signal_connect_object (priv->plinius_display, "changed::always-on-display",
++                             G_CALLBACK (update_doze_allowed), self, G_CONNECT_SWAPPED);
++  }
++  update_doze_allowed (self);
+   priv->launcher_entry_manager = phosh_launcher_entry_manager_new ();
+ 
+   priv->user_manager = phosh_user_manager_new (g_get_user_name ());
+@@ -1555,7 +1615,8 @@ phosh_shell_init (PhoshShell *self)
+ 
+     if (source)
+       schema = g_settings_schema_source_lookup (source, "org.plinius.display", TRUE);
+-    if (schema && g_settings_schema_has_key (schema, "notch-search"))
++    if (schema && g_settings_schema_has_key (schema, "notch-search") &&
++        g_settings_schema_has_key (schema, "always-on-display"))
+       priv->plinius_display = g_settings_new_full (schema, NULL, NULL);
+   }
+ 

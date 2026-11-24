@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 07:35:00 +0100
+Subject: [PATCH] emergency-menu: The dial pad doesn't ask for the on-screen
+ keyboard
+
+The menu has its own keys, yet the on-screen keyboard came up over it and hid
+part of the call button. The menu's entry no longer takes the focus, so it never
+asks for the keyboard. CuiKeypad is made for this: it writes into the entry
+without focus and only grabs it when the entry can take it.
+---
+ src/emergency-menu.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/emergency-menu.c b/src/emergency-menu.c
+index 7401ef4e..5589592d 100644
+--- a/src/emergency-menu.c
++++ b/src/emergency-menu.c
+@@ -267,11 +267,28 @@ static GActionEntry entries[] = {
+ };
+ 
+ 
++/*
++ * The dial pad has its own keys, so its entry never needs the on-screen keyboard, which would
++ * only cover the call button. An entry that can't take the focus doesn't ask for it, and
++ * CuiKeypad still writes into it.
++ */
++static void
++keep_entry_from_focus (GtkWidget *widget, gpointer unused)
++{
++  if (GTK_IS_ENTRY (widget))
++    gtk_widget_set_can_focus (widget, FALSE);
++  else if (GTK_IS_CONTAINER (widget))
++    gtk_container_forall (GTK_CONTAINER (widget), keep_entry_from_focus, NULL);
++}
++
++
+ static void
+ phosh_emergency_menu_init (PhoshEmergencyMenu *self)
+ {
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
++  keep_entry_from_focus (GTK_WIDGET (self->emergency_dialpad_box), NULL);
++
+   self->actions = g_simple_action_group_new ();
+   g_action_map_add_action_entries (G_ACTION_MAP (self->actions),
+                                    entries, G_N_ELEMENTS (entries),

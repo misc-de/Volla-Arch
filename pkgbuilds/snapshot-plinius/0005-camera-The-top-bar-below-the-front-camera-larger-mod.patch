@@ -1,0 +1,54 @@
+From 2d705ac706e7cc14b3e240f71df70fd18f81b9bc Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 15:12:42 +0100
+Subject: [PATCH] camera: The top bar below the front camera, larger mode
+ toggles
+
+On phones in portrait the top bar sat right below the status bar, so the
+mode toggles touched the light ring around the front camera. Move the bar
+down and make the picture/video/QR toggles larger.
+---
+ data/resources/style.css    | 17 +++++++++++++++++
+ data/resources/ui/camera.ui |  1 +
+ 2 files changed, 18 insertions(+)
+
+diff --git a/data/resources/style.css b/data/resources/style.css
+index 638e11c..2a4040c 100644
+--- a/data/resources/style.css
++++ b/data/resources/style.css
+@@ -87,3 +87,20 @@ camera .recording-label {
+ camera.portrait .recording-label {
+   margin-bottom: 24px;
+ }
++
++/* Phones in portrait: the top bar starts below the front camera and its light
++   ring, and the mode toggles are easier to hit */
++camera.mobile .top.controlsframe {
++  padding-top: 34px;
++  padding-bottom: 8px;
++}
++
++camera.mobile .top.controlsframe toggle-group > toggle {
++  min-width: 44px;
++  min-height: 36px;
++  padding: 0 8px;
++}
++
++camera.mobile .top.controlsframe toggle-group > toggle image {
++  -gtk-icon-size: 22px;
++}
+diff --git a/data/resources/ui/camera.ui b/data/resources/ui/camera.ui
+index bdb637a..36bec4b 100644
+--- a/data/resources/ui/camera.ui
++++ b/data/resources/ui/camera.ui
+@@ -586,6 +586,7 @@
+                                         <style>
+                                           <class name="cameracontrols" />
+                                           <class name="controlsframe" />
++                                          <class name="top" />
+                                         </style>
+                                         <child type="start">
+                                           <object class="GtkBox">
+-- 
+2.56.0
+

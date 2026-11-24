@@ -1,0 +1,54 @@
+From 8996b3546951b6107fe92236e386be5eeff1f417 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 19:31:43 +0100
+Subject: [PATCH] furios-gps-contribute: wait past geoclue's cached location
+ for a fresh fix
+
+geoclue answers a new client with its last known location first, while it
+still has one - an app such as Maps keeps it running - and the fresh fix
+follows a second later. gnss_fix() stopped at the first answer, so every
+attempt ended on the cached one, which judge_fix() refuses: nothing was
+ever collected while another app used location. It now skips locations
+taken before the request and waits on, up to wait_s.
+---
+ tools/furios-gps-contribute | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/tools/furios-gps-contribute b/tools/furios-gps-contribute
+index c37e4f1..6908263 100755
+--- a/tools/furios-gps-contribute
++++ b/tools/furios-gps-contribute
+@@ -234,8 +234,15 @@ def gnss_fix(not_before, wait_s=45):
+         values = lp.call_sync("GetAll", GLib.Variant("(s)",
+                              ("org.freedesktop.GeoClue2.Location",)),
+                              Gio.DBusCallFlags.NONE, -1, None).unpack()[0]
++        result.clear()
+         result.update(values)
+-        loop.quit()
++        # geoclue answers a new client with its last known location first
++        # while it still has one (an app kept it running), and the fresh fix
++        # follows a second later. Stopping at the first answer would end
++        # every attempt on that cached one, which judge_fix() refuses - so
++        # wait on for a fix taken after the request, up to wait_s.
++        if not fix_is_older(values, not_before):
++            loop.quit()
+ 
+     client.connect("g-signal", on_signal)
+     try:
+@@ -255,6 +262,16 @@ def gnss_fix(not_before, wait_s=45):
+     return judge_fix(result, not_before)
+ 
+ 
++def fix_is_older(result, not_before):
++    """True for a fix with a timestamp from before not_before. Without a
++    readable timestamp it is not "older" here; judge_fix() refuses it."""
++    try:
++        stamp = result["Timestamp"]
++        return float(stamp[0]) + float(stamp[1]) / 1e6 < not_before
++    except (KeyError, TypeError, ValueError, IndexError):
++        return False
++
++
+ def judge_fix(result, not_before):
+     """(position, fix time in seconds) from geoclue's Location properties,
+     or None for a fix that must not be paired with a scan.

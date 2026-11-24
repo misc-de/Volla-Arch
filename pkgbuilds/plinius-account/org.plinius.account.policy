@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <action id="org.plinius.account.rename-user">
+    <description>Rename your user account</description>
+    <description xml:lang="de">Eigenes Benutzerkonto umbenennen</description>
+    <message>Authentication is required to rename your user account</message>
+    <message xml:lang="de">Zum Umbenennen des Benutzerkontos ist eine Legitimierung erforderlich</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/plinius-rename-user</annotate>
+  </action>
+  <action id="org.plinius.account.add-user">
+    <description>Add a local account</description>
+    <description xml:lang="de">Lokales Konto hinzufügen</description>
+    <message>Authentication is required to add an account</message>
+    <message xml:lang="de">Zum Hinzufügen eines Kontos ist eine Legitimierung erforderlich</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/plinius-add-user</annotate>
+  </action>
+</policyconfig>

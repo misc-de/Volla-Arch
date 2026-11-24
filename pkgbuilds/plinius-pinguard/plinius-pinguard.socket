@@ -1,0 +1,10 @@
+[Unit]
+Description=PIN checks with waiting time after wrong PINs (socket)
+
+[Socket]
+ListenStream=/run/plinius-pinguard.socket
+# Everyone may ask; the daemon answers for a user only to root and that user (SO_PEERCRED)
+SocketMode=0666
+
+[Install]
+WantedBy=sockets.target

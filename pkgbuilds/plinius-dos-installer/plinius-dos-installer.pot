@@ -1,0 +1,378 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the plinius-dos-installer package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-dos-installer 0.1\n"
+"Report-Msgid-Bugs-To: https://plinius.cais.de\n"
+"POT-Creation-Date: 2026-11-22 07:59+0100\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: app.py:31
+msgid "Floppy Disk Images"
+msgstr ""
+
+#: app.py:32
+msgid "Disk 1 is enough, the other disks in its folder come along"
+msgstr ""
+
+#: app.py:34
+msgid "CD Image"
+msgstr ""
+
+#: app.py:34
+msgid ".iso, or .cue with its tracks"
+msgstr ""
+
+#: app.py:36
+msgid "ZIP Archive"
+msgstr ""
+
+#: app.py:36
+msgid "A packed game, such as a freeware download"
+msgstr ""
+
+#: app.py:38
+msgid "GOG Installer"
+msgstr ""
+
+#: app.py:38
+msgid "setup_….exe from GOG"
+msgstr ""
+
+#: app.py:40
+msgid "Folder"
+msgstr ""
+
+#: app.py:40
+msgid "The game's files, or a copy of its disks"
+msgstr ""
+
+#: app.py:133 app.py:167
+msgid "DOS Installer"
+msgstr ""
+
+#: app.py:149 app.py:158 app.py:383
+msgid "Install a Game"
+msgstr ""
+
+#: app.py:154
+msgid "No Games Yet"
+msgstr ""
+
+#: app.py:155
+msgid ""
+"Install a DOS game from floppy disk images, a CD image, a ZIP archive, a GOG "
+"installer or a folder."
+msgstr ""
+
+#: app.py:174
+msgid "Games"
+msgstr ""
+
+#: app.py:185 app.py:600
+msgid "Play"
+msgstr ""
+
+#: app.py:188
+msgid "Settings"
+msgstr ""
+
+#: app.py:205
+msgid "Uninstall Game"
+msgstr ""
+
+#: app.py:216
+msgid "Controls"
+msgstr ""
+
+#: app.py:217
+msgid "Touch Joystick"
+msgstr ""
+
+#: app.py:218
+msgid "Stick and buttons beside the picture"
+msgstr ""
+
+#: app.py:223
+msgid "Arrow Keys"
+msgstr ""
+
+#: app.py:223
+msgid "Number Pad"
+msgstr ""
+
+#: app.py:225
+msgid "Stick"
+msgstr ""
+
+#: app.py:225
+msgid "The keys it presses"
+msgstr ""
+
+#: app.py:233
+msgid "Mouse Speed"
+msgstr ""
+
+#: app.py:234
+msgid "How far a swipe moves the mouse, in percent"
+msgstr ""
+
+#: app.py:243
+msgid "Game"
+msgstr ""
+
+#: app.py:247
+msgid "Automatic"
+msgstr ""
+
+#: app.py:247
+msgid "Slow (286)"
+msgstr ""
+
+#: app.py:247
+msgid "Medium (386)"
+msgstr ""
+
+#: app.py:247
+msgid "Fast (486)"
+msgstr ""
+
+#: app.py:248
+msgid "Maximum"
+msgstr ""
+
+#: app.py:253
+msgid "CPU Speed"
+msgstr ""
+
+#: app.py:254
+msgid "Slower if the game is too fast"
+msgstr ""
+
+#: app.py:259
+msgid "Sharp Pixels"
+msgstr ""
+
+#: app.py:260
+msgid "The picture without smoothing"
+msgstr ""
+
+#: app.py:267
+msgid "Game Setup"
+msgstr ""
+
+#: app.py:268
+#, python-brace-format
+msgid "Starts {program}, for sound and controls"
+msgstr ""
+
+#: app.py:300
+#, python-brace-format
+msgid "Could not save: {error}"
+msgstr ""
+
+#: app.py:313
+#, python-brace-format
+msgid "Could not start: {error}"
+msgstr ""
+
+#: app.py:327
+msgid "Its folder is deleted, saved games included."
+msgstr ""
+
+#: app.py:329
+msgid "Its files are deleted. Saved games stay in ScummVM."
+msgstr ""
+
+#: app.py:331
+msgid "It is taken off the list; its files stay where they are."
+msgstr ""
+
+#: app.py:332
+#, python-brace-format
+msgid "Remove “{title}”?"
+msgstr ""
+
+#: app.py:334 app.py:520 app.py:560
+msgid "Cancel"
+msgstr ""
+
+#: app.py:335
+msgid "Remove"
+msgstr ""
+
+#: app.py:347
+#, python-brace-format
+msgid "Could not remove: {error}"
+msgstr ""
+
+#: app.py:373
+msgid ""
+"The DOS Installer finds the game by itself: it runs the installer if there "
+"is one and adds the game to the app grid with its icon."
+msgstr ""
+
+#: app.py:415
+msgid "These files do not go together."
+msgstr ""
+
+#: app.py:430
+msgid "Getting Ready"
+msgstr ""
+
+#: app.py:436
+msgid "Installing"
+msgstr ""
+
+#: app.py:467
+msgid "Insert Next Disk"
+msgstr ""
+
+#: app.py:470
+msgid ""
+"If the installer keeps asking for the same disk, insert the next one here."
+msgstr ""
+
+#: app.py:480
+#, python-brace-format
+msgid "Disk {number} of {total}"
+msgstr ""
+
+#: app.py:489
+#, python-brace-format
+msgid "Could not insert the disk: {error}"
+msgstr ""
+
+#: app.py:505
+#, python-brace-format
+msgid "DOSBox opens in fullscreen and starts {program}."
+msgstr ""
+
+#: app.py:507
+msgid ""
+"The keyboard opens by itself, in its Terminal layout: only that one reaches "
+"DOSBox."
+msgstr ""
+
+#: app.py:510
+msgid ""
+"The disks change by themselves: when the installer asks for the next disk, "
+"press Enter. Should it ask again, switch to the DOS Installer and insert the "
+"next disk there."
+msgstr ""
+
+#: app.py:513
+msgid "DOSBox closes when the installer is done."
+msgstr ""
+
+#: app.py:515
+msgid "The Installer Needs a Keyboard"
+msgstr ""
+
+#: app.py:519
+msgid "Start the Installer"
+msgstr ""
+
+#: app.py:524
+msgid "Installer"
+msgstr ""
+
+#: app.py:536
+msgid "ScummVM does not know this game, so it runs in DOSBox."
+msgstr ""
+
+#: app.py:537
+msgid "Name"
+msgstr ""
+
+#: app.py:540 app.py:565
+msgid "Start File"
+msgstr ""
+
+#: app.py:554
+msgid "No start file was found."
+msgstr ""
+
+#: app.py:558
+msgid "Add the Game"
+msgstr ""
+
+#: app.py:584
+msgid "Installation Failed"
+msgstr ""
+
+#: app.py:585
+msgid "OK"
+msgstr ""
+
+#: app.py:589
+#, python-brace-format
+msgid "“{title}” Is Installed"
+msgstr ""
+
+#: app.py:590
+msgid "You find it in the app grid."
+msgstr ""
+
+#: app.py:601
+msgid "Done"
+msgstr ""
+
+#: app.py:611
+msgid "Installed"
+msgstr ""
+
+#: install.py:119
+msgid "Looking up the game"
+msgstr ""
+
+#: install.py:122
+msgid "Reading the disks"
+msgstr ""
+
+#: install.py:129
+msgid "Reading the CD"
+msgstr ""
+
+#: install.py:132
+msgid "Unpacking"
+msgstr ""
+
+#: install.py:145 install.py:186
+msgid "Looking for the game"
+msgstr ""
+
+#: install.py:150 install.py:243
+msgid "Copying the game"
+msgstr ""
+
+#: install.py:168
+#, python-brace-format
+msgid "Installing {title}"
+msgstr ""
+
+#: install.py:172
+msgid "The installer is running"
+msgstr ""
+
+#: install.py:184
+msgid "The installer did not install anything."
+msgstr ""
+
+#: install.py:231
+msgid "Adding the game"
+msgstr ""
+
+#: install.py:235
+msgid "ScummVM did not take the game."
+msgstr ""

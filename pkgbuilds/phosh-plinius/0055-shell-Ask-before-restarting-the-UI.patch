@@ -1,0 +1,342 @@
+From 7fc04b2f751602e17c474ce6a950c46b8d50d5de Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 12:55:16 +0100
+Subject: [PATCH] shell: Ask before restarting the UI
+
+"Restart UI" in the power menu and in the system menu quit the shell at
+the first tap, while "Power Off" and "Restart" ask. Ask here too, in the
+same dialog but without a countdown: without an answer nothing happens.
+The question is taken back when the phone locks, since the entry isn't
+offered on the lock screen either.
+
+Translations for de, es, fr, it, nl, pl, pt, pt_BR and ru.
+---
+ po/de.po                 |  5 +++++
+ po/es.po                 |  5 +++++
+ po/fr.po                 |  5 +++++
+ po/it.po                 |  5 +++++
+ po/nl.po                 |  5 +++++
+ po/pl.po                 |  5 +++++
+ po/pt.po                 |  5 +++++
+ po/pt_BR.po              |  5 +++++
+ po/ru.po                 |  5 +++++
+ src/end-session-dialog.c | 10 +++++++++-
+ src/end-session-dialog.h |  2 ++
+ src/power-menu-manager.c |  2 +-
+ src/shell-priv.h         |  1 +
+ src/shell.c              | 50 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/top-panel.c          |  2 +-
+ 15 files changed, 109 insertions(+), 3 deletions(-)
+
+diff --git a/po/de.po b/po/de.po
+index 65e3d1db..829a3f30 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1372,6 +1372,11 @@ msgstr "Oberfläche neu starten"
+ msgid "Restart _UI"
+ msgstr "_Oberfläche neu starten"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Oberfläche wirklich neu starten? Geöffnete Apps laufen weiter und das Telefon wird gesperrt."
++
+ #~ msgid "In %u day"
+ #~ msgid_plural "In %u days"
+ #~ msgstr[0] "In %u Tag"
+diff --git a/po/es.po b/po/es.po
+index e114783e..f75d5288 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -768,6 +768,11 @@ msgstr "Reiniciar la interfaz"
+ msgid "Restart _UI"
+ msgstr "Reiniciar la _interfaz"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "¿Seguro que quieres reiniciar la interfaz? Las aplicaciones abiertas siguen funcionando y el teléfono se bloqueará."
++
+ msgid "Emergency"
+ msgstr "Emergencia"
+ 
+diff --git a/po/fr.po b/po/fr.po
+index 84a7b4d6..53612b52 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1118,6 +1118,11 @@ msgstr "Redémarrer l’interface"
+ msgid "Restart _UI"
+ msgstr "Redémarrer l’_interface"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Voulez-vous vraiment redémarrer l’interface ? Les applications ouvertes continuent de fonctionner et le téléphone sera verrouillé."
++
+ #~ msgid "Add"
+ #~ msgstr "Ajouter"
+ 
+diff --git a/po/it.po b/po/it.po
+index 4cb8a743..0255c3ee 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -848,6 +848,11 @@ msgstr "Riavvia l'interfaccia"
+ msgid "Restart _UI"
+ msgstr "Riavvia l'_interfaccia"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Vuoi davvero riavviare l'interfaccia? Le app aperte restano in esecuzione e il telefono verrà bloccato."
++
+ 
+ #: src/emergency-menu.c
+ msgid "Calling…"
+diff --git a/po/nl.po b/po/nl.po
+index 8f15b4ac..a02ec942 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1382,6 +1382,11 @@ msgstr "Interface herstarten"
+ msgid "Restart _UI"
+ msgstr "_Interface herstarten"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Wil je de interface echt herstarten? Geopende apps blijven draaien en de telefoon wordt vergrendeld."
++
+ #~ msgid "Screenshot copied to clipboard"
+ #~ msgstr "Schermafdruk gekopieerd naar klembord"
+ 
+diff --git a/po/pl.po b/po/pl.po
+index aa908a9b..8a35cbd8 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1432,6 +1432,11 @@ msgstr "Uruchom ponownie interfejs"
+ msgid "Restart _UI"
+ msgstr "Uruchom ponownie _interfejs"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Czy na pewno uruchomić ponownie interfejs? Otwarte aplikacje będą nadal działać, a telefon zostanie zablokowany."
++
+ 
+ #: src/emergency-menu.c
+ msgid "Calling…"
+diff --git a/po/pt.po b/po/pt.po
+index 044f583c..8ce0e72b 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1418,6 +1418,11 @@ msgstr "Reiniciar a interface"
+ msgid "Restart _UI"
+ msgstr "Reiniciar a _interface"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Quer mesmo reiniciar a interface? As aplicações abertas continuam a funcionar e o telefone será bloqueado."
++
+ 
+ #: src/emergency-menu.c
+ msgid "Calling…"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 3be862a6..ae480f0f 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1422,6 +1422,11 @@ msgstr "Reiniciar a interface"
+ msgid "Restart _UI"
+ msgstr "Reiniciar a _interface"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Quer mesmo reiniciar a interface? Os aplicativos abertos continuam em execução e o telefone será bloqueado."
++
+ #~ msgid "In %u day"
+ #~ msgid_plural "In %u days"
+ #~ msgstr[0] "Em %u dia"
+diff --git a/po/ru.po b/po/ru.po
+index db7f210e..7ec74982 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1445,6 +1445,11 @@ msgstr "Перезапустить интерфейс"
+ msgid "Restart _UI"
+ msgstr "Перезапустить _интерфейс"
+ 
++#. Plinius: the question before restarting only the shell
++#: src/end-session-dialog.c
++msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
++msgstr "Действительно перезапустить интерфейс? Открытые приложения продолжат работать, а телефон будет заблокирован."
++
+ #~ msgid "In %u day"
+ #~ msgid_plural "In %u days"
+ #~ msgstr[0] "Через %u день"
+diff --git a/src/end-session-dialog.c b/src/end-session-dialog.c
+index 474ecfa4..b824d032 100644
+--- a/src/end-session-dialog.c
++++ b/src/end-session-dialog.c
+@@ -192,6 +192,12 @@ end_session_dialog_update (PhoshEndSessionDialog *self)
+                                              seconds),
+                                    seconds);
+     break;
++  case PHOSH_END_SESSION_ACTION_RESTART_UI:
++    /* Plinius: no countdown, without an answer nothing happens */
++    title = _("Restart UI");
++    description = g_strdup (_("Do you really want to restart the interface? "
++                              "Open apps keep running and the phone gets locked."));
++    break;
+   default:
+     g_return_if_reached ();
+   }
+@@ -199,7 +205,9 @@ end_session_dialog_update (PhoshEndSessionDialog *self)
+   phosh_system_modal_dialog_set_title (PHOSH_SYSTEM_MODAL_DIALOG (self), title);
+ 
+   gtk_label_set_label (GTK_LABEL (self->lbl_subtitle), description);
+-  gtk_button_set_label (GTK_BUTTON (self->btn_confirm), title);
++  /* Plinius: the title of the restart question is too long for half of the dialog */
++  gtk_button_set_label (GTK_BUTTON (self->btn_confirm),
++                        self->action == PHOSH_END_SESSION_ACTION_RESTART_UI ? _("Restart") : title);
+ }
+ 
+ 
+diff --git a/src/end-session-dialog.h b/src/end-session-dialog.h
+index 39f81eb6..da7ba6cd 100644
+--- a/src/end-session-dialog.h
++++ b/src/end-session-dialog.h
+@@ -34,6 +34,8 @@ typedef enum {
+   PHOSH_END_SESSION_ACTION_HIBERNATE,
+   PHOSH_END_SESSION_ACTION_SUSPEND,
+   PHOSH_END_SESSION_ACTION_HYBRID_SLEEP,
++  /* Plinius: asked by the shell itself, see phosh_shell_ask_restart() */
++  PHOSH_END_SESSION_ACTION_RESTART_UI,
+ } PhoshLogoutAction;
+ 
+ GtkWidget *phosh_end_session_dialog_new                  (gint                action,
+diff --git a/src/power-menu-manager.c b/src/power-menu-manager.c
+index 08cdebd2..f074edc8 100644
+--- a/src/power-menu-manager.c
++++ b/src/power-menu-manager.c
+@@ -84,7 +84,7 @@ on_restart_shell_activated (GSimpleAction *action, GVariant *param, gpointer dat
+ 
+   /* Plinius: only the shell, the compositor and the apps keep running */
+   close_menu (self);
+-  phosh_shell_restart (phosh_shell_get_default ());
++  phosh_shell_ask_restart (phosh_shell_get_default ());
+ }
+ 
+ 
+diff --git a/src/shell-priv.h b/src/shell-priv.h
+index eab198d8..b4e62c27 100644
+--- a/src/shell-priv.h
++++ b/src/shell-priv.h
+@@ -130,6 +130,7 @@ void                  phosh_shell_show_notification (PhoshShell             *sel
+                                                      int                     timeout);
+ 
+ /* Plinius: restart the shell through its systemd user unit */
++void                 phosh_shell_ask_restart            (PhoshShell *self);
+ void                 phosh_shell_restart                (PhoshShell *self);
+ gboolean             phosh_shell_get_restart_requested  (PhoshShell *self);
+ 
+diff --git a/src/shell.c b/src/shell.c
+index 948a3c8c..4cae9ff2 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -46,6 +46,7 @@
+ #include "docked-info.h"
+ #include "docked-manager.h"
+ #include "emergency-calls-manager.h"
++#include "end-session-dialog.h"
+ #include "fader.h"
+ #include "aod.h"
+ #include "feedbackinfo.h"
+@@ -160,6 +161,7 @@ typedef struct {
+   gboolean                    overview_visible;
+   GPtrArray                  *faders; /* for final fade out */
+   gboolean                    restart_requested; /* Plinius: quit so that systemd starts us again */
++  PhoshEndSessionDialog      *restart_dialog; /* Plinius: asks before the restart */
+   GStrv log_domains;
+ 
+   PhoshOsdWindow             *osd;
+@@ -611,6 +613,10 @@ set_locked (PhoshShell *self, gboolean locked)
+     return;
+ 
+   priv->locked = locked;
++  /* Plinius: the question about a restart doesn't outlive the unlocked session */
++  if (locked && priv->restart_dialog)
++    g_clear_pointer ((PhoshSystemModalDialog **)&priv->restart_dialog,
++                     phosh_system_modal_dialog_close);
+   phosh_shell_set_state (self, PHOSH_STATE_LOCKED, priv->locked);
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_LOCKED]);
+ 
+@@ -738,6 +744,7 @@ phosh_shell_dispose (GObject *object)
+   panels_dispose (self);
+   g_clear_pointer (&priv->faders, g_ptr_array_unref);
+ 
++  g_clear_pointer (&priv->restart_dialog, phosh_cp_widget_destroy);
+   g_clear_pointer (&priv->notification_banner, phosh_cp_widget_destroy);
+ 
+   /* dispose managers in opposite order of declaration */
+@@ -2701,6 +2708,49 @@ on_restart_timeout (gpointer unused)
+   return G_SOURCE_REMOVE;
+ }
+ 
++static void
++on_restart_dialog_closed (PhoshShell *self, PhoshEndSessionDialog *dialog)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++  gboolean confirmed;
++
++  /* Already answered or closed by locking: a tap while it fades out counts for nothing */
++  if (priv->restart_dialog != dialog)
++    return;
++
++  confirmed = phosh_end_session_dialog_get_action_confirmed (dialog);
++  g_clear_pointer ((PhoshSystemModalDialog **)&priv->restart_dialog,
++                   phosh_system_modal_dialog_close);
++
++  if (confirmed)
++    phosh_shell_restart (self);
++}
++
++/**
++ * phosh_shell_ask_restart:
++ * @self: The shell
++ *
++ * Ask whether to restart the shell (Plinius) and do so if confirmed, see
++ * phosh_shell_restart(). Unlike a power off there is no countdown.
++ */
++void
++phosh_shell_ask_restart (PhoshShell *self)
++{
++  PhoshShellPrivate *priv;
++
++  g_return_if_fail (PHOSH_IS_SHELL (self));
++  priv = phosh_shell_get_instance_private (self);
++
++  if (priv->restart_dialog || priv->restart_requested)
++    return;
++
++  priv->restart_dialog = PHOSH_END_SESSION_DIALOG (
++    phosh_end_session_dialog_new (PHOSH_END_SESSION_ACTION_RESTART_UI, 0, NULL));
++  g_signal_connect_object (priv->restart_dialog, "closed",
++                           G_CALLBACK (on_restart_dialog_closed), self, G_CONNECT_SWAPPED);
++  gtk_widget_set_visible (GTK_WIDGET (priv->restart_dialog), TRUE);
++}
++
+ /**
+  * phosh_shell_restart:
+  * @self: The shell
+diff --git a/src/top-panel.c b/src/top-panel.c
+index ae14837a..b9520fae 100644
+--- a/src/top-panel.c
++++ b/src/top-panel.c
+@@ -273,7 +273,7 @@ on_restart_shell_action (GSimpleAction *action,
+ 
+   /* Plinius: only the shell, the compositor and the apps keep running */
+   phosh_top_panel_fold (self);
+-  phosh_shell_restart (phosh_shell_get_default ());
++  phosh_shell_ask_restart (phosh_shell_get_default ());
+ }
+ 
+ 

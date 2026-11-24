@@ -1,0 +1,9 @@
+#!/bin/sh
+# Sets NoDisplay=true in the launchers named on stdin (paths relative to /, from pacman).
+# The key goes right below [Desktop Entry], because later groups ([Desktop Action ...]) would
+# not hide the app; an existing NoDisplay line is replaced.
+while read -r target; do
+	f="/$target"
+	[ -f "$f" ] || continue
+	sed -i -e '/^NoDisplay=/d' -e '/^\[Desktop Entry\]$/a NoDisplay=true' "$f"
+done

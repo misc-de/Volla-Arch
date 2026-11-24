@@ -1,0 +1,651 @@
+From 2f837011bbbae87e6c6b3469b8209706be22fa6a Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 16:29:38 +0100
+Subject: [PATCH] obexd: Serve the contacts of all address books
+
+The ebook phone book only read the default address book. With a CardDAV
+account the contacts are spread over several books (a Nextcloud has
+"Contacts" and e.g. "FamilyContacts"), and the car showed only the
+contacts of one of them.
+
+Read every enabled address book, the default one first and the others
+in a fixed order, so that offsets and handles stay the same between
+requests. The id of a cached entry names its address book, so that a
+single vCard is read from the book it came from. Entries with only a
+display name now get a name in the vCard listing too, as in the pull.
+
+Contacts without a phone number are left out: the car cannot call them,
+and the "Accounts" book of a Nextcloud (its users) would only add names.
+---
+ obexd/plugins/phonebook-ebook.c | 423 ++++++++++++++++++++++++--------
+ 1 file changed, 327 insertions(+), 96 deletions(-)
+
+diff --git a/obexd/plugins/phonebook-ebook.c b/obexd/plugins/phonebook-ebook.c
+index b3f1fa4d9..e3d7cab86 100644
+--- a/obexd/plugins/phonebook-ebook.c
++++ b/obexd/plugins/phonebook-ebook.c
+@@ -48,9 +48,17 @@
+ #define PB_FORMAT_VCARD30	1
+ #define PB_FORMAT_NONE		2
+ 
++/*
++ * The car gets the contacts of every enabled address book, not only of the
++ * default one: with a CardDAV account the contacts are often spread over
++ * several books (e.g. "Contacts" and "FamilyContacts" of a Nextcloud).
++ * An entry id is "<source uid>/<contact uid>", so that a single vCard can be
++ * read from the book it came from even if two books use the same UID.
++ */
++#define ID_SEPARATOR '/'
++
+ ESourceRegistry *registry;
+-ESource *address_book;
+-EBookClient *book_client;
++static GHashTable *book_clients;	/* source uid -> EBookClient */
+ 
+ struct query_context {
+ 	const struct apparam_field *params;
+@@ -59,6 +67,9 @@ struct query_context {
+ 	phonebook_cache_ready_cb ready_cb;
+ 	gchar *query;
+ 	unsigned int count;
++	GSList **results;	/* contacts per address book */
++	char **book_uids;	/* source uid per address book */
++	unsigned int n_books;
+ 	GString *buf;
+ 	char *uid;
+ 	unsigned queued_calls;
+@@ -99,8 +110,21 @@ static const char *attribute_mask[] = {
+ 		NULL
+ };
+ 
++struct book_call {
++	struct query_context *data;
++	unsigned int index;
++};
++
+ static void free_query_context(struct query_context *data)
+ {
++	unsigned int i;
++
++	for (i = 0; data->results && i < data->n_books; i++)
++		g_slist_free_full(data->results[i],
++					(GDestroyNotify) g_object_unref);
++	g_free(data->results);
++	g_strfreev(data->book_uids);
++
+ 	g_free(data->uid);
+ 
+ 	if (data->buf != NULL)
+@@ -112,6 +136,203 @@ static void free_query_context(struct query_context *data)
+ 	g_free(data);
+ }
+ 
++static gint compare_books(gconstpointer a, gconstpointer b,
++							gpointer user_data)
++{
++	ESource *sa = E_SOURCE((gpointer) a), *sb = E_SOURCE((gpointer) b);
++	const char *def = user_data;
++	const char *ua = e_source_get_uid(sa), *ub = e_source_get_uid(sb);
++
++	/* The default address book first, the others in a fixed order */
++	if (g_strcmp0(ua, def) == 0)
++		return -1;
++	if (g_strcmp0(ub, def) == 0)
++		return 1;
++
++	return g_strcmp0(ua, ub);
++}
++
++/*
++ * Connect to every enabled address book (once, the clients are kept) and
++ * remember their source uids in data. Returns the clients, default first.
++ */
++static GPtrArray *connect_books(struct query_context *data)
++{
++	GList *sources, *l;
++	ESource *def;
++	char *def_uid = NULL;
++	GPtrArray *clients, *uids;
++	unsigned int i;
++
++	def = e_source_registry_ref_default_address_book(registry);
++	if (def) {
++		def_uid = g_strdup(e_source_get_uid(def));
++		g_object_unref(def);
++	}
++
++	sources = e_source_registry_list_enabled(registry,
++					E_SOURCE_EXTENSION_ADDRESS_BOOK);
++	sources = g_list_sort_with_data(sources, compare_books, def_uid);
++
++	clients = g_ptr_array_new_with_free_func(g_object_unref);
++	uids = g_ptr_array_new();
++
++	for (l = sources; l; l = g_list_next(l)) {
++		ESource *source = l->data;
++		const char *uid = e_source_get_uid(source);
++		EClient *client = g_hash_table_lookup(book_clients, uid);
++		GError *gerr = NULL;
++
++		if (client == NULL) {
++			client = e_book_client_connect_sync(source,
++					CONNECTION_TIMEOUT, NULL, &gerr);
++			if (client == NULL) {
++				error("Cannot connect to address book %s: %s",
++					uid, gerr ? gerr->message : "NULL");
++				g_clear_error(&gerr);
++				continue;
++			}
++			g_hash_table_insert(book_clients, g_strdup(uid),
++								client);
++		}
++
++		DBG("address book %s (%s)", uid,
++					e_source_get_display_name(source));
++		g_ptr_array_add(clients, g_object_ref(client));
++		g_ptr_array_add(uids, g_strdup(uid));
++	}
++
++	g_list_free_full(sources, g_object_unref);
++	g_free(def_uid);
++
++	/* A request asks again: forget what the last call collected */
++	for (i = 0; data->results && i < data->n_books; i++)
++		g_slist_free_full(data->results[i],
++					(GDestroyNotify) g_object_unref);
++	g_free(data->results);
++	g_strfreev(data->book_uids);
++
++	data->n_books = clients->len;
++	data->results = g_new0(GSList *, clients->len);
++	g_ptr_array_add(uids, NULL);
++	data->book_uids = (char **) g_ptr_array_free(uids, FALSE);
++
++	return clients;
++}
++
++/* Ask every address book for the contacts of data->query */
++static int query_books(struct query_context *data, GAsyncReadyCallback cb)
++{
++	GPtrArray *clients = connect_books(data);
++	unsigned int i;
++
++	for (i = 0; i < clients->len; i++) {
++		struct book_call *call = g_new0(struct book_call, 1);
++
++		call->data = data;
++		call->index = i;
++		e_book_client_get_contacts(clients->pdata[i], data->query,
++							NULL, cb, call);
++		data->queued_calls++;
++	}
++
++	g_ptr_array_unref(clients);
++
++	return data->queued_calls ? 0 : -ENOENT;
++}
++
++/* Whether a contact has a phone number that is not just blanks */
++static gboolean has_number(EContact *contact)
++{
++	GList *a, *v;
++
++	for (a = e_vcard_get_attributes(E_VCARD(contact)); a;
++							a = g_list_next(a)) {
++		EVCardAttribute *attrib = a->data;
++
++		if (!attrib || g_ascii_strcasecmp(
++				e_vcard_attribute_get_name(attrib), EVC_TEL))
++			continue;
++
++		for (v = e_vcard_attribute_get_values(attrib); v;
++							v = g_list_next(v)) {
++			const char *value = v->data;
++
++			while (value && g_ascii_isspace(*value))
++				value++;
++			if (value && *value)
++				return TRUE;
++		}
++	}
++
++	return FALSE;
++}
++
++/*
++ * The car can only call contacts with a number. Address books like the
++ * "Accounts" of a Nextcloud (its users, mostly without a number) would
++ * only fill its list with names. Pull and listing both use this, so
++ * that offsets and handles stay the same.
++ */
++static GSList *drop_contacts_without_number(GSList *contacts)
++{
++	GSList *l = contacts, *next;
++
++	while (l) {
++		next = g_slist_next(l);
++		if (!has_number(E_CONTACT(l->data))) {
++			g_object_unref(l->data);
++			contacts = g_slist_delete_link(contacts, l);
++		}
++		l = next;
++	}
++
++	return contacts;
++}
++
++/* Contacts of all address books in order, NULL while calls are queued */
++static GSList *collect_results(struct book_call *call, GObject *source,
++						GAsyncResult *result)
++{
++	struct query_context *data = call->data;
++	GSList *contacts = NULL, *all = NULL;
++	GError *gerr = NULL;
++	unsigned int i;
++
++	data->queued_calls--;
++
++	if (!e_book_client_get_contacts_finish(E_BOOK_CLIENT(source),
++					result, &contacts, &gerr)) {
++		error("Getting contacts failed: %s",
++					gerr ? gerr->message : "NULL");
++		g_clear_error(&gerr);
++	} else
++		data->results[call->index] =
++				drop_contacts_without_number(contacts);
++
++	g_free(call);
++
++	if (data->queued_calls > 0 || data->canceled)
++		return NULL;
++
++	for (i = 0; i < data->n_books; i++)
++		all = g_slist_concat(all, g_slist_copy(data->results[i]));
++
++	return all;
++}
++
++/* The address book a contact of collect_results() came from */
++static const char *book_uid_of(struct query_context *data, EContact *contact)
++{
++	unsigned int i;
++
++	for (i = 0; i < data->n_books; i++)
++		if (g_slist_find(data->results[i], contact))
++			return data->book_uids[i];
++
++	return "";
++}
++
+ /* Whether N holds anything but blanks */
+ static gboolean name_is_set(EVCardAttribute *n)
+ {
+@@ -335,26 +556,19 @@ void *phonebook_pull(const char *name, const struct apparam_field *params,
+ static void phonebook_pull_read_ready(GObject *source_object,
+ 				      GAsyncResult *result, gpointer user_data)
+ {
+-	struct query_context *data = user_data;
++	struct query_context *data = ((struct book_call *) user_data)->data;
+ 	GSList *l = NULL;
+-	GSList *contacts = NULL;
+-	GError *gerr = NULL;
+-	unsigned int count, maxcount;
++	GSList *contacts;
++	unsigned int count = 0, maxcount;
++	GString *buf;
+ 
+-	/* Finish async call to retrieve contacts */
+-	data->queued_calls--;
++	contacts = collect_results(user_data, source_object, result);
+ 
+ 	if (data->canceled)
+ 		goto canceled;
+ 
+-	e_book_client_get_contacts_finish(E_BOOK_CLIENT(source_object),
+-						     result, &contacts, &gerr);
+-
+-	if (gerr != NULL) {
+-		error("Failed to retrieve contacts, invalid query");
+-		g_error_free(gerr);
+-		goto done;
+-	}
++	if (data->queued_calls > 0)
++		return;
+ 
+ 	/*
+ 	 * When MaxListCount is zero, PCE wants to know the number of used
+@@ -363,7 +577,7 @@ static void phonebook_pull_read_ready(GObject *source_object,
+ 	 */
+ 	maxcount = data->params->maxlistcount;
+ 	if (maxcount == 0) {
+-		data->count += g_slist_length(contacts);
++		data->count = g_slist_length(contacts);
+ 		goto done;
+ 	}
+ 
+@@ -372,11 +586,11 @@ static void phonebook_pull_read_ready(GObject *source_object,
+ 	 * the buffer string.
+ 	 */
+ 	l = g_slist_nth(contacts, data->params->liststartoffset);
+-	for (count = 0; l && count + data->count < maxcount;
++	for (count = 0; l && count < maxcount;
+ 						l = g_slist_next(l), count++) {
+ 		EContact *contact = E_CONTACT(l->data);
+ 		EVCard *evcard = E_VCARD(contact);
+-		char *vcard;
++		char *vcard = NULL;
+ 
+ 		if (data->params->format == PB_FORMAT_VCARD30)
+ 			vcard = evcard_to_string(evcard, EVC_FORMAT_VCARD_30,
+@@ -387,29 +601,32 @@ static void phonebook_pull_read_ready(GObject *source_object,
+ 		else
+ 			error("unknown format: %d", data->params->format);
+ 
+-		data->buf = g_string_append(data->buf, vcard);
+-		data->buf = g_string_append(data->buf, "\r\n");
++		if (vcard) {
++			data->buf = g_string_append(data->buf, vcard);
++			data->buf = g_string_append(data->buf, "\r\n");
++		}
+ 		g_free(vcard);
+ 	}
+ 
+-	DBG("collected %d contacts", count);
++	DBG("collected %d contacts of %d address books", count,
++							data->n_books);
+ 
+-	data->count += count;
+-	g_slist_free_full(contacts, (GDestroyNotify) g_object_unref);
++	data->count = count;
+ 
+ done:
+-	if (data->queued_calls == 0) {
+-		GString *buf = data->buf;
+-		data->buf = NULL;
++	g_slist_free(contacts);
++
++	buf = data->buf;
++	data->buf = NULL;
+ 
+-		data->contacts_cb(buf->str, buf->len, data->count, 0, TRUE,
++	data->contacts_cb(buf->str, buf->len, data->count, 0, TRUE,
+ 							      data->user_data);
+-		g_string_free(buf, TRUE);
+-	}
++	g_string_free(buf, TRUE);
+ 
+ 	return;
+ 
+ canceled:
++	g_slist_free(contacts);
+ 	if (data->queued_calls == 0)
+ 		free_query_context(data);
+ }
+@@ -426,12 +643,8 @@ int phonebook_pull_read(void *request)
+ 
+ 	DBG("retrieving all contacts");
+ 
+-	/* Fetch async contacts from default address book */
+-	e_book_client_get_contacts(book_client, data->query, NULL,
+-			(GAsyncReadyCallback) phonebook_pull_read_ready, data);
+-	data->queued_calls++;
+-
+-	return 0;
++	/* Fetch async contacts from all address books */
++	return query_books(data, phonebook_pull_read_ready);
+ }
+ 
+ static void phonebook_get_entry_ready(GObject *source_object,
+@@ -486,7 +699,7 @@ done:
+ 			free_query_context(data);
+ 	}
+ 
+-	g_object_unref(contact);
++	g_clear_object(&contact);
+ }
+ 
+ void *phonebook_get_entry(const char *folder, const char *id,
+@@ -494,23 +707,49 @@ void *phonebook_get_entry(const char *folder, const char *id,
+ 						     void *user_data, int *err)
+ {
+ 	struct query_context *data;
+-	GSList *l;
++	const char *sep = strchr(id, ID_SEPARATOR);
++	GPtrArray *clients;
++	char *book_uid;
++	unsigned int i;
+ 
+ 	DBG("retrieving entry: %s", id);
+ 
++	if (sep == NULL) {
++		if (err)
++			*err = -ENOENT;
++		return NULL;
++	}
++
+ 	data = g_new0(struct query_context, 1);
+ 	data->contacts_cb = cb;
+ 	data->params = params;
+ 	data->user_data = user_data;
+-	data->uid = g_strdup(id);
++	data->uid = g_strdup(sep + 1);
++	book_uid = g_strndup(id, sep - id);
++
++	/* Fetch async the contact from the address book it came from */
++	clients = connect_books(data);
++	for (i = 0; i < clients->len; i++) {
++		if (g_strcmp0(data->book_uids[i], book_uid) != 0)
++			continue;
+ 
+-	/* Fetch async contacts from default address book */
+-	e_book_client_get_contact(book_client, data->uid, NULL,
++		e_book_client_get_contact(clients->pdata[i], data->uid, NULL,
+ 			(GAsyncReadyCallback) phonebook_get_entry_ready, data);
+-	data->queued_calls++;
++		data->queued_calls++;
++		break;
++	}
++	g_ptr_array_unref(clients);
++	g_free(book_uid);
++
++	if (data->queued_calls == 0) {
++		free_query_context(data);
++		if (err)
++			*err = -ENOENT;
++		return NULL;
++	}
+ 
+ 	if (err)
+-		*err = (data->queued_calls == 0 ? -ENOENT : 0);
++		*err = 0;
+ 
+ 	return data;
+ }
+@@ -548,41 +787,42 @@ static char *evcard_name_attribute_to_string(EVCard *evcard)
+ static void phonebook_create_cache_ready(GObject *source_object,
+ 				      GAsyncResult *result, gpointer user_data)
+ {
+-	struct query_context *data = user_data;
++	struct query_context *data = ((struct book_call *) user_data)->data;
+ 	GSList *l = NULL;
+-	GSList *contacts = NULL;
+-	GError *gerr = NULL;
++	GSList *contacts;
+ 
+-	data->queued_calls--;
++	contacts = collect_results(user_data, source_object, result);
+ 
+ 	if (data->canceled)
+ 		goto canceled;
+ 
+-	e_book_client_get_contacts_finish(E_BOOK_CLIENT(source_object),
+-						     result, &contacts, &gerr);
+-
+-	if (gerr != NULL) {
+-		error("Getting contacts failed: %s", gerr->message);
+-		goto done;
+-	}
++	if (data->queued_calls > 0)
++		return;
+ 
+ 	for (l = contacts; l; l = g_slist_next(l)) {
+ 		EContact *contact = E_CONTACT(l->data);
+ 		EVCard *evcard = E_VCARD(contact);
+ 		EVCardAttribute *attrib;
+-		char *uid, *tel, *name;
++		char *uid, *id, *tel, *name;
+ 
+ 		name = evcard_name_attribute_to_string(evcard);
++		if (!name) {
++			/* As in the pull, a display name stands in for N */
++			attrib = e_vcard_get_attribute(evcard, EVC_FN);
++			name = attrib ? e_vcard_attribute_get_value(attrib)
++									: NULL;
++			if (name && !*g_strstrip(name))
++				g_clear_pointer(&name, g_free);
++		}
+ 		if (!name)
+ 			continue;
+ 
+ 		attrib = e_vcard_get_attribute(evcard, EVC_UID);
+-		if (!attrib)
+-			continue;
+-
+-		uid = e_vcard_attribute_get_value(attrib);
+-		if (!uid)
++		uid = attrib ? e_vcard_attribute_get_value(attrib) : NULL;
++		if (!uid) {
++			g_free(name);
+ 			continue;
++		}
+ 
+ 		attrib = e_vcard_get_attribute(evcard, EVC_TEL);
+ 		if (attrib)
+@@ -590,9 +830,12 @@ static void phonebook_create_cache_ready(GObject *source_object,
+ 		else
+ 			tel = g_strdup("");
+ 
+-		data->entry_cb(uid, PHONEBOOK_INVALID_HANDLE, name, NULL,
++		id = g_strdup_printf("%s%c%s", book_uid_of(data, contact),
++							ID_SEPARATOR, uid);
++		data->entry_cb(id, PHONEBOOK_INVALID_HANDLE, name, NULL,
+ 							tel, data->user_data);
+ 
++		g_free(id);
+ 		g_free(name);
+ 		g_free(uid);
+ 		g_free(tel);
+@@ -600,15 +843,13 @@ static void phonebook_create_cache_ready(GObject *source_object,
+ 
+ 	DBG("caching successful");
+ 
+-	g_slist_free_full(contacts, (GDestroyNotify) g_object_unref);
+-
+-done:
+-	if (data->queued_calls == 0)
+-		data->ready_cb(data->user_data);
++	g_slist_free(contacts);
++	data->ready_cb(data->user_data);
+ 
+ 	return;
+ 
+ canceled:
++	g_slist_free(contacts);
+ 	if (data->queued_calls == 0)
+ 		free_query_context(data);
+ }
+@@ -624,7 +865,7 @@ void *phonebook_create_cache(const char *name, phonebook_entry_cb entry_cb,
+ 	EVCard *evcard;
+ 	GError *gerr = NULL;
+ 	EVCardAttribute *attrib;
+-	char *uid, *tel, *cname;
++	char *uid, *id, *tel, *cname;
+ 
+ 	if (g_strcmp0(PB_CONTACTS_FOLDER, name) != 0) {
+ 		if (err)
+@@ -669,29 +910,37 @@ void *phonebook_create_cache(const char *name, phonebook_entry_cb entry_cb,
+ 	else
+ 		tel = g_strdup("");
+ 
+-	data->entry_cb(uid, 0, cname, NULL, tel, data->user_data);
++	id = g_strdup_printf("%s%c%s",
++			e_source_get_uid(e_client_get_source(E_CLIENT(me_client))),
++			ID_SEPARATOR, uid);
++	data->entry_cb(id, 0, cname, NULL, tel, data->user_data);
+ 	data->count++;
+ 
++	g_free(id);
+ 	g_free(cname);
+ 	g_free(uid);
+ 	g_free(tel);
++	g_object_unref(me);
++	g_object_unref(me_client);
+ 
+ next:
+-	/* Fetch async contacts from default address book */
++	/* Fetch async contacts from all address books */
+ 	DBG("caching contacts");
+-	e_book_client_get_contacts(book_client, data->query, NULL,
+-		     (GAsyncReadyCallback) phonebook_create_cache_ready, data);
+-	data->queued_calls++;
++	if (query_books(data, phonebook_create_cache_ready) < 0) {
++		free_query_context(data);
++		if (err)
++			*err = -ENOENT;
++		return NULL;
++	}
+ 
+ 	if (err)
+-		*err = (data->queued_calls == 0 ? -ENOENT : 0);
++		*err = 0;
+ 
+ 	return data;
+ }
+ 
+ int phonebook_driver_init(void)
+ {
+-	EClient *client;
+ 	GError *gerr = NULL;
+ 
+ 	/* Acquire ESource Registry */
+@@ -702,33 +951,15 @@ int phonebook_driver_init(void)
+ 		return -1;
+ 	}
+ 
+-	/* Get ref to default address book */
+-	address_book = e_source_registry_ref_default_address_book(registry);
+-	if (address_book == NULL) {
+-		error("Unable to get reference to default address book");
+-		return -2;
+-	}
+-
+-	/* Allocate e-book client for address book */
+-	gerr = NULL;
+-	client = e_book_client_connect_sync(address_book, CONNECTION_TIMEOUT,
+-								  NULL, &gerr);
+-	if (gerr != NULL || client == NULL) {
+-		error("Cannot connect ebook client to EDS: %s",
+-					gerr != NULL ? gerr->message : "NULL");
+-		g_error_free(gerr);
+-		return -3;
+-	}
+-	book_client = E_BOOK_CLIENT(client);
+-
+-	DBG("created address book client");
++	/* The address books are connected on the first request */
++	book_clients = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
++							g_object_unref);
+ 
+ 	return 0;
+ }
+ 
+ void phonebook_driver_exit(void)
+ {
+-	g_object_unref(book_client);
+-	g_object_unref(address_book);
++	g_hash_table_destroy(book_clients);
+ 	g_object_unref(registry);
+ }
+-- 
+2.56.0
+

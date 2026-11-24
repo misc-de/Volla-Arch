@@ -1,0 +1,81 @@
+#!/bin/bash
+# Writes what the password prompt at startup takes from the system into the root of an initramfs
+# under construction: the look of the session's on-screen keyboard with the accent color, the
+# user's wallpaper, the keyboard layout and the language. Shared by the mkinitcpio install hook
+# (hooks: install) and the Halium ramdisk of the phone (halium-rebuild), so both prompts look alike.
+#
+# Usage: look-files DIR
+#   Writes, each only if there is something to say (otherwise the defaults of the package stay):
+#   DIR/usr/share/plinius-crypt/glass-background.bin  the wallpaper, as stored by background-install
+#   DIR/etc/unl0kr.conf.d/60-plinius-look.conf         theme and accent, from look-install
+#   DIR/etc/unl0kr.conf.d/40-plinius-keyboard.conf     on-screen and hardware keyboard layout
+#   DIR/etc/plinius-crypt.l10n                         the prompts' texts in the system language
+# PLINIUS_CRYPT_SYSROOT: read the system's files below this directory instead of / (tests)
+set -euo pipefail
+
+dest=${1:?usage: look-files DIR}
+sys=${PLINIUS_CRYPT_SYSROOT:-}
+state=$sys/var/lib/plinius-crypt
+
+# The user's wallpaper (background-install checked its format); 50-plinius.conf names this path
+if [[ -f $state/glass-background.bin ]]; then
+	install -D -m644 "$state/glass-background.bin" "$dest/usr/share/plinius-crypt/glass-background.bin"
+fi
+
+# The on-screen keyboard chosen in the session: its look, accent color and first layout, stored by
+# look-install (background-sync). Without that file, 50-plinius.conf holds the defaults of the
+# keyboard. The values are checked again, they go into a config file.
+look_theme="" look_other="" look_accent="" look_layout=""
+if [[ -f $state/look ]]; then
+	while IFS='=' read -r key value; do
+		case $key=$value in
+			style=glass) look_theme=plinius-glass look_other=plinius-original ;;
+			style=original) look_theme=plinius-original look_other=plinius-glass ;;
+			layout=us|layout=de|layout=es|layout=fr|layout=ru) look_layout=$value ;;
+			accent=*) [[ $value =~ ^#[0-9a-fA-F]{6}$ ]] && look_accent=$value ;;
+		esac
+	done < "$state/look"
+fi
+if [[ -n $look_theme || -n $look_accent ]]; then
+	mkdir -p "$dest/etc/unl0kr.conf.d"
+	{
+		echo "[theme]"
+		[[ -z $look_theme ]] || printf 'default=%s\nalternate=%s\n' "$look_theme" "$look_other"
+		[[ -z $look_accent ]] || printf 'accent=%s\n' "$look_accent"
+	} > "$dest/etc/unl0kr.conf.d/60-plinius-look.conf"
+fi
+
+# Keyboard layout (on-screen and hardware): the session's first one, else the system keymap
+# (KEYMAP in /etc/vconsole.conf, e.g. de-latin1 -> de), if unl0kr has that layout; otherwise its
+# default, US. Without KEYMAP the first X11 layout of the system, which systemd-localed writes to
+# 00-keyboard.conf (GNOME Settings: keyboard of the login screen; localed also converts it to
+# KEYMAP, but drops KEYMAP if it knows no matching console keymap). Numbered before
+# 50-plinius.conf so that later files can override it. Non-Latin layouts keep US on a hardware
+# keyboard as well (Alt+Shift switches), so a password with Latin letters can always be typed;
+# on screen the layout menu switches.
+keymap=$look_layout
+[[ -n $keymap ]] || keymap=$(unset KEYMAP; . "$sys/etc/vconsole.conf" 2>/dev/null; KEYMAP=${KEYMAP:-}; echo "${KEYMAP%%-*}")
+if [[ -z $keymap && -f $sys/etc/X11/xorg.conf.d/00-keyboard.conf ]]; then
+	# Option "XkbLayout" "de,us" -> de
+	keymap=$(sed -n -E 's/^[[:space:]]*Option[[:space:]]+"XkbLayout"[[:space:]]+"([^",]*).*/\1/p' \
+		"$sys/etc/X11/xorg.conf.d/00-keyboard.conf" | head -n 1)
+fi
+hwkeys=""
+case $keymap in
+	de|es|fr) hwkeys="layout=$keymap" ;;
+	ru) hwkeys="layout=us,ru\noptions=grp:alt_shift_toggle" ;;
+esac
+if [[ -n $hwkeys ]]; then
+	mkdir -p "$dest/etc/unl0kr.conf.d"
+	printf "[keyboard]\nlayout=%s\n\n[hardware keyboard]\n$hwkeys\n" "$keymap" \
+		> "$dest/etc/unl0kr.conf.d/40-plinius-keyboard.conf"
+fi
+
+# Prompt translations for the system language (LANG from /etc/locale.conf, e.g. de_DE.UTF-8 -> de).
+# The initramfs has no gettext, the scripts look the texts up in this table. No LANG there means
+# English; the LANG this script inherited (e.g. from systemd, which read locale.conf at boot) may
+# be stale, so only the file counts.
+lang=$(unset LANG; . "$sys/etc/locale.conf" 2>/dev/null; LANG=${LANG:-}; lang=${LANG%%.*}; echo "${lang%%_*}")
+if [[ -n $lang && -f $sys/usr/share/plinius-crypt/l10n/$lang ]]; then
+	install -D -m644 "$sys/usr/share/plinius-crypt/l10n/$lang" "$dest/etc/plinius-crypt.l10n"
+fi

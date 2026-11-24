@@ -1,0 +1,78 @@
+/* The bar of the desktop over VNC: dark glass with the Arch blue accent */
+* { font-family: "Cantarell", sans-serif; font-size: 14px; border: none; border-radius: 0; min-height: 0; }
+window#waybar { background: rgba(20, 22, 28, 0.82); color: #eeeeee; }
+/* The Software icon as the apps button */
+#custom-apps {
+  min-width: 34px; margin: 4px 4px 4px 8px; border-radius: 8px;
+  background-image: url("file:///usr/share/icons/hicolor/scalable/apps/org.plinius.Software.svg");
+  background-size: 30px 30px; background-repeat: no-repeat; background-position: center;
+  /* A real character, so waybar takes clicks; only the icon shows */
+  color: transparent;
+}
+#custom-apps:hover { background-color: rgba(255, 255, 255, 0.10); }
+#taskbar button { padding: 0 10px; margin: 5px 2px; border-radius: 8px; color: #dddddd; background: transparent; }
+#taskbar button:hover { background: rgba(255, 255, 255, 0.10); }
+#taskbar button.active { background: rgba(23, 147, 209, 0.35); color: #ffffff; }
+#clock { padding: 0 12px; }
+#clock { font-weight: bold; margin-right: 10px; margin-left: 6px; }
+#custom-to-phone, #custom-to-desktop { padding: 0 12px; margin: 5px 2px; border-radius: 8px; background: rgba(255, 255, 255, 0.08); }
+#custom-to-phone:hover, #custom-to-desktop:hover { background: rgba(23, 147, 209, 0.45); }
+#custom-fullscreen, #custom-settings { padding: 0 12px; margin: 5px 2px; border-radius: 8px; font-size: 18px; }
+#custom-fullscreen:hover, #custom-settings:hover { background: rgba(255, 255, 255, 0.10); }
+
+
+/* Wi-Fi: the theme's symbolic icon for the signal, drawn in the bar's color */
+#custom-wifi {
+  min-width: 30px; padding: 0 6px; margin: 5px 2px; border-radius: 8px;
+  /* The text color tints the symbolic icon; the placeholder character stays tiny */
+  color: #eeeeee; font-size: 1px;
+  background-repeat: no-repeat; background-position: center; background-size: 20px 20px;
+}
+#custom-wifi:hover { background-color: rgba(255, 255, 255, 0.10); }
+#custom-wifi.excellent { background-image: -gtk-icontheme("network-wireless-signal-excellent-symbolic"); }
+#custom-wifi.good { background-image: -gtk-icontheme("network-wireless-signal-good-symbolic"); }
+#custom-wifi.ok { background-image: -gtk-icontheme("network-wireless-signal-ok-symbolic"); }
+#custom-wifi.weak { background-image: -gtk-icontheme("network-wireless-signal-weak-symbolic"); }
+#custom-wifi.none { background-image: -gtk-icontheme("network-wireless-signal-none-symbolic"); }
+#custom-wifi.offline { background-image: -gtk-icontheme("network-wireless-offline-symbolic"); }
+
+/* Battery: the theme's symbolic level icons, tinted like the Wi-Fi icon */
+#custom-battery {
+  min-width: 30px; padding: 0 6px; margin: 5px 2px; border-radius: 8px;
+  color: #eeeeee; font-size: 1px;
+  background-repeat: no-repeat; background-position: center; background-size: 20px 20px;
+}
+#custom-battery:hover { background-color: rgba(255, 255, 255, 0.10); }
+#custom-battery.l0 { background-image: -gtk-icontheme("battery-level-0-symbolic"); }
+#custom-battery.l0-charging { background-image: -gtk-icontheme("battery-level-0-charging-symbolic"); }
+#custom-battery.l0-plugged-in { background-image: -gtk-icontheme("battery-level-0-plugged-in-symbolic"); }
+#custom-battery.l10 { background-image: -gtk-icontheme("battery-level-10-symbolic"); }
+#custom-battery.l10-charging { background-image: -gtk-icontheme("battery-level-10-charging-symbolic"); }
+#custom-battery.l10-plugged-in { background-image: -gtk-icontheme("battery-level-10-plugged-in-symbolic"); }
+#custom-battery.l20 { background-image: -gtk-icontheme("battery-level-20-symbolic"); }
+#custom-battery.l20-charging { background-image: -gtk-icontheme("battery-level-20-charging-symbolic"); }
+#custom-battery.l20-plugged-in { background-image: -gtk-icontheme("battery-level-20-plugged-in-symbolic"); }
+#custom-battery.l30 { background-image: -gtk-icontheme("battery-level-30-symbolic"); }
+#custom-battery.l30-charging { background-image: -gtk-icontheme("battery-level-30-charging-symbolic"); }
+#custom-battery.l30-plugged-in { background-image: -gtk-icontheme("battery-level-30-plugged-in-symbolic"); }
+#custom-battery.l40 { background-image: -gtk-icontheme("battery-level-40-symbolic"); }
+#custom-battery.l40-charging { background-image: -gtk-icontheme("battery-level-40-charging-symbolic"); }
+#custom-battery.l40-plugged-in { background-image: -gtk-icontheme("battery-level-40-plugged-in-symbolic"); }
+#custom-battery.l50 { background-image: -gtk-icontheme("battery-level-50-symbolic"); }
+#custom-battery.l50-charging { background-image: -gtk-icontheme("battery-level-50-charging-symbolic"); }
+#custom-battery.l50-plugged-in { background-image: -gtk-icontheme("battery-level-50-plugged-in-symbolic"); }
+#custom-battery.l60 { background-image: -gtk-icontheme("battery-level-60-symbolic"); }
+#custom-battery.l60-charging { background-image: -gtk-icontheme("battery-level-60-charging-symbolic"); }
+#custom-battery.l60-plugged-in { background-image: -gtk-icontheme("battery-level-60-plugged-in-symbolic"); }
+#custom-battery.l70 { background-image: -gtk-icontheme("battery-level-70-symbolic"); }
+#custom-battery.l70-charging { background-image: -gtk-icontheme("battery-level-70-charging-symbolic"); }
+#custom-battery.l70-plugged-in { background-image: -gtk-icontheme("battery-level-70-plugged-in-symbolic"); }
+#custom-battery.l80 { background-image: -gtk-icontheme("battery-level-80-symbolic"); }
+#custom-battery.l80-charging { background-image: -gtk-icontheme("battery-level-80-charging-symbolic"); }
+#custom-battery.l80-plugged-in { background-image: -gtk-icontheme("battery-level-80-plugged-in-symbolic"); }
+#custom-battery.l90 { background-image: -gtk-icontheme("battery-level-90-symbolic"); }
+#custom-battery.l90-charging { background-image: -gtk-icontheme("battery-level-90-charging-symbolic"); }
+#custom-battery.l90-plugged-in { background-image: -gtk-icontheme("battery-level-90-plugged-in-symbolic"); }
+#custom-battery.l100 { background-image: -gtk-icontheme("battery-level-100-symbolic"); }
+#custom-battery.l100-plugged-in { background-image: -gtk-icontheme("battery-level-100-plugged-in-symbolic"); }
+#custom-battery.l100-charged { background-image: -gtk-icontheme("battery-level-100-charged-symbolic"); }

@@ -1,0 +1,10 @@
+# Started by plinius-software-check.timer: checks for updates (checkupdates, Flathub) and
+# sends a desktop notification. Never installs anything. After notifying it waits until the
+# notification is tapped (opens the Updates tab) or dismissed; oneshot has no start timeout.
+[Unit]
+Description=Check for system updates
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/plinius-software --check-updates

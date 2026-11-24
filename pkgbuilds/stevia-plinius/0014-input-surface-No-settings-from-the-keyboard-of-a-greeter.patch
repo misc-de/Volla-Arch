@@ -1,0 +1,38 @@
+From 81273ee37514903457dc79dc9a7c711abd38b672 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 08:58:27 +0100
+Subject: [PATCH] input-surface: No settings from the keyboard of a greeter
+
+The settings action is enabled while the session is not locked. A
+greeter's session (XDG_SESSION_CLASS=greeter) is never locked, yet
+nobody has logged in: whoever holds the phone could open Phosh Mobile
+Settings as the greeter's user from the keyboard's menu. In a greeter
+the action now stays disabled.
+---
+ src/pos-input-surface.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index 362dc05..16b20da 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -3092,9 +3092,13 @@ pos_input_surface_init (PosInputSurface *self)
+ 
+   self->logind_session = pos_logind_session_new ();
+   action = g_action_map_lookup_action (G_ACTION_MAP (self->action_map), "settings");
+-  g_object_bind_property (self->logind_session, "locked",
+-                          action, "enabled",
+-                          G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
++  /* A greeter's session is never locked, but nobody has logged in yet: no settings there */
++  if (g_strcmp0 (g_getenv ("XDG_SESSION_CLASS"), "greeter") == 0)
++    g_simple_action_set_enabled (G_SIMPLE_ACTION (action), FALSE);
++  else
++    g_object_bind_property (self->logind_session, "locked",
++                            action, "enabled",
++                            G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
+ 
+   g_object_bind_property_full (self,
+                                "height",
+-- 
+2.56.0
+

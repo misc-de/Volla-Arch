@@ -1,0 +1,159 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=ofono2mm
+pkgver=1.0.1.20260109
+pkgrel=27
+pkgdesc="ModemManager D-Bus API on top of ofono, so gnome-calls, chatty and NetworkManager work unchanged"
+arch=(any)
+url="https://github.com/droidian/oFono2MM"
+license=(BSD-3-Clause)
+# modemmanager stays installed: its unit (redirected to ofono2mm via drop-in), libmm-glib
+depends=(python python-dbus-next python-gobject geoclue modemmanager ofono-sailfish polkit)
+makedepends=(git)
+# Droidian original; the FuriLabs offshoot has more fixes but counts as a fork (docs/HARDWARE.md).
+# Last tag 1.0.1 is from 2023: commit pin on the droidian branch, pkgver = tag + commit date
+_commit=97a792d2d6ae43be039d69ed2caabd34c1693412
+source=("git+$url.git#commit=$_commit"
+	50-ofono2mm-radio.rules
+	ofono2mm.sysusers
+	0001-Only-list-modems-in-GetManagedObjects.patch
+	0002-Export-modems-that-oFono-adds-later.patch
+	0003-Don-t-query-the-supplementary-service-interfaces.patch
+	0004-Update-the-modem-state-for-interfaces-added-later.patch
+	0005-Report-the-lock-oFono-names-and-the-enabled-PIN-lock.patch
+	0006-Export-each-modem-once-with-an-index-of-its-own.patch
+	20-ofono2mm-restart.conf
+	0007-Read-the-modem-s-properties-again-once-changes-arrive.patch
+	0008-Request-the-bus-name-once-any-modem-is-exported.patch
+	0009-Enable-the-modem-once-a-SIM-is-inserted.patch
+	0010-Subscribe-to-an-interface-s-changes-before-reading-i.patch
+	0011-Answer-CallWaitingQuery-and-CallWaitingSetup-through.patch
+	0012-Add-the-CellBroadcast-interface-on-top-of-oFono-s-Ce.patch
+	0013-Don-t-report-a-failed-hangup-for-a-call-that-ends.patch
+	0014-Announce-each-modem-once-when-it-is-complete.patch
+	0015-Switch-the-radio-on-for-an-emergency-call.patch
+	0016-Keep-track-of-which-call-ended.patch
+	0017-Select-a-data-SIM-if-oFono-has-none.patch
+	ofono2mm-cellbroadcast.conf
+	0018-Ask-polkit-before-every-ModemManager-call-that-needs-it.patch
+	0019-Give-each-modem-the-index-of-its-slot-and-refuse-SMS-without-MessageManager.patch
+	0020-Answer-every-queued-call-when-one-of-them-fails.patch
+	0021-Emergency-calls-only-for-the-session-root-and-the-group-radio.patch
+	0022-Keep-the-caller-s-number-and-the-location-to-those-allowed.patch
+	0023-Answer-GetManagedObjects-without-waiting-for-oFono.patch)
+sha256sums=('SKIP'
+	'757f256909d7c4fe63e818fe6052532a03f230ee30d48a6faacd2001ec857c5e'
+	'bc37f95e58fdc85adf395331db238487bb788a5f09343c38b2a5d9d2ca292f3c'
+	'9c4dabf07cc4695d33d142783bc493e58e8ef47383b3945743db4e2015c7cafe'
+	'be84bba5510524446300fa1ca97d0c6b0d7e3eb0c52f651d8861a59a68729ebd'
+	'28a8733b132d719621b34a5b0d65436b7c554fb3599518e96ce07877852f1022'
+	'218f76a0a1d9df103aba5511f73e12cad2a1d3f937dc5b1a30fcdf080756a81c'
+	'ae901f52baa7cb790648e3879cfbc5a03b892ee573022b2ae1107149cd829794'
+	'7eecf8e2637a8d70bd8c4b3c9c21fe01e8b7c4ecc86f613b08b55cd267da806a'
+	'cc10f51a630b0b0fe35b27992d1f3e46c97e18caf06b5062dc6b4591ac792a41'
+	'fb60b87548dc75bf90d2718b8d647ee0993735d9d991b266827065cceeac7e35'
+	'678429dfec83c30d6676ea5736446ddc301cb730206fd5c10d8a14d741826e22'
+	'5a8057f46e1199961d0449441e38e67c6ee302c0dcf1e807a83ba8509ddeb5c3'
+	'8e86203460d88985c5b225247159e405ce192d61334127c007bab0334e90ff4d'
+	'ff9ad19c8351c8c02257676516feef98a61f4cf9f43cc4e56b20e5f33d22762b'
+	'2caf35cfd4c716a103c8bc352760c8036ac183837a8aef2d405afbadbdc92844'
+	'27899077dc9aff63e56a1920fba0f3e83ad9c40f237f3053249e434fcc2ef8ef'
+	'7d4f0e265e8e82bdf248fee36e946b5deec49fee2b0af4266b4558d4056e1923'
+	'4adce237bfef4e77deb486707e79186e4aeaa77d6b8f904926fef50fb3cc2093'
+	'dedbfd7e58657cbff394b4704a4baf2926b51d89c2dcf14debd0ba328da1f4e1'
+	'22b8f9f584abe8231068b2ef39bda3630ca65c0881d4e20c9e803de6073c9be2'
+	'dff0b08ff190d44707eeb6f27d200b412c468f03dc7da3380b605354ed15678b'
+	'3243d240f46c9e564c7fbf957637257f561444eebda9716e063a93bf63581469'
+	'a1ba47e888e51797de54720dee8389b3e93543cd872a911217d2c110b12ae457'
+	'c63d3a9f6642f819b60369edae04ef7dee6e8b24dc8ac7d90b7824288260e0e7'
+	'ec0b965cd9f884b90da596e405ca355fc3437c87fc4d247372e1c36e0f7c7c8c'
+	'd8083b475433a4f83c375f2f6028cfc39b2945bbeffbc95a2a7453741cd8474f'
+	'9f99978d944cb73f41acfc2d11467666c4a12333158ed94191fd8dc0c537b18b')
+
+prepare() {
+	# Without it Phosh shows no modem at random: a SIM came first in GetManagedObjects
+	patch -d oFono2MM -Np1 -i "$srcdir/0001-Only-list-modems-in-GetManagedObjects.patch"
+	# Without it the second SIM slot is missing after boot (oFono registers it later)
+	patch -d oFono2MM -Np1 -i "$srcdir/0002-Export-modems-that-oFono-adds-later.patch"
+	# Without a network the call barring query held back every SIM request of the slot for
+	# 5 minutes (eSIM management included), and oFono2MM missed SIM changes meanwhile
+	patch -d oFono2MM -Np1 -i "$srcdir/0003-Don-t-query-the-supplementary-service-interfaces.patch"
+	# After boot the eSIM slot's modem stayed "disabled" instead of "sim-missing"
+	patch -d oFono2MM -Np1 -i "$srcdir/0004-Update-the-modem-state-for-interfaces-added-later.patch"
+	# A PUK-blocked SIM was reported as "PIN required" (no way to enter the PUK), and the SIM PIN
+	# lock always showed as off (no way to turn the PIN off or change it)
+	patch -d oFono2MM -Np1 -i "$srcdir/0005-Report-the-lock-oFono-names-and-the-enabled-PIN-lock.patch"
+	# At boot a modem added while the first ones were exported got the same index; exporting its
+	# SIM again raised and ModemManager1 never came up (GNOME Settings waited 25 s at start)
+	patch -d oFono2MM -Np1 -i "$srcdir/0006-Export-each-modem-once-with-an-index-of-its-own.patch"
+	# At boot oFono powers the modems up while they are being exported; that change was lost and
+	# an empty SIM slot stayed "disabled" instead of "sim-missing" (GNOME Settings showed SIM options)
+	patch -d oFono2MM -Np1 -i "$srcdir/0007-Read-the-modem-s-properties-again-once-changes-arrive.patch"
+	# At boot ModemAdded came before the reply to GetModems: no one requested ModemManager1,
+	# systemd stopped it after 45 s and geoclue hung in its start (90 s) waiting for it
+	patch -d oFono2MM -Np1 -i "$srcdir/0008-Request-the-bus-name-once-any-modem-is-exported.patch"
+	# A SIM inserted into an empty slot left the modem offline: NetworkManager does not enable
+	# a modem that leaves "failed" (sim-missing), mobile data hung in "prepare"
+	patch -d oFono2MM -Np1 -i "$srcdir/0009-Enable-the-modem-once-a-SIM-is-inserted.patch"
+	# At boot oFono read the SIM while ofono2mm was reading the SimManager: the change was lost,
+	# the modem stayed "sim-missing" with a working SIM (no mobile data, no calls)
+	patch -d oFono2MM -Np1 -i "$srcdir/0010-Subscribe-to-an-interface-s-changes-before-reading-i.patch"
+	# CallWaitingQuery returned nothing: GNOME Calls got a signature error and showed the call
+	# waiting state as unknown
+	patch -d oFono2MM -Np1 -i "$srcdir/0011-Answer-CallWaitingQuery-and-CallWaitingSetup-through.patch"
+	# Warnings over cell broadcast (EU-Alert/DE-Alert) reached oFono but no one showed them:
+	# Phosh and cellbroadcastd read them from ModemManager's CellBroadcast interface
+	patch -d oFono2MM -Np1 -i "$srcdir/0012-Add-the-CellBroadcast-interface-on-top-of-oFono-s-Ce.patch"
+	# Hanging up reported "Operation failed" for every call that ended (MediaTek RIL): GNOME Calls
+	# logged an error, and a car hanging up through PipeWire waited for an answer
+	patch -d oFono2MM -Np1 -i "$srcdir/0013-Don-t-report-a-failed-hangup-for-a-call-that-ends.patch"
+	# dbus-next sent InterfacesAdded from the modem's path: NetworkManager missed every modem
+	# exported after ModemManager1 appeared (after a restart: no mobile data until reboot).
+	# Now each modem reaches a client once and complete: ModemManager1 comes once all modems
+	# are exported, a later modem in one signal (a second InterfacesAdded left NetworkManager on
+	# stale proxies, the modem "failed"). EAGAIN on the bus socket no longer ends ofono2mm
+	patch -d oFono2MM -Np1 -i "$srcdir/0014-Announce-each-modem-once-when-it-is-complete.patch"
+	# In flight mode an emergency number could not be dialed (docs/NOTRUF.md)
+	patch -d oFono2MM -Np1 -i "$srcdir/0015-Switch-the-radio-on-for-an-emergency-call.patch"
+	# The wrong call was removed when one ended, and removing one that was over could end the
+	# emergency call dialed after it (docs/NOTRUF.md)
+	patch -d oFono2MM -Np1 -i "$srcdir/0016-Keep-track-of-which-call-ended.patch"
+	# oFono never picked a data SIM with an eSIM chip without a profile in the phone: on a new
+	# system mobile data hung in "prepare"
+	patch -d oFono2MM -Np1 -i "$srcdir/0017-Select-a-data-SIM-if-oFono-has-none.patch"
+	# ofono2mm never asked polkit: every local user, even "nobody", could read and send SMS,
+	# dial, read the location or enter the SIM PUK. Now each call needs the action ModemManager
+	# asks for; emergency calls never wait for polkit
+	patch -d oFono2MM -Np1 -i "$srcdir/0018-Ask-polkit-before-every-ModemManager-call-that-needs-it.patch"
+	# After a restart of ofono2mm the empty second slot became Modem/0, Chatty sent SMS there and
+	# they vanished as "sent": the index is the slot's, and Create fails without a MessageManager
+	patch -d oFono2MM -Np1 -i "$srcdir/0019-Give-each-modem-the-index-of-its-slot-and-refuse-SMS-without-MessageManager.patch"
+	# One failing call in the polkit queue of 0018 left the calls behind it unanswered
+	patch -d oFono2MM -Np1 -i "$srcdir/0020-Answer-every-queued-call-when-one-of-them-fails.patch"
+	# 0018 let emergency requests of any uid past polkit: "nobody" could dial 112 (radio on despite
+	# airplane mode) or end the user's emergency call. Now root, the active session and group radio
+	patch -d oFono2MM -Np1 -i "$srcdir/0021-Emergency-calls-only-for-the-session-root-and-the-group-radio.patch"
+	# Any uid could read the caller's number (call properties) and the last position (Location),
+	# and GetLocation blocked the whole event loop, emergency calls included, until geoclue's fix
+	patch -d oFono2MM -Np1 -i "$srcdir/0022-Keep-the-caller-s-number-and-the-location-to-those-allowed.patch"
+	# After boot Phosh showed "no SIM" while the SIM had mobile data: GetManagedObjects waited for
+	# an async USSD getter, a PropertiesChanged meanwhile went out first and GLib dropped it
+	patch -d oFono2MM -Np1 -i "$srcdir/0023-Answer-GetManagedObjects-without-waiting-for-oFono.patch"
+}
+
+package() {
+	cd oFono2MM
+	install -Dm755 main.py -t "$pkgdir/usr/lib/ofono2mm"
+	cp -r ofono2mm "$pkgdir/usr/lib/ofono2mm/"
+	install -m644 dbus.xml ofono.xml ofono_modem.xml ofono_operator.xml ofono_context.xml \
+		"$pkgdir/usr/lib/ofono2mm/"
+	install -d "$pkgdir/usr/bin"
+	ln -s ../lib/ofono2mm/main.py "$pkgdir/usr/bin/ofono2mm"
+	install -Dm644 systemd/10-ofono2mm.conf -t "$pkgdir/usr/lib/systemd/system/ModemManager.service.d"
+	install -Dm644 ../20-ofono2mm-restart.conf -t "$pkgdir/usr/lib/systemd/system/ModemManager.service.d"
+	install -Dm644 ../50-ofono2mm-radio.rules -t "$pkgdir/usr/share/polkit-1/rules.d"
+	# ModemManager's bus policy lacks CellBroadcast: without it only root could list warnings
+	install -Dm644 ../ofono2mm-cellbroadcast.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 ../ofono2mm.sysusers "$pkgdir/usr/lib/sysusers.d/ofono2mm.conf"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

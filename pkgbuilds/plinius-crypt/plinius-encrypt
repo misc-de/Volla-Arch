@@ -1,0 +1,270 @@
+#!/bin/bash
+# Requests full-disk encryption. At the next boot the initramfs asks for a new password and
+# encrypts offline. Two kinds of system:
+#  - with an initramfs of its own (mkinitcpio, hook plinius-crypt): the root filesystem is
+#    encrypted (mapping plinius-root), the request lies in /var/lib/plinius-crypt
+#  - the phone's Halium system (data partition on /userdata): the Halium ramdisk
+#    (tools/crypt-ramdisk.sh, halium-unlock) encrypts all of that partition (mapping plinius-data),
+#    with rootfs.img on it in the phone's own storage; the request lies at its top level, where the
+#    ramdisk looks for it. A system on the card has its root on a partition of its own, which
+#    stays as it is.
+# --change-password changes the password of an encrypted system; it accepts only characters
+# that the on-screen keyboard at startup (unl0kr) can type, otherwise the device could no
+# longer be unlocked, and no password that is the login password (screen lock PIN) of a user.
+#
+# Interface (also for GNOME Settings, which calls it via pkexec, polkit action
+# org.plinius.crypt.manage):
+#   plinius-encrypt [--request]   request encryption at the next boot (root)
+#   plinius-encrypt --cancel      withdraw the request (root)
+#   plinius-encrypt --status      print one word on stdout (no root needed):
+#       encrypted     root (Halium: the data partition) is on an opened LUKS device
+#       requested     not encrypted yet, encryption happens at the next boot
+#       off           not encrypted, no request; --request is possible
+#       unsupported   not encrypted and encryption impossible here: the initramfs does not run
+#                     the plinius-crypt hook (Halium: the ramdisk lacks the programs), or the
+#                     filesystem is not ext4 (a request is ignored)
+#   plinius-encrypt --change-password [--stdin]   (root)
+#       Interactive by default. With --stdin no prompts: stdin carries the current password on
+#       the first line and the new password on the second (both without the newline).
+# Exit codes:
+#   0  success
+#   1  other error (not root, cryptsetup failed, accounts not readable ...)
+#   2  usage error: unknown option, or --stdin input without two lines
+#   3  the current password is wrong
+#   4  the new password is empty or has characters the keyboard at startup cannot type
+#      (list: /usr/share/buffybox/unl0kr-keycaps)
+#   5  the new password is the login password (screen lock PIN) of a user
+#   6  the system is not encrypted (--change-password)
+#   7  encryption is not possible on this system (--request: see "unsupported")
+# Messages go to stderr (translated, see TEXTDOMAIN); callers decide by the exit code.
+set -euo pipefail
+
+export TEXTDOMAIN=plinius-crypt
+# t MSGID [ARG...]: translated message, %s placeholders filled with ARGs, with a newline
+t() {
+	local fmt
+	fmt=$(gettext "$1")
+	shift
+	# shellcheck disable=SC2059
+	printf "$fmt\n" "$@"
+}
+
+# read_secret PROMPT: reads a line from the terminal without echo and prints it
+read_secret() {
+	local s
+	printf '%s: ' "$1" >&2
+	IFS= read -rs s
+	printf '\n' >&2
+	printf '%s' "$s"
+}
+
+# untypeable TEXT: prints each character of TEXT once that the on-screen keyboard at startup
+# cannot type (list of its keys: /usr/share/buffybox/unl0kr-keycaps, from package buffybox)
+untypeable() {
+	local keycaps=/usr/share/buffybox/unl0kr-keycaps c i out=""
+	for ((i = 0; i < ${#1}; i++)); do
+		c=${1:i:1}
+		grep -qxF -- "$c" "$keycaps" || [[ $out == *"$c"* ]] || out+=$c
+	done
+	printf '%s' "$out"
+}
+
+# check_typeable PASSWORD: returns 0 if a new encryption password can be typed at startup,
+# otherwise explains on stderr and returns 4 (empty, or characters the keyboard lacks)
+check_typeable() {
+	local bad
+	if [[ -z $1 ]]; then
+		t "The password must not be empty." >&2
+		return 4
+	fi
+	bad=$(untypeable "$1")
+	if [[ -n $bad ]]; then
+		t "These characters cannot be typed on the keyboard at startup: %s" "$bad" >&2
+		return 4
+	fi
+}
+
+# check_not_pin PASSWORD: returns 0 if a new encryption password differs from the login
+# passwords (screen lock PINs) of all users, otherwise explains on stderr and returns 5, or 1 if
+# the accounts cannot be checked. Only after the current encryption password was verified: the
+# answer tells whether a text is someone's PIN.
+check_not_pin() {
+	local rc=0
+	# Password via stdin, never on the command line
+	printf '%s\n' "$1" | /usr/lib/plinius-crypt/login-password-check || rc=$?
+	case $rc in
+		0)
+			t "The password must differ from the PIN of the screen lock." >&2
+			return 5
+			;;
+		1) return 0 ;;
+		*)
+			t "Could not compare the password with the PIN of the screen lock." >&2
+			return 1
+			;;
+	esac
+}
+
+# rate_password PASSWORD: keeps only the rating of the new encryption password (strength
+# level, no secret) for GNOME Settings (Device Security), if plinius-security is installed
+rate_password() {
+	local rate=/usr/lib/plinius-security/plinius-pwrate out=/var/lib/plinius-crypt/strength
+	[[ -x $rate ]] || return 0
+	mkdir -p "${out%/*}"
+	if printf '%s\n' "$1" | "$rate" > "$out.tmp" 2>/dev/null; then
+		chmod 644 "$out.tmp"
+		mv -f "$out.tmp" "$out"
+	else
+		rm -f "$out.tmp"
+	fi
+}
+
+# change_password STDIN: changes the password of the encrypted root or data partition ($mapper);
+# STDIN=1 reads both passwords from stdin without prompts. Returns the exit codes above.
+change_password() {
+	local stdin=$1 dev old="" new="" new2 rc
+	# Character-wise checks need a UTF-8 locale (Cyrillic, umlauts)
+	[[ $(locale charmap 2>/dev/null) == UTF-8 ]] || export LC_CTYPE=C.UTF-8
+	dev=$(cryptsetup status "$mapper" 2>/dev/null | awk '$1 == "device:" { print $2 }')
+	if [[ -z $dev ]]; then
+		t "The system is not encrypted." >&2
+		return 6
+	fi
+	if ((stdin)); then
+		# Two lines; the second may lack its newline
+		if ! IFS= read -r old || ! { IFS= read -r new || [[ -n $new ]]; }; then
+			t "Expected the current and the new password on stdin, one per line." >&2
+			return 2
+		fi
+		# Cheap check first: no secret involved, no key derivation needed
+		check_typeable "$new" || return
+	else
+		old=$(read_secret "$(gettext "Current password")")
+	fi
+	if ! cryptsetup open --test-passphrase --key-file <(printf '%s' "$old") "$dev" 2>/dev/null; then
+		t "The current password is wrong." >&2
+		return 3
+	fi
+	if ((stdin)); then
+		check_not_pin "$new" || return
+	else
+		while :; do
+			new=$(read_secret "$(gettext "New password")")
+			rc=0
+			check_typeable "$new" && check_not_pin "$new" || rc=$?
+			case $rc in
+				0) ;;
+				4 | 5) continue ;;
+				*) return $rc ;;
+			esac
+			new2=$(read_secret "$(gettext "Repeat new password")")
+			[[ $new == "$new2" ]] && break
+			t "The passwords do not match. Please enter them again." >&2
+		done
+	fi
+	# Passwords via file descriptors, never on the command line
+	if ! cryptsetup luksChangeKey --key-file <(printf '%s' "$old") "$dev" <(printf '%s' "$new"); then
+		t "Changing the password failed. Is the current password right?" >&2
+		return 1
+	fi
+	rate_password "$new"
+	t "Password changed. From the next start on, the new password is asked."
+}
+
+# The kind of system (see the top): Halium mounts the data partition on /userdata
+if findmnt -n /userdata > /dev/null; then
+	halium=1 target=/userdata mapper=plinius-data req=/userdata/.plinius-crypt-request
+else
+	halium=0 target=/ mapper=plinius-root req=/var/lib/plinius-crypt/request
+fi
+target_src=$(findmnt -n -o SOURCE "$target")
+target_fs=$(findmnt -n -o FSTYPE "$target")
+# Created by the hook in the initramfs (Halium: by halium-unlock). If it is missing, the initramfs
+# does not run the hook (e.g. the plain Halium ramdisk of Ubuntu Touch): a request would then lie
+# around forever.
+hook_ran=/run/plinius-crypt
+# unsupported_reason: why encryption is impossible here, on stderr
+unsupported_reason() {
+	if ((halium)); then
+		t "This phone's boot ramdisk does not contain the programs for encryption." >&2
+	else
+		t "This system's initramfs does not contain the plinius-crypt hook; encryption only works with an initramfs built by mkinitcpio with plinius-crypt." >&2
+	fi
+}
+
+# require_root: exits with code 1 unless running as root
+require_root() {
+	if [[ $EUID -ne 0 ]]; then
+		t "Please run as root." >&2
+		exit 1
+	fi
+}
+
+# usage: prints the usage and exits with code 2
+usage() {
+	t "Usage: plinius-encrypt [--request|--status|--cancel|--change-password [--stdin]]" >&2
+	exit 2
+}
+
+action=request stdin=0
+for arg in "$@"; do
+	case $arg in
+		--request) action=request ;;
+		--status) action=status ;;
+		--cancel) action=cancel ;;
+		--change-password) action=change-password ;;
+		--stdin) stdin=1 ;;
+		*) usage ;;
+	esac
+done
+[[ $# -le 1 || ($# -eq 2 && $action == change-password && $stdin -eq 1) ]] || usage
+[[ $stdin -eq 0 || $action == change-password ]] || usage
+
+case $action in
+	status)
+		# One word for callers (GNOME Settings), see the interface at the top
+		if [[ $target_src == /dev/mapper/* ]]; then
+			echo encrypted
+		elif [[ ! -d $hook_ran || $target_fs != ext4 ]]; then
+			echo unsupported
+		elif [[ -e $req ]]; then
+			echo requested
+		else
+			echo off
+		fi
+		exit 0
+		;;
+	cancel)
+		require_root
+		rm -f "$req"
+		t "Request cancelled."
+		exit 0
+		;;
+	change-password)
+		require_root
+		rc=0
+		change_password "$stdin" || rc=$?
+		exit $rc
+		;;
+esac
+
+require_root
+if [[ $target_src == /dev/mapper/* ]]; then
+	t "The system is already encrypted (%s)." "$target_src"
+	exit 0
+fi
+if [[ $target_fs != ext4 ]]; then
+	t "Only ext4 is supported." >&2
+	exit 7
+fi
+[[ -d $hook_ran ]] || {
+	unsupported_reason
+	exit 7
+}
+
+mkdir -p "${req%/*}"
+date --iso-8601=seconds > "$req"
+sync
+t "Encryption requested for %s." "$target_src"
+t "At the next boot the device asks twice for the new password and then encrypts. Depending on the amount of data this takes a few minutes; do not power off meanwhile."
+t "Reboot now with: systemctl reboot   (to cancel: plinius-encrypt --cancel)"

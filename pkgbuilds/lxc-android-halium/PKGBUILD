@@ -1,0 +1,98 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+# Start of the Android container on Halium devices: the part of UT's lxc-android-config that the
+# Plinius ran under Ubuntu Touch 24.04 (measured 2026-10-28, docs/KOMPONENTEN.md). Left out:
+# Lomiri, Click, APT, system-image, AppArmor easyprof, rsyslog, ofono/rild wrappers, the
+# udev-trigger replacement (systemd owns that unit on Arch) and the rules of old devices.
+# Host udev rules with Android groups follow when the host needs device access (phase 4/5).
+pkgname=lxc-android-halium
+pkgver=0.20261020
+pkgrel=7
+pkgdesc="Start of the Android container on Halium devices (subset of UT lxc-android-config)"
+arch=(any)
+url="https://gitlab.com/ubports/development/core/hybris-support/lxc-android-config"
+license=(GPL-3.0-or-later)
+# getprop/setprop for lxc-android-ready and apply-sysctls come from libhybris; run-parts for the
+# pre-start hooks
+depends=(lxc libhybris python bash run-parts)
+_commit=552dca503a376fc15cd3bd58cf164f933c7bacaf
+source=("git+$url.git#commit=$_commit"
+	lxc-android-config.service
+	var-lib-android-data.mount
+	lxc-android-halium.tmpfiles
+	0001-mount-android-partitions-mnt-as-Android-mounts-it-not-world-writable.patch)
+sha256sums=('SKIP'
+	'3cf52d8f93b0e507538f4815bc0da5e5c12c732facd67a4d72be9ea02555e5f1'
+	'f19b81d5caddce117155f9a0561a3043a3761b46646cb998dcfdc05f3672e374'
+	'4059a799136f390c1619ca4b388472a878f23c3aca6f4eef2e153dd1060e36a6'
+	'8062692e0bec7efdf869927f5f89cd173472682e5f067fa7b2a9dd7a44a6c3d6')
+
+prepare() {
+	cd lxc-android-config
+	# /mnt mounted as Android mounts it (0755, gid system), not with tmpfs's default 1777
+	patch -Np1 -i "$srcdir/0001-mount-android-partitions-mnt-as-Android-mounts-it-not-world-writable.patch"
+	# Arch has no dash by default; the scripts are POSIX sh
+	local f
+	for f in mount-android-system mount-halium-overlay start-android-container apply-sysctls; do
+		sed -i '1s|^#!/bin/dash|#!/bin/sh|' "usr/libexec/lxc-android-config/$f"
+	done
+}
+
+package() {
+	cd lxc-android-config
+	local x=usr/libexec/lxc-android-config u=usr/lib/systemd/system
+
+	install -Dm755 -t "$pkgdir/$x" \
+		$x/mount-android-system $x/mount-android-partitions $x/mount-halium-overlay \
+		$x/mount-apexes.py $x/start-android-container $x/apply-sysctls
+	install -Dm644 usr/lib/lxc-android-config/common.sh -t "$pkgdir/usr/lib/lxc-android-config"
+	install -Dm755 usr/lib/lxc-android-config/lxc-android-ready -t "$pkgdir/usr/lib/lxc-android-config"
+
+	# Units: upstream ones unchanged, the container unit adapted (see the file)
+	install -Dm644 -t "$pkgdir/$u" \
+		lib/systemd/system/mount-android-system.service \
+		lib/systemd/system/mount-android-partitions.service \
+		lib/systemd/system/mount-halium-overlay.service \
+		lib/systemd/system/lxc-android-config-mount-apexes.service \
+		lib/systemd/system/lxc-android-config-apply-sysctls.service \
+		lib/systemd/system/android-set-boot-completion-property.service \
+		"$srcdir/lxc-android-config.service"
+	# The unit name has to escape the dash of the path
+	install -Dm644 "$srcdir/var-lib-android-data.mount" "$pkgdir/$u/var-lib-android\x2ddata.mount"
+	install -d "$pkgdir/$u/sysinit.target.wants"
+	ln -s ../lxc-android-config.service "$pkgdir/$u/sysinit.target.wants/lxc-android-config.service"
+	# sys.boot_completed once the display manager runs, as on UT. Vendor init.rc files pin the CPU
+	# and memory clocks to their maximum at early-init and only release them on that property;
+	# without it the Plinius ran at 2.0/2.5 GHz and 5.5 GHz DRAM forever (measured 2026-10-30)
+	install -d "$pkgdir/$u/multi-user.target.wants"
+	ln -s ../android-set-boot-completion-property.service \
+		"$pkgdir/$u/multi-user.target.wants/android-set-boot-completion-property.service"
+	install -Dm644 lib/systemd/system/systemd-udevd.service.d/lxc-android-config.conf \
+		"$pkgdir/$u/systemd-udevd.service.d/lxc-android-halium.conf"
+	install -Dm644 usr/lib/systemd/system/systemd-modules-load.service.d/lxc-android-config.conf \
+		"$pkgdir/$u/systemd-modules-load.service.d/lxc-android-halium.conf"
+
+	# Container configuration and hooks. The Android images next to them belong to the image
+	# build (image/mkimage.sh), not to this package.
+	local l=var/lib/lxc/android
+	install -Dm644 $l/config -t "$pkgdir/$l"
+	install -Dm755 $l/mount.sh $l/pre-start.sh $l/post-stop.sh -t "$pkgdir/$l"
+	install -Dm755 $l/pre-start.d/* -t "$pkgdir/$l/pre-start.d"
+	# overrides: copied into the container by a pre-start hook; rootfs: /android is bound there
+	install -d "$pkgdir/$l/overrides" "$pkgdir/$l/rootfs"
+
+	# Android paths at the root, as in UT's rootfs: libhybris loads the Android libraries from
+	# /system, /vendor, /apex ..., the kernel firmware from /vendor/firmware. /data comes from the
+	# Halium ramdisk.
+	local p
+	for p in system vendor apex odm product linkerconfig persist metadata firmware cache; do
+		ln -s "/android/$p" "$pkgdir/$p"
+	done
+
+	install -Dm644 "$srcdir/lxc-android-halium.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/lxc-android-halium.conf"
+	install -Dm644 usr/lib/sysctl.d/10-lxc-android-config.conf "$pkgdir/usr/lib/sysctl.d/10-lxc-android-halium.conf"
+	install -Dm644 usr/lib/systemd/logind.conf.d/50-lxc-android-config.conf \
+		"$pkgdir/usr/lib/systemd/logind.conf.d/50-lxc-android-halium.conf"
+	# udisks: the memory card (mmcblk0) holds the systems on the Plinius, never mount it automatically
+	install -Dm644 lib/udev/rules.d/99-android.rules "$pkgdir/usr/lib/udev/rules.d/99-android.rules"
+}

@@ -1,0 +1,22 @@
+# Gives each device its own pacman keyring on its first start. mkimage.sh and mkpreview.sh leave
+# the keyring out of the image (image_first_boot in tools/lib.sh): its master key decides which
+# keys pacman trusts, and one master key shared by every device made from an image would let
+# whoever has the image certify a key that all of them trust.
+[Unit]
+Description=Create the pacman keyring of this device
+ConditionPathExists=!/etc/pacman.d/gnupg/plinius-initialized
+# The master key carries the creation time; with a clock still behind it would come from the past
+After=time-set.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# A start cut off (power loss) leaves half a keyring behind: start over
+ExecStart=/usr/bin/rm -rf /etc/pacman.d/gnupg
+ExecStart=/usr/bin/pacman-key --init
+# Every installed keyring: the distribution's and plinius-keyring (mkimage.sh -r)
+ExecStart=/usr/bin/pacman-key --populate
+ExecStart=/usr/bin/touch /etc/pacman.d/gnupg/plinius-initialized
+
+[Install]
+WantedBy=multi-user.target

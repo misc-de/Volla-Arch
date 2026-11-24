@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- GNOME Settings › System › Self-Test runs "pkexec plinius-health check" for "Check Again".
+     The checks only read the system and write /run/plinius-health; whoever uses the phone may
+     run them without a password. "plinius-health" knows no other command that changes
+     anything. -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <action id="org.plinius.health.check">
+    <description>Run the phone self-test</description>
+    <description xml:lang="de">Selbsttest des Telefons ausführen</description>
+    <description xml:lang="es">Ejecutar la autoprueba del teléfono</description>
+    <description xml:lang="fr">Lancer l’autotest du téléphone</description>
+    <description xml:lang="it">Eseguire l’autotest del telefono</description>
+    <description xml:lang="nl">Zelftest van de telefoon uitvoeren</description>
+    <description xml:lang="pl">Uruchomienie autotestu telefonu</description>
+    <description xml:lang="pt">Executar o autoteste do telefone</description>
+    <description xml:lang="ru">Запустить самопроверку телефона</description>
+    <message>Authentication is required to run the phone self-test</message>
+    <message xml:lang="de">Zum Ausführen des Selbsttests ist eine Legitimierung erforderlich</message>
+    <message xml:lang="es">Se necesita autenticación para ejecutar la autoprueba del teléfono</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour lancer l’autotest du téléphone</message>
+    <message xml:lang="it">È richiesta l’autenticazione per eseguire l’autotest del telefono</message>
+    <message xml:lang="nl">Om de zelftest van de telefoon uit te voeren is authenticatie vereist</message>
+    <message xml:lang="pl">Uruchomienie autotestu telefonu wymaga uwierzytelnienia</message>
+    <message xml:lang="pt">É necessária autenticação para executar o autoteste do telefone</message>
+    <message xml:lang="ru">Для запуска самопроверки телефона требуется аутентификация</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/plinius-health</annotate>
+  </action>
+</policyconfig>

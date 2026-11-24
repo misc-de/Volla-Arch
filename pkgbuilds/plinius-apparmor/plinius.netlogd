@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in. Starting profile in complain mode: it logs what the service does
+# beyond these rules; the rules are completed from those messages (tools/aa-denials.sh) before
+# the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# plinius-netlogd: connection log per app (BPF in the cgroup, DNS names)
+# Enforced since 0.1-4: the rules below hold everything it did in complain mode over three boots
+# (11.–12.11.2026, 4381 messages: the packet socket for its traffic counters).
+profile plinius.netlogd flags=(attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/dbus-strict>
+  capability sys_admin,
+  capability bpf,
+  capability perfmon,
+  capability sys_ptrace,
+  capability dac_read_search,
+  capability net_admin,
+  capability net_raw,
+  network netlink raw,
+  network packet dgram,
+  network inet dgram, network inet6 dgram,
+  /usr/lib/plinius-netlog/plinius-netlogd mr,
+  /usr/lib/plinius-netlog/*.bpf.o r,
+  /var/lib/plinius-netlog/{,**} rwk,
+  /sys/fs/cgroup/{,**} r,
+  /sys/fs/bpf/{,**} rw,
+  @{PROC}/@{pids}/{cgroup,cmdline,comm,status} r,
+  # Whether a caller has a session (logind's state per user)
+  /run/systemd/users/[0-9]* r,
+  # The id of the group wheel: administrators see every account's connections (netlog 0.1-6)
+  /etc/group r,
+  ptrace read,
+}

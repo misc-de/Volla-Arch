@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 20:31:49 +0100
+Subject: [PATCH] routectld: start through a socket, end when idle
+
+routectld ran from boot to shutdown for routes that are needed for a few
+seconds per MMS. Started with a socket from systemd (LISTEN_FDS), it now
+serves that socket and exits 30 s after the last client is done, with no
+client counted and no route left; systemd starts it again on the next
+connection. Started without one, it creates its socket and stays, as before.
+
+asyncio of Python 3.13 and later removes a Unix server's path when it closes,
+also for a socket it was handed: cleanup_socket=False keeps the path of the
+systemd socket.
+---
+ routectld/routectld.py | 58 +++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 57 insertions(+), 1 deletion(-)
+
+diff --git a/routectld/routectld.py b/routectld/routectld.py
+index 81333ec..d8f62ec 100755
+--- a/routectld/routectld.py
++++ b/routectld/routectld.py
+@@ -3,10 +3,11 @@
+ import asyncio
+ import ipaddress
+ import json
++import socket
+ import sys
+ from argparse import ArgumentParser
+ from errno import EEXIST
+-from os import access, chown, chmod, environ, unlink, X_OK
++from os import access, chown, chmod, environ, getpid, unlink, X_OK
+ from os.path import isfile, realpath, join, dirname
+ from pathlib import Path
+ from typing import List
+@@ -27,9 +28,22 @@ MAX_ADDRESSES = 16
+ # behind. Longer than a fetch or send over three addresses with three tries
+ # of 120 s each (1080 s)
+ ROUTE_LIFETIME = 1200
++# Started through routectld.socket, routectld ends this long after the last
++# client is done and no route is left; the socket stays and starts it again
++IDLE_EXIT = 30
++# The first socket systemd passes (sd_listen_fds)
++SD_LISTEN_FDS_START = 3
+ # Interfaces of the modem's bearers (MediaTek ccmni, Qualcomm rmnet, wwan) and of the CLATs
+ CELLULAR_PREFIXES = ("ccmni", "rmnet", "wwan", "clat")
+ 
++def listen_socket():
++    """The listening socket of routectld.socket, or None when started without one."""
++    if environ.get("LISTEN_PID") != str(getpid()) or environ.get("LISTEN_FDS") != "1":
++        return None
++    for name in ("LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"):
++        environ.pop(name, None)
++    return socket.socket(fileno=SD_LISTEN_FDS_START)
++
+ def host_address(value):
+     """A single remote host, nothing else: a prefix such as 0.0.0.0/0 would
+     move all traffic onto the MMS bearer, past a VPN."""
+@@ -70,6 +84,10 @@ class MMSRouteController:
+         # of them has cleaned up
+         self.users = 0
+         self.expiry = None
++        # Socket activation: connections being handled, the pending exit, the end of run()
++        self.clients = 0
++        self.idle = None
++        self.done = None
+ 
+     async def _run_clatd_bearer_manager(self):
+         if not (isfile(CLATD_BEARER_MANAGER) and access(CLATD_BEARER_MANAGER, X_OK)):
+@@ -271,6 +289,7 @@ class MMSRouteController:
+         self.expiry = None
+         self.users = 0
+         self.cleanup_routes()
++        self.check_idle()
+ 
+     def cleanup_routes(self):
+         mmsd_print("Cleaning up routes", self.verbose)
+@@ -282,7 +301,26 @@ class MMSRouteController:
+ 
+         self.active_routes.clear()
+ 
++    def check_idle(self):
++        """Arm the exit once nothing is in use (socket activation only)."""
++        if self.done is None:
++            return
++        if self.idle:
++            self.idle.cancel()
++            self.idle = None
++        if self.clients == 0 and self.users == 0 and not self.active_routes:
++            self.idle = asyncio.get_running_loop().call_later(IDLE_EXIT, self.done.set)
++
+     async def handle_client(self, reader, writer):
++        self.clients += 1
++        self.check_idle()
++        try:
++            await self._handle_client(reader, writer)
++        finally:
++            self.clients -= 1
++            self.check_idle()
++
++    async def _handle_client(self, reader, writer):
+         try:
+             data = await reader.readline()
+             request = json.loads(data.decode())
+@@ -316,6 +354,24 @@ class MMSRouteController:
+             writer.close()
+ 
+     async def run(self):
++        sock = listen_socket()
++        if sock is not None:
++            # routectld.socket owns the path, its mode and group: only the routes are left to do
++            self.done = asyncio.Event()
++            # Python 3.13 and later remove the socket's path when the server closes: that
++            # would leave routectld.socket listening on a path that is gone
++            try:
++                server = await asyncio.start_unix_server(self.handle_client, sock=sock,
++                                                         cleanup_socket=False)
++            except TypeError:
++                server = await asyncio.start_unix_server(self.handle_client, sock=sock)
++            self.check_idle()
++            async with server:
++                await self.done.wait()
++            mmsd_print("Idle, exiting until the socket is used again", self.verbose)
++            self.cleanup_routes()
++            return
++
+         socket_dir = dirname(self.socket_path)
+         Path(socket_dir).mkdir(parents=True, exist_ok=True)
+ 

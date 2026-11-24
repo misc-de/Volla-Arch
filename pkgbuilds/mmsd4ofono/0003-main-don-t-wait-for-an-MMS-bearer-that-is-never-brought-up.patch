@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 07:37:58 +0100
+Subject: [PATCH] main: don't wait for an MMS bearer that is never brought up
+
+With the MMS context on demand (PR #10), acquire() waits until the MMS
+context carries an interface. Without an MMS context, or with the same
+APN as the internet context, activate_mms_context() leaves it down on
+purpose and MMS goes over the internet bearer, so the wait ran into
+READY_TIMEOUT ten times and every fetch and send failed after more than
+3 minutes. Count the context as ready in both cases.
+---
+ main.py | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/main.py b/main.py
+index f371bfb..f57c034 100755
+--- a/main.py
++++ b/main.py
+@@ -517,6 +517,8 @@ class OfonoMMSManagerInterface(ServiceInterface):
+             # if there is no MMS context then there is nothing to do here
+             if ofono_mms_ctx_interface is None:
+                 mmsd_print("No MMS context found", self.verbose)
++                # Nothing to bring up: MMS goes over the internet bearer (routectld)
++                self.mms_context.ready.set()
+                 return True
+ 
+             # if internet and MMS context APNs clash, MMS won't work and it will cause an infinite loop here which causes data instability
+@@ -525,6 +527,9 @@ class OfonoMMSManagerInterface(ServiceInterface):
+                 mms_apn is not None and
+                 internet_apn == mms_apn):
+                 mmsd_print(f"Internet and MMS contexts use the same APN ({internet_apn}), no activation needed", self.verbose)
++                # The MMS context never gets an interface of its own, so MMSContext would wait
++                # for it READY_TIMEOUT times ACTIVATION_ATTEMPTS and then fail every fetch and send
++                self.mms_context.ready.set()
+                 return True
+ 
+             await ofono_mms_ctx_interface.call_set_property("Active", Variant('b', True))

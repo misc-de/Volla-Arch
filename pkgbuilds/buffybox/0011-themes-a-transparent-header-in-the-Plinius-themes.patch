@@ -1,0 +1,75 @@
+From e9deb1597a31783cbd0c137f15e77b15caaf50db Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 21:31:37 +0100
+Subject: [PATCH] themes: a transparent header in the Plinius themes
+
+The bar with the keyboard, layout and shutdown buttons had a dark (plinius-original) or
+whitish (plinius-glass) panel with a line below it over the wallpaper. Phosh's top bar has
+no background, so the new theme option header.transparent drops the panel and its border,
+and both Plinius themes use it. The other themes are unchanged.
+---
+ shared/theme.c  | 5 +++--
+ shared/theme.h  | 2 ++
+ shared/themes.c | 8 ++++++--
+ 3 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/shared/theme.c b/shared/theme.c
+index 17a2ad9..3599c9a 100644
+--- a/shared/theme.c
++++ b/shared/theme.c
+@@ -103,10 +103,11 @@ static void init_styles(const bbx_theme *theme) {
+     lv_style_set_bg_color(&(styles.window), lv_color_hex(theme->window.bg_color));
+ 
+     reset_style(&(styles.header));
+-    lv_style_set_bg_opa(&(styles.header), panel_opa);
++    lv_style_set_bg_opa(&(styles.header), theme->header.transparent ? LV_OPA_TRANSP : panel_opa);
+     lv_style_set_bg_color(&(styles.header), lv_color_hex(theme->header.bg_color));
+     lv_style_set_border_side(&(styles.header), LV_BORDER_SIDE_BOTTOM);
+-    lv_style_set_border_width(&(styles.header), lv_dpx(theme->header.border_width));
++    lv_style_set_border_width(&(styles.header),
++        theme->header.transparent ? 0 : lv_dpx(theme->header.border_width));
+     lv_style_set_border_color(&(styles.header), lv_color_hex(theme->header.border_color));
+     lv_style_set_border_opa(&(styles.header), border_opa);
+     lv_style_set_pad_all(&(styles.header), lv_dpx(theme->header.pad));
+diff --git a/shared/theme.h b/shared/theme.h
+index 9752e82..4580b15 100644
+--- a/shared/theme.h
++++ b/shared/theme.h
+@@ -30,6 +30,8 @@ typedef struct {
+     uint32_t border_color;
+     int32_t pad;
+     int32_t gap;
++    /* No background and no border: the buttons sit directly on the window's background image */
++    bool transparent;
+ } bbx_theme_header;
+ 
+ /* Key theme for one specific key type and state */
+diff --git a/shared/themes.c b/shared/themes.c
+index 134ab9b..39cd2e7 100644
+--- a/shared/themes.c
++++ b/shared/themes.c
+@@ -1126,7 +1126,9 @@ static const bbx_theme plinius_glass = {
+         .border_width = 1,
+         .border_color = 0xFFFFFF,
+         .pad = 10,
+-        .gap = 10
++        .gap = 10,
++        /* Plinius: only the buttons over the wallpaper, as the top bar of Phosh */
++        .transparent = true
+     },
+     .keyboard = {
+         .bg_color = 0x000000,
+@@ -1299,7 +1301,9 @@ static const bbx_theme plinius_original = {
+         .border_width = 0,
+         .border_color = 0x242424,
+         .pad = 10,
+-        .gap = 10
++        .gap = 10,
++        /* Plinius: only the buttons over the wallpaper, as the top bar of Phosh */
++        .transparent = true
+     },
+     .keyboard = {
+         .bg_color = 0x242424,
+-- 
+2.56.0
+

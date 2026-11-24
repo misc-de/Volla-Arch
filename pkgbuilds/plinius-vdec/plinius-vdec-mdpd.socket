@@ -1,0 +1,11 @@
+[Unit]
+Description=MDP colour conversion for hardware video decoding (socket)
+
+[Socket]
+ListenSequentialPacket=/run/plinius-vdec-mdp.socket
+# Every app that plays a video may ask; the daemon only converts between the dma-bufs it is sent,
+# after checking them (mdp-proto.h)
+SocketMode=0666
+
+[Install]
+WantedBy=sockets.target

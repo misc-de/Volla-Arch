@@ -1,0 +1,245 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-freigabe
+pkgver=20261123.1551
+pkgrel=1
+pkgdesc="Approved versions of the packages the Plinius adaptations depend on"
+arch=(aarch64 x86_64)
+license=(MIT)
+# No content, only version limits: pacman rejects a -Syu as a whole if it would raise a coupled
+# package above the approved version (no partial upgrade). A conflicts entry does not affect
+# packages that are not installed. Each approval is a new version of this package.
+# The lists are written by tools/freigabe.py (libraries our packages link against + kern.list),
+# each with the version on the mirrors, which must also be the one recorded in the .BUILDINFO of
+# our packages (otherwise freigabe.py aborts). Do not edit by hand.
+conflicts_aarch64=(
+	"abseil-cpp>20260817.0-2"  # linked by audio-hal-bridge
+	"accountsservice>26.27.3-1"  # linked by gnome-control-center-plinius
+	"acl>2.4.0-1"  # linked by cups-plinius
+	"alsa-lib>1.2.16.1-1"  # linked by audio-hal-bridge
+	"aml>1.0.0-1"  # linked by wayvnc-plinius
+	"appstream>1.2.3-1"  # linked by gnome-control-center-plinius
+	"assimp>6.0.6-1"  # linked by vkmark-plinius
+	"at-spi2-core>2.62.2-1"  # linked by gtk3-plinius
+	"avahi>1:0.9rc5-2"  # linked by cups-plinius
+	"bluez-libs>5.88-1"  # linked by pipewire-audio-plinius
+	"cairo>1.18.6-1"  # linked by chatty-plinius
+	"callaudiod>0.1.99-3"  # linked by gnome-calls-plinius
+	"cjson>1.7.19-1"  # linked by lpac
+	"cryptsetup>2.8.8-2"  # linked by plinius-crypt
+	"curl>8.23.0-2"  # linked by lpac
+	"dbus>1.16.4-1"  # linked by bluez-obex-plinius
+	"dconf>51.0-1"  # linked by phosh-plinius
+	"evince>1:48.5-1"  # linked by phosh-plinius
+	"evolution-data-server>3.62.1-1"  # linked by bluez-obex-plinius
+	"feedbackd>0.8.9-2"  # linked by gnome-calls-plinius
+	"fftw>3.3.11-1"  # linked by pipewire-audio-plinius
+	"file>5.48-1"  # linked by nfcd
+	"folks>0.15.12-2"  # linked by gnome-calls-plinius
+	"fontconfig>2:2.18.4-1"  # linked by gnome-control-center-plinius
+	"fribidi>1.0.18-1"  # linked by gtk3-plinius
+	"gcr>3.41.2-2"  # linked by phosh-plinius
+	"gcr-4>4.4.1-1"  # linked by gnome-control-center-plinius
+	"gdk-pixbuf2>2.44.8-1"  # linked by chatty-plinius
+	"glib2>2.90.1-1"  # linked by audio-hal-bridge
+	"glibc>2.43+r22+g8362e8ce10b2-2"  # linked by audio-hal-bridge
+	"glycin>2.2.6-2"  # linked by snapshot-plinius
+	"glycin-gtk4>2.2.6-2"  # linked by snapshot-plinius
+	"gnome-bluetooth-3.0>47.2-1"  # linked by gnome-control-center-plinius
+	"gnome-desktop>1:51.0-1"  # linked by phoc-plinius
+	"gnome-desktop-4>1:51.0-1"  # linked by chatty-plinius
+	"gnome-online-accounts>3.58.1-1"  # linked by gnome-control-center-plinius
+	"gnutls>3.8.14-1"  # linked by gnome-control-center-plinius
+	"gom>0.5.6-1"  # linked by gnome-calls-plinius
+	"graphene>1.10.8-2.1"  # linked by gnome-control-center-plinius
+	"gsound>1.0.3-4"  # linked by gnome-calls-plinius
+	"gst-plugins-base-libs>1.28.9-3"  # linked by plinius-ambient
+	"gstreamer>1.28.9-3"  # linked by biomd-session
+	"gtk3>1:3.24.52-2"  # linked by libhandy-plinius
+	"gtk4>1:4.24.1-1"  # linked by chatty-plinius
+	"gtksourceview5>5.22.0-1"  # linked by chatty-plinius
+	"harfbuzz>15.2.0-1"  # linked by gtk3-plinius
+	"hunspell>1.7.6-1"  # linked by stevia-plinius
+	"jansson>2.15.1-1"  # linked by wayvnc-plinius
+	"json-glib>1.10.8-1"  # linked by gnome-control-center-plinius
+	"keyutils>1.6.3-4"  # linked by gnome-online-accounts-plinius
+	"krb5>1.22.2-2"  # linked by gnome-control-center-plinius
+	"lcms2>2.20-1"  # linked by phoc-plinius
+	"libadwaita>1:1.10.0-1"  # linked by chatty-plinius
+	"libbpf>1.8.0-1"  # linked by plinius-appaccess
+	"libcloudproviders>0.4.2-1"  # linked by gtk3-plinius
+	"libcmatrix>0.0.4-2"  # linked by chatty-plinius
+	"libcolord>1.4.8-2"  # linked by gtk3-plinius
+	"libcups>2:2.4.20-1"  # linked by cups-plinius
+	"libdisplay-info>0.3.0-1"  # linked by phoc-plinius
+	"libdrm>2.4.134-1"  # linked by buffybox
+	"libebur128>1.2.6-2"  # linked by pipewire-audio-plinius
+	"libepoxy>1.5.10-3"  # linked by gnome-control-center-plinius
+	"libfdk-aac>3.0.0-1"  # linked by pipewire-audio-plinius
+	"libfreeaptx>0.2.2-1"  # linked by pipewire-audio-plinius
+	"libgbinder>1.1.55-1"  # linked by biomd
+	"libgcc>16.1.1+r12+g301eb08fa2c5-1"  # linked by audio-hal-bridge
+	"libgee>0.20.8-1"  # linked by gnome-calls-plinius
+	"libglibutil>1.0.83-1"  # linked by libdbusaccess
+	"libglvnd>1.7.0-3"  # linked by gl4es
+	"libgmobile>0.7.5-1"  # linked by phoc-plinius
+	"libgoa>3.58.1-1"  # linked by gnome-control-center-plinius
+	"libgtop>2.41.4-1"  # linked by gnome-control-center-plinius
+	"libgudev>238-4"  # linked by gnome-control-center-plinius
+	"libhandy>1.8.3-3"  # linked by stevia-plinius
+	"libibus>1.5.35-1"  # linked by gnome-control-center-plinius
+	"libical>4.0.8-1"  # linked by phosh-plinius
+	"libinih>62-2"  # linked by buffybox
+	"libinput>1.32.0-1"  # linked by buffybox
+	"liblc3>1.1.3-2"  # linked by pipewire-audio-plinius
+	"libldac>2.0.2.6-1"  # linked by pipewire-audio-plinius
+	"libliftoff>0.5.0-1"  # linked by phoc-plinius
+	"libmalcontent>0.14.0-4"  # linked by gnome-control-center-plinius
+	"libmm-glib>1.24.2-2"  # linked by chatty-plinius
+	"libmysofa>1.3.5-1"  # linked by pipewire-audio-plinius
+	"libnl>3.12.0-1"  # linked by wpa_supplicant-plinius
+	"libnm>1.58.1-3"  # linked by gnome-control-center-plinius
+	"libnma-gtk4>1.10.6-3"  # linked by gnome-control-center-plinius
+	"libpaper>2.2.8-1"  # linked by cups-plinius
+	"libpeas-2>2.2.1-1"  # linked by gnome-calls-plinius
+	"libphonenumber>1:9.0.44-1"  # linked by chatty-plinius
+	"libpipewire>1:1.6.11-2"  # linked by audio-hal-bridge
+	"libpulse>17.0+r134+g77d25a1e6-2"  # linked by gnome-control-center-plinius
+	"libpwquality>1.4.5-7"  # linked by gnome-control-center-plinius
+	"librest>0.10.2-2"  # linked by gnome-online-accounts-plinius
+	"libsecret>0.21.8.2-1"  # linked by gnome-calls-plinius
+	"libsndfile>1.2.2-4"  # linked by pipewire-audio-plinius
+	"libsoup3>3.8.1-1"  # linked by gnome-control-center-plinius
+	"libspelling>0.4.11-1"  # linked by chatty-plinius
+	"libstdc++>16.1.1+r12+g301eb08fa2c5-1"  # linked by audio-hal-bridge
+	"libusb>1.0.30-1"  # linked by cups-plinius
+	"libwacom>2.20.0-1"  # linked by gnome-control-center-plinius
+	"libx11>1.8.14-1"  # linked by gnome-control-center-plinius
+	"libxcb>1.17.0-1"  # linked by phoc-plinius
+	"libxcomposite>0.4.7-1"  # linked by gtk3-plinius
+	"libxcrypt>4.5.2-1"  # linked by plinius-pattern
+	"libxcursor>1.2.3-1"  # linked by gtk3-plinius
+	"libxdamage>1.1.7-1"  # linked by gtk3-plinius
+	"libxext>1.3.7-1"  # linked by gtk3-plinius
+	"libxfixes>6.0.2-1"  # linked by gtk3-plinius
+	"libxi>1.8.4-1"  # linked by gtk3-plinius
+	"libxinerama>1.1.6-1"  # linked by gtk3-plinius
+	"libxkbcommon>1.13.2-1"  # linked by buffybox
+	"libxml2>2.15.4-1"  # linked by gnome-control-center-plinius
+	"libxrandr>1.5.5-1"  # linked by gtk3-plinius
+	"lilv>0.28.0-1"  # linked by pipewire-audio-plinius
+	"lxc>1:7.0.0-3"  # core list
+	"mesa>1:26.3.1-3"  # linked by phoc-plinius
+	"neatvnc>1.0.3-1"  # linked by wayvnc-plinius
+	"networkmanager>1.58.1-3"  # core list
+	"openssh>10.6p2-1"  # core list
+	"openssl>4.1.0-1"  # linked by wpa_supplicant-plinius
+	"opus>1.6.1-1"  # linked by pipewire-audio-plinius
+	"pacman>7.1.0.r9.g54d9411-4"  # core list
+	"pam>1.7.3-1"  # linked by biomd-pam
+	"pango>1:1.58.2-1"  # linked by chatty-plinius
+	"pcsclite>2.5.4-1"  # linked by wpa_supplicant-plinius
+	"phosh>0.59.0-1"  # core list
+	"pipewire>1:1.6.11-2"  # core list
+	"pixman>0.46.4-1.1"  # linked by phoc-plinius
+	"polkit>128-1"  # linked by gnome-control-center-plinius
+	"qrcodegen-cmake>1.8.0-5"  # linked by phosh-plinius
+	"readline>8.3.6-1"  # linked by bluez-obex-plinius
+	"sbc>2.2-1"  # linked by pipewire-audio-plinius
+	"seatd>0.9.3-1"  # linked by phoc-plinius
+	"smbclient>2:4.25.1-1"  # linked by gnome-control-center-plinius
+	"sofia-sip>1.13.19-1"  # linked by gnome-calls-plinius
+	"spandsp>3.1.1-1"  # linked by pipewire-audio-plinius
+	"sqlite>3.54.1-1"  # linked by biomd
+	"systemd>262.2-1"  # core list
+	"systemd-libs>262.2-1"  # linked by bluebinder
+	"tinysparql>3.12.0-1"  # linked by gnome-usage-plinius
+	"udisks2>2.12.0-1"  # linked by gnome-control-center-plinius
+	"upower>1.91.5-1"  # linked by gnome-control-center-plinius
+	"vulkan-icd-loader>1.4.363.0-1"  # linked by phoc-plinius
+	"wayland>1.26.0-1"  # linked by gnome-control-center-plinius
+	"webrtc-audio-processing-1>1.3-6"  # linked by audio-hal-bridge
+	"wireplumber>0.5.19-1"  # core list
+	"xcb-util-errors>1.0.1-2"  # linked by phoc-plinius
+	"xcb-util-renderutil>0.3.10-2"  # linked by phoc-plinius
+	"xcb-util-wm>0.4.2-2"  # linked by phoc-plinius
+)
+conflicts_x86_64=(
+	"accountsservice>26.27.3-1"  # linked by gnome-control-center-plinius
+	"cairo>1.18.6-1"  # linked by gnome-control-center-plinius
+	"colord-gtk4>0.3.1-1"  # linked by gnome-control-center-plinius
+	"dbus>1.16.2-2"  # linked by ofono-sailfish
+	"file>5.48-1"  # linked by nfcd
+	"fontconfig>2:2.18.3-2"  # linked by gnome-control-center-plinius
+	"gcr-4>4.4.1-1"  # linked by gnome-control-center-plinius
+	"gdk-pixbuf2>2.44.8-1"  # linked by gnome-control-center-plinius
+	"glib2>2.90.1-1"  # linked by biomd
+	"glibc>2.44+r50+g1848099f063e-1"  # linked by biomd
+	"gnome-bluetooth-3.0>47.2-1"  # linked by gnome-control-center-plinius
+	"gnome-desktop>1:51.0-1"  # linked by phoc-plinius
+	"gnome-desktop-4>1:51.0-1"  # linked by gnome-control-center-plinius
+	"gnome-online-accounts>3.58.1-1"  # linked by gnome-control-center-plinius
+	"gnutls>3.8.13-3"  # linked by gnome-control-center-plinius
+	"graphene>1.10.8-2"  # linked by gnome-control-center-plinius
+	"gsound>1.0.3-4"  # linked by gnome-control-center-plinius
+	"gstreamer>1.28.8-1"  # linked by biomd-session
+	"gtk4>1:4.24.1-1"  # linked by gnome-control-center-plinius
+	"json-glib>1.10.8-1"  # linked by gnome-control-center-plinius
+	"krb5>1.22.2-1"  # linked by gnome-control-center-plinius
+	"lcms2>2.19.1-1"  # linked by phoc-plinius
+	"libadwaita>1:1.10.0-1"  # linked by gnome-control-center-plinius
+	"libcolord>1.4.8-2"  # linked by gnome-control-center-plinius
+	"libcups>2:2.4.20-1"  # linked by gnome-control-center-plinius
+	"libdisplay-info>0.3.0-1"  # linked by phoc-plinius
+	"libdrm>2.4.134-1"  # linked by buffybox
+	"libepoxy>1.5.10-3"  # linked by gnome-control-center-plinius
+	"libgbinder>1.1.54-1"  # linked by biomd
+	"libgcc>16.2.1+r23+gd564253eb6c8-1"  # linked by biomd-fprintd
+	"libglibutil>1.0.83-1"  # linked by libdbusaccess
+	"libglvnd>1.7.0-3"  # linked by phoc-plinius
+	"libgmobile>0.7.4-1"  # linked by phoc-plinius
+	"libgoa>3.58.1-1"  # linked by gnome-control-center-plinius
+	"libgtop>2.41.3-2"  # linked by gnome-control-center-plinius
+	"libgudev>238-4"  # linked by gnome-control-center-plinius
+	"libibus>1.5.34-2"  # linked by gnome-control-center-plinius
+	"libinih>62-2"  # linked by buffybox
+	"libinput>1.32.0-1"  # linked by buffybox
+	"libliftoff>0.5.0-1"  # linked by phoc-plinius
+	"libmalcontent>0.14.0-4"  # linked by gnome-control-center-plinius
+	"libmm-glib>1.24.2-2"  # linked by gnome-control-center-plinius
+	"libnm>1.58.1-2"  # linked by gnome-control-center-plinius
+	"libnma-gtk4>1.10.6-3"  # linked by gnome-control-center-plinius
+	"libpulse>17.0+r134+g77d25a1e6-1"  # linked by gnome-control-center-plinius
+	"libpwquality>1.4.5-7"  # linked by gnome-control-center-plinius
+	"libsecret>0.21.8.2-1"  # linked by gnome-control-center-plinius
+	"libsoup3>3.8.1-1"  # linked by gnome-control-center-plinius
+	"libwacom>2.20.0-1"  # linked by gnome-control-center-plinius
+	"libx11>1.8.14-1"  # linked by gnome-control-center-plinius
+	"libxcb>1.17.0-1"  # linked by phoc-plinius
+	"libxkbcommon>1.13.2-1"  # linked by buffybox
+	"libxml2>2.15.4-1"  # linked by gnome-control-center-plinius
+	"lxc>1:7.0.0-2"  # core list
+	"mesa>1:26.2.5-1"  # linked by phoc-plinius
+	"networkmanager>1.58.1-2"  # core list
+	"openssh>10.6p1-2"  # core list
+	"pacman>7.1.0.r9.g54d9411-3"  # core list
+	"pam>1.7.3-1"  # linked by biomd-pam
+	"pango>1:1.58.2-1"  # linked by gnome-control-center-plinius
+	"phosh>0.57.0-2"  # core list
+	"pipewire>1:1.6.10-1"  # core list
+	"pixman>0.46.4-1"  # linked by phoc-plinius
+	"polkit>128-1"  # linked by gnome-control-center-plinius
+	"seatd>0.9.3-1"  # linked by phoc-plinius
+	"smbclient>2:4.25.1-1"  # linked by gnome-control-center-plinius
+	"sqlite>3.54.0-1"  # linked by biomd
+	"systemd>262.1-1"  # core list
+	"systemd-libs>262.1-1"  # linked by bluebinder
+	"udisks2>2.11.2-1"  # linked by gnome-control-center-plinius
+	"upower>1.91.5-1"  # linked by gnome-control-center-plinius
+	"vulkan-icd-loader>1.4.363.0-1"  # linked by phoc-plinius
+	"wayland>1.26.0-1"  # linked by gnome-control-center-plinius
+	"wireplumber>0.5.18-1"  # core list
+	"xcb-util-errors>1.0.1-2"  # linked by phoc-plinius
+	"xcb-util-renderutil>0.3.10-2"  # linked by phoc-plinius
+	"xcb-util-wm>0.4.2-2"  # linked by phoc-plinius
+)

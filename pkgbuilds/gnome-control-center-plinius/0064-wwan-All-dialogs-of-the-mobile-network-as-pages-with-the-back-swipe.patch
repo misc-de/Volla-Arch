@@ -1,0 +1,1046 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 10:38:44 +0100
+Subject: [PATCH] wwan: All dialogs of the mobile network as pages with the
+ back swipe
+
+Plinius: network mode, network and SIM lock were GtkDialogs, windows of
+their own with "Cancel" and "Set" in the window's bar, which
+cc-plinius-dialog-pages.c cannot turn into pages. Now they are
+AdwDialogs with their own header bar: "Set" (or "Next" for the SIM
+lock) at the end, the back arrow and the back swipe instead of
+"Cancel". A new dialog is made for every opening, as for the access
+points and the modem details, so what show() set up is done once
+constructed. The network list takes the rest of the page; the SIM
+lock's "Enter current PIN" line wraps, as one line it made the page
+wider than the phone.
+
+The modem details were presented for the window, outside the
+navigation, and so stayed a dialog; now for the page. The access
+points refused to close (can-close false, their own back button steps
+from the editor to the list), so they could not be swiped away: on the
+list they close with the back swipe now, in the editor the back button
+still returns to the list. The panel hears about it through "closed"
+too.
+---
+ panels/wwan/cc-wwan-apn-dialog.blp      |   1 -
+ panels/wwan/cc-wwan-apn-dialog.c        |  14 +
+ panels/wwan/cc-wwan-details-dialog.blp  |   4 +-
+ panels/wwan/cc-wwan-device-page.c       |  54 ++--
+ panels/wwan/cc-wwan-mode-dialog.blp     |  54 ++--
+ panels/wwan/cc-wwan-mode-dialog.c       |  29 +--
+ panels/wwan/cc-wwan-mode-dialog.h       |   4 +-
+ panels/wwan/cc-wwan-network-dialog.blp  |  54 ++--
+ panels/wwan/cc-wwan-network-dialog.c    |  26 +-
+ panels/wwan/cc-wwan-network-dialog.h    |   4 +-
+ panels/wwan/cc-wwan-sim-lock-dialog.blp | 327 ++++++++++++------------
+ panels/wwan/cc-wwan-sim-lock-dialog.c   |  28 +-
+ panels/wwan/cc-wwan-sim-lock-dialog.h   |   4 +-
+ 13 files changed, 295 insertions(+), 308 deletions(-)
+
+diff --git a/panels/wwan/cc-wwan-apn-dialog.blp b/panels/wwan/cc-wwan-apn-dialog.blp
+index 91e91fd..33fac8d 100644
+--- a/panels/wwan/cc-wwan-apn-dialog.blp
++++ b/panels/wwan/cc-wwan-apn-dialog.blp
+@@ -5,7 +5,6 @@ template $CcWwanApnDialog: Adw.Dialog {
+   content-height: 510;
+   content-width: 400;
+   title: _("Access Points");
+-  can-close: false;
+ 
+   child: Adw.ToolbarView {
+     [top]
+diff --git a/panels/wwan/cc-wwan-apn-dialog.c b/panels/wwan/cc-wwan-apn-dialog.c
+index db186fc..5b8a744 100644
+--- a/panels/wwan/cc-wwan-apn-dialog.c
++++ b/panels/wwan/cc-wwan-apn-dialog.c
+@@ -108,6 +108,16 @@ cc_wwan_apn_row_init (CcWwanApnRow *row)
+ {
+ }
+ 
++/* Plinius: as a page (cc-plinius-dialog-pages.c) the list closes with the back swipe too. The
++ * editor does not: there the back button returns to the list, a swipe would drop the edit. */
++static void
++cc_wwan_apn_view_changed_cb (CcWwanApnDialog *self)
++{
++    GtkWidget *view = gtk_stack_get_visible_child (self->apn_settings_stack);
++
++    adw_dialog_set_can_close (ADW_DIALOG (self), view != GTK_WIDGET (self->apn_edit_view));
++}
++
+ static void
+ cc_wwan_apn_back_clicked_cb (CcWwanApnDialog *self)
+ {
+@@ -405,6 +415,10 @@ static void
+ cc_wwan_apn_dialog_init (CcWwanApnDialog *self)
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
++
++    g_signal_connect_object (self->apn_settings_stack, "notify::visible-child",
++                             G_CALLBACK (cc_wwan_apn_view_changed_cb), self, G_CONNECT_SWAPPED);
++    cc_wwan_apn_view_changed_cb (self);
+ }
+ 
+ AdwDialog *
+diff --git a/panels/wwan/cc-wwan-details-dialog.blp b/panels/wwan/cc-wwan-details-dialog.blp
+index d1c0ddc..5c7b384 100644
+--- a/panels/wwan/cc-wwan-details-dialog.blp
++++ b/panels/wwan/cc-wwan-details-dialog.blp
+@@ -3,8 +3,8 @@ using Adw 1;
+ 
+ template $CcWwanDetailsDialog: Adw.Dialog {
+   title: _("Modem Details");
+-  height-request: 480;
+-  width-request: 360;
++  content-height: 480;
++  content-width: 360;
+ 
+   Adw.ToolbarView {
+     [top]
+diff --git a/panels/wwan/cc-wwan-device-page.c b/panels/wwan/cc-wwan-device-page.c
+index 41a611f..10dbad8 100644
+--- a/panels/wwan/cc-wwan-device-page.c
++++ b/panels/wwan/cc-wwan-device-page.c
+@@ -84,9 +84,6 @@ struct _CcWwanDevicePage {
+     GCancellable *cancellable;
+     char *esim_modem;   /* Plinius: oFono modem with an eUICC */
+ 
+-    GtkWindow *network_mode_dialog;
+-    GtkWindow *network_dialog;
+-    GtkWindow *sim_lock_dialog;
+     GtkWindow *sim_slot_dialog;
+ 
+     gint sim_index;
+@@ -133,7 +130,7 @@ wwan_device_page_handle_data_row (CcWwanDevicePage *self, AdwSwitchRow *data_row
+ }
+ 
+ static void
+-wwan_apn_dialog_closed_cb (CcWwanDevicePage *self, AdwDialog *dialog)
++wwan_apn_dialog_done (CcWwanDevicePage *self, AdwDialog *dialog)
+ {
+     AdwSwitchRow *data_row;
+ 
+@@ -142,7 +139,12 @@ wwan_apn_dialog_closed_cb (CcWwanDevicePage *self, AdwDialog *dialog)
+ 
+     if (data_row)
+         wwan_device_page_handle_data_row (self, data_row);
++}
+ 
++static void
++wwan_apn_dialog_closed_cb (CcWwanDevicePage *self, AdwDialog *dialog)
++{
++    wwan_apn_dialog_done (self, dialog);
+     adw_dialog_force_close (ADW_DIALOG (dialog));
+ }
+ 
+@@ -153,6 +155,8 @@ wwan_data_show_apn_dialog (CcWwanDevicePage *self)
+ 
+     dialog = cc_wwan_apn_dialog_new (self->device);
+     g_signal_connect_object (dialog, "close-attempt", G_CALLBACK (wwan_apn_dialog_closed_cb), self, G_CONNECT_SWAPPED);
++    /* Plinius: on the list the dialog may close without asking (back swipe as a page) */
++    g_signal_connect_object (dialog, "closed", G_CALLBACK (wwan_apn_dialog_done), self, G_CONNECT_SWAPPED);
+     adw_dialog_present (dialog, GTK_WIDGET (self));
+     return dialog;
+ }
+@@ -319,26 +323,18 @@ wwan_data_settings_changed_cb (CcWwanDevicePage *self, GParamSpec *pspec, AdwSwi
+ static void
+ wwan_network_settings_activated_cb (CcWwanDevicePage *self, CcListRow *row)
+ {
+-    GtkWidget *dialog;
+-    GtkWindow *top_level;
+-
+-    top_level = GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self)));
+-
+-    if (row == self->network_mode_row) {
+-        if (!self->network_mode_dialog)
+-            self->network_mode_dialog = cc_wwan_mode_dialog_new (top_level, self->device);
+-
+-        dialog = GTK_WIDGET (self->network_mode_dialog);
+-    } else if (row == self->network_name_row) {
+-        if (!self->network_dialog)
+-            self->network_dialog = cc_wwan_network_dialog_new (top_level, self->device);
++    AdwDialog *dialog;
+ 
+-        dialog = GTK_WIDGET (self->network_dialog);
+-    } else {
++    /* Plinius: AdwDialogs, a new one for every opening: they open as pages of the window
++     * (cc-plinius-dialog-pages.c) with the back swipe, no longer as windows of their own */
++    if (row == self->network_mode_row)
++        dialog = cc_wwan_mode_dialog_new (self->device);
++    else if (row == self->network_name_row)
++        dialog = cc_wwan_network_dialog_new (self->device);
++    else
+         return;
+-    }
+ 
+-    gtk_window_present (GTK_WINDOW (dialog));
++    adw_dialog_present (dialog, GTK_WIDGET (self));
+ }
+ 
+ /* Plinius: eSIM management, only for a modem whose card is an eUICC */
+@@ -375,17 +371,12 @@ wwan_esim_probe_cb (GObject *source, GAsyncResult *result, gpointer user_data)
+ static void
+ wwan_advanced_settings_activated_cb (CcWwanDevicePage *self, CcListRow *row)
+ {
+-    GtkWindow *top_level;
+-
+-    top_level = GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self)));
+-
+     if (row == self->sim_lock_row) {
+-        if (!self->sim_lock_dialog)
+-            self->sim_lock_dialog = cc_wwan_sim_lock_dialog_new (top_level, self->device);
+-        gtk_widget_set_visible (GTK_WIDGET (self->sim_lock_dialog), TRUE);
++        /* Plinius: a page like the others (see wwan_network_settings_activated_cb) */
++        adw_dialog_present (cc_wwan_sim_lock_dialog_new (self->device), GTK_WIDGET (self));
+     } else if (row == self->details_row) {
+-        AdwDialog *dialog = cc_wwan_details_dialog_new (self->device);
+-        adw_dialog_present (dialog, GTK_WIDGET (top_level));
++        /* Plinius: for this page, so that it opens as a page of the window, not over it */
++        adw_dialog_present (cc_wwan_details_dialog_new (self->device), GTK_WIDGET (self));
+     } else if (row == self->apn_settings_row) {
+         wwan_data_show_apn_dialog (self);
+     } else if (row == self->esim_row) {
+@@ -556,9 +547,6 @@ cc_wwan_device_page_dispose (GObject *object)
+ {
+     CcWwanDevicePage *self = (CcWwanDevicePage *) object;
+ 
+-    g_clear_pointer (&self->network_mode_dialog, gtk_window_destroy);
+-    g_clear_pointer (&self->network_dialog, gtk_window_destroy);
+-    g_clear_pointer (&self->sim_lock_dialog, gtk_window_destroy);
+     g_clear_pointer (&self->sim_slot_dialog, gtk_window_destroy);
+ 
+     g_cancellable_cancel (self->cancellable);
+diff --git a/panels/wwan/cc-wwan-mode-dialog.blp b/panels/wwan/cc-wwan-mode-dialog.blp
+index d683307..a7cbcc1 100644
+--- a/panels/wwan/cc-wwan-mode-dialog.blp
++++ b/panels/wwan/cc-wwan-mode-dialog.blp
+@@ -1,41 +1,39 @@
+ using Gtk 4.0;
+ using Adw 1;
+ 
+-template $CcWwanModeDialog: Dialog {
++// Plinius: an AdwDialog, so that it opens as a page of the window (cc-plinius-dialog-pages.c)
++// with the back arrow and the back swipe instead of "Cancel"
++template $CcWwanModeDialog: Adw.Dialog {
+   title: _("Network Mode");
+-  default-height: 480;
+-  default-width: 360;
+-  hide-on-close: true;
+-  modal: true;
++  content-height: 480;
++  content-width: 360;
+ 
+-  Adw.PreferencesPage {
+-    Adw.PreferencesGroup {
+-      ListBox network_mode_list {
+-        selection-mode: none;
+-        row-activated => $cc_wwan_mode_changed_cb(template);
++  child: Adw.ToolbarView {
++    [top]
++    Adw.HeaderBar {
++      [end]
++      Button button_ok {
++        use-underline: true;
++        label: _("_Set");
++        clicked => $cc_wwan_mode_dialog_ok_clicked_cb(template);
+ 
+         styles [
+-          "boxed-list",
++          "suggested-action",
+         ]
+       }
+     }
+-  }
+ 
+-  [action response=cancel]
+-  Button button_cancel {
+-    use-underline: true;
+-    label: _("_Cancel");
+-    clicked => $gtk_widget_hide(template);
+-  }
++    content: Adw.PreferencesPage {
++      Adw.PreferencesGroup {
++        ListBox network_mode_list {
++          selection-mode: none;
++          row-activated => $cc_wwan_mode_changed_cb(template);
+ 
+-  [action response=apply default]
+-  Button button_ok {
+-    use-underline: true;
+-    label: _("_Set");
+-    clicked => $cc_wwan_mode_dialog_ok_clicked_cb(template);
+-
+-    styles [
+-      "suggested-action ",
+-    ]
+-  }
++          styles [
++            "boxed-list",
++          ]
++        }
++      }
++    };
++  };
+ }
+diff --git a/panels/wwan/cc-wwan-mode-dialog.c b/panels/wwan/cc-wwan-mode-dialog.c
+index 389dee4..6acb98e 100644
+--- a/panels/wwan/cc-wwan-mode-dialog.c
++++ b/panels/wwan/cc-wwan-mode-dialog.c
+@@ -40,7 +40,7 @@
+ G_DECLARE_FINAL_TYPE (CcWwanModeRow, cc_wwan_mode_row, CC, WWAN_MODE_ROW, GtkListBoxRow)
+ 
+ struct _CcWwanModeDialog {
+-    GtkDialog parent_instance;
++    AdwDialog parent_instance;
+ 
+     CcWwanDevice *device;
+     GtkListBox *network_mode_list;
+@@ -52,7 +52,7 @@ struct _CcWwanModeDialog {
+     MMModemMode new_preferred;
+ };
+ 
+-G_DEFINE_FINAL_TYPE (CcWwanModeDialog, cc_wwan_mode_dialog, GTK_TYPE_DIALOG)
++G_DEFINE_FINAL_TYPE (CcWwanModeDialog, cc_wwan_mode_dialog, ADW_TYPE_DIALOG)
+ 
+ enum {
+     PROP_0,
+@@ -110,7 +110,7 @@ cc_wwan_mode_dialog_ok_clicked_cb (CcWwanModeDialog *self)
+         g_return_if_reached ();
+     }
+ 
+-    gtk_window_close (GTK_WINDOW (self));
++    adw_dialog_close (ADW_DIALOG (self));
+ }
+ 
+ static GtkWidget *
+@@ -203,6 +203,8 @@ cc_wwan_mode_dialog_set_property (GObject *object, guint prop_id, const GValue *
+     }
+ }
+ 
++static void cc_wwan_mode_dialog_reset (CcWwanModeDialog *self);
++
+ static void
+ cc_wwan_mode_dialog_constructed (GObject *object)
+ {
+@@ -214,6 +216,8 @@ cc_wwan_mode_dialog_constructed (GObject *object)
+         g_warning ("Can't get allowed and preferred wwan modes");
+ 
+     cc_wwan_mode_dialog_update (self);
++    /* Plinius: a new dialog for every opening (it is a page now), set up here instead of in show() */
++    cc_wwan_mode_dialog_reset (self);
+ }
+ 
+ static void
+@@ -237,13 +241,11 @@ cc_wwan_mode_dialog_update_mode (CcWwanModeRow *row, CcWwanModeDialog *self)
+ }
+ 
+ static void
+-cc_wwan_mode_dialog_show (GtkWidget *widget)
++cc_wwan_mode_dialog_reset (CcWwanModeDialog *self)
+ {
+-    CcWwanModeDialog *self = CC_WWAN_MODE_DIALOG (widget);
+-
+     if (!cc_wwan_device_get_current_mode (self->device, &self->allowed, &self->preferred)) {
+         g_warning ("Can't get allowed and preferred wwan modes");
+-        goto end;
++        return;
+     }
+ 
+     self->selected_row = NULL;
+@@ -251,9 +253,6 @@ cc_wwan_mode_dialog_show (GtkWidget *widget)
+     for (GtkWidget *child = gtk_widget_get_first_child (GTK_WIDGET (self->network_mode_list)); child;
+          child = gtk_widget_get_next_sibling (child))
+         cc_wwan_mode_dialog_update_mode (CC_WWAN_MODE_ROW (child), self);
+-
+-end:
+-    GTK_WIDGET_CLASS (cc_wwan_mode_dialog_parent_class)->show (widget);
+ }
+ 
+ static void
+@@ -266,8 +265,6 @@ cc_wwan_mode_dialog_class_init (CcWwanModeDialogClass *klass)
+     object_class->constructed = cc_wwan_mode_dialog_constructed;
+     object_class->dispose = cc_wwan_mode_dialog_dispose;
+ 
+-    widget_class->show = cc_wwan_mode_dialog_show;
+-
+     properties[PROP_DEVICE] = g_param_spec_object ("device", NULL, NULL, CC_TYPE_WWAN_DEVICE,
+                                                    G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY);
+ 
+@@ -287,12 +284,10 @@ cc_wwan_mode_dialog_init (CcWwanModeDialog *self)
+     gtk_widget_init_template (GTK_WIDGET (self));
+ }
+ 
+-GtkWindow *
+-cc_wwan_mode_dialog_new (GtkWindow *parent_window, CcWwanDevice *device)
++AdwDialog *
++cc_wwan_mode_dialog_new (CcWwanDevice *device)
+ {
+-    g_return_val_if_fail (GTK_IS_WINDOW (parent_window), NULL);
+     g_return_val_if_fail (CC_IS_WWAN_DEVICE (device), NULL);
+ 
+-    return GTK_WINDOW (g_object_new (CC_TYPE_WWAN_MODE_DIALOG, "transient-for", parent_window, "use-header-bar", 1,
+-                                     "device", device, NULL));
++    return ADW_DIALOG (g_object_new (CC_TYPE_WWAN_MODE_DIALOG, "device", device, NULL));
+ }
+diff --git a/panels/wwan/cc-wwan-mode-dialog.h b/panels/wwan/cc-wwan-mode-dialog.h
+index ccf0767..10e9562 100644
+--- a/panels/wwan/cc-wwan-mode-dialog.h
++++ b/panels/wwan/cc-wwan-mode-dialog.h
+@@ -32,7 +32,7 @@
+ G_BEGIN_DECLS
+ 
+ #define CC_TYPE_WWAN_MODE_DIALOG (cc_wwan_mode_dialog_get_type ())
+-G_DECLARE_FINAL_TYPE (CcWwanModeDialog, cc_wwan_mode_dialog, CC, WWAN_MODE_DIALOG, GtkDialog);
+-GtkWindow *cc_wwan_mode_dialog_new (GtkWindow *parent_window, CcWwanDevice *device);
++G_DECLARE_FINAL_TYPE (CcWwanModeDialog, cc_wwan_mode_dialog, CC, WWAN_MODE_DIALOG, AdwDialog);
++AdwDialog *cc_wwan_mode_dialog_new (CcWwanDevice *device);
+ 
+ G_END_DECLS
+diff --git a/panels/wwan/cc-wwan-network-dialog.blp b/panels/wwan/cc-wwan-network-dialog.blp
+index c855a50..f6991f9 100644
+--- a/panels/wwan/cc-wwan-network-dialog.blp
++++ b/panels/wwan/cc-wwan-network-dialog.blp
+@@ -1,18 +1,29 @@
+ using Gtk 4.0;
+ using Adw 1;
+ 
+-template $CcWwanNetworkDialog: Dialog {
++// Plinius: an AdwDialog, so that it opens as a page of the window (cc-plinius-dialog-pages.c)
++// with the back arrow and the back swipe instead of "Cancel"
++template $CcWwanNetworkDialog: Adw.Dialog {
+   title: _("Network");
+-  default-height: 480;
+-  default-width: 360;
+-  hide-on-close: true;
+-  modal: true;
+-
+-  Box {
+-    width-request: 340;
+-    height-request: 360;
++  content-height: 480;
++  content-width: 360;
++
++  child: Adw.ToolbarView {
++    [top]
++    Adw.HeaderBar {
++      [end]
++      Button button_apply {
++        use-underline: true;
++        label: _("_Set");
++        clicked => $cc_wwan_network_dialog_apply_clicked_cb(template);
++
++        styles [
++          "suggested-action",
++        ]
++      }
++    }
+ 
+-    Adw.ToastOverlay toast_overlay {
++    content: Adw.ToastOverlay toast_overlay {
+       hexpand: true;
+ 
+       child: Box {
+@@ -68,6 +79,7 @@ template $CcWwanNetworkDialog: Dialog {
+         ScrolledWindow {
+           hscrollbar-policy: never;
+           propagate-natural-height: true;
++          vexpand: true;
+           visible: bind operator_list_box.visible;
+ 
+           styles [
+@@ -86,24 +98,6 @@ template $CcWwanNetworkDialog: Dialog {
+           };
+         }
+       };
+-    }
+-  }
+-
+-  [action response=cancel]
+-  Button button_cancel {
+-    use-underline: true;
+-    label: _("_Cancel");
+-    clicked => $gtk_widget_hide(template);
+-  }
+-
+-  [action response=apply default]
+-  Button button_apply {
+-    use-underline: true;
+-    label: _("_Set");
+-    clicked => $cc_wwan_network_dialog_apply_clicked_cb(template);
+-
+-    styles [
+-      "suggested-action ",
+-    ]
+-  }
++    };
++  };
+ }
+diff --git a/panels/wwan/cc-wwan-network-dialog.c b/panels/wwan/cc-wwan-network-dialog.c
+index 1c10df9..9dbb19a 100644
+--- a/panels/wwan/cc-wwan-network-dialog.c
++++ b/panels/wwan/cc-wwan-network-dialog.c
+@@ -41,7 +41,7 @@
+ G_DECLARE_FINAL_TYPE (CcWwanNetworkRow, cc_wwan_network_row, CC, WWAN_NETWORK_ROW, GtkListBoxRow)
+ 
+ struct _CcWwanNetworkDialog {
+-    GtkDialog parent_instance;
++    AdwDialog parent_instance;
+ 
+     AdwToastOverlay *toast_overlay;
+     AdwSwitchRow *automatic_row;
+@@ -61,7 +61,7 @@ struct _CcWwanNetworkDialog {
+     gboolean no_update_network;
+ };
+ 
+-G_DEFINE_FINAL_TYPE (CcWwanNetworkDialog, cc_wwan_network_dialog, GTK_TYPE_DIALOG)
++G_DEFINE_FINAL_TYPE (CcWwanNetworkDialog, cc_wwan_network_dialog, ADW_TYPE_DIALOG)
+ 
+ enum {
+     PROP_0,
+@@ -372,7 +372,7 @@ cc_wwan_network_dialog_apply_clicked_cb (CcWwanNetworkDialog *self)
+     else
+         g_warn_if_reached ();
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (self), FALSE);
++    adw_dialog_close (ADW_DIALOG (self));
+ }
+ 
+ static void
+@@ -404,20 +404,22 @@ cc_wwan_auto_network_changed_cb (CcWwanNetworkDialog *self, GParamSpec *pspec, A
+     }
+ }
+ 
++/* Plinius: a new dialog for every opening (it is a page now), set up once constructed instead of
++ * in show() */
+ static void
+-cc_wwan_network_dialog_show (GtkWidget *widget)
++cc_wwan_network_dialog_constructed (GObject *object)
+ {
+-    CcWwanNetworkDialog *self = (CcWwanNetworkDialog *) widget;
++    CcWwanNetworkDialog *self = (CcWwanNetworkDialog *) object;
+     gboolean is_auto;
+ 
++    G_OBJECT_CLASS (cc_wwan_network_dialog_parent_class)->constructed (object);
++
+     is_auto = cc_wwan_device_is_auto_network (self->device);
+ 
+     self->no_update_network = TRUE;
+     g_object_set (self->automatic_row, "active", is_auto, NULL);
+ 
+     cc_wwan_network_dialog_update_current_network (self);
+-
+-    GTK_WIDGET_CLASS (cc_wwan_network_dialog_parent_class)->show (widget);
+ }
+ 
+ static void
+@@ -457,7 +459,7 @@ cc_wwan_network_dialog_class_init (CcWwanNetworkDialogClass *klass)
+     object_class->set_property = cc_wwan_network_dialog_set_property;
+     object_class->dispose = cc_wwan_network_dialog_dispose;
+ 
+-    widget_class->show = cc_wwan_network_dialog_show;
++    object_class->constructed = cc_wwan_network_dialog_constructed;
+ 
+     properties[PROP_DEVICE] = g_param_spec_object ("device", NULL, NULL, CC_TYPE_WWAN_DEVICE,
+                                                    G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY);
+@@ -489,12 +491,10 @@ cc_wwan_network_dialog_init (CcWwanNetworkDialog *self)
+     self->search_cancellable = g_cancellable_new ();
+ }
+ 
+-GtkWindow *
+-cc_wwan_network_dialog_new (GtkWindow *parent_window, CcWwanDevice *device)
++AdwDialog *
++cc_wwan_network_dialog_new (CcWwanDevice *device)
+ {
+-    g_return_val_if_fail (GTK_IS_WINDOW (parent_window), NULL);
+     g_return_val_if_fail (CC_IS_WWAN_DEVICE (device), NULL);
+ 
+-    return GTK_WINDOW (g_object_new (CC_TYPE_WWAN_NETWORK_DIALOG, "transient-for", parent_window, "use-header-bar", 1,
+-                                     "device", device, NULL));
++    return ADW_DIALOG (g_object_new (CC_TYPE_WWAN_NETWORK_DIALOG, "device", device, NULL));
+ }
+diff --git a/panels/wwan/cc-wwan-network-dialog.h b/panels/wwan/cc-wwan-network-dialog.h
+index 18c0dd1..558f559 100644
+--- a/panels/wwan/cc-wwan-network-dialog.h
++++ b/panels/wwan/cc-wwan-network-dialog.h
+@@ -32,7 +32,7 @@
+ G_BEGIN_DECLS
+ 
+ #define CC_TYPE_WWAN_NETWORK_DIALOG (cc_wwan_network_dialog_get_type ())
+-G_DECLARE_FINAL_TYPE (CcWwanNetworkDialog, cc_wwan_network_dialog, CC, WWAN_NETWORK_DIALOG, GtkDialog);
+-GtkWindow *cc_wwan_network_dialog_new (GtkWindow *parent_window, CcWwanDevice *device);
++G_DECLARE_FINAL_TYPE (CcWwanNetworkDialog, cc_wwan_network_dialog, CC, WWAN_NETWORK_DIALOG, AdwDialog);
++AdwDialog *cc_wwan_network_dialog_new (CcWwanDevice *device);
+ 
+ G_END_DECLS
+diff --git a/panels/wwan/cc-wwan-sim-lock-dialog.blp b/panels/wwan/cc-wwan-sim-lock-dialog.blp
+index 292179c..c7256c0 100644
+--- a/panels/wwan/cc-wwan-sim-lock-dialog.blp
++++ b/panels/wwan/cc-wwan-sim-lock-dialog.blp
+@@ -1,205 +1,202 @@
+ using Gtk 4.0;
+ using Adw 1;
+ 
+-template $CcWwanSimLockDialog: Dialog {
+-  default-height: 480;
+-  default-width: 360;
+-  hide-on-close: true;
+-  modal: true;
++// Plinius: an AdwDialog, so that it opens as a page of the window (cc-plinius-dialog-pages.c)
++// with the back arrow and the back swipe instead of "Cancel"
++template $CcWwanSimLockDialog: Adw.Dialog {
++  content-height: 480;
++  content-width: 360;
+   title: _("SIM Lock");
+ 
+-  [titlebar]
+-  HeaderBar {
+-    [end]
+-    Stack button_stack {
+-      StackPage {
+-        name: "next";
+-
+-        child: Button next_button {
+-          sensitive: false;
+-          use-underline: true;
+-          label: _("_Next");
+-          clicked => $cc_wwan_pin_next_clicked_cb(template);
+-
+-          styles [
+-            "suggested-action",
+-          ]
+-        };
+-      }
+-
+-      StackPage {
+-        name: "apply";
+-
+-        child: Button apply_button {
+-          use-underline: true;
+-          clicked => $cc_wwan_pin_apply_clicked_cb(template);
+-
+-          styles [
+-            "suggested-action",
+-          ]
+-        };
++  child: Adw.ToolbarView {
++    [top]
++    Adw.HeaderBar {
++      [end]
++      Stack button_stack {
++        StackPage {
++          name: "next";
++
++          child: Button next_button {
++            sensitive: false;
++            use-underline: true;
++            label: _("_Next");
++            clicked => $cc_wwan_pin_next_clicked_cb(template);
++
++            styles [
++              "suggested-action",
++            ]
++          };
++        }
++
++        StackPage {
++          name: "apply";
++
++          child: Button apply_button {
++            use-underline: true;
++            clicked => $cc_wwan_pin_apply_clicked_cb(template);
++
++            styles [
++              "suggested-action",
++            ]
++          };
++        }
+       }
+     }
+-  }
+-
+-  Box {
+-    width-request: 340;
+-    height-request: 360;
+ 
+-    Adw.Clamp {
+-      margin-top: 32;
+-      margin-bottom: 32;
+-      margin-start: 18;
+-      margin-end: 18;
++    content: Box {
++      Adw.Clamp {
++        hexpand: true;
++        margin-top: 32;
++        margin-bottom: 32;
++        margin-start: 18;
++        margin-end: 18;
+ 
+-      Adw.ToastOverlay toast_overlay {
+-        child: Stack pin_settings_stack {
+-          transition-type: slide_left;
++        Adw.ToastOverlay toast_overlay {
++          child: Stack pin_settings_stack {
++            transition-type: slide_left;
+ 
+-          StackPage {
+-            name: "pin-settings";
++            StackPage {
++              name: "pin-settings";
+ 
+-            child: Box {
+-              orientation: vertical;
++              child: Box {
++                orientation: vertical;
+ 
+-              ListBox {
+-                selection-mode: none;
+-                margin-bottom: 18;
++                ListBox {
++                  selection-mode: none;
++                  margin-bottom: 18;
+ 
+-                styles [
+-                  "frame",
+-                ]
++                  styles [
++                    "frame",
++                  ]
+ 
+-                Adw.SwitchRow lock_row {
+-                  use-underline: true;
+-                  title: _("_Lock SIM with PIN");
+-                  notify::active => $cc_wwan_sim_lock_changed_cb(template);
++                  Adw.SwitchRow lock_row {
++                    use-underline: true;
++                    title: _("_Lock SIM with PIN");
++                    notify::active => $cc_wwan_sim_lock_changed_cb(template);
++                  }
+                 }
+-              }
+ 
+-              Grid lock_change_grid {
+-                visible: false;
+-                row-spacing: 18;
+-                column-spacing: 12;
++                Grid lock_change_grid {
++                  visible: false;
++                  row-spacing: 18;
++                  column-spacing: 12;
++
++                  Label lock_change_title {
++                    label: _("Change PIN");
++                    margin-bottom: 9;
++                    xalign: 0.0;
++
++                    styles [
++                      "heading",
++                    ]
++
++                    layout {
++                      column: 0;
++                      row: 0;
++                      column-span: 2;
++                    }
++                  }
+ 
+-                Label lock_change_title {
+-                  label: _("Change PIN");
+-                  margin-bottom: 9;
+-                  xalign: 0.0;
++                  Label {
++                    label: _("New PIN");
++                    halign: end;
++                    mnemonic-widget: new_pin_entry;
+ 
+-                  styles [
+-                    "heading",
+-                  ]
++                    layout {
++                      column: 0;
++                      row: 1;
++                    }
++                  }
+ 
+-                  layout {
+-                    column: 0;
+-                    row: 0;
+-                    column-span: 2;
++                  Entry new_pin_entry {
++                    visibility: false;
++                    input-purpose: password;
++                    input-hints: no_emoji;
++                    max-length: 8;
++                    max-width-chars: 32;
++                    notify::text => $cc_wwan_pin_entry_changed_cb(template);
++                    insert-text => $cc_wwan_pin_entry_text_inserted_cb(template);
++
++                    layout {
++                      column: 1;
++                      row: 1;
++                    }
+                   }
+-                }
+ 
+-                Label {
+-                  label: _("New PIN");
+-                  halign: end;
+-                  mnemonic-widget: new_pin_entry;
++                  Label {
++                    label: _("Confirm");
++                    halign: end;
++                    mnemonic-widget: pin_confirm_entry;
++
++                    layout {
++                      column: 0;
++                      row: 2;
++                    }
++                  }
+ 
+-                  layout {
+-                    column: 0;
+-                    row: 1;
++                  Entry pin_confirm_entry {
++                    visibility: false;
++                    input-purpose: password;
++                    input-hints: no_emoji;
++                    max-length: 8;
++                    max-width-chars: 32;
++                    notify::text => $cc_wwan_pin_entry_changed_cb(template);
++                    insert-text => $cc_wwan_pin_entry_changed_cb(template);
++
++                    layout {
++                      column: 1;
++                      row: 2;
++                    }
+                   }
+                 }
++              };
++            }
+ 
+-                Entry new_pin_entry {
+-                  visibility: false;
+-                  input-purpose: password;
+-                  input-hints: no_emoji;
+-                  max-length: 8;
+-                  max-width-chars: 32;
+-                  notify::text => $cc_wwan_pin_entry_changed_cb(template);
+-                  insert-text => $cc_wwan_pin_entry_text_inserted_cb(template);
++            StackPage {
++              name: "pin-entry";
+ 
+-                  layout {
+-                    column: 1;
+-                    row: 1;
+-                  }
++              child: Box {
++                orientation: vertical;
++                hexpand: true;
++                vexpand: true;
++                valign: center;
++                halign: center;
++
++                Image {
++                  pixel-size: 128;
++                  icon-name: "dialog-password-symbolic";
+                 }
+ 
++                // Plinius: wrapped, as one line it made the page (the stack measures both
++                // views) wider than the phone
+                 Label {
+-                  label: _("Confirm");
+-                  halign: end;
+-                  mnemonic-widget: pin_confirm_entry;
++                  label: _("Enter current PIN to change SIM lock settings");
++                  margin-bottom: 24;
++                  halign: center;
++                  wrap: true;
++                  justify: center;
++                  mnemonic-widget: pin_entry;
+ 
+-                  layout {
+-                    column: 0;
+-                    row: 2;
+-                  }
++                  styles [
++                    "dim-label",
++                  ]
+                 }
+ 
+-                Entry pin_confirm_entry {
++                Entry pin_entry {
+                   visibility: false;
+                   input-purpose: password;
+                   input-hints: no_emoji;
+                   max-length: 8;
+                   max-width-chars: 32;
+-                  notify::text => $cc_wwan_pin_entry_changed_cb(template);
+-                  insert-text => $cc_wwan_pin_entry_changed_cb(template);
+-
+-                  layout {
+-                    column: 1;
+-                    row: 2;
+-                  }
++                  notify::text => $cc_wwan_pin_entered_cb(template);
++                  insert-text => $cc_wwan_pin_entry_text_inserted_cb(template);
++                  activate => $cc_wwan_pin_apply_clicked_cb(template);
+                 }
+-              }
+-            };
+-          }
+-
+-          StackPage {
+-            name: "pin-entry";
+-
+-            child: Box {
+-              orientation: vertical;
+-              hexpand: true;
+-              vexpand: true;
+-              valign: center;
+-              halign: center;
+-
+-              Image {
+-                pixel-size: 128;
+-                icon-name: "dialog-password-symbolic";
+-              }
+-
+-              Label {
+-                label: _("Enter current PIN to change SIM lock settings");
+-                margin-bottom: 24;
+-                halign: center;
+-                mnemonic-widget: pin_entry;
+-
+-                styles [
+-                  "dim-label",
+-                ]
+-              }
+-
+-              Entry pin_entry {
+-                visibility: false;
+-                input-purpose: password;
+-                input-hints: no_emoji;
+-                max-length: 8;
+-                max-width-chars: 32;
+-                notify::text => $cc_wwan_pin_entered_cb(template);
+-                insert-text => $cc_wwan_pin_entry_text_inserted_cb(template);
+-                activate => $cc_wwan_pin_apply_clicked_cb(template);
+-              }
+-            };
+-          }
+-        };
++              };
++            }
++          };
++        }
+       }
+-    }
+-  }
+-
+-  [action response=cancel]
+-  Button cancel_button {
+-    use-underline: true;
+-    label: _("_Cancel");
+-    clicked => $gtk_widget_hide(template);
+-  }
++    };
++  };
+ }
+diff --git a/panels/wwan/cc-wwan-sim-lock-dialog.c b/panels/wwan/cc-wwan-sim-lock-dialog.c
+index 88befc4..f55bdb9 100644
+--- a/panels/wwan/cc-wwan-sim-lock-dialog.c
++++ b/panels/wwan/cc-wwan-sim-lock-dialog.c
+@@ -40,7 +40,7 @@
+ #define PIN_MAXIMUM_LENGTH 8
+ 
+ struct _CcWwanSimLockDialog {
+-    GtkDialog parent_instance;
++    AdwDialog parent_instance;
+ 
+     CcWwanDevice *device;
+ 
+@@ -55,7 +55,7 @@ struct _CcWwanSimLockDialog {
+     GtkStack *pin_settings_stack;
+ };
+ 
+-G_DEFINE_FINAL_TYPE (CcWwanSimLockDialog, cc_wwan_sim_lock_dialog, GTK_TYPE_DIALOG)
++G_DEFINE_FINAL_TYPE (CcWwanSimLockDialog, cc_wwan_sim_lock_dialog, ADW_TYPE_DIALOG)
+ 
+ enum {
+     PROP_0,
+@@ -93,7 +93,9 @@ cc_wwan_pin_apply_clicked_cb (CcWwanSimLockDialog *self)
+     const gchar *pin, *new_pin;
+     gboolean row_enabled, lock_enabled;
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (self), FALSE);
++    /* Plinius: the page goes once the dialog is done; it is freed only after the page is gone,
++     * so the entries below can still be read */
++    adw_dialog_close (ADW_DIALOG (self));
+ 
+     lock_enabled = cc_wwan_device_get_sim_lock (self->device);
+     row_enabled = adw_switch_row_get_active (self->lock_row);
+@@ -195,12 +197,16 @@ cc_wwan_sim_lock_dialog_set_property (GObject *object, guint prop_id, const GVal
+     }
+ }
+ 
++/* Plinius: a new dialog for every opening (it is a page now), set up once constructed instead of
++ * in show() */
+ static void
+-cc_wwan_sim_lock_dialog_show (GtkWidget *widget)
++cc_wwan_sim_lock_dialog_constructed (GObject *object)
+ {
+-    CcWwanSimLockDialog *self = (CcWwanSimLockDialog *) widget;
++    CcWwanSimLockDialog *self = (CcWwanSimLockDialog *) object;
+     gboolean lock_enabled;
+ 
++    G_OBJECT_CLASS (cc_wwan_sim_lock_dialog_parent_class)->constructed (object);
++
+     gtk_editable_set_text (GTK_EDITABLE (self->pin_entry), "");
+     gtk_widget_set_sensitive (GTK_WIDGET (self->next_button), FALSE);
+     gtk_widget_set_sensitive (GTK_WIDGET (self->apply_button), FALSE);
+@@ -218,8 +224,6 @@ cc_wwan_sim_lock_dialog_show (GtkWidget *widget)
+     gtk_editable_set_text (GTK_EDITABLE (self->pin_entry), "");
+     gtk_editable_set_text (GTK_EDITABLE (self->new_pin_entry), "");
+     gtk_editable_set_text (GTK_EDITABLE (self->pin_confirm_entry), "");
+-
+-    GTK_WIDGET_CLASS (cc_wwan_sim_lock_dialog_parent_class)->show (widget);
+ }
+ 
+ static void
+@@ -241,7 +245,7 @@ cc_wwan_sim_lock_dialog_class_init (CcWwanSimLockDialogClass *klass)
+     object_class->set_property = cc_wwan_sim_lock_dialog_set_property;
+     object_class->dispose = cc_wwan_sim_lock_dialog_dispose;
+ 
+-    widget_class->show = cc_wwan_sim_lock_dialog_show;
++    object_class->constructed = cc_wwan_sim_lock_dialog_constructed;
+ 
+     properties[PROP_DEVICE] = g_param_spec_object ("device", NULL, NULL, CC_TYPE_WWAN_DEVICE,
+                                                    G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY);
+@@ -275,12 +279,10 @@ cc_wwan_sim_lock_dialog_init (CcWwanSimLockDialog *self)
+     gtk_widget_init_template (GTK_WIDGET (self));
+ }
+ 
+-GtkWindow *
+-cc_wwan_sim_lock_dialog_new (GtkWindow *parent_window, CcWwanDevice *device)
++AdwDialog *
++cc_wwan_sim_lock_dialog_new (CcWwanDevice *device)
+ {
+-    g_return_val_if_fail (GTK_IS_WINDOW (parent_window), NULL);
+     g_return_val_if_fail (CC_IS_WWAN_DEVICE (device), NULL);
+ 
+-    return GTK_WINDOW (g_object_new (CC_TYPE_WWAN_SIM_LOCK_DIALOG, "transient-for", parent_window, "use-header-bar", 1,
+-                                     "device", device, NULL));
++    return ADW_DIALOG (g_object_new (CC_TYPE_WWAN_SIM_LOCK_DIALOG, "device", device, NULL));
+ }
+diff --git a/panels/wwan/cc-wwan-sim-lock-dialog.h b/panels/wwan/cc-wwan-sim-lock-dialog.h
+index f16a23c..8042235 100644
+--- a/panels/wwan/cc-wwan-sim-lock-dialog.h
++++ b/panels/wwan/cc-wwan-sim-lock-dialog.h
+@@ -32,7 +32,7 @@
+ G_BEGIN_DECLS
+ 
+ #define CC_TYPE_WWAN_SIM_LOCK_DIALOG (cc_wwan_sim_lock_dialog_get_type ())
+-G_DECLARE_FINAL_TYPE (CcWwanSimLockDialog, cc_wwan_sim_lock_dialog, CC, WWAN_SIM_LOCK_DIALOG, GtkDialog);
+-GtkWindow *cc_wwan_sim_lock_dialog_new (GtkWindow *parent_window, CcWwanDevice *device);
++G_DECLARE_FINAL_TYPE (CcWwanSimLockDialog, cc_wwan_sim_lock_dialog, CC, WWAN_SIM_LOCK_DIALOG, AdwDialog);
++AdwDialog *cc_wwan_sim_lock_dialog_new (CcWwanDevice *device);
+ 
+ G_END_DECLS

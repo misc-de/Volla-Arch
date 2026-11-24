@@ -1,0 +1,142 @@
+#!/bin/bash
+# Self-test after boot and after updates (docs/PAKETIERUNG.md, "Gerätetest und Freigabe"):
+# does each layer that an update can break still work? Checks what the system must have, not
+# what the user may switch off: the Wi-Fi interface must exist, being connected is not required.
+#
+# Usage: plinius-health check | status
+#   check   run all checks (plinius-health.service, a few minutes after boot), as root
+#   status  result of the last check
+# Exit status: 0 all ok, 1 error, 2 at least one check failed
+#
+# Result in /run/plinius-health/result, one line per check: "ok|fail|skip NAME: message".
+# plinius-health-notify (user unit) shows failures as a notification.
+set -uo pipefail
+
+RUN=/run/plinius-health
+
+die() { echo "plinius-health: $*" >&2; exit 1; }
+
+# The user of the graphical session on seat0 (empty if nobody is logged in)
+session_user() {
+	local id
+	for id in $(loginctl list-sessions --no-legend | awk '{ print $1 }'); do
+		if [[ $(loginctl show-session "$id" -p Seat --value) == seat0 &&
+			$(loginctl show-session "$id" -p Type --value) == wayland ]]; then
+			loginctl show-session "$id" -p Name --value
+			return
+		fi
+	done
+}
+
+# Runs a command as the session user, with their runtime directory (PipeWire, D-Bus)
+as_user() {
+	local user=$1; shift
+	runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$user")" "$@"
+}
+
+# Each check prints "ok|fail|skip: message"
+check_units() {
+	local failed
+	failed=$(systemctl --failed --no-legend --plain | awk '{ print $1 }' | paste -sd' ')
+	[[ -z $failed ]] && echo "ok: no failed system units" || echo "fail: failed units: $failed"
+}
+
+check_user_units() {
+	local user=$1 failed
+	[[ -n $user ]] || { echo "skip: no graphical session"; return; }
+	# Much of the phone runs in the user manager, which "systemctl --failed" as root does not see.
+	# pipefail passes on systemctl's status: an empty list must not mean "could not ask".
+	if ! failed=$(as_user "$user" systemctl --user --failed --no-legend --plain 2>/dev/null |
+		awk '{ print $1 }' | paste -sd' '); then
+		echo "fail: user manager of $user not reachable"
+		return
+	fi
+	[[ -z $failed ]] && echo "ok: no failed user units" || echo "fail: failed user units: $failed"
+}
+
+check_container() {
+	# Without the Android container there is no modem, Bluetooth, sensors or camera
+	if [[ $(lxc-info -n android -sH 2>/dev/null) == RUNNING ]]; then
+		echo "ok: Android container running"
+	else
+		echo "fail: Android container not running (lxc-android-config.service)"
+	fi
+}
+
+check_display() {
+	local user=$1 pid
+	# greetd logs in on its own: without a session Phosh did not start or ended
+	[[ -n $user ]] || { echo "fail: no graphical session on seat0 (greetd, phoc, phosh)"; return; }
+	pid=$(pgrep -u "$user" -x phoc | head -1)
+	[[ -n $pid ]] || { echo "fail: phoc not running"; return; }
+	pgrep -u "$user" -x phosh >/dev/null || { echo "fail: phosh not running"; return; }
+	# phoc renders with the Mali driver through libhybris; without it everything is software
+	if grep -q /dev/mali0 "/proc/$pid/maps" 2>/dev/null; then
+		echo "ok: phoc and phosh running, phoc on the GPU"
+	else
+		echo "fail: phoc renders without the GPU (no /dev/mali0 mapped)"
+	fi
+}
+
+check_audio() {
+	local user=$1
+	[[ -n $user ]] || { echo "skip: no graphical session"; return; }
+	# audio-hal-bridge provides the speaker and microphone nodes
+	if as_user "$user" pw-cli ls Node 2>/dev/null | grep -q 'node.name = "hal_output"'; then
+		echo "ok: PipeWire has the speaker of the audio HAL"
+	else
+		echo "fail: no audio HAL sink in PipeWire (audio-hal-bridge)"
+	fi
+}
+
+check_modem() {
+	local n
+	n=$(mmcli -L 2>/dev/null | grep -c /Modem/)
+	((n > 0)) && echo "ok: $n modem(s) in ModemManager" || echo "fail: no modem in ModemManager (ofono, ofono2mm)"
+}
+
+check_wifi() {
+	[[ -e /sys/class/net/wlan0 ]] && echo "ok: Wi-Fi interface wlan0 present" ||
+		echo "fail: no Wi-Fi interface wlan0 (plinius-wlan, Android container)"
+}
+
+check_bluetooth() {
+	compgen -G '/sys/class/bluetooth/hci*' >/dev/null && echo "ok: Bluetooth adapter present" ||
+		echo "fail: no Bluetooth adapter (bluebinder)"
+}
+
+CHECKS=(units user_units container display audio modem wifi bluetooth)
+
+cmd=${1:-}
+case $cmd in
+check)
+	[[ $(id -u) -eq 0 ]] || die "must run as root"
+	mkdir -p "$RUN"
+	rm -f "$RUN/done"
+	user=$(session_user)
+	failed=0
+	for c in "${CHECKS[@]}"; do
+		line=$("check_$c" "$user")
+		state=${line%%:*}
+		[[ $state == fail ]] && failed=$((failed + 1))
+		echo "$state $c:${line#*:}"
+	done > "$RUN/result.new"
+	mv -f "$RUN/result.new" "$RUN/result"
+	touch "$RUN/done"
+	# Under systemd failures go to the journal as warnings (journalctl -p warning shows them)
+	while read -r state rest; do
+		prio=6
+		[[ $state == fail ]] && prio=4
+		[[ -n ${JOURNAL_STREAM:-} ]] && echo "<$prio>$state $rest" || echo "$state $rest"
+	done < "$RUN/result"
+	((failed == 0)) || exit 2
+	;;
+status)
+	[[ -e $RUN/done ]] || { echo "not checked yet"; exit 0; }
+	cat "$RUN/result"
+	! grep -q '^fail ' "$RUN/result" || exit 2
+	;;
+*)
+	die "usage: plinius-health check | status"
+	;;
+esac

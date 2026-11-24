@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 08:05:00 +0100
+Subject: [PATCH] emergency-menu: Fill the whole screen
+
+In an emergency nothing else should compete for attention or get in the way of
+a finger, so the menu is no longer a card in the middle of the screen. The dial
+pad stays centred between the way back at the top and the contacts at the bottom.
+Its keys have the size of the lock screen's keypad, whatever the scale. The call
+button is green, red stays for the way into the menu, and the contacts move away
+from it so that nobody hits one for the other. Other system modal dialogs stay
+cards.
+---
+ src/emergency-menu.c          | 37 +++++++++++++++++++++++++++++++++++++
+ src/stylesheet/common.css     | 38 ++++++++++++++++++++++++++++++++++++++
+ src/system-modal-dialog.c     | 30 ++++++++++++++++++++++++++++++
+ src/system-modal-dialog.h     |  1 +
+ src/ui/emergency-menu.ui      |  5 +++--
+ src/ui/system-modal-dialog.ui |  2 +-
+ 6 files changed, 110 insertions(+), 3 deletions(-)
+
+diff --git a/src/emergency-menu.c b/src/emergency-menu.c
+index 5589592d..0c2dd15f 100644
+--- a/src/emergency-menu.c
++++ b/src/emergency-menu.c
+@@ -282,12 +282,49 @@ keep_entry_from_focus (GtkWidget *widget, gpointer unused)
+ }
+ 
+ 
++/* The lock screen's keypad has its keys 109 logical pixels apart, the emergency menu keeps to that
++ * at any scale. The clamp puts the entry in line with the keys. */
++#define DIAL_KEY_SIZE   93
++#define DIAL_KEY_GAP    16
++#define DIAL_PAD_CLAMP 359
++
++
++static void
++set_key_size (GtkWidget *key, gpointer unused)
++{
++  gtk_widget_set_size_request (key, DIAL_KEY_SIZE, DIAL_KEY_SIZE);
++}
++
++
++/* CuiDialpad clamps itself to 300 and its keys have the size of their labels */
++static void
++fit_dial_pad (GtkWidget *widget, gpointer unused)
++{
++  if (HDY_IS_CLAMP (widget)) {
++    hdy_clamp_set_maximum_size (HDY_CLAMP (widget), DIAL_PAD_CLAMP);
++    hdy_clamp_set_tightening_threshold (HDY_CLAMP (widget), DIAL_PAD_CLAMP);
++  }
++
++  if (GTK_IS_GRID (widget)) {
++    gtk_grid_set_row_spacing (GTK_GRID (widget), DIAL_KEY_GAP);
++    gtk_grid_set_column_spacing (GTK_GRID (widget), DIAL_KEY_GAP);
++    gtk_container_foreach (GTK_CONTAINER (widget), set_key_size, NULL);
++  } else if (GTK_IS_CONTAINER (widget)) {
++    gtk_container_forall (GTK_CONTAINER (widget), fit_dial_pad, NULL);
++  }
++}
++
++
+ static void
+ phosh_emergency_menu_init (PhoshEmergencyMenu *self)
+ {
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
+   keep_entry_from_focus (GTK_WIDGET (self->emergency_dialpad_box), NULL);
++  phosh_system_modal_dialog_fill_screen (PHOSH_SYSTEM_MODAL_DIALOG (self));
++  fit_dial_pad (GTK_WIDGET (self->emergency_dialpad_box), NULL);
++  gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (self->emergency_dialpad_box)),
++                               "phosh-emergency-dial");
+ 
+   self->actions = g_simple_action_group_new ();
+   g_action_map_add_action_entries (G_ACTION_MAP (self->actions),
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 5d571c8d..eb8aa1a6 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -731,6 +731,44 @@ phosh-notch-search .card list row.provider-header label {
+   margin: 12px;
+ }
+ 
++/* Plinius: phosh_system_modal_dialog_fill_screen (). The padding keeps the first row clear of the
++ * camera at the top, the home bar has its gesture area at the bottom */
++.phosh-system-modal-dialog.fullscreen {
++  border: none;
++  border-radius: 0;
++  box-shadow: none;
++  margin: 0;
++  padding-top: 56px;
++  padding-bottom: 24px;
++}
++
++/* Plinius: the emergency menu's dial pad, digits as tall as on the lock screen's keypad */
++.phosh-emergency-dial cui-keypad label.digit {
++  font-size: 43px;
++}
++
++.phosh-emergency-dial cui-keypad label.letters {
++  font-size: 13px;
++}
++
++.phosh-emergency-dial cui-keypad > grid > button {
++  padding: 0;
++}
++
++.phosh-emergency-dial .dial-button,
++.phosh-emergency-dial .dial-button:hover,
++.phosh-emergency-dial .dial-button:focus {
++  background-image: none;
++  background-color: #26a269;
++  color: #ffffff;
++}
++
++.phosh-emergency-dial .dial-button:active {
++  background-image: none;
++  background-color: #1a7a4c;
++  color: #ffffff;
++}
++
+ .phosh-system-modal-dialog-buttons label {
+   margin: 12px;
+ }
+diff --git a/src/system-modal-dialog.c b/src/system-modal-dialog.c
+index a795b5a3..3a57f834 100644
+--- a/src/system-modal-dialog.c
++++ b/src/system-modal-dialog.c
+@@ -18,6 +18,7 @@
+ #include "util.h"
+ 
+ #include <gmobile.h>
++#include <handy.h>
+ 
+ /**
+  * PhoshSystemModalDialog:
+@@ -88,6 +89,7 @@ typedef struct {
+ 
+   GtkWidget      *lbl_title;
+   GtkWidget      *box_dialog;
++  GtkWidget      *clamp;
+   GtkWidget      *box_buttons;
+ 
+   gboolean        fade_out;
+@@ -215,6 +217,7 @@ phosh_system_modal_dialog_class_init (PhoshSystemModalDialogClass *klass)
+                                                "/mobi/phosh/ui/system-modal-dialog.ui");
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, lbl_title);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, box_dialog);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, clamp);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshSystemModalDialog, box_buttons);
+   gtk_widget_class_bind_template_callback (widget_class, on_removed_by_swipe);
+ 
+@@ -374,6 +377,33 @@ phosh_system_modal_dialog_remove_button (PhoshSystemModalDialog *self, GtkWidget
+   gtk_container_remove (GTK_CONTAINER (priv->box_buttons), button);
+ }
+ 
++/**
++ * phosh_system_modal_dialog_fill_screen:
++ * @self: The dialog
++ *
++ * Plinius: fills the screen instead of being a card in the middle of it, for a dialog
++ * that needs all the room and attention it can get.
++ */
++void
++phosh_system_modal_dialog_fill_screen (PhoshSystemModalDialog *self)
++{
++  PhoshSystemModalDialogPrivate *priv;
++
++  g_return_if_fail (PHOSH_IS_SYSTEM_MODAL_DIALOG (self));
++  priv = phosh_system_modal_dialog_get_instance_private (self);
++
++  /* Both, or HdyClamp eases towards the maximum and keeps a gap at the sides */
++  hdy_clamp_set_maximum_size (HDY_CLAMP (priv->clamp), G_MAXINT16);
++  hdy_clamp_set_tightening_threshold (HDY_CLAMP (priv->clamp), G_MAXINT16);
++
++  gtk_widget_set_halign (priv->box_dialog, GTK_ALIGN_FILL);
++  gtk_widget_set_valign (priv->box_dialog, GTK_ALIGN_FILL);
++  gtk_widget_set_margin_top (priv->box_dialog, 0);
++  gtk_widget_set_margin_bottom (priv->box_dialog, 0);
++  gtk_style_context_add_class (gtk_widget_get_style_context (priv->box_dialog), "fullscreen");
++}
++
++
+ /**
+  * phosh_system_modal_dialog_get_buttons:
+  * @self: A modal dialog
+diff --git a/src/system-modal-dialog.h b/src/system-modal-dialog.h
+index 2a4faaad..32c56f98 100644
+--- a/src/system-modal-dialog.h
++++ b/src/system-modal-dialog.h
+@@ -31,3 +31,4 @@ const char *phosh_system_modal_dialog_get_title (PhoshSystemModalDialog *self);
+ void        phosh_system_modal_dialog_remove_button (PhoshSystemModalDialog *self, GtkWidget *button);
+ GList      *phosh_system_modal_dialog_get_buttons (PhoshSystemModalDialog *self);
+ void        phosh_system_modal_dialog_close (PhoshSystemModalDialog *self);
++void        phosh_system_modal_dialog_fill_screen (PhoshSystemModalDialog *self);
+diff --git a/src/ui/emergency-menu.ui b/src/ui/emergency-menu.ui
+index 3a7af9f0..a7df74fc 100644
+--- a/src/ui/emergency-menu.ui
++++ b/src/ui/emergency-menu.ui
+@@ -44,6 +44,8 @@
+             <child>
+               <object class="CuiDialpad">
+                 <property name="visible">1</property>
++                <property name="vexpand">1</property>
++                <property name="valign">center</property>
+                 <signal name="dialed" handler="on_dialpad_dialed" swapped="yes"/>
+               </object>
+             </child>
+@@ -53,13 +55,12 @@
+                 <property name="visible">1</property>
+                 <property name="halign">center</property>
+                 <property name="valign">center</property>
+-                <property name="margin-top">10</property>
++                <property name="margin-top">36</property>
+                 <property name="margin-bottom">10</property>
+                 <property name="use-underline">1</property>
+                 <property name="tooltip-text" translatable="yes">Go to the emergency contacts page</property>
+                 <signal name="clicked" handler="on_emergency_contacts_button_clicked" swapped="yes"/>
+                 <style>
+-                  <class name="emergency-button"/>
+                   <class name="circular"/>
+                 </style>
+               </object>
+diff --git a/src/ui/system-modal-dialog.ui b/src/ui/system-modal-dialog.ui
+index 69bcaefc..e0585270 100644
+--- a/src/ui/system-modal-dialog.ui
++++ b/src/ui/system-modal-dialog.ui
+@@ -9,7 +9,7 @@
+         <property name="orientation">vertical</property>
+         <signal name="removed" handler="on_removed_by_swipe" swapped="true"/>
+         <child>
+-          <object class="HdyClamp">
++          <object class="HdyClamp" id="clamp">
+             <property name="visible">1</property>
+             <property name="maximum-size">400</property>
+             <child>

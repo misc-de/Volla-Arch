@@ -1,0 +1,95 @@
+From 7201b83224ced2dc796c0b880dace196e29d94ca Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 18:39:23 +0100
+Subject: [PATCH] plugins: Cast and USB settings in GNOME Settings
+
+Plinius: the footer and a long press of the cast quick setting open the
+"Streaming" page of GNOME Settings (the page of the TV in use, or the
+list of TVs) instead of Schwupp's window; Schwupp has no window of its
+own on the phone any more. The USB quick setting gets the same: a footer
+"USB Settings" and a long press open the "USB" page. Both go through
+the top panel's launch-panel action, which also closes the quick
+settings.
+---
+ plugins/cast-quick-setting/cast-quick-setting.c | 19 +++++++++++++++----
+ plugins/usb-quick-setting/qs.ui                 | 18 ++++++++++++++++++
+ 2 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/plugins/cast-quick-setting/cast-quick-setting.c b/plugins/cast-quick-setting/cast-quick-setting.c
+index a5702ed7..c771639d 100644
+--- a/plugins/cast-quick-setting/cast-quick-setting.c
++++ b/plugins/cast-quick-setting/cast-quick-setting.c
+@@ -29,7 +29,8 @@
+  * Mirror the screen to a TV or send all sound to a speaker through Schwupp
+  * (de.cais.Schwupp.Cast1). The status page lists TVs and speakers; a tap starts,
+  * a second tap stops. Schwupp searches only while the list is shown and keeps
+- * the settings per TV (resolution, bitrate, sound), the footer opens them.
++ * the settings per TV (resolution, bitrate, sound); the footer and a long press open
++ * them on the "Streaming" page of GNOME Settings, Schwupp has no window of its own there.
+  */
+ struct _PhoshCastQuickSetting {
+   PhoshQuickSetting  parent;
+@@ -308,9 +309,19 @@ static void
+ on_settings_clicked (PhoshCastQuickSetting *self)
+ {
+   g_autofree char *active = get_string (self, "ActiveDevice");
+-
+-  /* Schwupp opens with the settings of the TV in use, or its device list */
+-  call (self, "OpenSettings", g_variant_new ("(s)", active), G_DBUS_CALL_FLAGS_NONE);
++  GActionGroup *panel = gtk_widget_get_action_group (GTK_WIDGET (self), "panel");
++  GVariantBuilder params;
++
++  /* GNOME Settings, "Streaming": the page of the TV in use, or the list of TVs. The top
++   * panel's launch-panel action opens it and closes the quick settings. */
++  g_variant_builder_init (&params, G_VARIANT_TYPE ("av"));
++  if (active && *active)
++    g_variant_builder_add (&params, "v", g_variant_new_string (active));
++  if (panel)
++    g_action_group_activate_action (panel, "launch-panel",
++                                    g_variant_new ("(s@av)", "streaming", g_variant_builder_end (&params)));
++  else
++    g_variant_builder_clear (&params);
+   g_signal_emit_by_name (self->status_page, "done", FALSE);
+ }
+ 
+diff --git a/plugins/usb-quick-setting/qs.ui b/plugins/usb-quick-setting/qs.ui
+index b4794390..e019aa10 100644
+--- a/plugins/usb-quick-setting/qs.ui
++++ b/plugins/usb-quick-setting/qs.ui
+@@ -5,6 +5,9 @@
+     <property name="status-icon">info</property>
+     <property name="status-page">status_page</property>
+     <signal name="clicked" handler="on_clicked" object="PhoshUsbQuickSetting" swapped="yes"/>
++    <!-- The USB page of GNOME Settings -->
++    <property name="long-press-action-name">panel.launch-panel</property>
++    <property name="long-press-action-target">(&quot;usb&quot;, [&lt;&quot;&quot;&gt;])</property>
+   </template>
+   <object class="PhoshStatusIcon" id="info">
+     <property name="visible">1</property>
+@@ -16,6 +19,7 @@
+     <property name="visible">1</property>
+     <property name="title" translatable="yes">USB</property>
+     <property name="content">content</property>
++    <property name="footer">footer</property>
+   </object>
+   <object class="GtkBox" id="content">
+     <property name="visible">1</property>
+@@ -100,4 +104,18 @@
+       </object>
+     </child>
+   </object>
++  <object class="GtkButton" id="footer">
++    <property name="visible">1</property>
++    <property name="hexpand">1</property>
++    <property name="focus-on-click">0</property>
++    <property name="action-name">panel.launch-panel</property>
++    <property name="action-target">(&quot;usb&quot;, [&lt;&quot;&quot;&gt;])</property>
++    <child>
++      <object class="GtkLabel">
++        <property name="visible">1</property>
++        <property name="ellipsize">end</property>
++        <property name="label" translatable="yes">USB Settings</property>
++      </object>
++    </child>
++  </object>
+ </interface>

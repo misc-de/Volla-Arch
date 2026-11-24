@@ -1,0 +1,16 @@
+#!/bin/sh
+# Creates /userdata/home/plinius from /etc/skel. Built under another name and renamed last: an
+# interrupted first start must not leave a half-made home that the next start takes for finished.
+set -eu
+
+new=/userdata/home/.plinius.new
+uid=$(id -u plinius)
+gid=$(id -g plinius)
+
+install -d -m 755 /userdata/home
+rm -rf "$new"
+cp -a /etc/skel "$new"
+chown -R "$uid:$gid" "$new"
+chmod 700 "$new"
+sync
+mv "$new" /userdata/home/plinius

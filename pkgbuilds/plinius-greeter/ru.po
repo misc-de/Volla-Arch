@@ -1,0 +1,139 @@
+# Strings of plinius-greeter (xgettext -L Python --add-comments=Translators)
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-greeter\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-21 15:23+0100\n"
+"PO-Revision-Date: 2026-11-15 09:00+0100\n"
+"Last-Translator: plinius-greeter\n"
+"Language-Team: none\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
+"n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#: plinius-greeter:256
+msgid "A PIN has 4 to 12 digits."
+msgstr "PIN-код состоит из 4–12 цифр."
+
+#: plinius-greeter:258
+msgid "The PINs do not match. Please enter it again."
+msgstr "PIN-коды не совпадают. Введите его ещё раз."
+
+#: plinius-greeter:262
+msgid "A password has at least 6 characters."
+msgstr "Пароль содержит не менее 6 символов."
+
+#: plinius-greeter:264
+msgid "A password of digits only is a PIN: choose PIN above."
+msgstr "Пароль только из цифр — это PIN-код: выберите выше PIN."
+
+#: plinius-greeter:266
+msgid "The passwords do not match. Please enter them again."
+msgstr "Пароли не совпадают. Введите их ещё раз."
+
+#: plinius-greeter:323 plinius-greeter:692
+msgid "Who is using the phone?"
+msgstr "Кто пользуется телефоном?"
+
+#: plinius-greeter:325 plinius-greeter:693
+msgid "Tap your account, then unlock it as usual."
+msgstr "Коснитесь своей учётной записи и разблокируйте её как обычно."
+
+#: plinius-greeter:353 plinius-greeter:354 plinius-greeter:723
+msgid "Power"
+msgstr "Питание"
+
+#: plinius-greeter:415
+msgid "Protect your phone"
+msgstr "Защитите свой телефон"
+
+#: plinius-greeter:416
+msgid ""
+"Choose how to unlock it. Settings and every other question for the password "
+"ask for the same."
+msgstr "Выберите способ разблокировки. Настройки и любой другой запрос пароля спрашивают то же самое."
+
+#: plinius-greeter:467
+msgid "PIN"
+msgstr "PIN-код"
+
+#: plinius-greeter:468 plinius-greeter:501
+msgid "Password"
+msgstr "Пароль"
+
+#: plinius-greeter:487
+msgid "Delete"
+msgstr "Удалить"
+
+#: plinius-greeter:490 plinius-greeter:507
+msgid "Continue"
+msgstr "Далее"
+
+#: plinius-greeter:502
+msgid "Repeat password"
+msgstr "Повторите пароль"
+
+#: plinius-greeter:528
+msgid "Repeat the PIN."
+msgstr "Повторите PIN-код."
+
+#: plinius-greeter:529
+msgid "Choose a PIN of 4 to 12 digits."
+msgstr "Выберите PIN-код из 4–12 цифр."
+
+#: plinius-greeter:532
+msgid "Choose a password of at least 6 characters."
+msgstr "Выберите пароль не короче 6 символов."
+
+#: plinius-greeter:610 plinius-greeter:623 plinius-greeter:643
+msgid "The password could not be set. Please try again."
+msgstr "Не удалось задать пароль. Попробуйте ещё раз."
+
+#: plinius-greeter:613
+msgid "Setting it up…"
+msgstr "Настройка…"
+
+#: plinius-greeter:635 plinius-greeter:663
+msgid "Starting…"
+msgstr "Запуск…"
+
+#: plinius-greeter:638
+msgid ""
+"That is the password of the encryption. Choose another one: it is typed in "
+"view of others many times a day."
+msgstr "Это пароль шифрования. Выберите другой: его вводят много раз в день на глазах у других."
+
+#: plinius-greeter:641
+msgid ""
+"That cannot be used. A PIN has 4 to 12 digits, a password at least 6 "
+"characters."
+msgstr "Так нельзя. PIN-код содержит 4–12 цифр, пароль — не менее 6 символов."
+
+#: plinius-greeter:695
+msgid "The phone could not start this account. Please try again."
+msgstr "Телефону не удалось запустить эту учётную запись. Попробуйте ещё раз."
+
+#. Translators: the date below the clock (GLib's strftime codes), e.g. "%A, %-d. %B" in German
+#: plinius-greeter:717
+msgid "%A, %B %-d"
+msgstr "%A, %-d %B"
+
+#: plinius-greeter:723
+msgid "Restart the phone or power it off?"
+msgstr "Перезагрузить телефон или выключить?"
+
+#: plinius-greeter:724
+msgid "_Cancel"
+msgstr "_Отмена"
+
+#: plinius-greeter:725
+msgid "_Restart"
+msgstr "_Перезагрузить"
+
+#: plinius-greeter:726
+msgid "_Power Off"
+msgstr "_Выключить"

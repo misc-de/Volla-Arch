@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 03 Nov 2026 22:30:00 +0100
+Subject: [PATCH] Set up emergency calls with emergencyDial on the IMS slot
+
+With BINDER_EXT_CALL_DIAL_FLAG_EMERGENCY, send emergencyDial instead of dial
+on imsSlotN's IRadioVoice, as MediaTek's ImsService does (ImsRILAdapter.start,
+RadioVoiceProxy.emergencyDial). The parcel is the one of
+BpRadioVoice::emergencyDial in android.hardware.radio.voice-V2-ndk.so.
+
+A missing client no longer calls complete on top of returning 0: the caller
+would go on to its next way twice.
+---
+--- a/src/mtk_ims_call.c	2026-09-17 13:48:36.000000000 +0200
++++ b/src/mtk_ims_call.c	2026-11-03 22:19:28.244213720 +0100
+@@ -292,8 +292,10 @@
+     MtkImsCall* self = THIS(ext);
+     const RADIO_AIDL_INTERFACE iface_aidl =
+         radio_client_aidl_interface(self->ims_aosp_client);
++    const gboolean emergency = (flags & BINDER_EXT_CALL_DIAL_FLAG_EMERGENCY) != 0;
+     const guint32 code = (iface_aidl == RADIO_VOICE_INTERFACE) ?
+-        RADIO_VOICE_REQ_DIAL : RADIO_REQ_DIAL;
++        (emergency ? RADIO_VOICE_REQ_EMERGENCY_DIAL : RADIO_VOICE_REQ_DIAL) :
++        RADIO_REQ_DIAL;
+ 
+     /* Mostly duplicated from ofono-binder-plugin's binder_voicecall_dial */
+     // TODO: can we call back into ofono-binder-plugin with imsAospSlot instead?
+@@ -304,18 +306,21 @@
+     RadioRequest* req;
+     MtkImsCallResultRequest* result_req = NULL;
+ 
+-    result_req = mtk_ims_call_result_request_new(ext, complete, destroy,
+-                                                 user_data);
++    /* Emergency setup is implemented for the AIDL radio only. The caller takes
++     * a return value of 0 as the failure, without another call to complete. */
++    if (emergency && iface_aidl != RADIO_VOICE_INTERFACE) {
++        DBG("No emergency dial on this interface");
++        return 0;
++    }
+ 
+     if (!self->ims_aosp_client) {
+         DBG("No AOSP IRadio imsSlot client available, can't place dial request");
+-        if (complete) {
+-            complete(ext, BINDER_EXT_CALL_RESULT_ERROR, user_data);
+-        }
+-        mtk_ims_call_result_request_unref(result_req);
+         return 0;
+     }
+ 
++    result_req = mtk_ims_call_result_request_new(ext, complete, destroy,
++                                                 user_data);
++
+     /* dial(int32 serial, Dial dialInfo) */
+     req = radio_request_new(self->ims_aosp_client, code, &writer,
+         mtk_ims_call_radio_request_complete,
+@@ -348,6 +353,17 @@
+         gbinder_writer_append_int32(&writer, 0); /* UUS info array size */
+         gbinder_writer_overwrite_int32(&writer, initial_size,
+             gbinder_writer_bytes_written(&writer) - initial_size);
++
++        if (emergency) {
++            /* emergencyDial(serial, dialInfo, categories, urns, routing,
++             * hasKnownUserIntentEmergency, isTesting), filled in as MediaTek's
++             * ImsService does for a call without further details */
++            gbinder_writer_append_int32(&writer, 0); /* categories: unspecified */
++            gbinder_writer_append_int32(&writer, 0); /* no urns */
++            gbinder_writer_append_int32(&writer, 0); /* routing: unknown */
++            gbinder_writer_append_bool(&writer, FALSE);
++            gbinder_writer_append_bool(&writer, FALSE);
++        }
+     }
+ 
+     // result_req = mtk_ims_call_result_request_new(ext, complete, destroy, user_data);

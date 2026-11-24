@@ -1,0 +1,179 @@
+From bca8f9976944cd81419bb7dd2b85e499c211b5d9 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 20:06:34 +0100
+Subject: [PATCH] shared: a smooth scaling of the background image
+
+The phone's ramdisk has room only for a tiny background, a few dozen pixels per side. Scaled up
+bilinearly by 40 times, it shows faint creases along the lines between the source pixels. A
+Catmull-Rom spline (separable, four taps per axis) keeps the gradients smooth and as sharp as
+bilinear, and a 4x4 ordered dither keeps the wide gradients free of bands. Larger images, as
+the 108x240 of a system with mkinitcpio, look the same as before.
+---
+ shared/background.c | 114 +++++++++++++++++++++++++++++++++++---------
+ shared/background.h |   2 +-
+ 2 files changed, 92 insertions(+), 24 deletions(-)
+
+diff --git a/shared/background.c b/shared/background.c
+index e800e26..8ef7d6a 100644
+--- a/shared/background.c
++++ b/shared/background.c
+@@ -35,7 +35,28 @@ static lv_image_dsc_t background;
+ static uint8_t *read_file(const char *path, size_t *size);
+ 
+ /**
+- * Scale an XRGB8888 image to cover a larger area, centred and cropped (bilinear).
++ * The four source samples one target pixel takes along one axis, and their weights.
++ */
++typedef struct {
++    int32_t index[4];
++    float weight[4];
++} taps_t;
++
++/**
++ * Compute the taps of a Catmull-Rom spline for every target coordinate along one axis.
++ *
++ * @param taps array of n_dst taps to fill
++ * @param n_dst number of target pixels
++ * @param n_src number of source pixels
++ * @param scale target pixels per source pixel
++ * @param offset first visible source coordinate (centred crop)
++ */
++static void make_taps(taps_t *taps, int32_t n_dst, int32_t n_src, float scale, float offset);
++
++/**
++ * Scale an XRGB8888 image to cover a larger area, centred and cropped. A Catmull-Rom spline keeps
++ * even a tiny image (a few dozen pixels, as much as the phone's ramdisk has room for) free of the
++ * creases a bilinear scaling shows; an ordered dither keeps the wide gradients free of bands.
+  *
+  * @param src source pixels
+  * @param sw source width
+@@ -77,47 +98,94 @@ static uint8_t *read_file(const char *path, size_t *size) {
+     return data;
+ }
+ 
++static void make_taps(taps_t *taps, int32_t n_dst, int32_t n_src, float scale, float offset) {
++    for (int32_t i = 0; i < n_dst; i++) {
++        float f = (i + 0.5f) / scale + offset - 0.5f;
++        /* f > -1 (the offset is never negative), so this rounds down */
++        int32_t base = (int32_t)(f + 1.0f) - 1;
++        float t = f - base;
++        float t2 = t * t;
++        float t3 = t2 * t;
++        taps[i].weight[0] = (-t3 + 2.0f * t2 - t) / 2.0f;
++        taps[i].weight[1] = (3.0f * t3 - 5.0f * t2 + 2.0f) / 2.0f;
++        taps[i].weight[2] = (-3.0f * t3 + 4.0f * t2 + t) / 2.0f;
++        taps[i].weight[3] = (t3 - t2) / 2.0f;
++        for (int k = 0; k < 4; k++) {
++            int32_t j = base - 1 + k;
++            taps[i].index[k] = j < 0 ? 0 : (j > n_src - 1 ? n_src - 1 : j);
++        }
++    }
++}
++
+ static uint32_t *scale_to_cover(const uint8_t *src, int32_t sw, int32_t sh, uint32_t src_stride,
+         int32_t dw, int32_t dh) {
++    /* 4x4 ordered dither, thresholds in (-0.5, 0.5) of one step */
++    static const float dither[4][4] = {
++        { -0.469f,  0.031f, -0.344f,  0.156f },
++        {  0.281f, -0.219f,  0.406f, -0.094f },
++        { -0.281f,  0.219f, -0.406f,  0.094f },
++        {  0.469f, -0.031f,  0.344f, -0.156f },
++    };
++
+     uint32_t *dst = malloc((size_t)dw * dh * sizeof(uint32_t));
+-    if (!dst) {
++    taps_t *htaps = malloc((size_t)dw * sizeof(taps_t));
++    taps_t *vtaps = malloc((size_t)dh * sizeof(taps_t));
++    /* The source rows scaled to the target width, 3 channels each */
++    float *rows = malloc((size_t)sh * dw * 3 * sizeof(float));
++    if (!dst || !htaps || !vtaps || !rows) {
++        free(dst);
++        free(htaps);
++        free(vtaps);
++        free(rows);
+         return NULL;
+     }
+ 
+     /* The larger of both factors covers the area; the source rectangle that remains visible is
+      * centred */
+     float scale = (float)dw / sw > (float)dh / sh ? (float)dw / sw : (float)dh / sh;
+-    float offset_x = (sw - dw / scale) / 2;
+-    float offset_y = (sh - dh / scale) / 2;
+-
+-    for (int32_t y = 0; y < dh; y++) {
+-        float fy = (y + 0.5f) / scale + offset_y - 0.5f;
+-        fy = fy < 0 ? 0 : (fy > sh - 1 ? sh - 1 : fy);
+-        int32_t y0 = (int32_t)fy;
+-        int32_t y1 = y0 + 1 < sh ? y0 + 1 : y0;
+-        uint32_t wy = (uint32_t)((fy - y0) * 256);
+-        const uint8_t *row0 = src + (size_t)y0 * src_stride;
+-        const uint8_t *row1 = src + (size_t)y1 * src_stride;
++    make_taps(htaps, dw, sw, scale, (sw - dw / scale) / 2);
++    make_taps(vtaps, dh, sh, scale, (sh - dh / scale) / 2);
+ 
++    /* Horizontally, row by row of the source (B, G, R, X in memory order) */
++    for (int32_t y = 0; y < sh; y++) {
++        const uint8_t *row = src + (size_t)y * src_stride;
++        float *out = rows + (size_t)y * dw * 3;
+         for (int32_t x = 0; x < dw; x++) {
+-            float fx = (x + 0.5f) / scale + offset_x - 0.5f;
+-            fx = fx < 0 ? 0 : (fx > sw - 1 ? sw - 1 : fx);
+-            int32_t x0 = (int32_t)fx;
+-            int32_t x1 = x0 + 1 < sw ? x0 + 1 : x0;
+-            uint32_t wx = (uint32_t)((fx - x0) * 256);
++            const taps_t *t = &htaps[x];
++            for (int c = 0; c < 3; c++) {
++                out[x * 3 + c] = t->weight[0] * row[t->index[0] * 4 + c]
++                    + t->weight[1] * row[t->index[1] * 4 + c]
++                    + t->weight[2] * row[t->index[2] * 4 + c]
++                    + t->weight[3] * row[t->index[3] * 4 + c];
++            }
++        }
++    }
+ 
+-            /* Blend the four neighbours per channel (B, G, R in memory order), X stays opaque */
++    /* Then vertically, into XRGB8888 */
++    for (int32_t y = 0; y < dh; y++) {
++        const taps_t *t = &vtaps[y];
++        const float *r0 = rows + (size_t)t->index[0] * dw * 3;
++        const float *r1 = rows + (size_t)t->index[1] * dw * 3;
++        const float *r2 = rows + (size_t)t->index[2] * dw * 3;
++        const float *r3 = rows + (size_t)t->index[3] * dw * 3;
++        for (int32_t x = 0; x < dw; x++) {
++            float d = dither[y & 3][x & 3] + 0.5f;
+             uint32_t pixel = 0xFF000000;
+             for (int c = 0; c < 3; c++) {
+-                uint32_t top = row0[x0 * 4 + c] * (256 - wx) + row0[x1 * 4 + c] * wx;
+-                uint32_t bottom = row1[x0 * 4 + c] * (256 - wx) + row1[x1 * 4 + c] * wx;
+-                uint32_t value = (top * (256 - wy) + bottom * wy) >> 16;
+-                pixel |= value << (8 * c);
++                int i = x * 3 + c;
++                float v = t->weight[0] * r0[i] + t->weight[1] * r1[i] + t->weight[2] * r2[i]
++                    + t->weight[3] * r3[i] + d;
++                int32_t value = (int32_t)v;
++                value = value < 0 ? 0 : (value > 255 ? 255 : value);
++                pixel |= (uint32_t)value << (8 * c);
+             }
+             dst[(size_t)y * dw + x] = pixel;
+         }
+     }
+ 
++    free(htaps);
++    free(vtaps);
++    free(rows);
+     return dst;
+ }
+ 
+diff --git a/shared/background.h b/shared/background.h
+index 98a32c8..0b7166c 100644
+--- a/shared/background.h
++++ b/shared/background.h
+@@ -15,7 +15,7 @@
+  * Show an image file as the background of a screen, scaled to cover it.
+  *
+  * The file is an LVGL binary image (lv_image_header_t followed by XRGB8888 pixels), usually much
+- * smaller than the display, e.g. a blurred wallpaper. It is scaled up once (bilinear, centred,
++ * smaller than the display, e.g. a blurred wallpaper. It is scaled up once (Catmull-Rom, centred,
+  * the overflow cropped) and kept in memory for the lifetime of the program.
+  *
+  * @param screen the screen object

@@ -1,0 +1,6 @@
+# Halium overlay: the NN HAL service stays off, plinius-face reaches the NPU through the driver
+# library in its own process (tested 2026-11-05). What the original file does besides the service
+# stays.
+on post-fs-data
+    mkdir /data/vendor/nn 0775 system system
+    mkdir /data/vendor/nn/debug_plus 0775 system system

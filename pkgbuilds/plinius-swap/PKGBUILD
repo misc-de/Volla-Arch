@@ -1,0 +1,33 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-swap
+pkgver=0.1
+pkgrel=3
+pkgdesc="Swap file behind Android's zram, used only when memory runs short, with swappiness setting"
+arch=(any)
+license=(MIT)
+# The page is in gnome-control-center-plinius (System › Memory and Swap).
+depends=(bash coreutils polkit systemd util-linux)
+backup=(etc/plinius-swap.conf)
+install=plinius-swap.install
+source=(plinius-swap-set
+	plinius-swap.service
+	plinius-swap.conf
+	org.plinius.swap.policy
+	LICENSE)
+sha256sums=('1f46adb413e42c407a8af38c793264e5c3adc25d12b46d4bc22ed0f0707095c0'
+	'ab07e59ceddf999376aa18222aca595b55c89cea4a8df839c7820bb4032db6ad'
+	'a32581ba33abeb8d4b9b1012f974d7aa00fb441b29273f4bd9836ad1150a0f48'
+	'bc8c3dc9a83f3e257cabfde72d609ee34d412973924cb95b9c114264200e8062'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-swap-set -t "$pkgdir/usr/lib/plinius-swap"
+	install -Dm644 plinius-swap.service -t "$pkgdir/usr/lib/systemd/system"
+	# Enabled by the package: "initially on" also holds on a phone updated to this package
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-swap.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 plinius-swap.conf "$pkgdir/etc/plinius-swap.conf"
+	install -Dm644 org.plinius.swap.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

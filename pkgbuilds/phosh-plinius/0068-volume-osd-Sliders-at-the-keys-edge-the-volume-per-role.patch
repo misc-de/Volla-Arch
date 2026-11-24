@@ -1,0 +1,1067 @@
+From acb7105318130af759d5a0e40418f47660e516c3 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 11:43:28 +0100
+Subject: [PATCH] volume-osd: Sliders at the keys' edge, the volume per role
+ next to them
+
+The volume keys show a vertical slider at the screen's edge next to the
+keys instead of the level bar, as on Android. It changes the output volume,
+as the keys do. Swiping it inwards, or the button below it, shows a slider
+per role beside it: media, calls, ringtone, notifications, alarm. Each role
+plays through a WirePlumber role sink into the output, so its volume is a
+share of the output volume: the keys move all roles, the role sliders set
+their ratio. Emergency alerts keep their volume. Without role sinks only
+the output slider shows. A tap beside it, a swipe outwards or a few
+seconds without touching close it.
+---
+ po/POTFILES.in            |   1 +
+ po/de.po                  |  30 +++
+ po/es.po                  |  35 ++++
+ po/fr.po                  |  30 +++
+ po/it.po                  |  35 ++++
+ po/nl.po                  |  30 +++
+ po/pl.po                  |  30 +++
+ po/pt.po                  |  30 +++
+ po/pt_BR.po               |  30 +++
+ po/ru.po                  |  30 +++
+ src/meson.build           |   2 +
+ src/shell.c               |  28 +++
+ src/stylesheet/common.css |  69 +++++++
+ src/volume-osd.c          | 476 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/volume-osd.h          |  22 +++
+ 15 files changed, 878 insertions(+)
+
+diff --git a/po/POTFILES.in b/po/POTFILES.in
+index 37f96590..6407fdb8 100644
+--- a/po/POTFILES.in
++++ b/po/POTFILES.in
+@@ -111,6 +111,7 @@ src/ui/system-prompt.ui
+ src/ui/top-panel.ui
+ src/ui/wifi-status-page.ui
+ src/util.c
++src/volume-osd.c
+ src/vpn-info.c
+ src/wall-clock.c
+ src/widget-box.c
+diff --git a/po/de.po b/po/de.po
+index 829a3f30..645aaff8 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1470,3 +1470,33 @@ msgstr "Oberfläche wirklich neu starten? Geöffnete Apps laufen weiter und das
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "Anruf wird aufgebaut …"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Medien"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Anrufe"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Klingelton"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Wecker"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Lautstärke"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Lautstärke nach Art des Tons"
+diff --git a/po/es.po b/po/es.po
+index f75d5288..3457baf2 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -779,3 +779,38 @@ msgstr "Emergencia"
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "Llamando…"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Multimedia"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Llamadas"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Tono de llamada"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Notifications"
++msgstr "Notificaciones"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Alarma"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Volumen"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Volumen de cada tipo de sonido"
+diff --git a/po/fr.po b/po/fr.po
+index 53612b52..0b6f236e 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1132,3 +1132,33 @@ msgstr "Voulez-vous vraiment redémarrer l’interface ? Les applications ouvert
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "Appel en cours…"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Médias"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Appels"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Sonnerie"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Alarme"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Volume"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Volume de chaque type de son"
+diff --git a/po/it.po b/po/it.po
+index 0255c3ee..45b1576d 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -861,3 +861,38 @@ msgstr "Chiamata in corso…"
+ #: src/emergency-menu.c
+ msgid "Emergency"
+ msgstr "Emergenza"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Media"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Chiamate"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Suoneria"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Notifications"
++msgstr "Notifiche"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Sveglia"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Volume"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Volume di ogni tipo di suono"
+diff --git a/po/nl.po b/po/nl.po
+index a02ec942..3d8a85ef 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1477,3 +1477,33 @@ msgstr "Wil je de interface echt herstarten? Geopende apps blijven draaien en de
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "Bezig met bellen…"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Media"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Oproepen"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Beltoon"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Wekker"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Volume"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Volume per soort geluid"
+diff --git a/po/pl.po b/po/pl.po
+index 8a35cbd8..87d66e3e 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1441,3 +1441,33 @@ msgstr "Czy na pewno uruchomić ponownie interfejs? Otwarte aplikacje będą nad
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "Łączenie…"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Multimedia"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Połączenia"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Dzwonek"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Budzik"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Głośność"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Głośność każdego rodzaju dźwięku"
+diff --git a/po/pt.po b/po/pt.po
+index 8ce0e72b..50548c8f 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1427,3 +1427,33 @@ msgstr "Quer mesmo reiniciar a interface? As aplicações abertas continuam a fu
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "A ligar…"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Multimédia"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Chamadas"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Toque"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Alarme"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Volume"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Volume de cada tipo de som"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index ae480f0f..c145a4cc 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1519,3 +1519,33 @@ msgstr "Quer mesmo reiniciar a interface? Os aplicativos abertos continuam em ex
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "Ligando…"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Mídia"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Chamadas"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Toque"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Alarme"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Volume"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Volume de cada tipo de som"
+diff --git a/po/ru.po b/po/ru.po
+index 7ec74982..8678869f 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1538,3 +1538,33 @@ msgstr "Действительно перезапустить интерфейс
+ #: src/emergency-menu.c
+ msgid "Calling…"
+ msgstr "Вызов…"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Media"
++msgstr "Медиа"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Calls"
++msgstr "Звонки"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Ringtone"
++msgstr "Рингтон"
++
++#. Plinius: a volume slider per role in the volume OSD
++#: src/volume-osd.c
++msgid "Alarm"
++msgstr "Будильник"
++
++#. Plinius: the volume slider's caption, followed by its percentage
++#: src/volume-osd.c
++msgid "Volume"
++msgstr "Громкость"
++
++#. Plinius: the button below the volume slider that shows the slider per role
++#: src/volume-osd.c
++msgid "Volume of each kind of sound"
++msgstr "Громкость для каждого типа звука"
+diff --git a/src/meson.build b/src/meson.build
+index 63197387..d29c6b18 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -169,6 +169,7 @@ phosh_tool_headers = files(
+   'mount-manager.h',
+   'mount-operation.h',
+   'osd-window.h',
++  'volume-osd.h',
+   'overview.h',
+   'password-entry.h',
+   'phosh-wayland.h',
+@@ -262,6 +263,7 @@ phosh_tool_sources = files(
+   'mount-operation.c',
+   'mpris-manager.c',
+   'osd-window.c',
++  'volume-osd.c',
+   'overview.c',
+   'password-entry.c',
+   'phosh-wayland.c',
+diff --git a/src/shell.c b/src/shell.c
+index c4aff2ef..bbdc37bd 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -69,6 +69,7 @@
+ #include "monitor/monitor.h"
+ #include "mount-manager.h"
+ #include "osd-window.h"
++#include "volume-osd.h"
+ #include "power-menu-manager.h"
+ #include "revealer.h"
+ #include "settings.h"
+@@ -167,6 +168,7 @@ typedef struct {
+   PhoshOsdWindow             *osd;
+   gint osd_timeoutid;
+   gboolean                    osd_continue;
++  PhoshVolumeOsd             *volume_osd; /* Plinius: the volume keys' sliders */
+ 
+   GtkWidget                  *notification_banner;
+ 
+@@ -997,6 +999,15 @@ on_osd_destroyed (PhoshShell *self)
+   g_clear_handle_id (&priv->osd_timeoutid, g_source_remove);
+ }
+ 
++
++static void
++on_volume_osd_destroyed (PhoshShell *self)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++
++  priv->volume_osd = NULL;
++}
++
+ /* }}} */
+ 
+ static void
+@@ -3259,6 +3270,23 @@ phosh_shell_show_osd (PhoshShell *self,
+   g_debug ("DBus show osd: connector: %s icon: %s, label: %s, level %f/%f",
+            connector, icon, label, level, max_level);
+ 
++  /* Plinius: the output volume (gsd-media-keys sends audio-volume-* icons) gets sliders at
++   * the keys' edge instead of the level bar, with the volume per role next to them; it closes
++   * by itself. The microphone and brightness keep the bar. */
++  if (icon && g_str_has_prefix (icon, "audio-volume-")) {
++    if (priv->osd)
++      gtk_widget_destroy (GTK_WIDGET (priv->osd));
++    if (priv->volume_osd) {
++      phosh_volume_osd_poke (priv->volume_osd);
++    } else {
++      priv->volume_osd = PHOSH_VOLUME_OSD (phosh_volume_osd_new ());
++      g_signal_connect_swapped (priv->volume_osd, "destroy",
++                                G_CALLBACK (on_volume_osd_destroyed), self);
++      gtk_widget_set_visible (GTK_WIDGET (priv->volume_osd), TRUE);
++    }
++    return;
++  }
++
+   if (priv->osd) {
+     priv->osd_continue = TRUE;
+     g_object_set (priv->osd,
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index e0c4ff97..c7b4d241 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -1175,6 +1175,75 @@ phosh-osd-window.phosh-system-modal {
+   background: none;
+ }
+ 
++/* Plinius: the volume keys' sliders at the screen's edge (volume-osd.c) */
++phosh-volume-osd.phosh-system-modal {
++  background: none;
++}
++
++phosh-volume-osd .card {
++  margin: 0 8px 0 0;
++  padding: 14px 6px 8px 6px;
++  border-radius: 28px;
++  box-shadow: 0 2px 2px rgba(0,0,0,0.2),
++              0 3px 16px rgba(0,0,0,0.1);
++  background-color: shade(@phosh_notification_bg_color, 1.5);
++  color: @phosh_fg_color;
++  text-shadow: none;
++  -gtk-icon-shadow: none;
++}
++
++phosh-volume-osd .slider-column {
++  min-width: 48px;
++}
++
++phosh-volume-osd .caption {
++  font-size: 9pt;
++  margin: 0 4px;
++}
++
++phosh-volume-osd scale {
++  min-height: 220px;
++  padding: 0;
++}
++
++phosh-volume-osd scale trough {
++  min-width: 40px;
++  border: none;
++  border-radius: 20px;
++  box-shadow: none;
++  background-color: alpha(@phosh_fg_color, 0.15);
++}
++
++phosh-volume-osd scale highlight {
++  min-width: 40px;
++  border: none;
++  border-radius: 20px;
++  background-color: @theme_selected_bg_color;
++}
++
++/* No knob: the whole bar is the slider, as on Android. The selectors are more specific than
++ * the generic "scale trough slider" rules further down, which would otherwise draw a light
++ * line at the fill's edge (GTK 3 ignores opacity on the slider node). */
++phosh-volume-osd .card scale trough slider,
++phosh-volume-osd .card scale trough slider:hover,
++phosh-volume-osd .card scale trough slider:active,
++phosh-volume-osd .card scale trough slider:focus,
++phosh-volume-osd .card scale trough slider:backdrop {
++  min-width: 40px;
++  min-height: 1px;
++  margin: 0;
++  border: none;
++  outline: none;
++  box-shadow: none;
++  background: none;
++}
++
++/* No focus ring around the bars either */
++phosh-volume-osd .card scale trough {
++  outline: none;
++  padding: 0;
++}
++
+ phosh-osd-window levelbar block {
+   min-height:4px;
+   box-shadow: none;
+diff --git a/src/volume-osd.c b/src/volume-osd.c
+new file mode 100644
+index 00000000..cedebd0f
+--- /dev/null
++++ b/src/volume-osd.c
+@@ -0,0 +1,476 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-volume-osd"
++
++#include "phosh-config.h"
++
++#include "audio-manager.h"
++#include "volume-osd.h"
++
++#include <glib/gi18n.h>
++#include <math.h>
++
++/**
++ * PhoshVolumeOsd:
++ *
++ * Plinius: what the volume keys show, as on Android. A vertical slider at the screen's edge
++ * next to the keys changes the output volume, as the keys do. Swiping it inwards, or the
++ * button below it, shows one slider per role beside it: media, calls, ringtone,
++ * notifications, alarm. Each role plays through a role sink of WirePlumber
++ * (device-volla-ansuz 55-plinius-media-roles.conf) into the output, so a role's volume is a
++ * share of the output volume: the keys move all roles at once, the role sliders set their
++ * ratio. Emergency alerts have a role sink too, but no slider here: they stay loud.
++ * audio-hal-bridge applies the call slider to the modem's voice, which goes past PipeWire.
++ *
++ * Without role sinks (no such WirePlumber configuration) only the output slider shows.
++ * A tap beside the sliders, a swipe outwards or a few seconds without touching close it.
++ */
++
++#define COLLAPSED_TIMEOUT_MS 2500
++#define EXPANDED_TIMEOUT_MS  6000
++#define SWIPE_VELOCITY       300 /* px/s, slower movements are slider drags */
++
++typedef struct {
++  const char *sink; /* node name of the role sink */
++  const char *icon;
++  const char *name; /* N_() */
++} PhoshVolumeOsdRole;
++
++static const PhoshVolumeOsdRole roles[] = {
++  { "input.loopback.sink.role.multimedia", "audio-x-generic-symbolic", N_("Media") },
++  { "input.loopback.sink.role.phone", "call-start-symbolic", N_("Calls") },
++  { "input.loopback.sink.role.ringtone", "call-incoming-symbolic", N_("Ringtone") },
++  { "input.loopback.sink.role.notification", "preferences-system-notifications-symbolic",
++    N_("Notifications") },
++  { "input.loopback.sink.role.alarm", "alarm-symbolic", N_("Alarm") },
++};
++
++typedef struct {
++  PhoshVolumeOsd           *osd;
++  const PhoshVolumeOsdRole *role;     /* NULL: the output */
++  GvcMixerStream           *stream;   /* NULL: none (a role without its sink) */
++  GtkWidget                *box;
++  GtkWidget                *icon;
++  GtkWidget                *scale;
++  gboolean                  updating; /* the slider follows the stream: no write back */
++} PhoshVolumeOsdSlider;
++
++struct _PhoshVolumeOsd {
++  PhoshSystemModal      parent;
++
++  GvcMixerControl      *mixer;
++  GtkWidget            *card;
++  GtkWidget            *revealer;
++  GtkWidget            *caption;
++  GtkWidget            *more;
++  GtkWidget            *more_icon;
++  GtkWidget            *top_spacer; /* the output's room level with the caption */
++  GtkGesture           *swipe;
++  GtkGesture           *press;
++  PhoshVolumeOsdSlider  output;
++  PhoshVolumeOsdSlider  roles[G_N_ELEMENTS (roles)];
++  guint                 timeout_id;
++};
++
++G_DEFINE_TYPE (PhoshVolumeOsd, phosh_volume_osd, PHOSH_TYPE_SYSTEM_MODAL)
++
++
++static gboolean
++on_timeout (gpointer data)
++{
++  PhoshVolumeOsd *self = PHOSH_VOLUME_OSD (data);
++
++  self->timeout_id = 0;
++  gtk_widget_destroy (GTK_WIDGET (self));
++  return G_SOURCE_REMOVE;
++}
++
++/* Every key press and every touch starts the time to close anew */
++static void
++restart_timeout (PhoshVolumeOsd *self)
++{
++  gboolean expanded = gtk_revealer_get_reveal_child (GTK_REVEALER (self->revealer));
++
++  g_clear_handle_id (&self->timeout_id, g_source_remove);
++  self->timeout_id = g_timeout_add (expanded ? EXPANDED_TIMEOUT_MS : COLLAPSED_TIMEOUT_MS,
++                                    on_timeout, self);
++  g_source_set_name_by_id (self->timeout_id, "[phosh] volume-osd-timeout");
++}
++
++
++static double
++get_vol_max (PhoshVolumeOsd *self)
++{
++  return gvc_mixer_control_get_vol_max_norm (self->mixer);
++}
++
++/* The caption above the role sliders names the slider last moved */
++static void
++update_caption (PhoshVolumeOsd *self, PhoshVolumeOsdSlider *slider)
++{
++  g_autofree char *text = NULL;
++  double percent = 100.0 * gtk_range_get_value (GTK_RANGE (slider->scale)) / get_vol_max (self);
++
++  text = g_strdup_printf ("%s %d %%",
++                          slider->role ? _(slider->role->name) : _("Volume"),
++                          (int) round (percent));
++  gtk_label_set_label (GTK_LABEL (self->caption), text);
++}
++
++
++static void
++update_output_icon (PhoshVolumeOsd *self)
++{
++  double fraction = gtk_range_get_value (GTK_RANGE (self->output.scale)) / get_vol_max (self);
++  const char *icon;
++
++  if (fraction <= 0.0)
++    icon = "audio-volume-muted-symbolic";
++  else if (fraction < 0.34)
++    icon = "audio-volume-low-symbolic";
++  else if (fraction < 0.67)
++    icon = "audio-volume-medium-symbolic";
++  else
++    icon = "audio-volume-high-symbolic";
++  gtk_image_set_from_icon_name (GTK_IMAGE (self->output.icon), icon, GTK_ICON_SIZE_BUTTON);
++}
++
++
++static void
++slider_sync (PhoshVolumeOsdSlider *slider)
++{
++  double value = 0.0;
++
++  if (slider->stream && !gvc_mixer_stream_get_is_muted (slider->stream))
++    value = gvc_mixer_stream_get_volume (slider->stream);
++
++  slider->updating = TRUE;
++  gtk_range_set_value (GTK_RANGE (slider->scale), value);
++  slider->updating = FALSE;
++
++  if (!slider->role)
++    update_output_icon (slider->osd);
++}
++
++
++static void
++on_stream_volume_changed (GvcMixerStream *stream, GParamSpec *pspec, gpointer data)
++{
++  slider_sync (data);
++}
++
++
++static void
++slider_bind (PhoshVolumeOsdSlider *slider, GvcMixerStream *stream)
++{
++  if (slider->stream == stream)
++    return;
++
++  if (slider->stream)
++    g_signal_handlers_disconnect_by_data (slider->stream, slider);
++  g_set_object (&slider->stream, stream);
++
++  if (stream) {
++    g_signal_connect (stream, "notify::volume", G_CALLBACK (on_stream_volume_changed), slider);
++    g_signal_connect (stream, "notify::is-muted", G_CALLBACK (on_stream_volume_changed), slider);
++  }
++  /* The output slider always shows, a role's only with its sink */
++  if (slider->role)
++    gtk_widget_set_visible (slider->box, stream != NULL);
++  slider_sync (slider);
++}
++
++
++static void
++on_scale_value_changed (GtkRange *range, PhoshVolumeOsdSlider *slider)
++{
++  PhoshVolumeOsd *self = slider->osd;
++  pa_volume_t volume;
++
++  if (slider->updating || !slider->stream)
++    return;
++
++  volume = (pa_volume_t) round (gtk_range_get_value (range));
++  if (gvc_mixer_stream_set_volume (slider->stream, volume))
++    gvc_mixer_stream_push_volume (slider->stream);
++  /* As the volume keys do: the bottom mutes, anything above unmutes */
++  gvc_mixer_stream_change_is_muted (slider->stream, volume == 0);
++
++  if (!slider->role)
++    update_output_icon (self);
++  update_caption (self, slider);
++  restart_timeout (self);
++}
++
++
++/* The streams behind the sliders: the default sink, and the role sinks by name */
++static void
++find_streams (PhoshVolumeOsd *self)
++{
++  GSList *sinks = gvc_mixer_control_get_sinks (self->mixer);
++  gboolean any_role = FALSE;
++
++  slider_bind (&self->output, gvc_mixer_control_get_default_sink (self->mixer));
++
++  for (guint i = 0; i < G_N_ELEMENTS (roles); i++) {
++    GvcMixerStream *found = NULL;
++
++    for (GSList *l = sinks; l && !found; l = l->next) {
++      if (g_strcmp0 (gvc_mixer_stream_get_name (l->data), roles[i].sink) == 0)
++        found = l->data;
++    }
++    slider_bind (&self->roles[i], found);
++    any_role = any_role || found;
++  }
++  g_slist_free (sinks);
++
++  gtk_widget_set_visible (self->more, any_role);
++  if (!any_role)
++    gtk_revealer_set_reveal_child (GTK_REVEALER (self->revealer), FALSE);
++}
++
++
++static void
++on_mixer_changed (PhoshVolumeOsd *self)
++{
++  find_streams (self);
++}
++
++
++static void
++set_expanded (PhoshVolumeOsd *self, gboolean expanded)
++{
++  if (expanded && !gtk_widget_get_visible (self->more))
++    return; /* no role sinks */
++
++  gtk_revealer_set_reveal_child (GTK_REVEALER (self->revealer), expanded);
++  /* Next to the roles the output slider starts below their caption, alone at the top */
++  gtk_widget_set_visible (self->top_spacer, expanded);
++  /* At the right edge: "more" opens to the left, the arrow folds back to the right */
++  gtk_image_set_from_icon_name (GTK_IMAGE (self->more_icon),
++                                expanded ? "go-next-symbolic" : "view-more-horizontal-symbolic",
++                                GTK_ICON_SIZE_BUTTON);
++  if (expanded)
++    update_caption (self, &self->output);
++  restart_timeout (self);
++}
++
++
++static void
++on_more_clicked (PhoshVolumeOsd *self)
++{
++  set_expanded (self, !gtk_revealer_get_reveal_child (GTK_REVEALER (self->revealer)));
++}
++
++
++/* Inwards (to the left) shows the roles, outwards folds them back or closes */
++static void
++on_swipe (PhoshVolumeOsd *self, double velocity_x, double velocity_y)
++{
++  if (fabs (velocity_x) < SWIPE_VELOCITY || fabs (velocity_x) < fabs (velocity_y))
++    return;
++
++  if (velocity_x < 0)
++    set_expanded (self, TRUE);
++  else if (gtk_revealer_get_reveal_child (GTK_REVEALER (self->revealer)))
++    set_expanded (self, FALSE);
++  else
++    gtk_widget_destroy (GTK_WIDGET (self));
++}
++
++
++static void
++on_pressed (PhoshVolumeOsd *self, int n_press, double x, double y)
++{
++  restart_timeout (self);
++}
++
++
++/* A tap beside the card closes, as with the old OSD */
++static void
++on_released (PhoshVolumeOsd *self, int n_press, double x, double y)
++{
++  GtkAllocation alloc;
++  int cx, cy;
++
++  if (!gtk_widget_translate_coordinates (GTK_WIDGET (self), self->card, (int) x, (int) y, &cx, &cy))
++    return;
++  gtk_widget_get_allocation (self->card, &alloc);
++  if (cx < 0 || cy < 0 || cx >= alloc.width || cy >= alloc.height)
++    gtk_widget_destroy (GTK_WIDGET (self));
++}
++
++
++static void
++slider_init (PhoshVolumeOsd *self, PhoshVolumeOsdSlider *slider, const PhoshVolumeOsdRole *role)
++{
++  slider->osd = self;
++  slider->role = role;
++
++  slider->box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
++  gtk_style_context_add_class (gtk_widget_get_style_context (slider->box), "slider-column");
++
++  slider->scale = gtk_scale_new_with_range (GTK_ORIENTATION_VERTICAL, 0.0, get_vol_max (self),
++                                            get_vol_max (self) / 100.0);
++  gtk_range_set_inverted (GTK_RANGE (slider->scale), TRUE);
++  gtk_scale_set_draw_value (GTK_SCALE (slider->scale), FALSE);
++  gtk_widget_set_vexpand (slider->scale, TRUE);
++  gtk_widget_set_halign (slider->scale, GTK_ALIGN_CENTER);
++  g_signal_connect (slider->scale, "value-changed", G_CALLBACK (on_scale_value_changed), slider);
++
++  slider->icon = gtk_image_new_from_icon_name (role ? role->icon : "audio-volume-medium-symbolic",
++                                               GTK_ICON_SIZE_BUTTON);
++
++  gtk_box_pack_start (GTK_BOX (slider->box), slider->scale, TRUE, TRUE, 0);
++  gtk_box_pack_start (GTK_BOX (slider->box), slider->icon, FALSE, FALSE, 0);
++  gtk_widget_show_all (slider->box);
++}
++
++
++static void
++phosh_volume_osd_dispose (GObject *object)
++{
++  PhoshVolumeOsd *self = PHOSH_VOLUME_OSD (object);
++
++  g_clear_handle_id (&self->timeout_id, g_source_remove);
++  slider_bind (&self->output, NULL);
++  for (guint i = 0; i < G_N_ELEMENTS (roles); i++)
++    slider_bind (&self->roles[i], NULL);
++  g_clear_object (&self->swipe);
++  g_clear_object (&self->press);
++  g_clear_object (&self->mixer);
++
++  G_OBJECT_CLASS (phosh_volume_osd_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_volume_osd_class_init (PhoshVolumeOsdClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_volume_osd_dispose;
++
++  gtk_widget_class_set_css_name (widget_class, "phosh-volume-osd");
++}
++
++
++static void
++phosh_volume_osd_init (PhoshVolumeOsd *self)
++{
++  PhoshAudioManager *audio_manager = phosh_audio_manager_get_default ();
++  GtkWidget *outer, *output_column, *roles_box, *roles_column, *bottom_spacer;
++  g_autoptr (GtkSizeGroup) tops = gtk_size_group_new (GTK_SIZE_GROUP_VERTICAL);
++  g_autoptr (GtkSizeGroup) bottoms = gtk_size_group_new (GTK_SIZE_GROUP_VERTICAL);
++
++  self->mixer = g_object_ref (phosh_audio_manager_get_mixer_control (audio_manager));
++
++  /* The card at the right edge, centered on the height: the keys' side */
++  outer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
++  gtk_widget_set_halign (outer, GTK_ALIGN_END);
++  gtk_widget_set_valign (outer, GTK_ALIGN_CENTER);
++  gtk_container_add (GTK_CONTAINER (self), outer);
++
++  self->card = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->card), "card");
++  gtk_box_pack_start (GTK_BOX (outer), self->card, FALSE, FALSE, 0);
++
++  /* The roles, to the left of the output slider */
++  self->revealer = gtk_revealer_new ();
++  gtk_revealer_set_transition_type (GTK_REVEALER (self->revealer),
++                                    GTK_REVEALER_TRANSITION_TYPE_SLIDE_LEFT);
++  gtk_box_pack_start (GTK_BOX (self->card), self->revealer, FALSE, FALSE, 0);
++
++  roles_column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
++  gtk_container_add (GTK_CONTAINER (self->revealer), roles_column);
++  self->caption = gtk_label_new (NULL);
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->caption), "caption");
++  gtk_label_set_ellipsize (GTK_LABEL (self->caption), PANGO_ELLIPSIZE_END);
++  gtk_box_pack_start (GTK_BOX (roles_column), self->caption, FALSE, FALSE, 0);
++  roles_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
++  gtk_box_set_homogeneous (GTK_BOX (roles_box), TRUE);
++  gtk_box_pack_start (GTK_BOX (roles_column), roles_box, TRUE, TRUE, 0);
++  for (guint i = 0; i < G_N_ELEMENTS (roles); i++) {
++    slider_init (self, &self->roles[i], &roles[i]);
++    gtk_box_pack_start (GTK_BOX (roles_box), self->roles[i].box, FALSE, FALSE, 0);
++  }
++  /* Level with the output's button: all bars end at the same height */
++  bottom_spacer = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  gtk_box_pack_start (GTK_BOX (roles_column), bottom_spacer, FALSE, FALSE, 0);
++  gtk_size_group_add_widget (bottoms, bottom_spacer);
++  gtk_size_group_add_widget (tops, self->caption);
++
++  /* The output: the slider the keys move, the button for the roles below it */
++  output_column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
++  gtk_style_context_add_class (gtk_widget_get_style_context (output_column), "output");
++  gtk_box_pack_start (GTK_BOX (self->card), output_column, FALSE, FALSE, 0);
++  self->top_spacer = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  gtk_box_pack_start (GTK_BOX (output_column), self->top_spacer, FALSE, FALSE, 0);
++  gtk_size_group_add_widget (tops, self->top_spacer);
++  slider_init (self, &self->output, NULL);
++  gtk_box_pack_start (GTK_BOX (output_column), self->output.box, TRUE, TRUE, 0);
++
++  self->more = gtk_button_new ();
++  self->more_icon = gtk_image_new_from_icon_name ("view-more-horizontal-symbolic",
++                                                  GTK_ICON_SIZE_BUTTON);
++  gtk_container_add (GTK_CONTAINER (self->more), self->more_icon);
++  gtk_widget_set_tooltip_text (self->more, _("Volume of each kind of sound"));
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->more), "flat");
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->more), "circular");
++  gtk_widget_set_halign (self->more, GTK_ALIGN_CENTER);
++  g_signal_connect_swapped (self->more, "clicked", G_CALLBACK (on_more_clicked), self);
++  gtk_box_pack_start (GTK_BOX (output_column), self->more, FALSE, FALSE, 0);
++  gtk_size_group_add_widget (bottoms, self->more);
++
++  gtk_widget_show_all (outer);
++  gtk_widget_set_visible (self->top_spacer, FALSE); /* collapsed */
++
++  /* Gestures in the capture phase: they see touches on the sliders too, without taking them */
++  self->swipe = gtk_gesture_swipe_new (self->card);
++  gtk_gesture_single_set_touch_only (GTK_GESTURE_SINGLE (self->swipe), FALSE);
++  gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (self->swipe), GTK_PHASE_CAPTURE);
++  g_signal_connect_swapped (self->swipe, "swipe", G_CALLBACK (on_swipe), self);
++
++  self->press = gtk_gesture_multi_press_new (GTK_WIDGET (self));
++  gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (self->press), GTK_PHASE_CAPTURE);
++  g_signal_connect_swapped (self->press, "pressed", G_CALLBACK (on_pressed), self);
++  g_signal_connect_swapped (self->press, "released", G_CALLBACK (on_released), self);
++  gtk_widget_add_events (GTK_WIDGET (self), GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
++                         GDK_TOUCH_MASK);
++
++  g_signal_connect_object (self->mixer, "default-sink-changed",
++                           G_CALLBACK (on_mixer_changed), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (self->mixer, "stream-added",
++                           G_CALLBACK (on_mixer_changed), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (self->mixer, "stream-removed",
++                           G_CALLBACK (on_mixer_changed), self, G_CONNECT_SWAPPED);
++  find_streams (self);
++  update_caption (self, &self->output);
++  restart_timeout (self);
++}
++
++
++GtkWidget *
++phosh_volume_osd_new (void)
++{
++  return g_object_new (PHOSH_TYPE_VOLUME_OSD, NULL);
++}
++
++/**
++ * phosh_volume_osd_poke:
++ * @self: The volume OSD
++ *
++ * A volume key was pressed again: stay open. The slider follows the volume by itself.
++ */
++void
++phosh_volume_osd_poke (PhoshVolumeOsd *self)
++{
++  g_return_if_fail (PHOSH_IS_VOLUME_OSD (self));
++
++  restart_timeout (self);
++}
+diff --git a/src/volume-osd.h b/src/volume-osd.h
+new file mode 100644
+index 00000000..59107799
+--- /dev/null
++++ b/src/volume-osd.h
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include <gtk/gtk.h>
++
++#include "system-modal.h"
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_VOLUME_OSD (phosh_volume_osd_get_type ())
++
++G_DECLARE_FINAL_TYPE (PhoshVolumeOsd, phosh_volume_osd, PHOSH, VOLUME_OSD, PhoshSystemModal)
++
++GtkWidget *phosh_volume_osd_new  (void);
++void       phosh_volume_osd_poke (PhoshVolumeOsd *self);
++
++G_END_DECLS

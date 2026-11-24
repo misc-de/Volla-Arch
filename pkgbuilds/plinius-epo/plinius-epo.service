@@ -1,0 +1,52 @@
+[Unit]
+Description=Orbit predictions for a faster GPS fix
+# mnld's directory lives on the Android data partition, which the container setup mounts
+After=network-online.target lxc-android-config.service
+Wants=network-online.target
+ConditionPathIsDirectory=/android/data/vendor/gps
+
+[Service]
+Type=oneshot
+# As root, but only to restart mnld when mnl.prop changed: the file itself is written by a
+# copy running as gps (setpriv), as root must not work in a directory gps can change
+ExecStartPre=+/usr/lib/plinius-epo/plinius-epo apply
+# As Android's gps user, who owns mnld's files: the download
+ExecStart=/usr/lib/plinius-epo/plinius-epo fetch
+# 75: the download failed (no network); the next timer run tries again, the unit is not failed
+SuccessExitStatus=75
+# A stuck download or container call must not hold the unit (and the hourly timer) forever
+TimeoutStartSec=5min
+User=aid_gps
+Group=aid_gps
+StateDirectory=plinius-epo
+StateDirectoryMode=0755
+
+# Sandbox for "fetch" (ExecStartPre=+ runs without it): network and mnld's directory only
+ReadWritePaths=/android/data/vendor/gps
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RemoveIPC=yes
+UMask=0002

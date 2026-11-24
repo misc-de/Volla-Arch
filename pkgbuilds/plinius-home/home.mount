@@ -1,0 +1,18 @@
+# /home on the data partition of this system. Without /userdata (or if the bind mount fails) /home
+# stays on the system partition, where the image keeps an empty home for the user: logging in still
+# works.
+[Unit]
+Description=Home on the data partition
+ConditionPathIsMountPoint=/userdata
+Wants=plinius-home-init.service
+After=plinius-home-init.service
+Before=local-fs.target
+
+[Mount]
+What=/userdata/home
+Where=/home
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

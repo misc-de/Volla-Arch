@@ -1,0 +1,178 @@
+#!/bin/bash
+# plinius-ssh-set: the networks the SSH server takes logins from. Three choices, each allowed or
+# not (GNOME Settings › System › Secure Shell runs this through pkexec):
+#
+#   usb    the USB network to a computer (NCM, interface usb0)
+#   local  Wi-Fi, the hotspot and Ethernet adapters, from local addresses only
+#   all    every network, also mobile data, VPN and the internet (includes the other two)
+#
+# Whether sshd runs at all stays the switch of GNOME Settings (sshd.service); this only decides
+# where it answers. The choices live in /etc/plinius-ssh.conf.
+#
+# Two layers, so that neither alone opens anything:
+#   1. Firewall (iptables-legacy, the kernel has no nftables): chain "plinius-ssh" in INPUT drops
+#      SSH from interfaces not allowed. Only the firewall knows interfaces: mobile data has a
+#      private address here too (ccmni2 10.x/8, measured), so addresses alone cannot tell it
+#      from a local network.
+#   2. sshd (/etc/ssh/sshd_config.d/40-plinius-ssh.conf): key login only from the addresses of
+#      the allowed choices, in case the firewall rules are gone (a flushed INPUT chain).
+#
+#   plinius-ssh-set allow|deny usb|local|all   change one choice and apply
+#   plinius-ssh-set apply                      apply the file (at boot, plinius-ssh.service)
+#   plinius-ssh-set status                     print the choices
+#
+# polkit (org.plinius.ssh.policy): "allow" asks for the user's PIN, "deny" does not.
+#
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+
+conf=/etc/plinius-ssh.conf
+sshd_conf=/etc/ssh/sshd_config.d/40-plinius-ssh.conf
+chain=plinius-ssh
+
+# The device's address on the USB network (40-plinius-usb.network of plinius-usb)
+usb_if=usb0
+usb_addr=10.15.19.82
+# Interfaces of local networks: Wi-Fi, hotspot, Wi-Fi Direct, Ethernet adapters ("+" = prefix)
+local_ifs=(wlan+ ap+ p2p+ eth+ enx+)
+# Local addresses: private, link-local, unique local (IPv6)
+local_v4=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16)
+local_v6=(fe80::/10 fc00::/7)
+
+# Reads one choice ("yes"/"no") from the file; missing file or key: the default
+get() {
+	local key=$1 def=$2 val
+	val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*\([a-z]*\).*/\1/p" "$conf" 2>/dev/null | tail -n1)
+	case $val in yes | no) echo "$val" ;; *) echo "$def" ;; esac
+}
+
+# Writes one choice, keeping the comments and the other keys of the file
+put() {
+	local key=$1 val=$2 tmp
+	tmp=$(mktemp "$conf.XXXXXX")
+	if [[ -f $conf ]] && grep -q "^[[:space:]]*$key[[:space:]]*=" "$conf"; then
+		sed "s/^[[:space:]]*$key[[:space:]]*=.*/$key=$val/" "$conf" >"$tmp"
+	else
+		{ [[ -f $conf ]] && cat "$conf"; echo "$key=$val"; } >"$tmp"
+	fi
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$conf"
+}
+
+# The ports sshd listens on (normally 22)
+ports() {
+	local p
+	p=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' | sort -u)
+	echo "${p:-22}"
+}
+
+# Rules for one family through *-restore --noflush: declaring the chain empties it, the new rules
+# take effect in one step (no moment without rules). The jump from INPUT is added only once.
+apply_firewall() {
+	local tool=$1 usb=$2 lan=$3 all=$4 port i net
+	local -a nets
+	if [[ $tool == ip6tables-legacy ]]; then nets=("${local_v6[@]}"); else nets=("${local_v4[@]}"); fi
+	{
+		echo '*filter'
+		echo ":$chain - [0:0]"
+		echo "-A $chain -i lo -j RETURN"
+		if [[ $all == yes ]]; then
+			echo "-A $chain -j RETURN"
+		else
+			[[ $usb == yes ]] && echo "-A $chain -i $usb_if -j RETURN"
+			if [[ $lan == yes ]]; then
+				for i in "${local_ifs[@]}"; do
+					for net in "${nets[@]}"; do
+						echo "-A $chain -i $i -s $net -j RETURN"
+					done
+				done
+			fi
+			echo "-A $chain -j DROP"
+		fi
+		echo 'COMMIT'
+	} | "$tool-restore" -w --noflush
+	for port in $(ports); do
+		"$tool" -w -C INPUT -p tcp --dport "$port" -j "$chain" 2>/dev/null ||
+			"$tool" -w -I INPUT 1 -p tcp --dport "$port" -j "$chain"
+	done
+}
+
+# sshd: 50-plinius.conf (device package) switches key login off globally; these Match blocks
+# switch it on again for allowed addresses. Of several matching blocks the first one counts, so
+# the USB block comes first and also says "no" when USB is not allowed.
+write_sshd() {
+	local usb=$1 lan=$2 all=$3 tmp list
+	tmp=$(mktemp "$sshd_conf.XXXXXX")
+	{
+		echo "# Written by plinius-ssh-set from $conf, changes here are overwritten."
+		echo "# GNOME Settings › System › Secure Shell › Allowed Networks."
+		if [[ $all == yes ]]; then
+			echo 'Match all'
+			printf '\tPubkeyAuthentication yes\n'
+		else
+			echo "Match LocalAddress $usb_addr"
+			printf '\tPubkeyAuthentication %s\n' "$usb"
+			if [[ $lan == yes ]]; then
+				list=$(IFS=,; echo "${local_v4[*]},${local_v6[*]}")
+				echo "Match Address $list"
+				printf '\tPubkeyAuthentication yes\n'
+			fi
+		fi
+	} >"$tmp"
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$sshd_conf"
+}
+
+apply() {
+	local usb lan all old=
+	usb=$(get usb yes)
+	lan=$(get local no)
+	all=$(get all no)
+
+	# The firewall first: it is the layer that knows interfaces
+	apply_firewall iptables-legacy "$usb" "$lan" "$all"
+	apply_firewall ip6tables-legacy "$usb" "$lan" "$all"
+
+	[[ -f $sshd_conf ]] && old=$(mktemp) && cp "$sshd_conf" "$old"
+	write_sshd "$usb" "$lan" "$all"
+	# A file sshd does not take would stop it from starting: back to the old one. sshd -t needs
+	# host keys, which sshdgenkeys.service makes on the first boot after this ran; the file is
+	# then checked on the next change.
+	if compgen -G '/etc/ssh/ssh_host_*_key' >/dev/null && ! sshd -t 2>/dev/null; then
+		echo "plinius-ssh-set: sshd does not accept $sshd_conf, kept the old one" >&2
+		if [[ -n $old ]]; then mv -f "$old" "$sshd_conf"; else rm -f "$sshd_conf"; fi
+		exit 1
+	fi
+	[[ -n $old ]] && rm -f "$old"
+
+	# A running sshd reads its files again on SIGHUP; open sessions stay
+	if systemctl -q is-active sshd.service 2>/dev/null; then
+		systemctl kill --kill-whom=main -s HUP sshd.service
+	fi
+}
+
+case "${1:-}" in
+allow | deny)
+	case "${2:-}" in
+	usb | local | all) ;;
+	*)
+		echo "Usage: plinius-ssh-set allow|deny usb|local|all" >&2
+		exit 2
+		;;
+	esac
+	if [[ $1 == allow ]]; then put "$2" yes; else put "$2" no; fi
+	apply
+	;;
+apply)
+	apply
+	;;
+status)
+	echo "usb=$(get usb yes)"
+	echo "local=$(get local no)"
+	echo "all=$(get all no)"
+	;;
+*)
+	echo "Usage: plinius-ssh-set allow|deny usb|local|all | apply | status" >&2
+	exit 2
+	;;
+esac

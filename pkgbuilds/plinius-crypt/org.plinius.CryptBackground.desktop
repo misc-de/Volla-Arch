@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Password prompt background
+Comment=Use the wallpaper as background of the password prompt at startup
+Exec=/usr/lib/plinius-crypt/background-sync
+# Phosh sessions set XDG_CURRENT_DESKTOP=Phosh:GNOME. No X-GNOME-Autostart-Phase: gnome-session 49 and
+# later skip such entries ("no longer manages session services"), the watcher would never start.
+OnlyShowIn=GNOME;
+NoDisplay=true

@@ -1,0 +1,57 @@
+# pacman install script of cups-plinius. A printer found on the network is reached by its .local
+# name (a printer announces e.g. printer.local): nss-mdns (a dependency) resolves those names, once it
+# is in the hosts line of /etc/nsswitch.conf, before systemd-resolved (as the Arch wiki has it:
+# mdns_minimal [NOTFOUND=return] in front of resolve). Without it no .local name resolved on the
+# phone (getent hosts, 2026-11-13), not even its own.
+
+_mdns() {
+	local conf=/etc/nsswitch.conf
+
+	[ -f "$conf" ] || return 0
+	# Already there (also added by hand, or mdns4_minimal and the like)
+	grep -qE '^hosts:.*[[:space:]]mdns' "$conf" && return 0
+	if grep -qE '^hosts:.*[[:space:]]resolve' "$conf"; then
+		sed -i -E 's/^(hosts:.*[[:space:]])(resolve([[:space:]]|$))/\1mdns_minimal [NOTFOUND=return] \2/' "$conf"
+	else
+		# Behind files, with a space of its own: files may also end the line
+		sed -i -E 's/^(hosts:.*[[:space:]])files([[:space:]]+|$)/\1files mdns_minimal [NOTFOUND=return] /' "$conf"
+	fi
+}
+
+# Replacing Arch's cups, pacman removes it first and saves its changed configuration as .pacsave
+# (2026-11-13 on the phone: printers.conf with the PDF printer, classes.conf, subscriptions.conf);
+# the new files are empty or the defaults, and the next start of cupsd lost every queue. Taken back
+# when the file is still empty or the default and the .pacsave was saved by this very transaction
+# (renaming it set its ctime), so that an old leftover .pacsave stays where it is.
+_keep_config() {
+	local f
+
+	for f in printers.conf classes.conf subscriptions.conf cupsd.conf cups-files.conf snmp.conf; do
+		f=/etc/cups/$f
+		[ -s "$f.pacsave" ] || continue
+		[ -n "$(find "$f.pacsave" -cmin -30 2>/dev/null)" ] || continue
+		if [ -s "$f" ] && ! cmp -s "$f" "$f.default"; then
+			continue
+		fi
+		mv -f "$f.pacsave" "$f"
+		chown root:cups "$f"
+		echo "  kept the configuration of cups: $f"
+	done
+}
+
+# A cupsd that keeps running is still the old program (the fix of the device URI is in cupsd)
+_restart() {
+	[ -d /run/systemd/system ] || return 0
+	systemctl try-restart cups.service >/dev/null 2>&1 || :
+}
+
+post_install() {
+	_keep_config
+	_mdns
+	_restart
+}
+
+post_upgrade() {
+	_mdns
+	_restart
+}

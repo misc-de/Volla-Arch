@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:20:00 +0100
+Subject: [PATCH] shell: The always-on display stays on top of everything
+
+On a locked phone the top bar sits in the overlay layer and stayed in
+full white above the always-on display, in one place all the time: bad
+for burn-in and for power. It goes to the top layer as long as the
+always-on display is shown, the same way as for the proximity fader.
+
+A phone that locks while it already dozes maps the lock screen above
+the always-on display. Layer surfaces stack in the order they came, so
+the always-on display is made anew on top of it.
+
+A Phosh that crashed leaves $XDG_RUNTIME_DIR/plinius-aod behind. The
+display would then count as off for good for the services that read it
+(no face unlock any more), so a starting Phosh removes it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/shell.c | 59 ++++++++++++++++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 50 insertions(+), 9 deletions(-)
+
+diff --git a/src/shell.c b/src/shell.c
+index 6d2d5cf5..948a3c8c 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -21,6 +21,7 @@
+ #include <glib-object.h>
+ #include <glib-unix.h>
+ #include <glib/gi18n.h>
++#include <glib/gstdio.h>
+ #include <gtk/gtk.h>
+ #include <gdk/gdkwayland.h>
+ 
+@@ -328,8 +329,10 @@ update_top_level_layer (PhoshShell *self)
+   /* When the proximity fader is on we want to remove the top-panel from the
+      overlay layer since it uses an exclusive zone and hence the fader is
+      drawn below that top-panel. This can be dropped once layer-shell allows
+-     to specify the z-level */
+-  use_top_layer = priv->proximity && phosh_proximity_has_fader (priv->proximity);
++     to specify the z-level.
++     Plinius: the same for the always-on display */
++  use_top_layer = priv->aod ||
++    (priv->proximity && phosh_proximity_has_fader (priv->proximity));
+   if (use_top_layer)
+     goto set_layer;
+ 
+@@ -426,6 +429,34 @@ on_primary_monitor_power_mode_changed (PhoshShell *self, GParamSpec *pspec, Phos
+ }
+ 
+ 
++/* Plinius: the always-on display over everything there is so far */
++static void
++aod_show (PhoshShell *self, PhoshMonitor *monitor)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++
++  priv->aod = GTK_WIDGET (phosh_aod_new (monitor));
++  g_object_add_weak_pointer (G_OBJECT (priv->aod), (gpointer *)&priv->aod);
++  gtk_widget_show (priv->aod);
++  update_top_level_layer (self);
++}
++
++
++static void
++aod_hide (PhoshShell *self)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++  GtkWidget *aod = priv->aod;
++
++  if (!aod)
++    return;
++
++  g_clear_weak_pointer (&priv->aod);
++  gtk_widget_destroy (aod);
++  update_top_level_layer (self);
++}
++
++
+ /* Plinius: always-on display. Shown while the built-in panel dozes, allowed by the
+  * setting and outside of calls (the proximity sensor blanks the screen then) */
+ static void
+@@ -437,13 +468,10 @@ on_builtin_monitor_power_mode_changed (PhoshShell *self, GParamSpec *pspec, Phos
+   g_object_get (monitor, "power-mode", &mode, NULL);
+ 
+   if (mode == PHOSH_MONITOR_POWER_SAVE_MODE_DOZE) {
+-    if (!priv->aod) {
+-      priv->aod = GTK_WIDGET (phosh_aod_new (monitor));
+-      g_object_add_weak_pointer (G_OBJECT (priv->aod), (gpointer *)&priv->aod);
+-      gtk_widget_show (priv->aod);
+-    }
+-  } else if (priv->aod) {
+-    gtk_widget_destroy (priv->aod);
++    if (!priv->aod)
++      aod_show (self, monitor);
++  } else {
++    aod_hide (self);
+   }
+ }
+ 
+@@ -592,6 +620,13 @@ set_locked (PhoshShell *self, gboolean locked)
+     phosh_top_panel_fold (PHOSH_TOP_PANEL (priv->top_panel));
+   close_notch_search (self);
+ 
++  /* Plinius: the lock screen just came up above the always-on display, which has to
++   * stay on top: surfaces of a layer stack in the order they came */
++  if (locked && priv->aod && priv->builtin_monitor) {
++    aod_hide (self);
++    aod_show (self, priv->builtin_monitor);
++  }
++
+   update_top_level_layer (self);
+   update_top_bar_transparency (self);
+ }
+@@ -1279,6 +1314,12 @@ phosh_shell_constructed (GObject *object)
+     g_signal_connect_object (priv->plinius_display, "changed::always-on-display",
+                              G_CALLBACK (update_doze_allowed), self, G_CONNECT_SWAPPED);
+   }
++  /* Plinius: left behind by a Phosh that crashed while dozing */
++  {
++    g_autofree char *aod_flag = g_build_filename (g_get_user_runtime_dir (), "plinius-aod", NULL);
++
++    g_unlink (aod_flag);
++  }
+   update_doze_allowed (self);
+   priv->launcher_entry_manager = phosh_launcher_entry_manager_new ();
+ 

@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+# Keeps the password prompt at startup (LUKS, initramfs) in line with the session. Runs in the
+# user's session (XDG autostart) and, a little after a change, hands to root helpers that store
+# the result and rebuild the initramfs:
+#  - the GNOME/Phosh wallpaper, rendered small and blurred (pkexec background-install); while
+#    plinius-ambient shows a 360° photo instead, the middle of that photo; with "No picture"
+#    (picture-options none) the plain primary colour, as Phosh shows it
+#  - the look of the on-screen keyboard, the accent color and the first keyboard layout
+#    (pkexec look-install)
+#
+# The copy in the initramfs is not encrypted. Wallpapers shipped with the system (/usr/share)
+# are only blurred lightly; the user's own pictures so strongly that only the colours remain.
+
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+import gi
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import GdkPixbuf, Gio, GLib
+
+# Portrait 9:20 as the screen, LVGL XRGB8888 as glass-background.bin of the package, but half its
+# size: the prompt scales it up bilinearly, which looks the same behind the glass, and it has to fit
+# into the phone's Halium ramdisk. lz4 packs smooth gradients poorly: at 216x480 a GNOME wallpaper
+# took 140-220 KB there, more than the boot entry on the card has left; at 108x240 40-65 KB.
+WIDTH, HEIGHT = 108, 240
+LV_IMAGE_HEADER = bytes.fromhex("191100006c00f000b0010000")
+HELPER = "/usr/lib/plinius-crypt/background-install"
+LOOK_HELPER = "/usr/lib/plinius-crypt/look-install"
+# Seconds to wait after a change, the user may still be trying wallpapers
+DELAY = 20
+# System wallpapers are not private
+SYSTEM_DIR = "/usr/share/"
+# Own pictures: scaled down to this size first, which leaves only colours
+PRIVATE_W, PRIVATE_H = 12, 27
+# Overall brightness of the result (out of 255) so white text stays readable
+SYSTEM_ALPHA, PRIVATE_ALPHA = 217, 204
+
+# GNOME's accent colors (org.gnome.desktop.interface accent-color), as in stevia-plinius
+ACCENT_COLORS = {
+    "blue": "#3584e4", "teal": "#2190a4", "green": "#3a944a", "yellow": "#c88800",
+    "orange": "#ed5b00", "red": "#e62d42", "pink": "#d56199", "purple": "#9141ac",
+    "slate": "#6f8396",
+}
+
+
+def settings_if_installed(schema_id):
+    """Settings of a schema another package ships (stevia-plinius, phosh-plinius), or None."""
+    source = Gio.SettingsSchemaSource.get_default()
+    if source and source.lookup(schema_id, True):
+        return Gio.Settings.new(schema_id)
+    return None
+
+
+background = Gio.Settings.new("org.gnome.desktop.background")
+interface = Gio.Settings.new("org.gnome.desktop.interface")
+input_sources = Gio.Settings.new("org.gnome.desktop.input-sources")
+keyboard = settings_if_installed("org.plinius.keyboard")
+appearance = settings_if_installed("org.plinius.appearance")
+ambient = settings_if_installed("org.plinius.ambient")
+# The 360° photo came with plinius-ambient 0.3; an older schema has no such keys
+if ambient and not ambient.props.settings_schema.has_key("panorama-enabled"):
+    ambient = None
+pending = 0
+
+
+def log(text):
+    print(f"background-sync: {text}", file=sys.stderr, flush=True)
+
+
+def slideshow_first(path):
+    """First picture of a GNOME slideshow (XML), or None."""
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return None
+    node = root.find(".//static/file")
+    if node is None:
+        node = root.find(".//file")
+    if node is None:
+        return None
+    # <file> holds a path, or several <size> elements with one path each (take the largest)
+    sizes = node.findall("size")
+    text = sizes[-1].text if sizes else node.text
+    return text.strip() if text else None
+
+
+def plain_color():
+    """The primary colour as (r, g, b) when Phosh shows no picture but only that colour, else None.
+    Phosh fills with the primary colour alone (no gradient) when picture-options is "none"."""
+    if background.get_string("picture-options") != "none":
+        return None
+    return parse_color(background.get_string("primary-color"))
+
+
+def parse_color(text):
+    """#rgb or #rrggbb as (r, g, b); black for anything else, as Phosh does."""
+    text = text.strip()
+    if re.fullmatch("#[0-9a-fA-F]{3}", text):
+        text = "#" + "".join(c * 2 for c in text[1:])
+    if not re.fullmatch("#[0-9a-fA-F]{6}", text):
+        return (0, 0, 0)
+    return tuple(int(text[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def wallpaper_path():
+    """Path of the picture behind Phosh: the 360° photo of plinius-ambient when it shows one,
+    otherwise the wallpaper, the dark variant with a dark colour scheme; None without a picture."""
+    if ambient and ambient.get_boolean("panorama-enabled"):
+        panorama = ambient.get_string("panorama")
+        if panorama and GLib.file_test(panorama, GLib.FileTest.IS_REGULAR):
+            return panorama
+    if plain_color() is not None:
+        return None
+    dark = interface.get_string("color-scheme") == "prefer-dark"
+    uri = background.get_string("picture-uri-dark" if dark else "picture-uri")
+    uri = uri or background.get_string("picture-uri")
+    if not uri:
+        return None
+    path = Gio.File.new_for_uri(uri).get_path() if "://" in uri else uri
+    if path and path.endswith(".xml"):
+        path = slideshow_first(path)
+    return path
+
+
+def render(path):
+    """The wallpaper as LVGL image for the password prompt, or None if it cannot be loaded."""
+    try:
+        # At most 1024 pixels: plenty for 108x240, and a 360° photo may be huge
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 1024, 1024, True)
+    except GLib.Error as e:
+        log(f"cannot load {path}: {e.message}")
+        return None
+
+    # Centre crop to the screen's aspect ratio, as Phosh's "zoom"
+    w, h = pixbuf.get_width(), pixbuf.get_height()
+    if w * HEIGHT > h * WIDTH:
+        cw, ch = h * WIDTH // HEIGHT, h
+    else:
+        cw, ch = w, w * HEIGHT // WIDTH
+    pixbuf = pixbuf.new_subpixbuf((w - cw) // 2, (h - ch) // 2, cw, ch)
+
+    private = not path.startswith(SYSTEM_DIR)
+    if private:
+        tiny = pixbuf.scale_simple(PRIVATE_W, PRIVATE_H, GdkPixbuf.InterpType.HYPER)
+        # Up in two steps: one bilinear step from the tiny size leaves visible edges
+        image = tiny.scale_simple(WIDTH // 4, HEIGHT // 4, GdkPixbuf.InterpType.BILINEAR)
+        image = image.scale_simple(WIDTH, HEIGHT, GdkPixbuf.InterpType.BILINEAR)
+    else:
+        image = pixbuf.scale_simple(WIDTH, HEIGHT, GdkPixbuf.InterpType.HYPER)
+
+    return lv_image(image, PRIVATE_ALPHA if private else SYSTEM_ALPHA)
+
+
+def render_color(rgb):
+    """A plain colour as LVGL image, darkened as a system wallpaper so white text stays readable."""
+    r, g, b = rgb
+    image = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, WIDTH, HEIGHT)
+    image.fill((r << 24) | (g << 16) | (b << 8) | 0xFF)
+    return lv_image(image, SYSTEM_ALPHA)
+
+
+def lv_image(image, alpha):
+    """A WIDTHxHEIGHT pixbuf put onto black with the given opacity, as LVGL XRGB8888 image."""
+    # Onto black: removes any transparency and darkens
+    result = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, WIDTH, HEIGHT)
+    result.fill(0x000000FF)
+    image.composite(result, 0, 0, WIDTH, HEIGHT, 0, 0, 1, 1, GdkPixbuf.InterpType.NEAREST, alpha)
+
+    # RGB rows (with padding) to XRGB8888 in memory order B, G, R, X
+    data, stride = result.read_pixel_bytes().get_data(), result.get_rowstride()
+    rgb = b"".join(data[y * stride:y * stride + WIDTH * 3] for y in range(HEIGHT))
+    out = bytearray(WIDTH * HEIGHT * 4)
+    out[0::4], out[1::4], out[2::4] = rgb[2::3], rgb[1::3], rgb[0::3]
+    out[3::4] = b"\xff" * (WIDTH * HEIGHT)
+    return LV_IMAGE_HEADER + bytes(out)
+
+
+def keyboard_look():
+    """The on-screen keyboard's look, as stevia-plinius has it: "glass" or "original"."""
+    return keyboard.get_string("style") if keyboard else "original"
+
+
+def accent_color():
+    """The accent color as #rrggbb: the user's own, otherwise the one GNOME's setting names."""
+    color = appearance.get_string("accent-color") if appearance else ""
+    if re.fullmatch("#[0-9a-fA-F]{6}", color):
+        return color
+    return ACCENT_COLORS.get(interface.get_string("accent-color"), ACCENT_COLORS["blue"])
+
+
+def first_layout():
+    """The first keyboard layout of the session without its variant (de+neo -> de), or ""."""
+    for kind, name in input_sources.get_value("sources").unpack():
+        if kind == "xkb":
+            return name.split("+")[0]
+    return ""
+
+
+def sync_background():
+    """Render the current wallpaper and hand it to the root helper."""
+    path = wallpaper_path()
+    if path:
+        data = render(path)
+    else:
+        color = plain_color()
+        data = render_color(color) if color is not None else None
+    if data is None:
+        return
+    # Unchanged images are skipped by the helper, no rebuild then
+    proc = Gio.Subprocess.new(["pkexec", HELPER], Gio.SubprocessFlags.STDIN_PIPE)
+    proc.communicate(GLib.Bytes.new(data), None)
+    if not proc.get_successful():
+        log(f"{HELPER} failed for {path}")
+
+
+def sync_look():
+    """Hand the look of the keyboard to the root helper; it skips an unchanged look as well."""
+    proc = Gio.Subprocess.new(["pkexec", LOOK_HELPER, keyboard_look(), accent_color(), first_layout()],
+                              Gio.SubprocessFlags.NONE)
+    proc.wait()
+    if not proc.get_successful():
+        log(f"{LOOK_HELPER} failed")
+
+
+def sync():
+    """Bring the password prompt up to date with the session."""
+    global pending
+    pending = 0
+    sync_background()
+    sync_look()
+    return GLib.SOURCE_REMOVE
+
+
+def schedule(*_args):
+    """Sync DELAY seconds after the last change."""
+    global pending
+    if pending:
+        GLib.source_remove(pending)
+    pending = GLib.timeout_add_seconds(DELAY, sync)
+
+
+background.connect("changed", schedule)
+interface.connect("changed::color-scheme", schedule)
+interface.connect("changed::accent-color", schedule)
+input_sources.connect("changed::sources", schedule)
+if keyboard:
+    keyboard.connect("changed::style", schedule)
+if appearance:
+    appearance.connect("changed::accent-color", schedule)
+if ambient:
+    ambient.connect("changed::panorama-enabled", schedule)
+    ambient.connect("changed::panorama", schedule)
+# GSettings only reports changes of keys that were read; reading also catches up with changes
+# made while the session was not running
+wallpaper_path()
+background.get_string("primary-color")
+if ambient:
+    ambient.get_boolean("panorama-enabled")
+    ambient.get_string("panorama")
+keyboard_look()
+accent_color()
+first_layout()
+schedule()
+GLib.MainLoop().run()

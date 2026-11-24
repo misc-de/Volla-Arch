@@ -1,0 +1,77 @@
+Plinius: "Desktop over VNC" as a panel of its own below Printers.
+
+A panel in the sidebar after Printers with the switch for the desktop over VNC, the status, the
+address and the allowed networks. The panel (cc-desktop-vnc-panel.*) and its desktop file come as
+separate files; it is only listed when plinius-desktop is installed.
+
+diff --git a/panels/desktop-vnc/meson.build b/panels/desktop-vnc/meson.build
+new file mode 100644
+index 000000000..cd4bd1571
+--- /dev/null
++++ b/panels/desktop-vnc/meson.build
+@@ -0,0 +1,20 @@
++# Plinius: Desktop over VNC panel. The sources and the desktop file (with its
++# translations) come as separate files of gnome-control-center-plinius.
++panels_list += cappletname
++
++install_data(
++  'gnome-desktop-vnc-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
++sources = files(
++  'cc-desktop-vnc-panel.c',
++)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps,
++  c_args: cflags,
++)
+diff --git a/panels/meson.build b/panels/meson.build
+index 181f4ce7f..6a438c25e 100644
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -9,6 +9,7 @@ panels = [
+   'assistant',
+   'background',
+   'color',
++  'desktop-vnc',
+   'display',
+   'mouse',
+   'multitasking',
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index f1cfa389a..f7e959677 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -368,6 +368,7 @@ static const gchar *const panel_order[] = {
+     "assistant",
+     "color",
+     "printers",
++    "desktop-vnc",
+     "wacom",
+ 
+     "separator",
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index 38f604891..c6af9b868 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -38,6 +38,8 @@ extern GType cc_nfc_panel_get_type (void);
+ extern void cc_nfc_panel_static_init_func (void);
+ extern GType cc_streaming_panel_get_type (void);
+ extern void cc_streaming_panel_static_init_func (void);
++extern GType cc_desktop_vnc_panel_get_type (void);
++extern void cc_desktop_vnc_panel_static_init_func (void);
+ extern GType cc_usb_panel_get_type (void);
+ extern void cc_usb_panel_static_init_func (void);
+ extern GType cc_background_panel_get_type (void);
+@@ -99,6 +101,7 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("bluetooth", cc_bluetooth_panel_get_type, NULL),
+ #endif
+     /* Plinius: no "Color", a phone panel has no color calibration */
++    PANEL_TYPE ("desktop-vnc", cc_desktop_vnc_panel_get_type, cc_desktop_vnc_panel_static_init_func),
+     PANEL_TYPE ("display", cc_display_panel_get_type, NULL),
+     PANEL_TYPE ("keyboard", cc_keyboard_panel_get_type, NULL),
+     PANEL_TYPE ("mouse", cc_mouse_panel_get_type, NULL),

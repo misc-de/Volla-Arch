@@ -1,0 +1,16 @@
+#!/bin/sh
+# Password checks of polkit (Settings: Unlock, Printers, Users ...) on the Plinius kernel.
+# polkit 128 runs its agent helper through polkit-agent-helper.socket, which needs pidfds of
+# socket peers (SO_PEERPIDFD, Linux 6.5). The Plinius runs Linux 6.1: every helper exits at once
+# and every password counts as wrong. With the socket masked (by this package) the agents start
+# the helper directly; it then has to be setuid root, which the polkit package no longer sets.
+# Runs after every install or upgrade of polkit, since pacman restores the packaged mode.
+helper=/usr/lib/polkit-1/polkit-agent-helper-1
+[ -f "$helper" ] && chmod 4755 "$helper"
+# On a running system: an active socket would still be found by the agents until the next
+# start; stop it (its socket file stays behind, so remove that too). Not in an image build.
+if [ -d /run/systemd/system ]; then
+	systemctl stop polkit-agent-helper.socket 2>/dev/null
+	rm -f /run/polkit/agent-helper.socket
+fi
+exit 0

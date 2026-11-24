@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 16:05:31 +0100
+Subject: [PATCH] desktop: A maximized window whose screen went away is
+ arranged anew
+
+When a screen goes away, e.g. the virtual one when the VNC desktop ends,
+its windows were only moved to the remaining screen. A maximized window
+kept the size it had there. The next commit with that size, an app that
+plays music commits all the time, then took it for the client's answer:
+scale-to-fit divided the phone's usable area by the desktop's window
+size, the scale ended at its floor of 0.5, and that scale confirmed
+itself from then on. The app stayed in its desktop layout at half size.
+
+A maximized window is now arranged on the remaining screen, which starts
+its scale over from the client's minimum size. Any other window moves to
+that screen like one moved there by hand: on the phone it is maximized.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/desktop.c | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/src/desktop.c b/src/desktop.c
+index 5596056e..99199b9c 100644
+--- a/src/desktop.c
++++ b/src/desktop.c
+@@ -419,8 +419,7 @@ phoc_desktop_view_check_visibility (PhocDesktop *self, PhocView *view)
+ 
+ 
+ struct move_to_layout_space_data {
+-  double center_x;
+-  double center_y;
++  PhocOutput *output;
+ };
+ 
+ 
+@@ -436,7 +435,15 @@ move_to_layout_space_iter (PhocDesktop *self, PhocView *view, gpointer user_data
+ 
+   /* Its screen went away (e.g. the virtual one when VNC ends): keep its geometry there */
+   phoc_view_remember_geometry (view);
+-  phoc_view_move (view, data->center_x - box.width / 2, data->center_y - box.height / 2);
++
++  /* A maximized view only moved would keep the size it had there. Its next commit would then
++   * judge that size against the new screen and scale the view down for good, see
++   * view_reset_scale(). Arranged anew it gets the size and scale of the new screen. */
++  if (phoc_view_is_maximized (view))
++    phoc_view_arrange (view, data->output, TRUE);
++  else
++    phoc_view_move_to_output (view, data->output);
++
+   return TRUE;
+ }
+ 
+@@ -446,8 +453,6 @@ handle_layout_change (struct wl_listener *listener, void *data)
+ {
+   PhocDesktop *self;
+   struct wlr_output *center_output;
+-  struct wlr_box center_output_box;
+-  double center_x, center_y;
+   PhocOutput *output;
+ 
+   self = wl_container_of (listener, self, layout_change);
+@@ -455,16 +460,11 @@ handle_layout_change (struct wl_listener *listener, void *data)
+   if (center_output == NULL)
+     return;
+ 
+-  wlr_output_layout_get_box (self->layout, center_output, &center_output_box);
+-  center_x = center_output_box.x + center_output_box.width / 2;
+-  center_y = center_output_box.y + center_output_box.height / 2;
+-
+   /* Make sure all views are on an existing output */
+   phoc_desktop_for_each_view (self,
+                               move_to_layout_space_iter,
+                                (gpointer)&(struct move_to_layout_space_data) {
+-                                 .center_x = center_x,
+-                                 .center_y = center_y,
++                                 .output = PHOC_OUTPUT (center_output->data),
+                                });
+ 
+   /* Damage all outputs since the move above damaged old layout space */

@@ -1,0 +1,14 @@
+// Equivalent of extra/ofono2mm-radio.pkla from oFono2MM (polkit no longer reads the pkla format):
+// members of group radio may control the modem through the ModemManager API.
+polkit.addRule(function(action, subject) {
+	var actions = [
+		"org.freedesktop.ModemManager1.Device.Control",
+		"org.freedesktop.ModemManager1.Contacts",
+		"org.freedesktop.ModemManager1.Messaging",
+		"org.freedesktop.ModemManager1.Location"
+	];
+	if (actions.indexOf(action.id) >= 0 && subject.isInGroup("radio") &&
+	    subject.active && subject.local) {
+		return polkit.Result.YES;
+	}
+});

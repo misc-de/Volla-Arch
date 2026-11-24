@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 00:05:42 +0100
+Subject: [PATCH] ofono-binder: Report only registration failures with the
+ display off
+
+With the display off, upstream's filter keeps data call dormancy and does
+not look at the charger. Keep the filter our standby measurements were
+done with, as Android's DeviceStateMonitor does: with the display off and
+no charger connected, ask only for registration failures. With the display
+on or a charger connected everything stays enabled. The filter is sent
+only when it changes, and again after a failed request.
+---
+ src/binder_devmon_if.c | 29 ++++++++++++++++++++++++-----
+ 1 file changed, 24 insertions(+), 5 deletions(-)
+
+diff --git a/src/binder_devmon_if.c b/src/binder_devmon_if.c
+index dbc07ff..799a846 100644
+--- a/src/binder_devmon_if.c
++++ b/src/binder_devmon_if.c
+@@ -74,6 +74,7 @@ typedef struct binder_devmon_if_io {
+     RadioClient* network_client;
+     RadioRequest* req;
+     gboolean display_on;
++    gint64 ind_filter; /* last filter sent, -1 if none */
+     gboolean ind_filter_supported;
+     gulong battery_event_id[BATTERY_EVENT_COUNT];
+     gulong charger_event_id[CHARGER_EVENT_COUNT];
+@@ -162,6 +163,11 @@ binder_devmon_if_io_indication_filter_sent(
+         DBG_(self, "setIndicationFilter error %s",
+              binder_radio_error_string(error));
+     }
++
++    /* Send the filter again on the next change */
++    if (status != RADIO_TX_STATUS_OK || error != RADIO_ERROR_NONE) {
++        self->ind_filter = -1;
++    }
+ }
+ 
+ static
+@@ -169,11 +175,19 @@ void
+ binder_devmon_if_io_set_indication_filter(
+     DevMonIo* self)
+ {
+-    if (self->ind_filter_supported) {
++    const DevMonApi* api = self->api;
++    /*
++     * Like Android's DeviceStateMonitor: with the display off and no
++     * charger, only registration failures are reported. Signal strength,
++     * network state details, physical channel configs and so on would
++     * otherwise wake the system every few seconds.
++     */
++    const RADIO_IND_FILTER filter = (self->display_on ||
++        binder_devmon_if_charging(self->charger)) ? api->ind_filter_all :
++        (api->ind_filter_all & RADIO_IND_FILTER_REGISTRATION_FAILURE);
++
++    if (self->ind_filter_supported && self->ind_filter != (gint64)filter) {
+         GBinderWriter args;
+-        const DevMonApi* api = self->api;
+-        const RADIO_IND_FILTER filter = self->display_on ?
+-            api->ind_filter_all : api->ind_filter_off;
+         RadioRequest* req = radio_request_new(self->network_client,
+             api->set_indication_filter_req, &args,
+             binder_devmon_if_io_indication_filter_sent, NULL, self);
+@@ -195,6 +209,7 @@ binder_devmon_if_io_set_indication_filter(
+          * void setIndicationFilter(in int serial, in int indicationFilter);
+          */
+         DBG_(self, "Setting indication filter: 0x%02x", filter);
++        self->ind_filter = filter;
+         gbinder_writer_append_int32(&args, filter);
+         radio_request_drop(self->req);
+         self->req = radio_request_try_submit(req);
+@@ -227,7 +242,10 @@ void binder_devmon_if_io_charger_cb(
+     MceCharger* charger,
+     void* user_data)
+ {
+-    binder_devmon_if_io_set_cell_info_update_interval((DevMonIo*)user_data);
++    DevMonIo* self = user_data;
++
++    binder_devmon_if_io_set_indication_filter(self);
++    binder_devmon_if_io_set_cell_info_update_interval(self);
+ }
+ 
+ static
+@@ -290,6 +308,7 @@ binder_devmon_if_start_io(
+ 
+     self->pub.free = binder_devmon_if_io_free;
+     self->ind_filter_supported = TRUE;
++    self->ind_filter = -1;
+     self->slot = ofono_slot_ref(slot);
+     self->network_client = radio_client_ref(network_client);
+     self->api = api;
+-- 
+2.56.0
+

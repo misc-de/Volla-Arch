@@ -1,0 +1,37 @@
+From dfad3b0fb31c8de46e77de8f83c54c3c46765138 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 19:03:56 +0100
+Subject: [PATCH] app-item: Don't match system services to applications
+
+The application ID taken from a process's systemd unit is meant for apps
+started in a user session (see https://systemd.io/DESKTOP_ENVIRONMENTS/).
+System services follow the same naming, so cupsd in cups.service was
+listed as "Manage Printing" (cups.desktop, the CUPS web interface) with
+a root tag, even with the launcher hidden through NoDisplay.
+
+Only look at the unit for processes below /user.slice/; system services
+fall back to the command line and are otherwise grouped under System.
+---
+ src/app-item.vala | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/app-item.vala b/src/app-item.vala
+index db4c37e..f350a51 100644
+--- a/src/app-item.vala
++++ b/src/app-item.vala
+@@ -172,7 +172,11 @@ public class Usage.AppItem : Object {
+             return appid_map[p.cmdline] ?? appid_map["system_waydroid"];
+         }
+ 
+-        if (cgroup != null) {
++        /* Only units of a user session can belong to an application: system
++         * services (e.g. cups.service for cupsd) would otherwise be matched to a
++         * launcher of the same name (cups.desktop, "Manage Printing"), including
++         * hidden ones, and listed as that application. */
++        if (cgroup != null && cgroup.has_prefix ("/user.slice/")) {
+             /* Try to extract an application ID, this is a bit "magic".
+              * See https://systemd.io/DESKTOP_ENVIRONMENTS/
+              * and we also have some special cases for GNOME which is not
+-- 
+2.56.0
+

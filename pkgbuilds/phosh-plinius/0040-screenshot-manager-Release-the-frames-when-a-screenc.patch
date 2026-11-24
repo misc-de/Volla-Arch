@@ -1,0 +1,42 @@
+From a9aab78eff2e4446983f72e8f530e42b72b2c338 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 19:25:06 +0100
+Subject: [PATCH] screenshot-manager: Release the frames when a screencopy
+ fails
+
+When copying an output failed (e.g. while the screen is locked and
+blanked), only the D-Bus invocation was answered: self->frames was
+never freed, so every later screenshot was refused with "Screenshot
+already in progress" until phosh restarted. Screenshots triggered by
+a keybinding, which have no invocation, passed NULL to
+phosh_dbus_screenshot_complete_screenshot ().
+
+Finish through screenshot_done () instead: it answers the invocation
+or shows the "Failed to save screenshot" notification and releases
+the frames.
+---
+ src/screenshot-manager.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/screenshot-manager.c b/src/screenshot-manager.c
+index 5f0e1e27..c0dac773 100644
+--- a/src/screenshot-manager.c
++++ b/src/screenshot-manager.c
+@@ -823,12 +823,12 @@ maybe_screencopy_done (PhoshScreenshotManager *self)
+   if (done + failed != self->frames->num_outputs)
+     return;
+ 
+-  /* With a failure no need to merge pixbufs */
++  /* With a failure no need to merge pixbufs. Finish the screenshot so the
++   * frames get released, otherwise every later request is refused as
++   * "already in progress". Nothing is copied to the clipboard either. */
+   if (failed) {
+-    phosh_dbus_screenshot_complete_screenshot (PHOSH_DBUS_SCREENSHOT (self),
+-                                               self->frames->invocation,
+-                                               FALSE,
+-                                               self->frames->filename ?: "");
++    self->frames->copy_to_clipboard = FALSE;
++    screenshot_done (self, FALSE);
+     return;
+   }
+ 

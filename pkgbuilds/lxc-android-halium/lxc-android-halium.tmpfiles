@@ -1,0 +1,6 @@
+# Bind mount sources for the Android container (from UT's lxc-android-config). Numeric IDs:
+# Android's AIDs, which have no names on Arch (1013 = AID_MEDIA).
+d	/dev/__properties__	0755	root	root	-	-
+d	/dev/socket	0755	root	root	-	-
+# Sound from apps to the video recording service in the container
+p	/dev/socket/micshm	0660	1013	1013	-	-

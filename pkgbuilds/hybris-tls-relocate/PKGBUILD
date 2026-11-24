@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=hybris-tls-relocate
+pkgver=0.1
+pkgrel=3
+pkgdesc="Moves executables' own TLS off bionic's TLS slots (Firefox and Thunderbird on the Mali GPU through libhybris)"
+arch=(any)
+license=(MIT)
+# libhybris >= 5: the preloaded TLS padding that takes over the freed slots
+depends=(python 'libhybris>=0.1.0.20260624-5')
+install=hybris-tls-relocate.install
+source=(hybris-tls-relocate
+        hybris-tls-relocate.hook
+        LICENSE)
+sha256sums=('dd3d5c446f3b7d95f932ee903d95bacf88bc46bad58b960c9a4bb7b1b1b570bd'
+            '3489fec939d13272cf055aced37eab2b8bfc662c969c20b9ebd17b5e2c227503'
+            '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 hybris-tls-relocate -t "$pkgdir/usr/bin"
+	install -Dm644 hybris-tls-relocate.hook -t "$pkgdir/usr/share/libalpm/hooks"
+}

@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 13:00:00 +0100
+Subject: [PATCH] unl0kr: a keyboard layout list that fits a phone display
+
+The layout dropdown is 90 px wide on every display. At the 429 dpi of a phone
+its padding leaves too little room, so the name and the arrow overlap, and
+the opened list takes over that width with its rows right on top of each
+other in the 32 px font of all widgets. The width now follows the density of
+the display and stays as it was on low densities. The list theme gets its own
+font and row space, used by plinius-glass and plinius-original: the 44 px font
+of the keys and rows of about the height of a finger tip. All other themes
+stay as they were.
+---
+ shared/theme.c  | 18 +++++++++++++++++-
+ shared/theme.h  |  4 ++++
+ shared/themes.c |  8 ++++++--
+ unl0kr/main.c   |  3 +++
+ 4 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/shared/theme.c b/shared/theme.c
+index ba5084e..17a2ad9 100644
+--- a/shared/theme.c
++++ b/shared/theme.c
+@@ -36,6 +36,7 @@ static struct {
+     lv_style_t dropdown_pressed;
+     lv_style_t dropdown_list;
+     lv_style_t dropdown_list_selected;
++    lv_style_t dropdown_list_label;
+ #endif
+     lv_style_t label;
+ #if LV_USE_MSGBOX
+@@ -206,6 +207,19 @@ static void init_styles(const bbx_theme *theme) {
+     lv_style_set_border_color(&(styles.dropdown_list), lv_color_hex(theme->dropdown.list.border_color));
+     lv_style_set_radius(&(styles.dropdown_list), lv_dpx(theme->dropdown.list.corner_radius));
+     lv_style_set_pad_all(&(styles.dropdown_list), lv_dpx(theme->dropdown.list.pad));
++    reset_style(&(styles.dropdown_list_label));
++    if (theme->dropdown.list.font) {
++        /* The list draws the selected row, its label all the others */
++        lv_style_set_text_font(&(styles.dropdown_list), theme->dropdown.list.font);
++        lv_style_set_text_font(&(styles.dropdown_list_label), theme->dropdown.list.font);
++    }
++    if (theme->dropdown.list.line_space) {
++        /* The highlight of a row reaches half the row space above and below its text. With the same
++         * space at the ends of the list, the first and last row are as tall as the others. */
++        const int32_t line_space = lv_dpx(theme->dropdown.list.line_space);
++        lv_style_set_text_line_space(&(styles.dropdown_list), line_space);
++        lv_style_set_pad_ver(&(styles.dropdown_list), line_space / 2);
++    }
+ 
+     reset_style(&(styles.dropdown_list_selected));
+     lv_style_set_text_color(&(styles.dropdown_list_selected), lv_color_hex(theme->dropdown.list.selection_fg_color));
+@@ -310,7 +324,9 @@ static void apply_theme_cb(lv_theme_t *theme, lv_obj_t *obj) {
+     }
+ 
+     if (lv_obj_check_type(obj, &lv_label_class) && lv_obj_check_type(lv_obj_get_parent(obj), &lv_dropdownlist_class)) {
+-        return; /* Inherit styling from dropdown list */
++        /* Inherits from the dropdown list, except for the font of all widgets it got above */
++        lv_obj_add_style(obj, &(styles.dropdown_list_label), 0);
++        return;
+     }
+ #endif
+ 
+diff --git a/shared/theme.h b/shared/theme.h
+index 60e1acf..9752e82 100644
+--- a/shared/theme.h
++++ b/shared/theme.h
+@@ -123,6 +123,10 @@ typedef struct {
+     uint32_t border_color;
+     int32_t corner_radius;
+     int32_t pad;
++    /* For an opened list that is easy to hit: its font (NULL = the font of all widgets) and the
++     * space between its rows */
++    const lv_font_t *font;
++    int32_t line_space;
+ } bbx_theme_dropdown_list;
+ 
+ /* Dropdown theme */
+diff --git a/shared/themes.c b/shared/themes.c
+index 717581d..134ab9b 100644
+--- a/shared/themes.c
++++ b/shared/themes.c
+@@ -1247,7 +1247,9 @@ static const bbx_theme plinius_glass = {
+             .border_width = 1,
+             .border_color = 0x4A4558,
+             .corner_radius = 10,
+-            .pad = 8
++            .pad = 8,
++            .font = &bbx_font_key_regular,
++            .line_space = 17
+         }
+     },
+     .label = {
+@@ -1431,7 +1433,9 @@ static const bbx_theme plinius_original = {
+             .border_width = 1,
+             .border_color = 0x515151,
+             .corner_radius = 7,
+-            .pad = 8
++            .pad = 8,
++            .font = &bbx_font_key_regular,
++            .line_space = 17
+         }
+     },
+     .label = {
+diff --git a/unl0kr/main.c b/unl0kr/main.c
+index aa4fbf8..ccdf265 100644
+--- a/unl0kr/main.c
++++ b/unl0kr/main.c
+@@ -503,6 +503,9 @@ int main(int argc, char *argv[]) {
+     bbx_header_init_config(&header_config);
+     header_config.theme_symbol = UL_SYMBOL_ADJUST;
+     header_config.dropdown_options = sq2lv_layout_short_names;
++    /* The padding grows with the density of the display, so that the 90 px of the header leave no
++     * room for the name and the arrow on a phone */
++    header_config.dropdown_width = LV_MAX(header_config.dropdown_width, lv_dpx(60));
+ 
+     bbx_header_widgets_t header_widgets;
+     lv_obj_t *header = bbx_header_create(screen, &header_config, &header_widgets);

@@ -1,0 +1,228 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 00:05:00 +0100
+Subject: [PATCH] background: 360° photos and headings in the background chooser
+
+Plinius: the chooser gets a heading over each kind of picture - the
+360° photos on top (cc-plinius-panorama.c: shown by plinius-ambient,
+turning with the phone), the pictures added by hand, GNOME's light/dark
+wallpapers - and one can switch between them in both directions.
+
+A tap on one of GNOME's pictures or an added one switches the 360°
+photo off first (the animated effect over it stays), also for the
+picture that is set already: choosing that one changes no key that
+plinius-ambient could notice. While a 360° photo is the background,
+none of the other pictures carries the check mark.
+
+The headings are set in the code: their strings live in our gettext
+domain, not in GNOME's.
+
+The list of added pictures leaves the 360° photos out: "Add Picture..."
+copies them to ~/.local/share/backgrounds like any other, and they show
+in the 360° section, which watches that folder.
+---
+ panels/background/bg-recent-source.c        | 13 +++++++-
+ panels/background/cc-background-chooser.blp | 27 ++++++++++++++-
+ panels/background/cc-background-chooser.c   | 37 +++++++++++++++++++--
+ panels/background/meson.build               |  1 +
+ 4 files changed, 74 insertions(+), 4 deletions(-)
+
+diff --git a/panels/background/bg-recent-source.c b/panels/background/bg-recent-source.c
+index 9f8e62e..b506bb8 100644
+--- a/panels/background/bg-recent-source.c
++++ b/panels/background/bg-recent-source.c
+@@ -23,6 +23,7 @@
+ 
+ #include "bg-recent-source.h"
+ #include "cc-background-item.h"
++#include "cc-plinius-panorama.h"
+ 
+ #define ATTRIBUTES                                                                                                     \
+     G_FILE_ATTRIBUTE_STANDARD_NAME "," G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE "," G_FILE_ATTRIBUTE_TIME_MODIFIED
+@@ -75,6 +76,14 @@ add_file_from_info (BgRecentSource *self, GFile *file, GFileInfo *info)
+     if (!content_type || !g_content_type_is_a (content_type, "image/*"))
+         return;
+ 
++    /* Plinius: 360° photos have a section of their own above (cc-plinius-panorama.c) */
++    {
++        g_autofree gchar *path = g_file_get_path (file);
++
++        if (path && cc_plinius_panorama_is_photo (path))
++            return;
++    }
++
+     uri = g_file_get_uri (file);
+     name = g_strdup_printf ("Recent background %d", g_hash_table_size (self->items) + 1);
+     item = cc_background_item_new (uri);
+@@ -153,7 +162,9 @@ on_file_changed_cb (BgRecentSource *self, GFile *file, GFile *other_file, GFileM
+ 
+     case G_FILE_MONITOR_EVENT_DELETED:
+         uri = g_file_get_uri (file);
+-        remove_item (self, g_hash_table_lookup (self->items, uri));
++        /* Plinius: not every file was listed, the 360° photos are left out */
++        if (g_hash_table_contains (self->items, uri))
++            remove_item (self, g_hash_table_lookup (self->items, uri));
+         break;
+ 
+     default:
+diff --git a/panels/background/cc-background-chooser.blp b/panels/background/cc-background-chooser.blp
+index 4165a5e..0dea929 100644
+--- a/panels/background/cc-background-chooser.blp
++++ b/panels/background/cc-background-chooser.blp
+@@ -3,9 +3,24 @@ using Gtk 4.0;
+ template $CcBackgroundChooser: Box {
+   orientation: vertical;
+ 
++  // Plinius: 360° photos (cc-plinius-panorama.c), hidden without them
++  Box panorama_box {
++    orientation: vertical;
++  }
++
+   Box recent_box {
+     orientation: vertical;
+-    halign: center;
++
++    // Plinius: a heading for each kind of picture, set in the code (our gettext domain)
++    Label recent_heading {
++      xalign: 0;
++      margin-start: 18;
++      margin-top: 12;
++
++      styles [
++        "heading",
++      ]
++    }
+ 
+     FlowBox recent_flowbox {
+       margin-top: 12;
+@@ -33,6 +48,16 @@ template $CcBackgroundChooser: Box {
+     }
+   }
+ 
++  Label wallpapers_heading {
++    xalign: 0;
++    margin-start: 18;
++    margin-top: 12;
++
++    styles [
++      "heading",
++    ]
++  }
++
+   FlowBox flowbox {
+     margin-top: 12;
+     margin-bottom: 12;
+diff --git a/panels/background/cc-background-chooser.c b/panels/background/cc-background-chooser.c
+index c75a21f..e1c4772 100644
+--- a/panels/background/cc-background-chooser.c
++++ b/panels/background/cc-background-chooser.c
+@@ -30,6 +30,7 @@
+ #include "cc-background-chooser.h"
+ #include "cc-background-item.h"
+ #include "cc-background-paintable.h"
++#include "cc-plinius-panorama.h"
+ 
+ #define THUMBNAIL_WIDTH 144
+ #define THUMBNAIL_HEIGHT (THUMBNAIL_WIDTH * 3 / 4)
+@@ -40,6 +41,9 @@ struct _CcBackgroundChooser {
+     GtkFlowBox *flowbox;
+     GtkWidget *recent_box;
+     GtkFlowBox *recent_flowbox;
++    GtkWidget *panorama_box;
++    GtkLabel *recent_heading;
++    GtkLabel *wallpapers_heading;
+ 
+     gboolean recent_selected;
+ 
+@@ -251,7 +255,9 @@ create_widget_func (gpointer model_item, gpointer user_data)
+ 
+     g_object_set_data_full (G_OBJECT (child), "item", g_object_ref (item), g_object_unref);
+ 
+-    if (self->active_item && cc_background_item_compare (item, self->active_item)) {
++    /* Plinius: while a 360° photo is the background, none of these is */
++    if (self->active_item && !cc_plinius_panorama_is_active () &&
++        cc_background_item_compare (item, self->active_item)) {
+         gtk_widget_add_css_class (GTK_WIDGET (child), "active-item");
+         gtk_accessible_update_state (GTK_ACCESSIBLE (child), GTK_ACCESSIBLE_STATE_CHECKED, TRUE, -1);
+     } else
+@@ -289,9 +295,26 @@ setup_flowbox (CcBackgroundChooser *self)
+     g_signal_connect_object (store, "items-changed", G_CALLBACK (update_recent_visibility), self, G_CONNECT_SWAPPED);
+ }
+ 
++static void flow_box_set_active_item (GtkFlowBox *flowbox, CcBackgroundItem *active_item);
++
++/* Plinius: a 360° photo switched on (from the 360° tiles or elsewhere) takes the check mark off
++ * these pictures; switched off, it goes back to the current one */
++static void
++on_panorama_changed (gboolean active, gpointer user_data)
++{
++    CcBackgroundChooser *self = user_data;
++    CcBackgroundItem *item = active ? NULL : self->active_item;
++
++    flow_box_set_active_item (self->flowbox, item);
++    flow_box_set_active_item (self->recent_flowbox, item);
++}
++
+ static void
+ on_item_activated_cb (CcBackgroundChooser *self, GtkFlowBoxChild *child, GtkFlowBox *flowbox)
+ {
++    /* Plinius: one of these pictures instead of the 360° photo, even the one set already (whose
++     * choice changes no key that plinius-ambient could notice) */
++    cc_plinius_panorama_deactivate ();
+     self->recent_selected = flowbox == self->recent_flowbox;
+     if (self->recent_selected)
+         gtk_flow_box_unselect_all (self->flowbox);
+@@ -374,6 +397,9 @@ cc_background_chooser_class_init (CcBackgroundChooserClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, flowbox);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_box);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_flowbox);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, panorama_box);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_heading);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, wallpapers_heading);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, on_item_activated_cb);
+ 
+@@ -393,6 +419,10 @@ cc_background_chooser_init (CcBackgroundChooser *self)
+     g_object_set_data (G_OBJECT (self->wallpapers_source), "background-chooser", self);
+ 
+     setup_flowbox (self);
++
++    gtk_label_set_label (self->recent_heading, cc_plinius_panorama_heading ("recent"));
++    gtk_label_set_label (self->wallpapers_heading, cc_plinius_panorama_heading ("wallpapers"));
++    gtk_box_append (GTK_BOX (self->panorama_box), cc_plinius_panorama_section_new (on_panorama_changed, self));
+ }
+ 
+ void
+@@ -435,7 +465,8 @@ flow_box_set_active_item (GtkFlowBox *flowbox, CcBackgroundItem *active_item)
+     while ((child = gtk_flow_box_get_child_at_index (flowbox, idx++))) {
+         item = g_object_get_data (G_OBJECT (child), "item");
+ 
+-        if (cc_background_item_compare (item, active_item)) {
++        /* Plinius: NULL while a 360° photo is the background */
++        if (active_item && cc_background_item_compare (item, active_item)) {
+             gtk_widget_add_css_class (GTK_WIDGET (child), "active-item");
+             gtk_accessible_update_state (GTK_ACCESSIBLE (child), GTK_ACCESSIBLE_STATE_CHECKED, TRUE, -1);
+         } else {
+@@ -453,6 +484,8 @@ cc_background_chooser_set_active_item (CcBackgroundChooser *self, CcBackgroundIt
+ 
+     self->active_item = active_item;
+ 
++    if (cc_plinius_panorama_is_active ())
++        active_item = NULL;
+     flow_box_set_active_item (self->flowbox, active_item);
+     flow_box_set_active_item (self->recent_flowbox, active_item);
+ }
+diff --git a/panels/background/meson.build b/panels/background/meson.build
+index 77c4124..35518cb 100644
+--- a/panels/background/meson.build
++++ b/panels/background/meson.build
+@@ -70,6 +70,7 @@ sources = common_sources + files(
+   'cc-background-xml.c',
+   'cc-plinius-accent.c',
+   'cc-plinius-ambient.c',
++  'cc-plinius-panorama.c',
+ )
+ 
+ deps = common_deps + [
+-- 
+2.55.0

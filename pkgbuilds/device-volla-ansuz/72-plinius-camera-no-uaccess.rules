@@ -1,0 +1,17 @@
+# Volla Phone Plinius: the camera's device nodes stay with Android's camera HAL, not with every app
+# of the session. systemd's 70-uaccess.rules tags all video4linux and media nodes "uaccess", and on
+# a /dev with ACLs (plinius-kernel from 6.1.192-12) 73-seat-late.rules then gives the active user
+# rw on each of them: about 50 ISP, sensor and media-controller nodes of MediaTek's drivers.
+# No app of the session needs them, the camera reaches apps through the HAL in the container,
+# camera-hal-bridge and PipeWire, where the camera permission of each app applies (GNOME Settings >
+# Privacy > Camera). Opening the ISP's imgsys node while the HAL uses it even hits a kernel BUG.
+# Kept: the video node of the USB webcam gadget (plinius-usb-webcam, under the UDC's gadget), and
+# the hardware video decoder and encoder. Those two are also in the group video (their own rules,
+# 71-plinius-vcodec.rules and plinius-vdec), which only administrators are in: other local
+# accounts reach them through the ACL while they are the active session, not while another account
+# is in front of the phone (attack review 2026-11-18, L14). The match is on the node's name, so a
+# node without that attribute (media controllers) still loses the tag.
+ACTION=="remove", GOTO="plinius_camera_no_uaccess_end"
+SUBSYSTEM=="video4linux", ATTR{name}=="mtk-vcodec-enc|mtk-vcodec-dec", GOTO="plinius_camera_no_uaccess_end"
+SUBSYSTEM=="video4linux|media", DEVPATH!="*/gadget*", TAG-="uaccess"
+LABEL="plinius_camera_no_uaccess_end"

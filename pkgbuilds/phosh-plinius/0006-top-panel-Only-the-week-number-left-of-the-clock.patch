@@ -1,0 +1,38 @@
+From 3d1ff4e8bb3810503c1fbc07bf696159041ca34c Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 16:37:27 +0100
+Subject: [PATCH] top-panel: Only the week number left of the clock
+
+Plinius: the top bar shows just the number of the calendar week left of
+the clock ("44  Thu 15:40"), like the weekday and date it shows there.
+The opened panel keeps "Week 44" after the date.
+---
+ src/top-panel.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/src/top-panel.c b/src/top-panel.c
+index 15d00cb9..6fed4838 100644
+--- a/src/top-panel.c
++++ b/src/top-panel.c
+@@ -396,16 +396,17 @@ get_week_text (PhoshTopPanel *self)
+ }
+ 
+ 
+-/* Plinius: the top bar clock, with the calendar week to its left */
++/* Plinius: the top bar clock, with the number of the calendar week to its left */
+ static void
+ update_top_bar_clock (PhoshTopPanel *self)
+ {
+   g_autofree char *clock = NULL;
+-  g_autofree char *week = get_week_text (self);
+ 
+   g_object_get (phosh_wall_clock_get_default (), "date-time", &clock, NULL);
+-  if (week) {
+-    g_autofree char *with_week = g_strdup_printf ("%s  %s", week, clock);
++  if (self->calendar_settings &&
++      g_settings_get_boolean (self->calendar_settings, "show-weekdate")) {
++    g_autoptr (GDateTime) now = g_date_time_new_now_local ();
++    g_autofree char *with_week = g_strdup_printf ("%d  %s", g_date_time_get_week_of_year (now), clock);
+     gtk_label_set_label (GTK_LABEL (self->lbl_clock), with_week);
+   } else {
+     gtk_label_set_label (GTK_LABEL (self->lbl_clock), clock);

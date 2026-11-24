@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 14:13:41 +0100
+Subject: [PATCH] users: No "Add User" on the phone
+
+Plinius: a phone has one user. The row stays in the template (the code
+binds it) but is never shown.
+---
+ panels/system/users/cc-users-page.blp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/panels/system/users/cc-users-page.blp b/panels/system/users/cc-users-page.blp
+index 719013344..844d5cdc9 100644
+--- a/panels/system/users/cc-users-page.blp
++++ b/panels/system/users/cc-users-page.blp
+@@ -22,7 +22,9 @@ template $CcUsersPage: $CcPanel {
+       }
+     }
+ 
++    // Plinius: a phone has one user; no "Add User"
+     Adw.ButtonRow add_user_button_row {
++      visible: false;
+       title: _("_Add User");
+       end-icon-name: "go-next-symbolic";
+       use-underline: true;

@@ -1,0 +1,279 @@
+#!/usr/bin/python3 -I
+"""One launcher with the game's own icon for every game added in ScummVM.
+
+ScummVM keeps its games in scummvm.ini, one section per target, and only offers them inside its
+own window. This writes ~/.local/share/applications/org.plinius.ScummVM.<target>.desktop for
+each of them, so they sit in the app grid like any other app, and removes the launchers of
+games that were removed from ScummVM again. Only files carrying X-Plinius-ScummVM-Target are
+ever touched.
+
+The icons come from ScummVM's icon packs, ZIP files named gui-icons*.dat: the small one in
+/usr/share/scummvm (freeware games only) and the full one ScummVM downloads into its icons path
+on request (Options > Misc > Download icons). Later packs override earlier ones, as in ScummVM.
+Single icons the DOS Installer fetched for a game it installed (all packs together are several
+hundred MB) come last and win.
+The lookup follows ScummVM's grid: <engineid>-<gameid>.png, then <engineid>.png; after that the
+platform's icon and in the end ScummVM's own icon.
+
+A PNG icon larger than ICON_MAX is stored scaled down to it: the packs have 512 px icons, and
+GTK 3 keeps no icon from a file, so Phosh decoded and scaled them again whenever it drew a
+folder or button with them anew (120-240 ms for a folder of such games).
+
+Runs from plinius-scummvm-launchers.path whenever scummvm.ini or the icons path changes, and
+once per session. Files are only rewritten when their content changes.
+"""
+
+import configparser
+import hashlib
+import os
+import re
+import sys
+import zipfile
+from pathlib import Path
+
+HOME = Path.home()
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
+CACHE = Path(os.environ.get("XDG_CACHE_HOME") or HOME / ".cache")
+DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
+
+INI = CONFIG / "scummvm/scummvm.ini"
+SYSTEM_PACKS = Path("/usr/share/scummvm")
+APPS = DATA / "applications"
+ICONS = DATA / "plinius-dos-installer/scummvm-icons"
+FETCHED = DATA / "plinius-dos-installer/scummvm-icons-fetched"
+PREFIX = "org.plinius.ScummVM."
+MARKER = "X-Plinius-ScummVM-Target"
+FALLBACK_ICON = "org.scummvm.scummvm"
+# Phosh shows app icons at 64 px, 192 px at a scale of 3; more only costs decoding time
+ICON_MAX = 256
+
+# Targets go into file names and Exec= unquoted, so only the characters ScummVM itself uses
+TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+# ScummVM appends variant, platform and language in one pair of parentheses at the end
+VARIANT_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def read_ini():
+    parser = configparser.RawConfigParser(strict=False, interpolation=None,
+                                          comment_prefixes=("#",), inline_comment_prefixes=None)
+    parser.optionxform = str.lower
+    try:
+        with open(INI, encoding="utf-8", errors="replace") as f:
+            parser.read_file(f)
+    except FileNotFoundError:
+        return None, {}
+    except configparser.Error as e:
+        # Half-written file: keep the launchers as they are, the next change runs again
+        print(f"cannot read {INI}: {e}", file=sys.stderr)
+        return None, None
+    general = parser["scummvm"] if parser.has_section("scummvm") else {}
+    games = {}
+    for section in parser.sections():
+        if section == "scummvm" or not parser.has_option(section, "gameid"):
+            continue
+        if not TARGET_RE.match(section):
+            print(f"skipping target with unusual name: {section!r}", file=sys.stderr)
+            continue
+        games[section] = parser[section]
+    return general, games
+
+
+def icon_packs(general):
+    """Icon packs in load order: ScummVM's own first, the downloaded ones after it."""
+    dirs = [SYSTEM_PACKS]
+    icons_path = general.get("iconspath") if general else None
+    dirs.append(Path(icons_path).expanduser() if icons_path else CACHE / "scummvm/icons")
+    packs = []
+    for d in dirs:
+        try:
+            packs += sorted(p for p in d.glob("gui-icons*.dat") if p.is_file())
+        except OSError:
+            pass
+    return packs
+
+
+def load_icons(packs):
+    """Maps names below icons/ to (pack, member), or (None, file) for a fetched icon; later
+    packs win."""
+    index = {}
+    for pack in packs:
+        try:
+            with zipfile.ZipFile(pack) as z:
+                for name in z.namelist():
+                    if name.startswith("icons/") and name.lower().endswith((".png", ".svg")):
+                        index[name[len("icons/"):].lower()] = (pack, name)
+        except (OSError, zipfile.BadZipFile) as e:
+            print(f"cannot read {pack}: {e}", file=sys.stderr)
+    try:
+        for f in FETCHED.iterdir():
+            if f.suffix in (".png", ".svg") and f.is_file():
+                index[f.name.lower()] = (None, f)
+    except FileNotFoundError:
+        pass
+    return index
+
+
+def pick_icon(index, game):
+    engine = game.get("engineid", "").lower()
+    gameid = game.get("gameid", "").lower()
+    platform = game.get("platform", "").lower()
+    candidates = []
+    if engine:
+        candidates += [f"{engine}-{gameid}", engine]
+    if platform:
+        candidates.append(f"platforms/{platform}")
+    for c in candidates:
+        for ext in (".png", ".svg"):
+            if c + ext in index:
+                return index[c + ext], ext
+    return None, None
+
+
+def shrink_icon(data, ext):
+    """A PNG icon larger than ICON_MAX scaled down to it, anything else as it is."""
+    if ext != ".png":
+        return data
+    try:
+        import gi
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+        loader = GdkPixbuf.PixbufLoader.new_with_type("png")
+        loader.write(data)
+        loader.close()
+        pixbuf = loader.get_pixbuf()
+        width, height = pixbuf.get_width(), pixbuf.get_height()
+        if max(width, height) <= ICON_MAX:
+            return data
+        factor = ICON_MAX / max(width, height)
+        pixbuf = pixbuf.scale_simple(max(1, round(width * factor)), max(1, round(height * factor)),
+                                     GdkPixbuf.InterpType.HYPER)
+        ok, out = pixbuf.save_to_bufferv("png", [], [])
+        return bytes(out) if ok else data
+    except Exception as e:  # noqa: BLE001 - a broken icon is still better than none
+        print(f"cannot scale an icon down: {e}", file=sys.stderr)
+        return data
+
+
+def write_if_changed(path, data):
+    try:
+        if path.read_bytes() == data:
+            return False
+    except FileNotFoundError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+    return True
+
+
+def desktop_value(text):
+    # Desktop entry strings: one line, backslash escapes
+    return (text.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "")
+            .replace("\t", "\\t"))
+
+
+def full_name(target, game):
+    return game.get("description") or game.get("gameid") or target
+
+
+def short_name(target, game):
+    """The title without ScummVM's variant suffix: "Day of the Tentacle (Floppy/DOS/German)"
+    becomes "Day of the Tentacle"."""
+    name = full_name(target, game)
+    return VARIANT_RE.sub("", name) or name
+
+
+def launcher_names(games):
+    """Short titles, except for games whose short titles clash (the same game in two languages,
+    say): those keep the full description, so the app grid can tell them apart."""
+    short = {t: short_name(t, g) for t, g in games.items()}
+    count = {}
+    for n in short.values():
+        count[n] = count.get(n, 0) + 1
+    return {t: n if count[n] == 1 else full_name(t, games[t]) for t, n in short.items()}
+
+
+def launcher(name, target, icon):
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name={desktop_value(name)}\n"
+        "Comment=Play with ScummVM\n"
+        "Comment[de]=Mit ScummVM spielen\n"
+        f"Exec=scummvm {target}\n"
+        f"Icon={desktop_value(icon)}\n"
+        "Terminal=false\n"
+        # Like the other emulators: no startup notification, Phosh would keep its splash
+        # screen over the game until its timeout
+        "StartupNotify=false\n"
+        "Categories=Game;AdventureGame;\n"
+        "X-Purism-FormFactor=Workstation;Mobile;\n"
+        f"{MARKER}={target}\n"
+    ).encode()
+
+
+def own_files(directory, suffixes):
+    try:
+        return [p for p in directory.iterdir()
+                if p.name.startswith(PREFIX) and p.suffix in suffixes]
+    except FileNotFoundError:
+        return []
+
+
+def is_ours(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return any(line.startswith(MARKER + "=") for line in f)
+    except OSError:
+        return False
+
+
+def main():
+    general, games = read_ini()
+    if games is None:
+        return 1
+    index = load_icons(icon_packs(general))
+
+    names = launcher_names(games)
+    keep_apps, keep_icons = set(), set()
+    changed = 0
+    for target, game in games.items():
+        icon = FALLBACK_ICON
+        found, ext = pick_icon(index, game)
+        if found:
+            pack, member = found
+            if pack is None:
+                data = member.read_bytes()
+            else:
+                with zipfile.ZipFile(pack) as z:
+                    data = z.read(member)
+            data = shrink_icon(data, ext)
+            # The content's hash in the name: a new icon changes the launcher too, so Phosh
+            # reloads it instead of keeping the old picture for the same path
+            digest = hashlib.sha256(data).hexdigest()[:12]
+            icon_path = ICONS / f"{PREFIX}{target}-{digest}{ext}"
+            changed += write_if_changed(icon_path, data)
+            keep_icons.add(icon_path.name)
+            icon = str(icon_path)
+        app_path = APPS / f"{PREFIX}{target}.desktop"
+        if app_path.exists() and not is_ours(app_path):
+            print(f"leaving {app_path} alone, it was not written here", file=sys.stderr)
+            continue
+        changed += write_if_changed(app_path, launcher(names[target], target, icon))
+        keep_apps.add(app_path.name)
+
+    for p in own_files(APPS, {".desktop"}):
+        if p.name not in keep_apps and is_ours(p):
+            p.unlink()
+            changed += 1
+    for p in own_files(ICONS, {".png", ".svg"}):
+        if p.name not in keep_icons:
+            p.unlink()
+            changed += 1
+    print(f"{len(games)} games, {changed} files changed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,74 @@
+From 39505143d6168fb901303108df626b5e974b7e20 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 07:37:19 +0100
+Subject: [PATCH] Drop the stray Command Status after a Command Complete
+
+The MediaTek controller of the Volla Phone Plinius answers a failing
+command twice: with a Command Complete and then a Command Status for the
+same opcode, e.g. for Read Local Supported Codecs V2 (0x100d) and Read
+Local Supported Codec Capabilities (0x100e). The specification allows
+only one of them.
+
+The kernel matches the stray Command Status against the command it sent
+next. During setup that is Read Local Simple Pairing Options (0x100c):
+the kernel takes the error 0x11 as its failure (-95) and aborts the
+setup. The controller then never reaches bluetoothd, while rfkill and
+the UI still show Bluetooth as on. Whether it happens depends on timing;
+it hit one of the last three boots.
+
+Drop a Command Status that directly follows a Command Complete for the
+same opcode. Commands answered with a Command Status never get a Command
+Complete, so no real event is lost.
+---
+ bluebinder.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/bluebinder.c b/bluebinder.c
+index 3535749..6ca1391 100644
+--- a/bluebinder.c
++++ b/bluebinder.c
+@@ -248,6 +248,9 @@ struct proxy {
+     const struct bluetooth_hal_protocol *protocol;
+ 
+     bool bluetooth_hal_initialized;
++    /* Opcode of the last HAL event if it was a Command Complete, else 0 (see hal event filter) */
++    uint16_t last_cc_opcode;
++    unsigned int stray_status_dropped;
+     /* wait_for_hal runs the main loop until the HAL reports init complete */
+     bool waiting_for_hal;
+     bool quit_requested;
+@@ -1098,6 +1101,31 @@ bluebinder_callbacks_transact(
+                 }
+             }
+ 
++            /* The MediaTek controller of the Volla Phone Plinius answers a failing command
++             * twice: with a Command Complete and then a Command Status for the same opcode
++             * (the specification allows only one of them). The kernel matches the stray
++             * Command Status against the command it sent next; during setup (e.g. Read Local
++             * Supported Codecs V2, then Read Local Simple Pairing Options) it takes it as that
++             * command's failure and aborts: the controller never reaches bluetoothd, while
++             * rfkill and the UI still show Bluetooth as on. Drop a Command Status that follows
++             * a Command Complete for the same opcode. */
++            if (packet[0] == HCI_EVENT_PKT && count >= 2) {
++                if (packet[1] == 0x0f && count >= 6 && proxy->last_cc_opcode &&
++                    ((packet[6] << 8) | packet[5]) == proxy->last_cc_opcode) {
++                    if (proxy->stray_status_dropped++ < 20)
++                        fprintf(stderr, "Dropping stray Command Status 0x%02x for opcode 0x%04x\n",
++                                packet[3], proxy->last_cc_opcode);
++                    proxy->last_cc_opcode = 0;
++                    free(packet);
++                    *status = GBINDER_STATUS_OK;
++                    return gbinder_local_reply_append_int32(gbinder_local_object_new_reply(obj), 0);
++                }
++                if (packet[1] == 0x0e && count >= 5)
++                    proxy->last_cc_opcode = (packet[5] << 8) | packet[4];
++                else
++                    proxy->last_cc_opcode = 0;
++            }
++
+             dev_write_packet(proxy, packet, count + 1);
+ 
+             free(packet);
+-- 
+2.56.0
+

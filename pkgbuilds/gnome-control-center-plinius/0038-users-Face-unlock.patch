@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 20:00:00 +0100
+Subject: [PATCH] users: Face unlock
+
+Plinius: a "Face Unlock" row below Unlock Pattern, for one's own account
+when plinius-face is installed. It opens cc-face-dialog (a file of its own,
+copied in by the PKGBUILD): set up the face, try it, switch face unlock on
+or off, strictness, remove. The row says On, Off or Not Set Up, as the
+service answers.
+---
+  panels/system/meson.build            |  1 +
+  panels/system/users/cc-user-page.blp |  8 ++++++++
+  panels/system/users/cc-user-page.c   | 27 +++++++++++++++++++++++++++
+  3 files changed, 36 insertions(+)
+
+diff --git a/panels/system/meson.build b/panels/system/meson.build
+index eb7fbfdac..e3b7cb594 100644
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -70,6 +70,7 @@ sources = files(
+   'users/cc-user-page.c',
+   'users/cc-username-dialog.c',
+   'users/cc-pattern-dialog.c',
++  'users/cc-face-dialog.c',
+   'users/cc-users-page.c',
+   'users/pw-utils.c',
+   'users/run-passwd.c',
+diff --git a/panels/system/users/cc-user-page.blp b/panels/system/users/cc-user-page.blp
+index e2fb4d11b..d0a8fcf86 100644
+--- a/panels/system/users/cc-user-page.blp
++++ b/panels/system/users/cc-user-page.blp
+@@ -122,6 +122,14 @@ template $CcUserPage: Adw.NavigationPage {
+             activated => $change_pattern(template);
+           }
+ 
++          // Plinius: face unlock (plinius-face); own account only
++          $CcListRow face_row {
++            visible: false;
++            activatable: true;
++            show-arrow: true;
++            activated => $change_face(template);
++          }
++
+           Adw.ActionRow auto_login_row {
+             title: _("A_utomatic Login");
+             use-underline: true;
+diff --git a/panels/system/users/cc-user-page.c b/panels/system/users/cc-user-page.c
+index ffaf930a6..8066174c5 100644
+--- a/panels/system/users/cc-user-page.c
++++ b/panels/system/users/cc-user-page.c
+@@ -40,6 +40,7 @@
+ #include "cc-user-page.h"
+ #include "cc-username-dialog.h"
+ #include "cc-pattern-dialog.h"
++#include "cc-face-dialog.h"
+ #include "user-utils.h"
+ 
+ #include <config.h>
+@@ -70,6 +71,7 @@ struct _CcUserPage {
+     AdwPreferencesGroup *button_group;
+     CcListRow *fingerprint_row;
+     CcListRow *pattern_row;
++    CcListRow *face_row;
+     CcListRow *language_row;
+     AdwEntryRow *fullname_row;
+ #ifdef HAVE_MALCONTENT
+@@ -427,6 +429,26 @@ change_pattern (CcUserPage *self)
+     adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
+ }
+ 
++/* Plinius: face unlock; the label comes from the service and follows the dialog */
++static void
++update_face_row (CcUserPage *self)
++{
++    gboolean visible = is_current_user (self->user) && cc_face_dialog_is_available ();
++
++    gtk_widget_set_visible (GTK_WIDGET (self->face_row), visible);
++    if (visible)
++        cc_face_dialog_update_row (self->face_row);
++}
++
++static void
++change_face (CcUserPage *self)
++{
++    CcFaceDialog *dialog = cc_face_dialog_new ();
++
++    g_signal_connect_object (dialog, "closed", G_CALLBACK (update_face_row), self, G_CONNECT_SWAPPED);
++    adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
++}
++
+ static void
+ delete_user_done (ActUserManager *manager, GAsyncResult *res, void *user_data)
+ {
+@@ -684,6 +706,7 @@ cc_user_page_class_init (CcUserPageClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, button_group);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, fingerprint_row);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, pattern_row);
++    gtk_widget_class_bind_template_child (widget_class, CcUserPage, face_row);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, fullname_row);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, language_row);
+ #ifdef HAVE_MALCONTENT
+@@ -701,6 +724,7 @@ cc_user_page_class_init (CcUserPageClass *klass)
+     gtk_widget_class_bind_template_callback (widget_class, autologin_changed);
+     gtk_widget_class_bind_template_callback (widget_class, change_fingerprint);
+     gtk_widget_class_bind_template_callback (widget_class, change_pattern);
++    gtk_widget_class_bind_template_callback (widget_class, change_face);
+     gtk_widget_class_bind_template_callback (widget_class, show_language_chooser);
+     gtk_widget_class_bind_template_callback (widget_class, change_password);
+     gtk_widget_class_bind_template_callback (widget_class, change_username);
+@@ -793,6 +817,9 @@ cc_user_page_set_user (CcUserPage *self, ActUser *user, GPermission *permission)
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->pattern_row),
+                                    g_dgettext ("plinius-control-center", "Unlock Pattern"));
+     update_pattern_row (self);
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->face_row),
++                                   g_dgettext ("plinius-control-center", "Face Unlock"));
++    update_face_row (self);
+ 
+     if (!self->fingerprint_manager
+         || g_strcmp0 (act_user_get_user_name (cc_fingerprint_manager_get_user (self->fingerprint_manager)),

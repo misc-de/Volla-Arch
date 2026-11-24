@@ -1,0 +1,218 @@
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-crypt\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-30 10:42+0100\n"
+"PO-Revision-Date: 2026-10-30 10:30+0100\n"
+"Last-Translator: plinius-crypt\n"
+"Language-Team: none\n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: plinius-encrypt:69
+msgid "The password must not be empty."
+msgstr "La contraseña no puede estar vacía."
+
+#: plinius-encrypt:74
+#, sh-printf-format
+msgid "These characters cannot be typed on the keyboard at startup: %s"
+msgstr "Estos caracteres no se pueden escribir con el teclado durante el arranque: %s"
+
+#: plinius-encrypt:89
+msgid "The password must differ from the PIN of the screen lock."
+msgstr "La contraseña debe ser distinta del PIN de la pantalla de bloqueo."
+
+#: plinius-encrypt:94
+msgid "Could not compare the password with the PIN of the screen lock."
+msgstr "No se pudo comparar la contraseña con el PIN de la pantalla de bloqueo."
+
+#: plinius-encrypt:108
+msgid "The system is not encrypted."
+msgstr "El sistema no está cifrado."
+
+#: plinius-encrypt:114
+msgid "Expected the current and the new password on stdin, one per line."
+msgstr "Se esperan en stdin la contraseña actual y la nueva, una por línea."
+
+#: plinius-encrypt:120
+msgid "Current password"
+msgstr "Contraseña actual"
+
+#: plinius-encrypt:123
+msgid "The current password is wrong."
+msgstr "La contraseña actual es incorrecta."
+
+#: plinius-encrypt:130
+msgid "New password"
+msgstr "Nueva contraseña"
+
+#: plinius-encrypt:138 hook:216
+msgid "Repeat new password"
+msgstr "Repite la nueva contraseña"
+
+#: plinius-encrypt:140 hook:218
+msgid "The passwords do not match. Please enter them again."
+msgstr "Las contraseñas no coinciden. Introdúcelas de nuevo."
+
+#: plinius-encrypt:145
+msgid "Changing the password failed. Is the current password right?"
+msgstr "No se pudo cambiar la contraseña. ¿Es correcta la contraseña actual?"
+
+#: plinius-encrypt:148
+msgid "Password changed. From the next start on, the new password is asked."
+msgstr "Contraseña cambiada. A partir del próximo arranque se pedirá la nueva contraseña."
+
+#: plinius-encrypt:160
+msgid "Please run as root."
+msgstr "Ejecútalo como root."
+
+#: plinius-encrypt:167
+msgid "Usage: plinius-encrypt [--request|--status|--cancel|--change-password [--stdin]]"
+msgstr "Uso: plinius-encrypt [--request|--status|--cancel|--change-password [--stdin]]"
+
+#: plinius-encrypt:202
+msgid "Request cancelled."
+msgstr "Solicitud cancelada."
+
+#: plinius-encrypt:215
+#, sh-printf-format
+msgid "The system is already encrypted (%s)."
+msgstr "El sistema ya está cifrado (%s)."
+
+#: plinius-encrypt:219
+msgid "Only ext4 is supported."
+msgstr "Solo se admite ext4."
+
+#: plinius-encrypt:223
+msgid "This system's initramfs does not contain the plinius-crypt hook; encryption only works with an initramfs built by mkinitcpio with plinius-crypt."
+msgstr "El initramfs de este sistema no contiene el hook plinius-crypt; el cifrado solo funciona con un initramfs creado por mkinitcpio con plinius-crypt."
+
+#: plinius-encrypt:230
+#, sh-printf-format
+msgid "Encryption requested for %s."
+msgstr "Cifrado solicitado para %s."
+
+#: plinius-encrypt:231
+msgid "At the next boot the device asks twice for the new password and then encrypts. Depending on the amount of data this takes a few minutes; do not power off meanwhile."
+msgstr "En el próximo arranque el dispositivo pedirá dos veces la nueva contraseña y luego cifrará. Según la cantidad de datos tarda unos minutos; no lo apagues mientras tanto."
+
+#: plinius-encrypt:232
+msgid "Reboot now with: systemctl reboot   (to cancel: plinius-encrypt --cancel)"
+msgstr "Reinicia ahora con: systemctl reboot   (para cancelar: plinius-encrypt --cancel)"
+
+#: hook:66
+msgid "Enter password..."
+msgstr "Introduce la contraseña..."
+
+#: hook:67
+msgid "Switch off?"
+msgstr "¿Apagar?"
+
+#: hook:68
+msgid "Yes"
+msgstr "Sí"
+
+#: hook:68
+msgid "No"
+msgstr "No"
+
+#: hook:87
+msgid "Continue"
+msgstr "Continuar"
+
+#: hook:99
+msgid "This takes a few minutes. Do not switch off the device."
+msgstr "Esto tarda unos minutos. No apagues el dispositivo."
+
+#: hook:100
+#, sh-printf-format
+msgid "about %s min left"
+msgstr "quedan unos %s min"
+
+#: hook:117
+msgid "Password to unlock"
+msgstr "Contraseña para desbloquear"
+
+#: hook:118
+msgid "Wrong password."
+msgstr "Contraseña incorrecta."
+
+#: hook:123
+msgid "Resuming the encryption"
+msgstr "Reanudando el cifrado"
+
+#: hook:125
+msgid "The encryption could not be resumed."
+msgstr "No se pudo reanudar el cifrado."
+
+#: hook:158
+msgid "Encrypt the device?"
+msgstr "¿Cifrar el dispositivo?"
+
+#: hook:158
+msgid "Encryption was requested for this device. You choose a password that is asked at every start and should differ from the screen lock PIN. Encrypting then takes a few minutes."
+msgstr "Se ha solicitado el cifrado de este dispositivo. Elige una contraseña que se pedirá en cada arranque y que debería ser distinta del PIN de la pantalla de bloqueo. Después, el cifrado tarda unos minutos."
+
+#: hook:159
+msgid "Set password"
+msgstr "Establecer contraseña"
+
+#: hook:159
+msgid "Continue without encryption"
+msgstr "Continuar sin cifrado"
+
+#: hook:198
+msgid "Encryption not set up"
+msgstr "Cifrado no configurado"
+
+#: hook:203
+msgid "Set up encryption: new password"
+msgstr "Configurar el cifrado: nueva contraseña"
+
+#: hook:204
+msgid "Leave empty to go back."
+msgstr "Déjalo vacío para volver."
+
+#: hook:222
+msgid "Encrypting the device"
+msgstr "Cifrando el dispositivo"
+
+#: hook:227
+msgid "Encryption interrupted"
+msgstr "Cifrado interrumpido"
+
+#: hook:230
+msgid "Encryption failed"
+msgstr "El cifrado ha fallado"
+
+#: hook:241
+msgid "Encryption complete"
+msgstr "Cifrado completado"
+
+#: hook:199
+msgid "No matching password was entered. The system starts unencrypted and asks again at the next start."
+msgstr "No se introdujo ninguna contraseña coincidente. El sistema arranca sin cifrar y volverá a preguntar en el próximo arranque."
+
+#: hook:228
+msgid "Enter the password to continue the encryption."
+msgstr "Introduce la contraseña para continuar el cifrado."
+
+#: hook:231
+msgid "Your data are unchanged and the system starts unencrypted. Encryption is tried again at the next start."
+msgstr "Tus datos no han cambiado y el sistema arranca sin cifrar. El cifrado se intentará de nuevo en el próximo arranque."
+
+#: hook:242
+msgid "The device is now encrypted. From now on it asks for this password at every start."
+msgstr "El dispositivo ya está cifrado. A partir de ahora pedirá esta contraseña en cada arranque."
+
+#: halium-unlock:72
+msgid "Starting the system…"
+msgstr "Iniciando el sistema…"
+
+#: plinius-encrypt:188
+msgid "This phone's boot ramdisk does not contain the programs for encryption."
+msgstr "El ramdisk de arranque de este teléfono no contiene los programas de cifrado."

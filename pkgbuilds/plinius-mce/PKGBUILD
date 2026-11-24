@@ -1,0 +1,39 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-mce
+pkgver=0.2
+pkgrel=3
+pkgdesc="Display, charger and battery state for ofono, as Sailfish's MCE provides it (com.nokia.mce); Wi-Fi suspend mode with the display off"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# The display state comes from the hook of plinius-backlight-wake; without that, the modem is
+# never told the display is off and wakes the phone from every suspend (docs/STANDBY.md)
+depends=(glib2 systemd-libs plinius-backlight-wake)
+source=(plinius-mce.c
+	plinius-mce.service
+	com.nokia.mce.conf
+	60-plinius-mce
+	LICENSE)
+sha256sums=('2c4104d8a6604270aeb58f1b076eb43979f384b3142276931d4618a76cc0d182'
+	'24e34242d067334a0d8df42656a7da55fb960b1a9704023e286a435015e598eb'
+	'8604d66cadaeeb97785258ae6f5bbf9854454f4770d4db934dd72894df2a85d4'
+	'03ff3b52085a6288081af211cd7e6017545ae66178bc96a35a11d0b68b4538d7'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-mce plinius-mce.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 libudev) $LDFLAGS
+}
+
+package() {
+	install -Dm755 plinius-mce -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-mce.service -t "$pkgdir/usr/lib/systemd/system"
+	# Enabled by the package: the modem must be told after every boot
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-mce.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	install -Dm644 com.nokia.mce.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm755 60-plinius-mce -t "$pkgdir/usr/lib/plinius/display.d"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

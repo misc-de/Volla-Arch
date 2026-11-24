@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 11:14:06 +0100
+Subject: [PATCH] ofono_mms_message: D-Bus property names without spaces
+
+"Delivery Report", "Delivery Status" and "Modem Number" are not valid
+D-Bus member names. dbus-fast 5 refuses them when the class is defined,
+so mmsd and routectld (which imports the mmsd package) fail at import:
+on Arch Linux ARM with python-dbus-fast 5.2.0 both services restarted
+every 5 s. The properties are now DeliveryReport, DeliveryStatus and
+ModemNumber. The keys of the property dictionaries in MessageAdded and
+GetMessages, which Chatty reads, keep their names.
+---
+ mmsd/ofono_mms_message.py | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/mmsd/ofono_mms_message.py b/mmsd/ofono_mms_message.py
+index d52bd16..d56da96 100644
+--- a/mmsd/ofono_mms_message.py
++++ b/mmsd/ofono_mms_message.py
+@@ -85,15 +85,15 @@ class OfonoMMSMessageInterface(ServiceInterface):
+     def Sender(self) -> 's':
+         return self.props['Sender'].value
+ 
+-    @dbus_property(access=PropertyAccess.READ, name="Delivery Report")
++    @dbus_property(access=PropertyAccess.READ)
+     def DeliveryReport(self) -> 'b':
+         return self.props['Delivery Report'].value
+ 
+-    @dbus_property(access=PropertyAccess.READ, name="Delivery Status")
++    @dbus_property(access=PropertyAccess.READ)
+     def DeliveryStatus(self) -> 's':
+         return self.props['Delivery Status'].value
+ 
+-    @dbus_property(access=PropertyAccess.READ, name="Modem Number")
++    @dbus_property(access=PropertyAccess.READ)
+     def ModemNumber(self) -> 's':
+         return self.props['Modem Number'].value
+ 

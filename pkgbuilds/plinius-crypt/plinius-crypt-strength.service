@@ -1,0 +1,21 @@
+# The initramfs rates the encryption password (plinius-pwrate of plinius-security) and leaves
+# the rating, without the password, in /run; keep it for GNOME Settings (Device Security).
+#  - /run/plinius-crypt/strength: a new password, set while encrypting. Always kept.
+#  - /run/plinius-crypt/strength-unlock: the password typed to unlock. Only kept if there is no
+#    rating yet (a device encrypted by a ramdisk without plinius-pwrate); a rating made in the
+#    system, with cracklib's dictionary check, is never replaced by it.
+[Unit]
+Description=Keep the rating of the encryption password
+ConditionPathExists=|/run/plinius-crypt/strength
+ConditionPathExists=|/run/plinius-crypt/strength-unlock
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '\
+	r=/run/plinius-crypt; v=/var/lib/plinius-crypt/strength; \
+	if [ -s "$$r/strength" ]; then install -D -m 644 "$$r/strength" "$$v"; \
+	elif [ -s "$$r/strength-unlock" ] && [ ! -s "$$v" ]; then install -D -m 644 "$$r/strength-unlock" "$$v"; fi'
+ExecStart=/usr/bin/rm -f /run/plinius-crypt/strength /run/plinius-crypt/strength-unlock
+
+[Install]
+WantedBy=multi-user.target

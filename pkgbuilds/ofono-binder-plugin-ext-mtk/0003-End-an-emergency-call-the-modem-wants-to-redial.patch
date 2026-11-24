@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 04 Nov 2026 07:00:00 +0100
+Subject: [PATCH] End an emergency call the modem wants to redial
+
+imsRedialEmergencyIndication was not looked at. MediaTek's ImsService
+(ImsCallSessionProxy.handleRedialEccIndication) ignores it for a call that is
+established, and otherwise has the call set up anew. End the call: gnome-calls
+dials again if a call ends without having connected, and ofono-binder-plugin
+then starts with the other way. AIDL only: HIDL has not been read.
+---
+--- a/src/mtk_ims_call.c
++++ b/src/mtk_ims_call.c
+@@ -44,6 +44,7 @@
+     RadioClient* ims_aosp_client;
+     GPtrArray* calls;
+     GHashTable* id_map;
++    gboolean emergency; /* An emergency call is being set up over IMS */
+ } MtkImsCall;
+ 
+ static
+@@ -256,12 +257,49 @@
+         g_signal_emit(THIS(user_data),
+                       mtk_ims_call_signals[SIGNAL_CALL_DISCONNECTED], 0, call_id, "");
+         g_ptr_array_remove(self->calls, call);
++        if (!self->calls->len) {
++            self->emergency = FALSE;
++        }
+     }
+ 
+     g_signal_emit(THIS(user_data),
+                   mtk_ims_call_signals[SIGNAL_CALL_STATE_CHANGED], 0);
+ }
+ 
++/*
++ * The modem tells that an emergency call over IMS won't work out. MediaTek's
++ * ImsService (ImsCallSessionProxy.handleRedialEccIndication) ignores that for
++ * a call that is established, and otherwise has the call set up anew. End it
++ * here: gnome-calls dials again if it ends without having connected, and
++ * ofono-binder-plugin then starts with the other way.
++ */
++static
++void
++mtk_ims_call_handle_redial_emergency(
++    MtkRadioExt* radio,
++    const char* call_id,
++    void* user_data)
++{
++    MtkImsCall* self = THIS(user_data);
++
++    if (!self->emergency) {
++        return;
++    }
++
++    for (guint i = 0; i < self->calls->len; i++) {
++        const BinderExtCallInfo* info = g_ptr_array_index(self->calls, i);
++
++        if (info->state == BINDER_EXT_CALL_STATE_ACTIVE ||
++            info->state == BINDER_EXT_CALL_STATE_HOLDING) {
++            return;
++        }
++    }
++
++    ofono_warn("Redial of the emergency call requested");
++    self->emergency = FALSE;
++    mtk_radio_ext_hangup_all(self->radio_ext, NULL, NULL, NULL);
++}
++
+ /*==========================================================================*
+  * BinderExtCallInterface
+  *==========================================================================*/
+@@ -318,6 +356,7 @@
+         return 0;
+     }
+ 
++    self->emergency = emergency;
+     result_req = mtk_ims_call_result_request_new(ext, complete, destroy,
+                                                  user_data);
+ 
+@@ -548,6 +587,8 @@
+ 
+         mtk_radio_ext_add_call_info_handler(radio_ext,
+                 mtk_ims_call_handle_call_info, self);
++        mtk_radio_ext_add_redial_emergency_handler(radio_ext,
++                mtk_ims_call_handle_redial_emergency, self);
+ 
+         return BINDER_EXT_CALL(self);
+     }
+--- a/src/mtk_radio_ext.c
++++ b/src/mtk_radio_ext.c
+@@ -49,12 +49,14 @@
+     SIGNAL_IMS_REG_STATUS_CHANGED,
+     SIGNAL_IMS_REGISTRATION_INFO_CHANGED,
+     SIGNAL_CALL_INFO,
++    SIGNAL_REDIAL_EMERGENCY,
+     SIGNAL_COUNT
+ };
+ 
+ #define SIGNAL_IMS_REG_STATUS_CHANGED_NAME        "mtk-radio-ext-ims-reg-status-changed"
+ #define SIGNAL_IMS_REGISTRATION_INFO_CHANGED_NAME "mtk-radio-ext-ims-registration-info-changed"
+ #define SIGNAL_CALL_INFO_NAME                     "mtk-radio-ext-call-info"
++#define SIGNAL_REDIAL_EMERGENCY_NAME              "mtk-radio-ext-redial-emergency"
+ 
+ static guint mtk_radio_ext_signals[SIGNAL_COUNT] = { 0 };
+ 
+@@ -333,6 +335,15 @@
+ }
+ 
+ void
++mtk_radio_ext_emit_redial_emergency(
++    MtkRadioExt* self,
++    const char* call_id)
++{
++    g_signal_emit(self, mtk_radio_ext_signals[SIGNAL_REDIAL_EMERGENCY],
++        0, call_id);
++}
++
++void
+ mtk_radio_ext_emit_ims_reg_status(
+     MtkRadioExt* self,
+     guint report_type)
+@@ -1199,6 +1210,16 @@
+ }
+ 
+ gulong
++mtk_radio_ext_add_redial_emergency_handler(
++    MtkRadioExt* self,
++    MtkRadioExtRedialEmergencyFunc handler,
++    void* user_data)
++{
++    return (G_LIKELY(self) && G_LIKELY(handler)) ? g_signal_connect(self,
++        SIGNAL_REDIAL_EMERGENCY_NAME, G_CALLBACK(handler), user_data) : 0;
++}
++
++gulong
+ mtk_radio_ext_add_call_info_handler(
+     MtkRadioExt* self,
+     MtkRadioExtCallInfoFunc handler,
+@@ -1263,6 +1284,10 @@
+         g_signal_new(SIGNAL_CALL_INFO_NAME, G_OBJECT_CLASS_TYPE(klass),
+             G_SIGNAL_RUN_FIRST, 0, NULL, NULL, NULL, G_TYPE_NONE,
+             4, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_STRING);
++    mtk_radio_ext_signals[SIGNAL_REDIAL_EMERGENCY] =
++        g_signal_new(SIGNAL_REDIAL_EMERGENCY_NAME, G_OBJECT_CLASS_TYPE(klass),
++            G_SIGNAL_RUN_FIRST, 0, NULL, NULL, NULL, G_TYPE_NONE,
++            1, G_TYPE_STRING);
+ }
+ 
+ /*
+--- a/src/mtk_radio_ext.h
++++ b/src/mtk_radio_ext.h
+@@ -53,6 +53,11 @@
+     char* number,
+     void* user_data);
+ 
++typedef void (*MtkRadioExtRedialEmergencyFunc)(
++    MtkRadioExt* radio,
++    const char* call_id,
++    void* user_data);
++
+ MtkRadioExt*
+ mtk_radio_ext_new(
+     const char* dev,
+@@ -175,6 +180,12 @@
+     void* user_data);
+ 
+ gulong
++mtk_radio_ext_add_redial_emergency_handler(
++    MtkRadioExt* self,
++    MtkRadioExtRedialEmergencyFunc handler,
++    void* user_data);
++
++gulong
+ mtk_radio_ext_add_call_info_handler(
+     MtkRadioExt* self,
+     MtkRadioExtCallInfoFunc handler,
+--- a/src/mtk_radio_ext_aidl.c
++++ b/src/mtk_radio_ext_aidl.c
+@@ -599,6 +599,19 @@
+ }
+ 
+ static gboolean
++mtk_radio_ext_aidl_handle_ims_redial_emergency(
++    MtkRadioExt* self,
++    const GBinderReader* args)
++{
++    char** data = mtk_radio_ext_aidl_read_string_list(self, args, 1);
++
++    DBG("%s: redial emergency: call id: %s", self->slot, data[0]);
++    mtk_radio_ext_emit_redial_emergency(self, data[0]);
++    g_strfreev(data);
++    return TRUE;
++}
++
++static gboolean
+ mtk_radio_ext_aidl_handle_on_xui(
+     MtkRadioExt* self,
+     const GBinderReader* args)
+@@ -789,6 +802,8 @@
+         return mtk_radio_ext_aidl_handle_video_capability_indicator(self, args);
+     case IMS_RADIO_IND_ON_XUI:
+         return mtk_radio_ext_aidl_handle_on_xui(self, args);
++    case IMS_RADIO_IND_IMS_REDIAL_EMERGENCY_INDICATION:
++        return mtk_radio_ext_aidl_handle_ims_redial_emergency(self, args);
+     case IMS_RADIO_IND_SIP_REG_INFO_IND:
+         return mtk_radio_ext_aidl_handle_sip_reg_info_ind(self, args);
+     case IMS_RADIO_IND_RTT_CAPABILITY_INDICATION:
+--- a/src/mtk_radio_ext_priv.h
++++ b/src/mtk_radio_ext_priv.h
+@@ -106,6 +106,11 @@
+     const char* number) G_GNUC_INTERNAL;
+ 
+ void
++mtk_radio_ext_emit_redial_emergency(
++    MtkRadioExt* self,
++    const char* call_id) G_GNUC_INTERNAL;
++
++void
+ mtk_radio_ext_emit_ims_reg_status(
+     MtkRadioExt* self,
+     guint report_type) G_GNUC_INTERNAL;

@@ -1,0 +1,135 @@
+From f919dc90d1c063cb693603394b5e9221fd86ffca Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 21:11:55 +0100
+Subject: [PATCH] mixer-control: A Bluetooth headset is one device per
+ direction
+
+A headset offers an audio profile (A2DP) and a hands-free profile
+(HFP/HSP), and each brings ports of its own: "Headphones" and
+"Handsfree" outputs, a "Handsfree" input. The lists showed the headset
+two or three times under the port names, and the settings offered the
+codecs as a "Configuration".
+
+The user picks a device, not a profile: calls and recordings switch to
+hands-free by themselves. So hands-free ports are not offered, an
+audio port of a Bluetooth device is named after the device alone and
+carries only its best profile, and a stream in the hands-free profile
+(during a call) still counts as the headset's.
+---
+ gvc-mixer-control.c | 67 ++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 63 insertions(+), 4 deletions(-)
+
+diff --git a/gvc-mixer-control.c b/gvc-mixer-control.c
+index 57dc2d4..8459ebf 100644
+--- a/gvc-mixer-control.c
++++ b/gvc-mixer-control.c
+@@ -1215,6 +1215,9 @@ add_stream (GvcMixerControl *control,
+  *   and the port-name on the device is the same as the streamport-name.
+  * This should always find a match and is used exclusively by sync_devices().
+  */
++static gboolean is_card_port_name_handsfree (GvcMixerCard *card,
++                                             const char   *name);
++
+ static gboolean
+ match_stream_with_devices (GvcMixerControl    *control,
+                            GvcMixerStreamPort *stream_port,
+@@ -1267,7 +1270,10 @@ match_stream_with_devices (GvcMixerControl    *control,
+                                  stream_card_id);
+ 
+                         if (stream_card_id == card_id) {
+-                                if (g_strcmp0 (device_port_name, stream_port->port) == 0) {
++                                /* A headset in hands-free (a call or a recording) is still
++                                 * the headset: its hands-free port has no device of its own */
++                                if (g_strcmp0 (device_port_name, stream_port->port) == 0 ||
++                                    (is_bluetooth && is_card_port_name_handsfree (card, stream_port->port))) {
+                                         g_debug ("Match device with stream: We have a match with description: '%s', origin: '%s', cached already with device id %u, so set stream id to %i",
+                                                  description,
+                                                  origin,
+@@ -1978,6 +1984,43 @@ is_card_port_an_output (GvcMixerCardPort* port)
+         return port->direction == PA_DIRECTION_OUTPUT ? TRUE : FALSE;
+ }
+ 
++/* TRUE if every profile of the port starts with the prefix: the port belongs to one kind of
++ * Bluetooth profile only */
++static gboolean
++card_port_profiles_all (GvcMixerCardPort *port,
++                        const char       *prefix)
++{
++        if (port->profiles == NULL)
++                return FALSE;
++        for (const GList *p = port->profiles; p != NULL; p = p->next) {
++                GvcMixerCardProfile *profile = p->data;
++                if (!g_str_has_prefix (profile->profile, prefix))
++                        return FALSE;
++        }
++        return TRUE;
++}
++
++/* A Bluetooth headset's hands-free port (HFP/HSP). Calls and recordings switch to it by
++ * themselves, so it is not offered on its own: the headset is one device to the user. */
++static gboolean
++is_card_port_handsfree (GvcMixerCardPort *port)
++{
++        return card_port_profiles_all (port, "headset-head-unit");
++}
++
++/* The hands-free port of a card, by name */
++static gboolean
++is_card_port_name_handsfree (GvcMixerCard *card,
++                             const char   *name)
++{
++        for (const GList *p = gvc_mixer_card_get_ports (card); p != NULL; p = p->next) {
++                GvcMixerCardPort *port = p->data;
++                if (g_strcmp0 (port->port, name) == 0)
++                        return is_card_port_handsfree (port);
++        }
++        return FALSE;
++}
++
+ /*
+  * This method will create a ui device for the given port.
+  */
+@@ -1990,6 +2033,16 @@ update_ui_device_on_port_added (GvcMixerControl  *control,
+         GObject                   *object;
+         GvcMixerUIDevice          *uidevice;
+         gboolean                   available = port->available != PA_PORT_AVAILABLE_NO;
++        gboolean                   a2dp;
++
++        if (is_card_port_handsfree (port)) {
++                g_debug ("update_ui_device_on_port_added, hands-free port '%s' of '%s' not offered",
++                         port->port, gvc_mixer_card_get_name (card));
++                return;
++        }
++        /* A Bluetooth device's audio port: the device's name alone, and only its best profile
++         * (the codec is not the user's question) */
++        a2dp = card_port_profiles_all (port, "a2dp-");
+ 
+         direction = (is_card_port_an_output (port) == TRUE) ? UIDeviceOutput : UIDeviceInput;
+ 
+@@ -1997,14 +2050,20 @@ update_ui_device_on_port_added (GvcMixerControl  *control,
+                                "type", (guint)direction,
+                                "card", card,
+                                "port-name", port->port,
+-                               "description", port->human_port,
+-                               "origin", gvc_mixer_card_get_name (card),
++                               "description", a2dp ? gvc_mixer_card_get_name (card) : port->human_port,
++                               "origin", a2dp ? "" : gvc_mixer_card_get_name (card),
+                                "port-available", available,
+                                "icon-name", port->icon_name,
+                                NULL);
+ 
+         uidevice = GVC_MIXER_UI_DEVICE (object);
+-        gvc_mixer_ui_device_set_profiles (uidevice, port->profiles);
++        if (a2dp) {
++                /* The profiles are sorted by priority: the last one is the best */
++                GList best = { g_list_last (port->profiles)->data, NULL, NULL };
++                gvc_mixer_ui_device_set_profiles (uidevice, &best);
++        } else {
++                gvc_mixer_ui_device_set_profiles (uidevice, port->profiles);
++        }
+ 
+         g_hash_table_insert (is_card_port_an_output (port) ? control->priv->ui_outputs : control->priv->ui_inputs,
+                              GUINT_TO_POINTER (gvc_mixer_ui_device_get_id (uidevice)),
+-- 
+2.56.0
+

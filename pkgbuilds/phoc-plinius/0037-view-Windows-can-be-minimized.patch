@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 16:32:04 +0100
+Subject: [PATCH] view: Windows can be minimized
+
+A task bar (the desktop's waybar on a second screen) asks to minimize
+through wlr-foreign-toplevel-management; phoc ignored that. Its task
+bar can now bring a window to the front with a click and minimize it
+with the next one.
+
+A minimized view is not drawn and the pointer goes through it. It goes
+below the other views (on the phone only the top view is drawn) and the
+keyboard goes to the next view that is not minimized; the focus
+fallbacks after a view closes or a layer surface lets go skip minimized
+views too. Focusing a minimized view again, from the task bar, Phosh's
+overview or an activation, brings it back. Un-minimizing from the task
+bar also focuses it.
+
+Clients still cannot minimize themselves: the capability stays off, so
+GTK shows no minimize button that would only do this half way.
+---
+ src/desktop.c |  2 +-
+ src/seat.c    | 40 ++++++++++++++++++---
+ src/seat.h    |  1 +
+ src/view.c    | 96 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/view.h    |  2 ++
+ 5 files changed, 136 insertions(+), 5 deletions(-)
+
+diff --git a/src/desktop.c b/src/desktop.c
+index 99199b9c..5bd7cc6a 100644
+--- a/src/desktop.c
++++ b/src/desktop.c
+@@ -367,7 +367,7 @@ phoc_desktop_view_check_visibility (PhocDesktop *self, PhocView *view)
+ 
+   priv = phoc_desktop_get_instance_private (self);
+ 
+-  if (!phoc_view_is_mapped (view)) {
++  if (!phoc_view_is_mapped (view) || phoc_view_is_minimized (view)) {
+     visible = FALSE;
+     goto out;
+   }
+diff --git a/src/seat.c b/src/seat.c
+index 5caeb8a2..7cdafcce 100644
+--- a/src/seat.c
++++ b/src/seat.c
+@@ -1152,9 +1152,11 @@ seat_view_destroy (PhocSeatView *seat_view)
+   if (view && view->parent) {
+     phoc_seat_set_focus_view (seat, view->parent);
+   } else if (!g_queue_is_empty (priv->views)) {
+-    /* Focus first view */
+-    PhocSeatView *first_seat_view = g_queue_peek_head (priv->views);
+-    phoc_seat_set_focus_view (seat, first_seat_view->view);
++    /* Focus first view that is not minimized: focusing a minimized one would bring it back */
++    PhocView *next = phoc_seat_get_next_unminimized_view (seat, NULL);
++
++    if (next)
++      phoc_seat_set_focus_view (seat, next);
+   }
+ }
+ 
+@@ -1272,6 +1274,31 @@ seat_raise_view_stack (PhocSeat *seat, PhocView *view)
+  * the given %view, raise it if necessary and make it appear
+  * activated. If %NULL is passed only the current view is unfocused.
+  */
++/**
++ * phoc_seat_get_next_unminimized_view:
++ * @seat: The seat
++ * @except:(nullable): A view to skip
++ *
++ * Returns:(transfer none)(nullable): The most recently focused view that is not minimized
++ */
++PhocView *
++phoc_seat_get_next_unminimized_view (PhocSeat *seat, PhocView *except)
++{
++  PhocSeatPrivate *priv;
++
++  g_assert (PHOC_IS_SEAT (seat));
++  priv = phoc_seat_get_instance_private (seat);
++
++  for (GList *l = priv->views->head; l; l = l->next) {
++    PhocSeatView *seat_view = l->data;
++
++    if (seat_view->view != except && !phoc_view_is_minimized (seat_view->view))
++      return seat_view->view;
++  }
++  return NULL;
++}
++
++
+ void
+ phoc_seat_set_focus_view (PhocSeat *seat, PhocView *view)
+ {
+@@ -1286,6 +1313,10 @@ phoc_seat_set_focus_view (PhocSeat *seat, PhocView *view)
+   if (view && !phoc_seat_is_input_allowed (seat, view->wlr_surface->resource))
+     return;
+ 
++  /* Focusing a minimized view (task bar, overview, activation) brings it back */
++  if (view && phoc_view_is_minimized (view))
++    phoc_view_set_minimized (view, FALSE);
++
+   /* Make sure the view will be rendered on top of others, even if it's
+    * already focused in this seat */
+   if (view) {
+@@ -1397,7 +1428,8 @@ phoc_seat_set_focus_layer (PhocSeat *seat, struct wlr_layer_surface_v1 *layer)
+       PhocSeatView *seat_view = g_queue_peek_head (priv->views);
+ 
+       seat->focused_layer = NULL;
+-      phoc_seat_set_focus_view (seat, seat_view ? seat_view->view : NULL);
++      phoc_seat_set_focus_view (seat, seat_view && !phoc_view_is_minimized (seat_view->view) ?
++                                seat_view->view : phoc_seat_get_next_unminimized_view (seat, NULL));
+ 
+       if (output) {
+         phoc_layer_shell_arrange (output);
+diff --git a/src/seat.h b/src/seat.h
+index 2f9c7c17..3bdc4715 100644
+--- a/src/seat.h
++++ b/src/seat.h
+@@ -108,6 +108,7 @@ bool               phoc_seat_grab_meta_press (PhocSeat *seat);
+ 
+ PhocView          *phoc_seat_get_focus_view  (PhocSeat *seat);
+ void               phoc_seat_set_focus_view  (PhocSeat *seat, PhocView *view);
++PhocView          *phoc_seat_get_next_unminimized_view (PhocSeat *seat, PhocView *except);
+ void               phoc_seat_set_focus_layer (PhocSeat                    *seat,
+                                               struct wlr_layer_surface_v1 *layer);
+ void               phoc_seat_set_focus_surface (PhocSeat           *self,
+diff --git a/src/view.c b/src/view.c
+index 102e1321..18248902 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -64,6 +64,7 @@ typedef struct _PhocViewPrivate {
+   PhocViewTileDirection tile_direction;
+   gboolean       always_on_top;
+   gboolean       visibility;
++  gboolean       minimized;
+   gboolean       modal;
+   guint          suspend_timer_id;
+   char          *tag;
+@@ -82,6 +83,7 @@ typedef struct _PhocViewPrivate {
+   struct wl_listener toplevel_handle_request_activate;
+   struct wl_listener toplevel_handle_request_fullscreen;
+   struct wl_listener toplevel_handle_request_close;
++  struct wl_listener toplevel_handle_request_minimize;
+   /* ext-foreign-toplevel-list */
+   struct wlr_ext_foreign_toplevel_handle_v1 *ext_foreign_toplevel_v1_handle;
+ 
+@@ -364,6 +366,30 @@ handle_toplevel_handle_request_close (struct wl_listener *listener, void *data)
+ }
+ 
+ 
++static void
++handle_toplevel_handle_request_minimize (struct wl_listener *listener, void *data)
++{
++  PhocInput *input = phoc_server_get_input (phoc_server_get_default ());
++  PhocViewPrivate *priv = wl_container_of (listener, priv, toplevel_handle_request_minimize);
++  PhocView *self = PHOC_VIEW_SELF (priv);
++  struct wlr_foreign_toplevel_handle_v1_minimized_event *event = data;
++  PhocSeat *seat;
++
++  if (event->minimized) {
++    phoc_view_set_minimized (self, TRUE);
++    return;
++  }
++
++  /* Back from the task bar: in front and focused, like an activation */
++  phoc_view_set_minimized (self, FALSE);
++  seat = phoc_input_get_last_active_seat (input);
++  if (seat) {
++    phoc_view_move_to_output_of_last_press (self, seat);
++    phoc_seat_set_focus_view (seat, self);
++  }
++}
++
++
+ static void
+ view_create_foreign_toplevel_handle (PhocView *self)
+ {
+@@ -393,6 +419,10 @@ view_create_foreign_toplevel_handle (PhocView *self)
+   wl_signal_add (&priv->toplevel_handle->events.request_close,
+                  &priv->toplevel_handle_request_close);
+ 
++  priv->toplevel_handle_request_minimize.notify = handle_toplevel_handle_request_minimize;
++  wl_signal_add (&priv->toplevel_handle->events.request_minimize,
++                 &priv->toplevel_handle_request_minimize);
++
+   priv->toplevel_handle->data = self;
+ 
+   wlr_foreign_toplevel_handle_v1_set_title (priv->toplevel_handle, priv->title ?: "");
+@@ -418,6 +448,7 @@ phoc_view_destroy_toplevel_handle (PhocView *self)
+   wl_list_remove (&priv->toplevel_handle_request_activate.link);
+   wl_list_remove (&priv->toplevel_handle_request_fullscreen.link);
+   wl_list_remove (&priv->toplevel_handle_request_close.link);
++  wl_list_remove (&priv->toplevel_handle_request_minimize.link);
+ 
+   g_clear_pointer (&priv->toplevel_handle, wlr_foreign_toplevel_handle_v1_destroy);
+   g_clear_pointer (&priv->ext_foreign_toplevel_v1_handle,
+@@ -2881,6 +2912,71 @@ phoc_view_move (PhocView *self, double x, double y)
+ }
+ 
+ 
++/**
++ * phoc_view_set_minimized:
++ * @self: The view
++ * @minimized: Whether to minimize it
++ *
++ * A minimized view is neither drawn nor reachable by the pointer. It goes below the other views
++ * and the keyboard goes to the next view that is not minimized. Focusing it again (a task bar,
++ * Phosh's overview, an activation) brings it back.
++ */
++void
++phoc_view_set_minimized (PhocView *self, gboolean minimized)
++{
++  PhocServer *server = phoc_server_get_default ();
++  PhocDesktop *desktop = phoc_server_get_desktop (server);
++  PhocInput *input = phoc_server_get_input (server);
++  PhocWorkspace *workspace;
++  PhocViewPrivate *priv;
++  PhocOutput *output;
++
++  g_assert (PHOC_IS_VIEW (self));
++  priv = phoc_view_get_instance_private (self);
++
++  minimized = !!minimized;
++  if (priv->minimized == minimized)
++    return;
++
++  /* Where it is shown now, or where it will be shown again */
++  if (phoc_view_is_mapped (self))
++    phoc_view_damage_whole (self);
++  priv->minimized = minimized;
++  if (priv->toplevel_handle)
++    wlr_foreign_toplevel_handle_v1_set_minimized (priv->toplevel_handle, minimized);
++
++  if (!minimized || !phoc_view_is_mapped (self))
++    return;
++
++  /* Below the others: on the phone only the top view is drawn, the next one shows */
++  workspace = phoc_desktop_get_active_workspace (desktop);
++  if (phoc_workspace_remove_view (workspace, self))
++    phoc_workspace_append_view (workspace, self);
++
++  for (GSList *elem = phoc_input_get_seats (input); elem; elem = elem->next) {
++    PhocSeat *seat = PHOC_SEAT (elem->data);
++
++    if (phoc_seat_get_focus_view (seat) == self)
++      phoc_seat_set_focus_view (seat, phoc_seat_get_next_unminimized_view (seat, self));
++  }
++
++  wl_list_for_each (output, &desktop->outputs, link)
++    phoc_output_damage_whole (output);
++}
++
++
++gboolean
++phoc_view_is_minimized (PhocView *self)
++{
++  PhocViewPrivate *priv;
++
++  g_assert (PHOC_IS_VIEW (self));
++  priv = phoc_view_get_instance_private (self);
++
++  return priv->minimized;
++}
++
++
+ void
+ phoc_view_close (PhocView *self)
+ {
+diff --git a/src/view.h b/src/view.h
+index e63cd010..d6390e7e 100644
+--- a/src/view.h
++++ b/src/view.h
+@@ -222,6 +222,8 @@ float                 phoc_view_get_scale (PhocView *self);
+ gboolean              phoc_view_is_decorated (PhocView *self);
+ void                  phoc_view_set_always_on_top (PhocView *self, gboolean on_top);
+ bool                  phoc_view_is_always_on_top (PhocView *self);
++void                  phoc_view_set_minimized (PhocView *self, gboolean minimized);
++gboolean              phoc_view_is_minimized (PhocView *self);
+ PhocOutput *          phoc_view_get_fullscreen_output (PhocView *self);
+ bool                  phoc_view_want_auto_maximize (PhocView *self);
+ void                  phoc_view_set_decorated (PhocView *self,
+-- 
+2.56.0
+

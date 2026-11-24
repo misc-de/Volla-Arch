@@ -1,0 +1,43 @@
+[Unit]
+Description=Set the backlight again when the display is switched on
+
+[Service]
+ExecStart=/usr/bin/plinius-backlight-wake
+Restart=on-failure
+RestartSec=5
+# Reads two sysfs files, writes the LED brightness and the light sensor's screen colour; runs the
+# hooks in /usr/lib/plinius/display.d
+ProtectSystem=strict
+ReadWritePaths=/sys/class/leds /sys/devices -/sys/kernel/pix_manager
+# Read-only, not "yes": that empties /run/user, where the always-on display's flag lies
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+# More sandbox (docs/DIENSTE-HAERTEN.md). The panel brightness is writable for the group
+# aid_system; CAP_DAC_READ_SEARCH to watch /run/user/<uid> (0700) for the always-on display's
+# flag and to read the light sensor's screen colour from phoc. The hooks only call D-Bus.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+SupplementaryGroups=aid_system
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+PrivateIPC=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

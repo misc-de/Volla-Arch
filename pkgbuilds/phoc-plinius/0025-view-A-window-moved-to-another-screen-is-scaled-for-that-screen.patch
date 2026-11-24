@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 08:05:54 +0100
+Subject: [PATCH] view: A window moved to another screen is scaled for that
+ screen
+
+A window moved to the phone took its new size while it still had its old
+position: the commit updated the size first. Scale-to-fit therefore judged
+the phone's window height against the desktop's usable area, shrank the
+window and arranged it on the desktop again, so that it hung across both
+screens. The position is now updated first.
+
+The maximized box also divided its position by the view's scale. Positions
+are layout coordinates; with a screen away from the origin and a scale
+below 1 the window landed elsewhere, and the geometry offset went the wrong
+way. It stayed unnoticed with one screen, at the origin.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/view.c         | 9 +++++----
+ src/xdg-toplevel.c | 4 +++-
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/src/view.c b/src/view.c
+index 1d6969d..a7a762b 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -873,8 +873,9 @@ phoc_view_get_maximized_box (PhocView *self, PhocOutput *output, struct wlr_box
+   usable_area.x += output_box.x;
+   usable_area.y += output_box.y;
+ 
+-  box->x = usable_area.x / priv->scale;
+-  box->y = usable_area.y / priv->scale;
++  /* The position is in layout coordinates, only the size scales */
++  box->x = usable_area.x;
++  box->y = usable_area.y;
+   box->width = usable_area.width / priv->scale;
+   box->height = usable_area.height / priv->scale;
+ 
+@@ -895,8 +896,8 @@ view_arrange_maximized (PhocView *self, PhocOutput *output)
+     return;
+ 
+   phoc_view_get_geometry (self, &geom);
+-  box.x -= geom.x / priv->scale;
+-  box.y -= geom.y / priv->scale;
++  box.x -= geom.x * priv->scale;
++  box.y -= geom.y * priv->scale;
+ 
+   phoc_view_move_resize (self, box.x, box.y, box.width, box.height);
+ }
+diff --git a/src/xdg-toplevel.c b/src/xdg-toplevel.c
+index b16a480..9f6b271 100644
+--- a/src/xdg-toplevel.c
++++ b/src/xdg-toplevel.c
+@@ -466,8 +466,8 @@ handle_surface_commit (struct wl_listener *listener, void *data)
+ 
+   struct wlr_box size;
+   get_size (view, &size);
+-  view_update_size (view, size.width, size.height);
+ 
++  /* The position first: the new size is judged on the screen the view is going to */
+   uint32_t pending_serial = self->pending_move_resize_configure_serial;
+   if (pending_serial > 0 && pending_serial >= xdg_toplevel->base->current.configure_serial) {
+     double x = view->box.x;
+@@ -491,6 +491,8 @@ handle_surface_commit (struct wl_listener *listener, void *data)
+       self->pending_move_resize_configure_serial = 0;
+   }
+ 
++  view_update_size (view, size.width, size.height);
++
+   struct wlr_box geometry;
+   phoc_xdg_toplevel_get_geometry (self, &geometry);
+   if (self->saved_geometry.x != geometry.x || self->saved_geometry.y != geometry.y) {

@@ -1,0 +1,69 @@
+From 1fdc8b47c1f340d32f23f1a0f6389b786586da68 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 08:16:29 +0100
+Subject: [PATCH] backend/drm: Keep the outputs over a session pause
+
+logind pauses the session not only for a VT switch but also for a
+suspend. Destroying the outputs on pause made every client see its
+output vanish and a new one appear on resume: Phosh rebuilt its whole
+shell (over 2 s on a phone), and GTK 3 surfaces committed a buffer
+drawn at scale 1 with scale 3 meanwhile, which got them disconnected.
+
+Keep the outputs and, on resume, request a modeset with the current mode
+from the compositor so the KMS state is restored.
+---
+ backend/drm/backend.c | 34 ++++++++++++++++++++++++++--------
+ 1 file changed, 26 insertions(+), 8 deletions(-)
+
+diff --git a/backend/drm/backend.c b/backend/drm/backend.c
+index 5a545b192..bb620e8cf 100644
+--- a/backend/drm/backend.c
++++ b/backend/drm/backend.c
+@@ -112,18 +112,36 @@ static void handle_session_active(struct wl_listener *listener, void *data) {
+ 	wlr_log(WLR_INFO, "DRM FD %s", session->active ? "resumed" : "paused");
+ 
+ 	if (!session->active) {
+-		// Disconnect any active connectors so that the client will modeset and
+-		// rerender when the session is activated again.
+-		struct wlr_drm_connector *conn;
+-		wl_list_for_each(conn, &drm->connectors, link) {
+-			if (conn->status == DRM_MODE_CONNECTED) {
+-				wlr_output_destroy(&conn->output);
+-			}
+-		}
++		// Keep the outputs: logind also pauses the session for a suspend, and
++		// destroying them made clients rebuild everything for the "new" outputs
++		// on resume (GTK 3 committed buffers at the wrong scale meanwhile). The
++		// modeset on resume below restores the KMS state instead.
+ 		return;
+ 	}
+ 
+ 	scan_drm_connectors(drm, NULL);
++
++	// The KMS state is undefined after the pause (another DRM master, or the
++	// driver's suspend): ask the compositor to set the current mode again. A
++	// modeset commit is blocking, so a page-flip still pending from before the
++	// pause does not get in the way.
++	struct wlr_drm_connector *conn;
++	wl_list_for_each(conn, &drm->connectors, link) {
++		if (conn->status != DRM_MODE_CONNECTED || !conn->output.enabled) {
++			continue;
++		}
++		struct wlr_output_state state;
++		wlr_output_state_init(&state);
++		wlr_output_state_set_enabled(&state, true);
++		if (conn->output.current_mode != NULL) {
++			wlr_output_state_set_mode(&state, conn->output.current_mode);
++		} else {
++			wlr_output_state_set_custom_mode(&state, conn->output.width,
++				conn->output.height, conn->output.refresh);
++		}
++		wlr_output_send_request_state(&conn->output, &state);
++		wlr_output_state_finish(&state);
++	}
+ }
+ 
+ static void handle_dev_change(struct wl_listener *listener, void *data) {
+-- 
+2.55.0
+

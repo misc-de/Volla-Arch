@@ -1,0 +1,43 @@
+[Unit]
+Description=Advanced Mobile Location: the position of an emergency call for the emergency services
+# oFono comes when it comes; the daemon only listens for its CallAdded signal
+After=dbus.service
+
+[Service]
+ExecStart=/usr/bin/plinius-aml
+Restart=always
+RestartSec=2
+
+# Sandbox (docs/DIENSTE-HAERTEN.md): talks to oFono over the system bus and reads the NMEA socket
+# of gnss-nmea-bridge. Root for oFono's bus policy (SendDataMessage needs root or the group
+# privileged), but without any capability; the group geoclue for the socket (0660).
+SupplementaryGroups=geoclue
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+# Plinius: waits for phosh's keyring prompt at boot instead of starting gcr's own window
+# (keyring-prompter-wait). Same name as gcr's file in /usr/share/dbus-1/services; this one is
+# found first because /usr/share/plinius comes before /usr/share in XDG_DATA_DIRS
+# (50-plinius-callaudio.conf).
+[D-BUS Service]
+Name=org.gnome.keyring.SystemPrompter
+Exec=/usr/lib/plinius/keyring-prompter-wait

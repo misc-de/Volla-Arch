@@ -1,0 +1,47 @@
+From 5e08ee075e021acee18645780f2ae145c461ebf0 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 23:39:51 +0100
+Subject: [PATCH] fingerprint: aidl: a rejected finger keeps identifying
+
+onAuthenticationFailed was passed on as onError(UNABLE_TO_PROCESS), as
+HIDL did. fingerprint.c ends the operation on any error: the state went
+to idle, an under-display touch target went away and nothing started
+identifying again, while the HAL still waited for a finger. On the lock
+screen, one wrong finger left no way to use the sensor until the screen
+was turned off and on again; fprintd clients got verify-unknown-error
+instead of verify-no-match.
+
+The AIDL operation goes on after a rejected touch, so report it as
+finger id 0, which fingerprint.c takes as "not recognized" while it keeps
+identifying.
+---
+ src/fingerprint_binder_aidl.c | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/src/fingerprint_binder_aidl.c b/src/fingerprint_binder_aidl.c
+index dd29998..df7b942 100644
+--- a/src/fingerprint_binder_aidl.c
++++ b/src/fingerprint_binder_aidl.c
+@@ -657,9 +657,16 @@ fingerprint_aidl_handle_authentication_failed(BiomFingerprintAidl* self)
+ {
+     g_debug("onAuthenticationFailed");
+ 
+-    /* reported like HIDL does, as a non fatal UNABLE_TO_PROCESS */
+-    if (self->callbacks.error)
+-        self->callbacks.error(self->user_data, FINGERPRINT_ERROR_UNABLE_TO_PROCESS, 0);
++    /*
++     * A rejected touch. The AIDL operation goes on (it only ends with
++     * onAuthenticationSucceeded, onError or a lockout), so this must not end
++     * it in fingerprint.c either: an error there sets the state to idle, the
++     * touch target goes away and nothing starts identifying again, while the
++     * HAL is still waiting for a finger. fingerprint.c reports finger id 0 as
++     * "not recognized" and keeps identifying.
++     */
++    if (self->callbacks.authenticated)
++        self->callbacks.authenticated(self->user_data, 0, 0);
+ 
+     return GBINDER_STATUS_OK;
+ }
+-- 
+2.56.0
+

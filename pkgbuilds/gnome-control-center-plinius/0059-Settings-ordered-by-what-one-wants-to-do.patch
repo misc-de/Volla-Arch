@@ -1,0 +1,1354 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] Settings ordered by what one wants to do
+
+The panel list had grown along the components: 25 rows in five groups
+without names, and the same subject in several places. Now it has named
+sections (Connections, Phone, Apps, Security, System) and 22 rows:
+
+- Hubs: USB, Streaming, Printers, Mouse and Graphics Tablets are
+  rows on Connected Devices, Your Account and Online Accounts on
+  Accounts, the assistant button on Keyboard & Buttons. They stay real
+  panels: search finds them, "gnome-control-center usb" and the quick
+  settings open them on top of their hub, with their parameters. A
+  panel opened that way is a static subpage of the hub, which GNOME's
+  shell can already do; it gets its title and parameters there, and is
+  cancelled when popped.
+- Lock & Unlock: the ways to unlock from the user page and the lock
+  options from the Screen Lock page on one page. The user page shows
+  a section of its rows, the Screen Lock page hands over its groups.
+- Privacy and Security apart: Security is a panel of its own with the
+  phone's checks that were "Device Security" in Privacy & Security,
+  and the encryption page; Privacy keeps location, cameras, file
+  history and diagnostics.
+- Secure Shell has left System for Remote Access (the VNC panel).
+- Automatic brightness, dimming and the screen-off delay are on Display
+  only; the delay was on Power and on Screen Lock.
+- The mouse panel only shows with a mouse or touchpad.
+
+What belongs where is in shell/cc-plinius-hubs.c, the phone's names for
+GNOME's panels in shell/cc-panel-loader.c.
+---
+diff --git a/panels/hubs/meson.build b/panels/hubs/meson.build
+new file mode 100644
+index 0000000..f654fea
+--- /dev/null
++++ b/panels/hubs/meson.build
+@@ -0,0 +1,21 @@
++# Plinius: the panels that are nothing but rows to other panels. The sources and the desktop files
++# (with their translations) come as separate files of gnome-control-center-plinius.
++panels_list += [ 'connected-devices', 'accounts' ]
++
++install_data(
++  'gnome-connected-devices-panel.desktop',
++  'gnome-accounts-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
++sources = files(
++  'cc-plinius-hub-panels.c',
++)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps,
++  c_args: cflags,
++)
+diff --git a/panels/keyboard/cc-keyboard-panel.c b/panels/keyboard/cc-keyboard-panel.c
+index ea71e21..1ea492b 100644
+--- a/panels/keyboard/cc-keyboard-panel.c
++++ b/panels/keyboard/cc-keyboard-panel.c
+@@ -33,6 +33,7 @@
+ #include "cc-list-row.h"
+ #include "cc-plinius-dictate.h"
+ #include "cc-plinius-osk-style.h"
++#include "shell/cc-plinius-hubs.h"
+ #include "cc-xkb-modifier-page.h"
+ 
+ #include "keyboard-shortcuts.h"
+@@ -133,6 +134,8 @@ cc_keyboard_panel_set_property (GObject *object, guint property_id, const GValue
+ {
+     switch (property_id) {
+     case PROP_PARAMETERS:
++        /* Plinius: "keyboard assistant" opens the assistant button's page (cc-plinius-hubs.c) */
++        cc_panel_set_parameters (CC_PANEL (object), g_value_get_variant (value));
+         break;
+ 
+     default:
+@@ -224,6 +227,8 @@ cc_keyboard_panel_init (CcKeyboardPanel *self)
+     cc_plinius_dictate_setup (self->preferences_page);
+     /* Plinius: look of the on-screen keyboard, between the input sources and speech to text */
+     cc_plinius_osk_style_setup (self->preferences_page);
++    /* Plinius: the assistant button as a page of this panel (cc-plinius-hubs.c) */
++    cc_plinius_hub_add_rows (CC_PANEL (self), self->preferences_page, "keyboard");
+ 
+     self->input_source_settings = g_settings_new ("org.gnome.desktop.input-sources");
+ 
+diff --git a/panels/meson.build b/panels/meson.build
+index 6a438c2..937141a 100644
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -11,6 +11,7 @@ panels = [
+   'color',
+   'desktop-vnc',
+   'display',
++  'hubs',
+   'mouse',
+   'multitasking',
+   'nfc',
+diff --git a/panels/mouse/cc-mouse-panel.c b/panels/mouse/cc-mouse-panel.c
+index ada22fb..0f2eb97 100644
+--- a/panels/mouse/cc-mouse-panel.c
++++ b/panels/mouse/cc-mouse-panel.c
+@@ -27,6 +27,7 @@
+ #include "cc-illustrated-row.h"
+ #include "cc-list-row-info-button.h"
+ #include "cc-split-row.h"
++#include "shell/cc-application.h"
+ #include "shell/cc-window.h"
+ 
+ #include "cc-mouse-panel.h"
+@@ -77,6 +78,28 @@ struct _CcMousePanel {
+ 
+ CC_PANEL_REGISTER (CcMousePanel, cc_mouse_panel)
+ 
++/* Plinius: a phone has neither until one is connected. Search finds the panel all the same. */
++static void
++update_visibility (GsdDeviceManager *manager, GsdDevice *device, gpointer user_data)
++{
++    CcApplication *application = CC_APPLICATION (g_application_get_default ());
++    g_autoptr(GList) devices =
++        gsd_device_manager_list_devices (manager, GSD_DEVICE_TYPE_MOUSE | GSD_DEVICE_TYPE_TOUCHPAD);
++
++    cc_shell_model_set_panel_visibility (cc_application_get_model (application), "mouse",
++                                         devices ? CC_PANEL_VISIBLE : CC_PANEL_VISIBLE_IN_SEARCH);
++}
++
++void
++cc_mouse_panel_static_init_func (void)
++{
++    GsdDeviceManager *manager = gsd_device_manager_get ();
++
++    g_signal_connect (manager, "device-added", G_CALLBACK (update_visibility), NULL);
++    g_signal_connect (manager, "device-removed", G_CALLBACK (update_visibility), NULL);
++    update_visibility (manager, NULL, NULL);
++}
++
+ static void
+ setup_title_stack (CcMousePanel *self)
+ {
+diff --git a/panels/power/cc-power-panel.blp b/panels/power/cc-power-panel.blp
+index 63f2b73..28b1914 100644
+--- a/panels/power/cc-power-panel.blp
++++ b/panels/power/cc-power-panel.blp
+@@ -200,7 +200,10 @@ template $CcPowerPanel: $CcPanel {
+               }
+             }
+ 
++            // Plinius: on the Display page (cc-plinius-display.c)
+             Adw.PreferencesGroup blank_screen_group {
++              visible: false;
++
+               Adw.SwitchRow blank_screen_switch_row {
+                 title: _("Automatic Screen _Blank");
+                 subtitle: _("Turn the screen off after a period of inactivity");
+diff --git a/panels/power/cc-power-panel.c b/panels/power/cc-power-panel.c
+index 382aa8f..d27b721 100644
+--- a/panels/power/cc-power-panel.c
++++ b/panels/power/cc-power-panel.c
+@@ -223,9 +223,7 @@ ensure_power_saving_title (CcPowerPanel *self)
+ {
+     const char *power_saving_title;
+ 
+-    /* If we have batteries, we are in split-page mode, so we don't have to set a title */
+-    if (self->has_batteries)
+-        return;
++    /* Plinius: always one page (setup_general_section ()), so the groups need their title */
+ 
+     /* TRANSLATORS: This is the same title as the title from the .ui file, but without mnemonic */
+     power_saving_title = _("Power Saving");
+@@ -467,7 +465,8 @@ als_enabled_state_changed (CcPowerPanel *self)
+     g_debug ("ALS enabled: %s", enabled ? "on" : "off");
+     g_signal_handlers_block_by_func (self->als_row, als_row_changed_cb, self);
+     adw_switch_row_set_active (self->als_row, enabled);
+-    gtk_widget_set_visible (GTK_WIDGET (self->als_row), visible && self->has_brightness_control);
++    /* Plinius: on the Display page (cc-plinius-display.c) */
++    gtk_widget_set_visible (GTK_WIDGET (self->als_row), FALSE);
+     g_signal_handlers_unblock_by_func (self->als_row, als_row_changed_cb, self);
+ }
+ 
+@@ -750,7 +749,8 @@ shell_brightness_changed_cb (CcPowerPanel *self)
+     else
+         self->has_brightness_control = FALSE;
+ 
+-    gtk_widget_set_visible (GTK_WIDGET (self->dim_screen_row), self->has_brightness_control);
++    /* Plinius: on the Display page (cc-plinius-display.c) */
++    gtk_widget_set_visible (GTK_WIDGET (self->dim_screen_row), FALSE);
+     als_enabled_state_changed (self);
+ }
+ 
+@@ -1230,8 +1230,9 @@ setup_general_section (CcPowerPanel *self)
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->general_section), show_section);
+ 
+-    if (!self->has_batteries)
+-        switch_to_single_page_layout (self);
++    /* Plinius: one page also with a battery. Brightness and screen off are on the Display page,
++     * what is left for a "Power Saving" tab (power saver, automatic suspend) is often nothing. */
++    switch_to_single_page_layout (self);
+ }
+ 
+ static gint
+diff --git a/panels/privacy/cc-privacy-panel.blp b/panels/privacy/cc-privacy-panel.blp
+index ca4a2a9..a1b6c31 100644
+--- a/panels/privacy/cc-privacy-panel.blp
++++ b/panels/privacy/cc-privacy-panel.blp
+@@ -12,24 +12,7 @@ template $CcPrivacyPanel: $CcPanel {
+       Adw.PreferencesGroup {
+         title: _("System");
+ 
+-        $CcListRow {
+-          title: _("_Screen Lock");
+-          subtitle: _("Automatic screen lock");
+-          icon-name: "org.gnome.Settings-screen-lock-symbolic";
+-          show-arrow: true;
+-          action-name: "navigation.push";
+-          action-target: "'screenlock'";
+-        }
+-
+-        /* Plinius: texts and visibility from cc-plinius-crypt.c (plinius-crypt installed) */
+-        $CcListRow encryption_row {
+-          visible: false;
+-          icon-name: "drive-harddisk-system-symbolic";
+-          show-arrow: true;
+-          action-name: "navigation.push";
+-          action-target: "'encryption'";
+-        }
+-
++        // Plinius: Screen Lock is on Lock & Unlock
+         $CcListRow location_row {
+           visible: false;
+           title: _("_Location");
+@@ -96,9 +79,6 @@ template $CcPrivacyPanel: $CcPanel {
+     };
+   };
+ 
+-  [subpage]
+-  $CcScreenPage {}
+-
+   [subpage]
+   $CcCameraPage {}
+ 
+diff --git a/panels/privacy/cc-privacy-panel.c b/panels/privacy/cc-privacy-panel.c
+index 80a409d..b1c0275 100644
+--- a/panels/privacy/cc-privacy-panel.c
++++ b/panels/privacy/cc-privacy-panel.c
+@@ -27,8 +27,6 @@
+ #endif
+ #include "camera/cc-camera-page.h"
+ #include "cc-list-row.h"
+-#include "cc-plinius-crypt.h"
+-#include "cc-plinius-security.h"
+ #include "cc-privacy-resources.h"
+ #include "diagnostics/cc-diagnostics-page.h"
+ #include "firmware-security/cc-firmware-security-page.h"
+@@ -40,7 +38,6 @@ struct _CcPrivacyPanel {
+     CcPanel parent_instance;
+ 
+     CcListRow *bolt_row;
+-    CcListRow *encryption_row;
+     CcListRow *location_row;
+     CcListRow *security_row;
+     GtkWidget *security_page;
+@@ -81,7 +78,6 @@ cc_privacy_panel_class_init (CcPrivacyPanelClass *klass)
+     gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/privacy/cc-privacy-panel.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, bolt_row);
+-    gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, encryption_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, location_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, security_row);
+     gtk_widget_class_bind_template_child (widget_class, CcPrivacyPanel, security_page);
+@@ -90,7 +86,6 @@ cc_privacy_panel_class_init (CcPrivacyPanelClass *klass)
+     g_type_ensure (CC_TYPE_DIAGNOSTICS_PAGE);
+     g_type_ensure (CC_TYPE_FIRMWARE_SECURITY_PAGE);
+     g_type_ensure (CC_TYPE_LOCATION_PAGE);
+-    g_type_ensure (CC_TYPE_SCREEN_PAGE);
+     g_type_ensure (CC_TYPE_USAGE_PAGE);
+ }
+ 
+@@ -112,23 +107,18 @@ cc_privacy_panel_init (CcPrivacyPanel *self)
+ #ifdef HAVE_LOCATION_SERVICES
+     CcLocationPage *location_page = g_object_new (CC_TYPE_LOCATION_PAGE, NULL);
+ 
++    /* Plinius: GNOME's German says "Ort" (a place), the phone's own position is "Standort"; our
++     * domain has the word for the row and the page in every language */
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->location_row),
++                                   g_dgettext ("plinius-control-center", "_Location"));
++    adw_navigation_page_set_title (ADW_NAVIGATION_PAGE (location_page),
++                                   g_dgettext ("plinius-control-center", "Location"));
++
+     cc_panel_add_subpage (CC_PANEL (self), "location", ADW_NAVIGATION_PAGE (location_page));
+ 
+     g_object_bind_property (location_page, "visible", self->location_row, "visible", G_BINDING_SYNC_CREATE);
+ #endif
+ 
+-    /* Plinius: encryption with a password at startup (plinius-crypt) */
+-    AdwNavigationPage *encryption_page = cc_plinius_crypt_page_new ();
+-
+-    if (encryption_page) {
+-        cc_panel_add_subpage (CC_PANEL (self), "encryption", encryption_page);
+-        cc_plinius_crypt_row_setup (ADW_ACTION_ROW (self->encryption_row));
+-    }
+-
+-    /* Plinius: Device Security with our checks (screen lock, encryption, connections, known
+-     * vulnerabilities) instead of fwupd's host security checks, which are made for PCs */
+-    if (cc_plinius_security_add_pages (CC_PANEL (self)))
+-        cc_plinius_security_row_setup (ADW_ACTION_ROW (self->security_row));
+-    else
+-        g_object_bind_property (self->security_page, "visible", self->security_row, "visible", G_BINDING_SYNC_CREATE);
++    /* Plinius: encryption and the phone's own security checks are on the Security panel
++     * (cc-security-panel.c); fwupd's Device Security has no row, its checks are made for PCs */
+ }
+diff --git a/panels/privacy/meson.build b/panels/privacy/meson.build
+index ac6febf..1095bc5 100644
+--- a/panels/privacy/meson.build
++++ b/panels/privacy/meson.build
+@@ -10,6 +10,13 @@ i18n.merge_file(
+   install_dir: control_center_desktopdir
+ )
+ 
++# Plinius: Security, a panel of its own (cc-security-panel.c), the desktop file with its translations
++panels_list += 'security'
++install_data(
++  'gnome-security-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
+ blueprints = []
+ 
+ subdir('bolt')
+@@ -49,6 +56,7 @@ sources = files(
+   'cc-plinius-crypt.c',
+   'cc-plinius-security.c',
+   'cc-privacy-panel.c',
++  'cc-security-panel.c',
+   'screen/cc-plinius-pinguard.c',
+   'screen/cc-screen-page.c',
+   'usage/cc-usage-page.c',
+diff --git a/panels/privacy/screen/cc-screen-page.blp b/panels/privacy/screen/cc-screen-page.blp
+index 58146dc..b6cb2c7 100644
+--- a/panels/privacy/screen/cc-screen-page.blp
++++ b/panels/privacy/screen/cc-screen-page.blp
+@@ -12,25 +12,8 @@ template $CcScreenPage: Adw.NavigationPage {
+     content: Adw.PreferencesPage preferences_page {
+       description: _("Automatically locking the screen prevents others from accessing the device while you're away");
+ 
+-      Adw.PreferencesGroup {
+-        $CcNumberRow blank_screen_row {
+-          title: _("_Blank Screen Delay");
+-          subtitle: _("Period of inactivity until screen blanks");
+-          subtitle-lines: 2;
+-          use-underline: true;
+-          values: "[60, 120, 180, 240, 300, 480, 600, 720, 900]";
+-
+-          special-value: $CcNumberObject {
+-            value: 0;
+-
+-            /* Translators: Option for Blank Screen in Screen Lock page */
+-            string: _("Never");
+-            order: last;
+-          };
+-
+-          value-type: seconds;
+-        }
+-
++      // Plinius: the screen-off delay is on the Display page
++      Adw.PreferencesGroup lock_group {
+         Adw.SwitchRow automatic_screen_lock_row {
+           title: _("Automatic Screen _Lock");
+           subtitle: _("Locks the screen after it blanks");
+diff --git a/panels/privacy/screen/cc-screen-page.c b/panels/privacy/screen/cc-screen-page.c
+index 755196a..6ad0a81 100644
+--- a/panels/privacy/screen/cc-screen-page.c
++++ b/panels/privacy/screen/cc-screen-page.c
+@@ -27,6 +27,7 @@
+ #include "panels/display/cc-display-config-manager.h"
+ 
+ #include <gio/gdesktopappinfo.h>
++#include <glib/gi18n.h>
+ 
+ struct _CcScreenPage {
+     AdwNavigationPage parent_instance;
+@@ -40,7 +41,7 @@ struct _CcScreenPage {
+ 
+     GCancellable *cancellable;
+ 
+-    CcNumberRow *blank_screen_row;
++    AdwPreferencesGroup *lock_group;
+     CcNumberRow *lock_after_row;
+     AdwPreferencesGroup *screen_privacy_group;
+     AdwPreferencesPage *preferences_page;
+@@ -125,7 +126,7 @@ cc_screen_page_class_init (CcScreenPageClass *klass)
+                                                  "/org/gnome/control-center/privacy/screen/cc-screen-page.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, automatic_screen_lock_row);
+-    gtk_widget_class_bind_template_child (widget_class, CcScreenPage, blank_screen_row);
++    gtk_widget_class_bind_template_child (widget_class, CcScreenPage, lock_group);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, lock_after_row);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, preferences_page);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, privacy_screen_row);
+@@ -182,14 +183,9 @@ cc_screen_page_init (CcScreenPage *self)
+     g_settings_bind (self->notification_settings, "show-in-lock-screen", self->show_notifications_row, "active",
+                      G_SETTINGS_BIND_DEFAULT);
+ 
+-    cc_number_row_bind_settings (self->blank_screen_row, self->session_settings, "idle-delay");
+-
+     g_settings_bind (self->privacy_settings, "usb-protection", self->usb_protection_row, "active",
+                      G_SETTINGS_BIND_DEFAULT);
+ 
+-    /* Plinius: the wait after wrong PINs (plinius-pinguard), below the lock options */
+-    cc_plinius_pinguard_setup (self->preferences_page);
+-
+     self->display_config_manager = cc_display_config_manager_new ();
+     g_signal_connect_object (self->display_config_manager, "changed", G_CALLBACK (update_display_config), self,
+                              G_CONNECT_SWAPPED);
+@@ -203,3 +199,28 @@ cc_screen_page_init (CcScreenPage *self)
+                               "org.gnome.SettingsDaemon.UsbProtection", self->cancellable,
+                               on_usb_protection_param_ready, self);
+ }
++
++/**
++ * cc_screen_page_move_groups:
++ * @self: a #CcScreenPage
++ * @to: the page to show the groups on
++ *
++ * Plinius: the lock options on the Lock & Unlock page, this page stays alive behind them.
++ */
++void
++cc_screen_page_move_groups (CcScreenPage *self, AdwPreferencesPage *to)
++{
++    AdwPreferencesGroup *groups[] = { self->lock_group, ADW_PREFERENCES_GROUP (self->screen_privacy_group) };
++
++    adw_preferences_group_set_title (self->lock_group, _("Screen Lock"));
++    for (gsize i = 0; i < G_N_ELEMENTS (groups); i++) {
++        g_object_ref (groups[i]);
++        adw_preferences_page_remove (self->preferences_page, groups[i]);
++        adw_preferences_page_add (to, groups[i]);
++        g_object_unref (groups[i]);
++
++        /* The wait after wrong PINs (plinius-pinguard), below the lock options */
++        if (groups[i] == self->lock_group)
++            cc_plinius_pinguard_setup (to);
++    }
++}
+diff --git a/panels/privacy/screen/cc-screen-page.h b/panels/privacy/screen/cc-screen-page.h
+index c894407..8c5d3f6 100644
+--- a/panels/privacy/screen/cc-screen-page.h
++++ b/panels/privacy/screen/cc-screen-page.h
+@@ -26,4 +26,7 @@ G_BEGIN_DECLS
+ 
+ #define CC_TYPE_SCREEN_PAGE (cc_screen_page_get_type ())
+ G_DECLARE_FINAL_TYPE (CcScreenPage, cc_screen_page, CC, SCREEN_PAGE, AdwNavigationPage);
++
++void cc_screen_page_move_groups (CcScreenPage *self, AdwPreferencesPage *to);
++
+ G_END_DECLS
+diff --git a/panels/system/cc-system-panel.blp b/panels/system/cc-system-panel.blp
+index 0882c6a..248425a 100644
+--- a/panels/system/cc-system-panel.blp
++++ b/panels/system/cc-system-panel.blp
+@@ -39,13 +39,7 @@ template $CcSystemPanel: $CcPanel {
+           action-target: "'remote-desktop'";
+         }
+ 
+-        $CcListRow {
+-          title: _("Se_cure Shell");
+-          subtitle: _("SSH network access");
+-          icon-name: "utilities-terminal-symbolic";
+-          show-arrow: true;
+-          activated => $on_secure_shell_row_clicked(template);
+-        }
++        // Plinius: Secure Shell is on Remote Access (panels/desktop-vnc)
+ 
+         // Plinius: title, subtitle and target in cc_plinius_swap_row_setup ()
+         $CcListRow swap_row {
+diff --git a/panels/system/cc-system-panel.c b/panels/system/cc-system-panel.c
+index 88dddae..308411d 100644
+--- a/panels/system/cc-system-panel.c
++++ b/panels/system/cc-system-panel.c
+@@ -46,7 +46,6 @@ struct _CcSystemPanel {
+     AdwActionRow *remote_desktop_row;
+     AdwActionRow *swap_row;
+ 
+-    CcSecureShellPage *secure_shell_dialog;
+     AdwPreferencesGroup *software_updates_group;
+ };
+ 
+@@ -115,17 +114,6 @@ cc_system_page_open_software_update (CcSystemPanel *self)
+         g_warning ("Failed to spawn %s: %s", argv[0], error->message);
+ }
+ 
+-static void
+-on_secure_shell_row_clicked (CcSystemPanel *self)
+-{
+-    if (self->secure_shell_dialog == NULL) {
+-        self->secure_shell_dialog = g_object_new (CC_TYPE_SECURE_SHELL_PAGE, NULL);
+-        g_object_add_weak_pointer (G_OBJECT (self->secure_shell_dialog), (gpointer *) &self->secure_shell_dialog);
+-    }
+-
+-    adw_dialog_present (ADW_DIALOG (self->secure_shell_dialog), GTK_WIDGET (self));
+-}
+-
+ static void
+ cc_system_panel_class_init (CcSystemPanelClass *klass)
+ {
+@@ -142,7 +130,6 @@ cc_system_panel_class_init (CcSystemPanelClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcSystemPanel, software_updates_group);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, cc_system_page_open_software_update);
+-    gtk_widget_class_bind_template_callback (widget_class, on_secure_shell_row_clicked);
+ 
+     g_type_ensure (CC_TYPE_ABOUT_PAGE);
+     g_type_ensure (CC_TYPE_DATE_TIME_PAGE);
+diff --git a/panels/system/meson.build b/panels/system/meson.build
+index 5a03f97..e697f85 100644
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -10,6 +10,13 @@ i18n.merge_file(
+   install_dir: control_center_desktopdir
+ )
+ 
++# Plinius: Lock & Unlock (users/cc-lock-panel.c), the desktop file with its translations
++panels_list += 'lock'
++install_data(
++  'users/gnome-lock-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
+ polkit = 'org.gnome.controlcenter.user-accounts.policy'.format(cappletname)
+ i18n.merge_file(
+   input: 'users/' + polkit + '.in',
+@@ -75,6 +82,7 @@ sources = files(
+   'users/cc-pattern-dialog.c',
+   'users/cc-face-dialog.c',
+   'users/cc-users-page.c',
++  'users/cc-lock-panel.c',
+   'users/pw-utils.c',
+   'users/run-passwd.c',
+   'users/user-utils.c',
+diff --git a/panels/system/users/cc-user-page.blp b/panels/system/users/cc-user-page.blp
+index d0a8fcf..5b74d7e 100644
+--- a/panels/system/users/cc-user-page.blp
++++ b/panels/system/users/cc-user-page.blp
+@@ -12,7 +12,8 @@ template $CcUserPage: Adw.NavigationPage {
+       $CcPermissionInfobar permission_infobar {}
+ 
+       Adw.PreferencesPage preferences_page {
+-        Adw.PreferencesGroup {
++        // Plinius: three groups, cc_user_page_set_section () shows Your Account or Lock & Unlock
++        Adw.PreferencesGroup avatar_group {
+           Overlay {
+             halign: center;
+             sensitive: bind template.avatar-editable;
+@@ -67,7 +68,7 @@ template $CcUserPage: Adw.NavigationPage {
+           }
+         }
+ 
+-        Adw.PreferencesGroup {
++        Adw.PreferencesGroup identity_group {
+           Adw.EntryRow fullname_row {
+             sensitive: bind template.editable;
+             has-tooltip: bind template.editable no-sync-create inverted;
+@@ -91,6 +92,29 @@ template $CcUserPage: Adw.NavigationPage {
+             activated => $change_username(template);
+           }
+ 
++          Adw.ActionRow auto_login_row {
++            title: _("A_utomatic Login");
++            use-underline: true;
++            activatable-widget: auto_login_switch;
++            sensitive: bind template.locked no-sync-create inverted;
++            has-tooltip: bind template.locked;
++            tooltip-text: _("Unlock to Change This Setting");
++
++            [suffix]
++            $CcListRowInfoButton {
++              valign: center;
++              text: _("Automatic login opens the user account when the device starts, without requiring authentication. Authentication is still required at other times, such as when unlocking the screen.");
++            }
++
++            [suffix]
++            Switch auto_login_switch {
++              valign: center;
++              notify::active => $autologin_changed(template);
++            }
++          }
++        }
++
++        Adw.PreferencesGroup unlock_group {
+           $CcListRow password_row {
+             sensitive: bind template.editable;
+             has-tooltip: bind template.editable no-sync-create inverted;
+@@ -129,27 +153,6 @@ template $CcUserPage: Adw.NavigationPage {
+             show-arrow: true;
+             activated => $change_face(template);
+           }
+-
+-          Adw.ActionRow auto_login_row {
+-            title: _("A_utomatic Login");
+-            use-underline: true;
+-            activatable-widget: auto_login_switch;
+-            sensitive: bind template.locked no-sync-create inverted;
+-            has-tooltip: bind template.locked;
+-            tooltip-text: _("Unlock to Change This Setting");
+-
+-            [suffix]
+-            $CcListRowInfoButton {
+-              valign: center;
+-              text: _("Automatic login opens the user account when the device starts, without requiring authentication. Authentication is still required at other times, such as when unlocking the screen.");
+-            }
+-
+-            [suffix]
+-            Switch auto_login_switch {
+-              valign: center;
+-              notify::active => $autologin_changed(template);
+-            }
+-          }
+         }
+ 
+         Adw.PreferencesGroup account_settings_box {
+diff --git a/panels/system/users/cc-user-page.c b/panels/system/users/cc-user-page.c
+index 8066174..73360f0 100644
+--- a/panels/system/users/cc-user-page.c
++++ b/panels/system/users/cc-user-page.c
+@@ -60,6 +60,13 @@
+ struct _CcUserPage {
+     AdwNavigationPage parent_instance;
+ 
++    /* Plinius: which part of the page shows */
++    CcUserPageSection section;
++    AdwPreferencesGroup *account_settings_box;
++    AdwPreferencesGroup *avatar_group;
++    AdwPreferencesGroup *identity_group;
++    AdwPreferencesGroup *unlock_group;
++
+     CcListRow *account_type_row;
+     GtkSwitch *account_type_switch;
+     AdwAvatar *avatar;
+@@ -697,6 +704,10 @@ cc_user_page_class_init (CcUserPageClass *klass)
+                                                  "/org/gnome/control-center/system/users/cc-user-page.ui");
+ 
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, avatar);
++    gtk_widget_class_bind_template_child (widget_class, CcUserPage, account_settings_box);
++    gtk_widget_class_bind_template_child (widget_class, CcUserPage, avatar_group);
++    gtk_widget_class_bind_template_child (widget_class, CcUserPage, identity_group);
++    gtk_widget_class_bind_template_child (widget_class, CcUserPage, unlock_group);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, avatar_edit_button);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, avatar_remove_button);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, account_type_row);
+@@ -813,25 +824,28 @@ cc_user_page_set_user (CcUserPage *self, ActUser *user, GPermission *permission)
+     cc_list_row_set_secondary_label (self->language_row, user_language);
+     /* Plinius: one's own language is set in Region & Language; here only for other accounts */
+     gtk_widget_set_visible (GTK_WIDGET (self->language_row), !is_current_user (user));
+-    /* Plinius: title here, the strings come from our own domain */
+-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->pattern_row),
+-                                   g_dgettext ("plinius-control-center", "Unlock Pattern"));
+-    update_pattern_row (self);
+-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->face_row),
+-                                   g_dgettext ("plinius-control-center", "Face Unlock"));
+-    update_face_row (self);
+-
+-    if (!self->fingerprint_manager
+-        || g_strcmp0 (act_user_get_user_name (cc_fingerprint_manager_get_user (self->fingerprint_manager)),
+-                      act_user_get_user_name (user))
+-               != 0) {
+-        g_clear_object (&self->fingerprint_manager);
+-        self->fingerprint_manager = cc_fingerprint_manager_new (user);
+-        g_signal_connect_object (self->fingerprint_manager, "notify::state", G_CALLBACK (update_fingerprint_row_state),
+-                                 self, G_CONNECT_SWAPPED);
+-    }
++    /* Plinius: Your Account does not show the ways to unlock, so it does not ask the services */
++    if (self->section != CC_USER_PAGE_SECTION_ACCOUNT) {
++        /* Plinius: title here, the strings come from our own domain */
++        adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->pattern_row),
++                                       g_dgettext ("plinius-control-center", "Unlock Pattern"));
++        update_pattern_row (self);
++        adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->face_row),
++                                       g_dgettext ("plinius-control-center", "Face Unlock"));
++        update_face_row (self);
++
++        if (!self->fingerprint_manager
++            || g_strcmp0 (act_user_get_user_name (cc_fingerprint_manager_get_user (self->fingerprint_manager)),
++                          act_user_get_user_name (user))
++                   != 0) {
++            g_clear_object (&self->fingerprint_manager);
++            self->fingerprint_manager = cc_fingerprint_manager_new (user);
++            g_signal_connect_object (self->fingerprint_manager, "notify::state",
++                                     G_CALLBACK (update_fingerprint_row_state), self, G_CONNECT_SWAPPED);
++        }
+ 
+-    update_fingerprint_row_state (self, NULL, self->fingerprint_manager);
++        update_fingerprint_row_state (self, NULL, self->fingerprint_manager);
++    }
+ 
+     cc_permission_infobar_set_permission (self->permission_infobar, permission);
+     g_object_bind_property (permission, "allowed", self, "locked", G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
+@@ -839,6 +853,41 @@ cc_user_page_set_user (CcUserPage *self, ActUser *user, GPermission *permission)
+     update_editable_state (self);
+ }
+ 
++/**
++ * cc_user_page_set_section:
++ * @self: a #CcUserPage
++ * @section: which part of the page shows
++ *
++ * Plinius: Your Account and Lock & Unlock each show their part of the page. Call before
++ * cc_user_page_set_user ().
++ */
++void
++cc_user_page_set_section (CcUserPage *self, CcUserPageSection section)
++{
++    gboolean account = section != CC_USER_PAGE_SECTION_UNLOCK;
++    gboolean unlock = section != CC_USER_PAGE_SECTION_ACCOUNT;
++
++    g_return_if_fail (CC_IS_USER_PAGE (self));
++
++    self->section = section;
++    gtk_widget_set_visible (GTK_WIDGET (self->avatar_group), account);
++    gtk_widget_set_visible (GTK_WIDGET (self->identity_group), account);
++    gtk_widget_set_visible (GTK_WIDGET (self->account_settings_box), account);
++    gtk_widget_set_visible (GTK_WIDGET (self->button_group), account);
++    gtk_widget_set_visible (GTK_WIDGET (self->unlock_group), unlock);
++    if (section == CC_USER_PAGE_SECTION_UNLOCK)
++        adw_preferences_group_set_title (self->unlock_group, g_dgettext ("plinius-control-center", "Unlock"));
++}
++
++/* Plinius: for groups of another page that belong here (Lock & Unlock) */
++AdwPreferencesPage *
++cc_user_page_get_preferences_page (CcUserPage *self)
++{
++    g_return_val_if_fail (CC_IS_USER_PAGE (self), NULL);
++
++    return self->preferences_page;
++}
++
+ ActUser *
+ cc_user_page_get_user (CcUserPage *self)
+ {
+diff --git a/panels/system/users/cc-user-page.h b/panels/system/users/cc-user-page.h
+index 7073e39..4cffc9c 100644
+--- a/panels/system/users/cc-user-page.h
++++ b/panels/system/users/cc-user-page.h
+@@ -30,9 +30,18 @@
+ 
+ G_BEGIN_DECLS
+ 
++/* Plinius: what a user page shows. Other users always get the full page. */
++typedef enum {
++    CC_USER_PAGE_SECTION_FULL,
++    CC_USER_PAGE_SECTION_ACCOUNT, /* name, picture, username, no way to unlock */
++    CC_USER_PAGE_SECTION_UNLOCK,  /* the ways to unlock and nothing else */
++} CcUserPageSection;
++
+ #define CC_TYPE_USER_PAGE (cc_user_page_get_type ())
+ G_DECLARE_FINAL_TYPE (CcUserPage, cc_user_page, CC, USER_PAGE, AdwNavigationPage);
+ CcUserPage *cc_user_page_new (void);
++void cc_user_page_set_section (CcUserPage *self, CcUserPageSection section);
++AdwPreferencesPage *cc_user_page_get_preferences_page (CcUserPage *self);
+ void cc_user_page_set_user (CcUserPage *self, ActUser *user, GPermission *permission);
+ ActUser *cc_user_page_get_user (CcUserPage *self);
+ 
+diff --git a/panels/system/users/cc-users-page.c b/panels/system/users/cc-users-page.c
+index 448e6f2..1377c94 100644
+--- a/panels/system/users/cc-users-page.c
++++ b/panels/system/users/cc-users-page.c
+@@ -319,6 +319,11 @@ cc_users_page_init (CcUsersPage *self)
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
++    /* Plinius: one's own page is Your Account, the ways to unlock are on Lock & Unlock */
++    cc_user_page_set_section (self->current_user_page, CC_USER_PAGE_SECTION_ACCOUNT);
++    adw_navigation_page_set_title (ADW_NAVIGATION_PAGE (self->current_user_page),
++                                   g_dgettext ("plinius-control-center", "Your Account"));
++
+     self->model = g_list_store_new (ACT_TYPE_USER);
+     gtk_list_box_bind_model (self->user_list, G_LIST_MODEL (self->model), (GtkListBoxCreateWidgetFunc) create_user_row,
+                              self, NULL);
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index f7e9596..a7bc730 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -24,6 +24,7 @@
+ 
+ #include "cc-log.h"
+ #include "cc-panel-list.h"
++#include "cc-plinius-hubs.h"
+ #include "cc-ui-util.h"
+ #include "cc-util.h"
+ 
+@@ -334,48 +335,39 @@ filter_func (GtkListBoxRow *row, gpointer user_data)
+ }
+ 
+ static const gchar *const panel_order[] = {
+-    /* Main page */
++    /* Plinius: "#" starts a section of the list and names it (header_func) */
++    "#Connections",
+     "wifi",
+-    "network",
+     "wwan",
+     "mobile-broadband",
+     "bluetooth",
+-    "streaming",
++    "network",
++    "connected-devices",
++    "desktop-vnc",
+     "nfc",
+-    "usb",
+-
+-    "separator",
++    "sharing",
+ 
++    "#Phone",
+     "display",
++    "background",
+     "sound",
+     "power",
+-    "multitasking",
+-    "background",
+-
+-    "separator",
++    "keyboard",
+ 
++    "#Apps",
+     "applications",
+     "notifications",
+     "search",
+-    "online-accounts",
+-    "sharing",
+     "wellbeing",
+ 
+-    "separator",
+-
+-    "mouse",
+-    "keyboard",
+-    "assistant",
+-    "color",
+-    "printers",
+-    "desktop-vnc",
+-    "wacom",
+-
+-    "separator",
++    "#Security",
++    "lock",
++    "privacy",
++    "security",
++    "accounts",
+ 
++    "#System",
+     "universal-access",
+-    "users",
+-    "privacy",
+     "system",
+     "reset-settings",
+ };
+@@ -451,25 +443,39 @@ search_sort_function (GtkListBoxRow *a, GtkListBoxRow *b, gpointer user_data)
+     return a_distance - b_distance;
+ }
+ 
++/* Plinius: the name of the section a panel is in, as it stands in panel_order */
++static const gchar *
++get_panel_section (const gchar *panel_id)
++{
++    for (gint i = get_panel_id_index (panel_id); i >= 0; i--)
++        if (panel_order[i][0] == '#')
++            return panel_order[i];
++
++    return NULL;
++}
++
++/* Plinius: a section's name above its first visible row, instead of a line between sections */
+ static void
+ header_func (GtkListBoxRow *row, GtkListBoxRow *before, gpointer user_data)
+ {
+-    guint pid;
++    const gchar *section = get_panel_section (get_panel_id_from_row (user_data, row));
++    GtkWidget *label;
+ 
+-    if (!before)
++    if (!section || (before && g_strcmp0 (section, get_panel_section (get_panel_id_from_row (user_data, before))) == 0)) {
++        gtk_list_box_row_set_header (row, NULL);
+         return;
++    }
+ 
+-    pid = get_panel_id_index (get_panel_id_from_row (user_data, row));
+-    if (pid > 0 && g_str_equal (panel_order[pid - 1], "separator")) {
+-        GtkWidget *separator;
+-
+-        separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+-        gtk_widget_set_hexpand (separator, TRUE);
++    label = gtk_label_new (g_dgettext ("plinius-control-center", section + 1));
++    gtk_label_set_xalign (GTK_LABEL (label), 0);
++    gtk_widget_set_margin_start (label, 12);
++    gtk_widget_set_margin_end (label, 12);
++    gtk_widget_set_margin_top (label, before ? 18 : 6);
++    gtk_widget_set_margin_bottom (label, 6);
++    gtk_widget_add_css_class (label, "heading");
++    gtk_widget_add_css_class (label, "dim-label");
+ 
+-        gtk_list_box_row_set_header (row, separator);
+-    } else {
+-        gtk_list_box_row_set_header (row, NULL);
+-    }
++    gtk_list_box_row_set_header (row, label);
+ }
+ 
+ /*
+@@ -794,7 +800,8 @@ cc_panel_list_add_panel (CcPanelList *self, CcPanelCategory category, const gcha
+ 
+     /* Add the panel to the proper listbox */
+     data = row_data_new (category, id, title, description, keywords, icon, visibility);
+-    gtk_widget_set_visible (data->row, visibility == CC_PANEL_VISIBLE);
++    /* Plinius: a panel on a hub's page has no row of its own, but search finds it */
++    gtk_widget_set_visible (data->row, visibility == CC_PANEL_VISIBLE && !cc_plinius_hub_of (id));
+ 
+     gtk_list_box_append (GTK_LIST_BOX (self->main_listbox), data->row);
+ 
+@@ -959,7 +966,7 @@ cc_panel_list_set_panel_visibility (CcPanelList *self, const gchar *id, CcPanelV
+         activate_row_below (self, data);
+     }
+ 
+-    gtk_widget_set_visible (data->row, visibility == CC_PANEL_VISIBLE);
++    gtk_widget_set_visible (data->row, visibility == CC_PANEL_VISIBLE && !cc_plinius_hub_of (id));
+     gtk_widget_set_visible (search_data->row, visibility != CC_PANEL_HIDDEN);
+ }
+ 
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index c6af9b8..7ded3f2 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -32,6 +32,11 @@
+ 
+ /* Extension points */
+ extern GType cc_applications_panel_get_type (void);
++extern GType cc_accounts_panel_get_type (void);
++extern GType cc_connected_devices_panel_get_type (void);
++extern GType cc_lock_panel_get_type (void);
++extern GType cc_security_panel_get_type (void);
++extern void cc_mouse_panel_static_init_func (void);
+ extern GType cc_assistant_panel_get_type (void);
+ extern void cc_assistant_panel_static_init_func (void);
+ extern GType cc_nfc_panel_get_type (void);
+@@ -94,6 +99,11 @@ extern void cc_wwan_panel_static_init_func (void);
+ #endif
+ 
+ static CcPanelLoaderVtable default_panels[] = {
++    /* Plinius: hubs and Lock & Unlock; the mouse panel only with a mouse or touchpad */
++    PANEL_TYPE ("accounts", cc_accounts_panel_get_type, NULL),
++    PANEL_TYPE ("connected-devices", cc_connected_devices_panel_get_type, NULL),
++    PANEL_TYPE ("lock", cc_lock_panel_get_type, NULL),
++    PANEL_TYPE ("security", cc_security_panel_get_type, NULL),
+     PANEL_TYPE ("applications", cc_applications_panel_get_type, NULL),
+     PANEL_TYPE ("assistant", cc_assistant_panel_get_type, cc_assistant_panel_static_init_func),
+     PANEL_TYPE ("background", cc_background_panel_get_type, NULL),
+@@ -104,7 +114,7 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("desktop-vnc", cc_desktop_vnc_panel_get_type, cc_desktop_vnc_panel_static_init_func),
+     PANEL_TYPE ("display", cc_display_panel_get_type, NULL),
+     PANEL_TYPE ("keyboard", cc_keyboard_panel_get_type, NULL),
+-    PANEL_TYPE ("mouse", cc_mouse_panel_get_type, NULL),
++    PANEL_TYPE ("mouse", cc_mouse_panel_get_type, cc_mouse_panel_static_init_func),
+     /* Plinius: no "Multitasking", its workspaces and hot corners are GNOME Shell features */
+     PANEL_TYPE ("nfc", cc_nfc_panel_get_type, cc_nfc_panel_static_init_func),
+ #ifdef BUILD_NETWORK
+@@ -232,8 +242,59 @@ cc_panel_loader_load_by_name (CcWindow *window, const gchar *name, const gchar *
+     return g_object_new (get_type (), "window", window, "parameters", parameters, "title", title, NULL);
+ }
+ 
++/* Plinius: for a hub, which makes panels its subpages. G_TYPE_INVALID if not built in. */
++GType
++cc_panel_loader_get_panel_type (const char *name)
++{
++    GType (*get_type) (void);
++
++    ensure_panel_types ();
++
++    get_type = g_hash_table_lookup (panel_types, name);
++
++    return get_type ? get_type () : G_TYPE_INVALID;
++}
++
+ #endif /* CC_PANEL_LOADER_NO_GTYPES */
+ 
++/*
++ * Plinius: the phone's names for GNOME's panels. They replace what the desktop files say when the
++ * model is filled, here for the search provider too, so that the list, search and the page titles
++ * agree and GNOME's translations stay untouched. Keywords come on top of the desktop file's. Our
++ * strings use the gettext domain plinius-control-center.
++ */
++typedef struct {
++    const char *panel;
++    const char *name;
++    const char *comment;
++    const char *keywords;
++} PanelLabels;
++
++static const PanelLabels panel_labels[] = {
++    { "network", N_("Network & VPN"), NULL, NULL },
++    { "privacy", N_("Privacy"), N_("Location, cameras, diagnostics and file history"), NULL },
++    { "power", N_("Battery"), NULL, NULL },
++    { "display", N_("Display"), NULL, N_("Brightness;Dim;Blank;Screen Off;Timeout;") },
++    { "keyboard", N_("Keyboard & Buttons"), NULL, NULL },
++    { "users", N_("Your Account"), N_("Your name, picture and username"), NULL },
++};
++
++static void
++apply_panel_labels (CcShellModel *model, const char *panel_id)
++{
++    for (gsize i = 0; i < G_N_ELEMENTS (panel_labels); i++) {
++        const PanelLabels *l = &panel_labels[i];
++
++        if (g_strcmp0 (l->panel, panel_id) != 0)
++            continue;
++
++        cc_shell_model_set_panel_labels (model, panel_id, g_dgettext ("plinius-control-center", l->name),
++                                         l->comment ? g_dgettext ("plinius-control-center", l->comment) : NULL,
++                                         l->keywords ? g_dgettext ("plinius-control-center", l->keywords) : NULL);
++        break;
++    }
++}
++
+ /**
+  * cc_panel_loader_fill_model:
+  * @model: a #CcShellModel
+@@ -266,6 +327,7 @@ cc_panel_loader_fill_model (CcShellModel *model)
+             continue;
+ 
+         cc_shell_model_add_item (model, category, G_APP_INFO (app), panels_vtable[i].name);
++        apply_panel_labels (model, panels_vtable[i].name);
+     }
+ 
+     for (i = 0; i < supages_vtable_len; i++) {
+diff --git a/shell/cc-panel-loader.h b/shell/cc-panel-loader.h
+index 5b4e013..55e8d47 100644
+--- a/shell/cc-panel-loader.h
++++ b/shell/cc-panel-loader.h
+@@ -42,6 +42,7 @@ void cc_panel_loader_fill_model (CcShellModel *model);
+ void cc_panel_loader_list_panels (void);
+ CcPanel *cc_panel_loader_load_by_name (CcWindow *window, const char *name, const gchar *title, GVariant *parameters);
+ 
++GType cc_panel_loader_get_panel_type (const char *name);
+ void cc_panel_loader_override_vtable (CcPanelLoaderVtable *override_vtable, gsize n_elements);
+ 
+ G_END_DECLS
+diff --git a/shell/cc-panel.c b/shell/cc-panel.c
+index 2373111..37a14e6 100644
+--- a/shell/cc-panel.c
++++ b/shell/cc-panel.c
+@@ -33,6 +33,7 @@
+ #include "config.h"
+ 
+ #include "cc-panel.h"
++#include "cc-plinius-hubs.h"
+ #include "cc-window.h"
+ 
+ #include <stdio.h>
+@@ -49,6 +50,8 @@ typedef struct {
+ 
+     GHashTable *subpages;
+     GHashTable *static_subpages;
++    /* Plinius: what comes after the subpage's name in the parameters, for a panel as subpage */
++    GVariant *subpage_parameters;
+ 
+     GPtrArray *navigation_stack;
+ } CcPanelPrivate;
+@@ -131,6 +134,54 @@ set_subpage (CcPanel *panel, const gchar *tag)
+     g_ptr_array_add (priv->navigation_stack, page);
+ }
+ 
++/**
++ * cc_panel_set_parameters:
++ * @panel: a #CcPanel
++ * @parameters: (nullable): the panel's parameters (type "av")
++ *
++ * Plinius: what the "parameters" property does, for a panel that overrides it and still wants a
++ * subpage opened from them (Keyboard & Buttons with its assistant button page).
++ */
++void
++cc_panel_set_parameters (CcPanel *panel, GVariant *parameters)
++{
++    CcPanelPrivate *priv = cc_panel_get_instance_private (panel);
++    GObject *object = G_OBJECT (panel);
++    g_autoptr(GVariant) v = NULL;
++    gsize n_parameters;
++
++    if (parameters == NULL)
++        return;
++
++    n_parameters = g_variant_n_children (parameters);
++    if (n_parameters == 0)
++        return;
++
++    g_variant_get_child (parameters, 0, "v", &v);
++
++    /* Plinius: the rest of the parameters goes to a panel that opens as the subpage */
++    g_clear_pointer (&priv->subpage_parameters, g_variant_unref);
++    if (n_parameters > 1) {
++        GVariantBuilder builder;
++
++        g_variant_builder_init (&builder, G_VARIANT_TYPE ("av"));
++        for (gsize i = 1; i < n_parameters; i++) {
++            g_autoptr(GVariant) child = g_variant_get_child_value (parameters, i);
++
++            g_variant_builder_add_value (&builder, child);
++        }
++        priv->subpage_parameters = g_variant_ref_sink (g_variant_builder_end (&builder));
++    }
++
++    if (g_variant_is_of_type (v, G_VARIANT_TYPE_STRING)) {
++        set_subpage (CC_PANEL (object), g_variant_get_string (v, NULL));
++    } else if (!g_variant_is_of_type (v, G_VARIANT_TYPE_DICTIONARY))
++        g_warning ("Wrong type for the first argument GVariant, expected 'a{sv}' but got '%s'",
++                   (gchar *) g_variant_get_type (v));
++    else if (g_variant_n_children (v) > 0)
++        g_warning ("Ignoring additional flags");
++}
++
+ static void
+ cc_panel_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
+ {
+@@ -142,35 +193,9 @@ cc_panel_set_property (GObject *object, guint prop_id, const GValue *value, GPar
+         priv->window = g_value_get_object (value);
+         break;
+ 
+-    case PROP_PARAMETERS: {
+-        g_autoptr(GVariant) v = NULL;
+-        GVariant *parameters;
+-        gsize n_parameters;
+-
+-        parameters = g_value_get_variant (value);
+-
+-        if (parameters == NULL)
+-            return;
+-
+-        n_parameters = g_variant_n_children (parameters);
+-        if (n_parameters == 0)
+-            return;
+-
+-        g_variant_get_child (parameters, 0, "v", &v);
+-
+-        if (g_variant_is_of_type (v, G_VARIANT_TYPE_STRING)) {
+-            set_subpage (CC_PANEL (object), g_variant_get_string (v, NULL));
+-        } else if (!g_variant_is_of_type (v, G_VARIANT_TYPE_DICTIONARY))
+-            g_warning ("Wrong type for the first argument GVariant, expected 'a{sv}' but got '%s'",
+-                       (gchar *) g_variant_get_type (v));
+-        else if (g_variant_n_children (v) > 0)
+-            g_warning ("Ignoring additional flags");
+-
+-        if (n_parameters > 1)
+-            g_warning ("Ignoring additional parameters");
+-
++    case PROP_PARAMETERS:
++        cc_panel_set_parameters (CC_PANEL (object), g_value_get_variant (value));
+         break;
+-    }
+ 
+     default:
+         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+@@ -194,11 +219,23 @@ cc_panel_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec
+     }
+ }
+ 
++/* Plinius: a panel on a hub's page goes when it is popped, nobody calls cc_panel_deactivate () */
++static void
++cc_panel_dispose (GObject *object)
++{
++    CcPanelPrivate *priv = cc_panel_get_instance_private (CC_PANEL (object));
++
++    g_cancellable_cancel (priv->cancellable);
++
++    G_OBJECT_CLASS (cc_panel_parent_class)->dispose (object);
++}
++
+ static void
+ cc_panel_finalize (GObject *object)
+ {
+     CcPanelPrivate *priv = cc_panel_get_instance_private (CC_PANEL (object));
+ 
++    g_clear_pointer (&priv->subpage_parameters, g_variant_unref);
+     g_cancellable_cancel (priv->cancellable);
+     g_clear_object (&priv->cancellable);
+     g_clear_pointer (&priv->subpages, g_hash_table_unref);
+@@ -216,6 +253,7 @@ cc_panel_class_init (CcPanelClass *klass)
+ 
+     object_class->get_property = cc_panel_get_property;
+     object_class->set_property = cc_panel_set_property;
++    object_class->dispose = cc_panel_dispose;
+     object_class->finalize = cc_panel_finalize;
+ 
+     properties[PROP_WINDOW] = g_param_spec_object ("window", NULL, NULL, CC_TYPE_WINDOW,
+@@ -370,8 +408,17 @@ cc_panel_get_static_subpage (CcPanel *panel, const gchar *tag)
+ 
+     page_type = GPOINTER_TO_TYPE (page_type_ptr);
+ 
+-    if (g_type_is_a (page_type, CC_TYPE_PANEL))
+-        return g_object_new (page_type, "window", priv->window, NULL);
++    if (g_type_is_a (page_type, CC_TYPE_PANEL)) {
++        g_autoptr(GVariant) parameters = g_steal_pointer (&priv->subpage_parameters);
++        g_autofree gchar *title = cc_plinius_hub_panel_title (tag);
++        AdwNavigationPage *page = g_object_new (page_type, "window", priv->window, "parameters", parameters, NULL);
++
++        /* Plinius: the panel loader gives panels of the list their title, here it is up to us */
++        if (title)
++            adw_navigation_page_set_title (page, title);
++
++        return page;
++    }
+ 
+     return g_object_new (page_type, NULL);
+ }
+diff --git a/shell/cc-panel.h b/shell/cc-panel.h
+index 17c52f6..35ee4e7 100644
+--- a/shell/cc-panel.h
++++ b/shell/cc-panel.h
+@@ -86,6 +86,8 @@ GCancellable *cc_panel_get_cancellable (CcPanel *panel);
+ 
+ void cc_panel_deactivate (CcPanel *panel);
+ 
++void cc_panel_set_parameters (CcPanel *panel, GVariant *parameters);
++
+ void cc_panel_add_subpage (CcPanel *panel, const gchar *page_tag, AdwNavigationPage *subpage);
+ 
+ void cc_panel_add_static_subpage (CcPanel *panel, const gchar *page_name, GType page_type);
+diff --git a/shell/cc-shell-model.c b/shell/cc-shell-model.c
+index b5947db..53ca776 100644
+--- a/shell/cc-shell-model.c
++++ b/shell/cc-shell-model.c
+@@ -267,6 +267,54 @@ cc_shell_model_add_item (CcShellModel *model, CcPanelCategory category, GAppInfo
+                                        COL_GICON, icon, COL_KEYWORDS, keywords, COL_VISIBILITY, CC_PANEL_VISIBLE, -1);
+ }
+ 
++/* Plinius: the panel's texts instead of its desktop file's. NULL keeps what is there, @keywords
++ * (separated by semicolons) come on top. */
++void
++cc_shell_model_set_panel_labels (CcShellModel *model, const char *id, const char *name, const char *comment,
++                                 const char *keywords)
++{
++    GtkTreeIter iter;
++    gboolean valid = gtk_tree_model_get_iter_first (GTK_TREE_MODEL (model), &iter);
++
++    while (valid) {
++        g_autofree char *panel_id = NULL;
++
++        gtk_tree_model_get (GTK_TREE_MODEL (model), &iter, COL_ID, &panel_id, -1);
++        if (g_str_equal (id, panel_id))
++            break;
++        valid = gtk_tree_model_iter_next (GTK_TREE_MODEL (model), &iter);
++    }
++    if (!valid)
++        return;
++
++    if (name) {
++        g_autofree char *casefolded = cc_util_normalize_casefold_and_unaccent (name);
++
++        gtk_list_store_set (GTK_LIST_STORE (model), &iter, COL_NAME, name, COL_CASEFOLDED_NAME, casefolded, -1);
++    }
++    if (comment) {
++        g_autofree char *casefolded = cc_util_normalize_casefold_and_unaccent (comment);
++
++        gtk_list_store_set (GTK_LIST_STORE (model), &iter, COL_DESCRIPTION, comment, COL_CASEFOLDED_DESCRIPTION,
++                            casefolded, -1);
++    }
++    if (keywords) {
++        g_auto(GStrv) old = NULL;
++        g_auto(GStrv) added = g_strsplit (keywords, ";", -1);
++        g_autoptr(GStrvBuilder) builder = g_strv_builder_new ();
++        g_auto(GStrv) all = NULL;
++
++        gtk_tree_model_get (GTK_TREE_MODEL (model), &iter, COL_KEYWORDS, &old, -1);
++        if (old)
++            g_strv_builder_addv (builder, (const char **) old);
++        for (char **word = added; *word; word++)
++            if (**word)
++                g_strv_builder_take (builder, cc_util_normalize_casefold_and_unaccent (*word));
++        all = g_strv_builder_end (builder);
++        gtk_list_store_set (GTK_LIST_STORE (model), &iter, COL_KEYWORDS, all, -1);
++    }
++}
++
+ gboolean
+ cc_shell_model_has_panel (CcShellModel *model, const char *id)
+ {
+diff --git a/shell/cc-shell-model.h b/shell/cc-shell-model.h
+index 830233c..5f1c488 100644
+--- a/shell/cc-shell-model.h
++++ b/shell/cc-shell-model.h
+@@ -59,6 +59,9 @@ CcShellModel *cc_shell_model_new (void);
+ 
+ void cc_shell_model_add_item (CcShellModel *model, CcPanelCategory category, GAppInfo *appinfo, const char *id);
+ 
++void cc_shell_model_set_panel_labels (CcShellModel *model, const char *id, const char *name, const char *comment,
++                                      const char *keywords);
++
+ gboolean cc_shell_model_has_panel (CcShellModel *model, const char *id);
+ 
+ gboolean cc_shell_model_iter_matches_search (CcShellModel *model, GtkTreeIter *iter, const char *term);
+diff --git a/shell/cc-window.c b/shell/cc-window.c
+index 1e9ba56..662db77 100644
+--- a/shell/cc-window.c
++++ b/shell/cc-window.c
+@@ -37,6 +37,7 @@
+ #include "cc-application.h"
+ #include "cc-panel-list.h"
+ #include "cc-panel-loader.h"
++#include "cc-plinius-hubs.h"
+ #include "cc-panel.h"
+ #include "cc-shell-model.h"
+ #include "cc-util.h"
+@@ -284,6 +285,8 @@ set_active_panel_from_id (CcWindow *self, const gchar *start_id, GVariant *param
+     CcPanelVisibility visibility;
+     CcPanelCategory category;
+     g_autoptr(GVariant) system_param_overwrite = NULL;
++    g_autoptr(GVariant) hub_parameters = NULL;
++    const gchar *hub;
+     GtkTreeIter iter;
+     CcPanelListView view;
+     gboolean activated;
+@@ -293,8 +296,24 @@ set_active_panel_from_id (CcWindow *self, const gchar *start_id, GVariant *param
+ 
+     view = cc_panel_list_get_view (self->panel_list);
+ 
+-    /* When loading the same panel again, just set its parameters */
+-    if (g_strcmp0 (self->current_panel_id, start_id) == 0) {
++    /* Plinius: a panel on a hub's page (cc-plinius-hubs.c) opens on top of the hub, also from
++     * search and from outside. A panel that is hidden here leaves just the hub. */
++    hub = cc_plinius_hub_of (start_id);
++    if (hub) {
++        if (find_iter_for_panel_id (self, start_id, &iter))
++            gtk_tree_model_get (GTK_TREE_MODEL (self->store), &iter, COL_VISIBILITY, &visibility, -1);
++        else
++            visibility = CC_PANEL_HIDDEN;
++
++        if (visibility != CC_PANEL_HIDDEN)
++            hub_parameters = cc_plinius_hub_parameters (start_id, parameters);
++        parameters = hub_parameters;
++        start_id = hub;
++    }
++
++    /* When loading the same panel again, just set its parameters; a hub is built anew, setting
++     * them would not open the page in the window */
++    if (!hub && g_strcmp0 (self->current_panel_id, start_id) == 0) {
+         g_object_set (G_OBJECT (self->current_panel), "parameters", parameters, NULL);
+         if (force_moving_to_the_panel || self->previous_list_view == view)
+             adw_navigation_split_view_set_show_content (self->split_view, TRUE);
+diff --git a/shell/meson.build b/shell/meson.build
+index 397000d..a65443f 100644
+--- a/shell/meson.build
++++ b/shell/meson.build
+@@ -62,6 +62,7 @@ common_sources = files(
+   'cc-panel-loader.c',
+   'cc-panel.c',
+   'cc-panel-list.c',
++  'cc-plinius-hubs.c',
+   'cc-window.c',
+ )
+ 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Plinius: appearance settings that Phosh and phoc read (phosh-plinius, phoc-plinius), set in
+     GNOME Settings -->
+<schemalist>
+  <schema id="org.plinius.appearance" path="/org/plinius/appearance/">
+    <key name="accent-color" type="s">
+      <default>''</default>
+      <summary>Custom accent color</summary>
+      <description>
+        An accent color of the user's choice as "#rrggbb", used instead of the one of
+        org.gnome.desktop.interface accent-color, which can only name one of GNOME's
+        colors (Settings sets it to the one nearest to this). Empty for GNOME's color.
+      </description>
+    </key>
+  </schema>
+</schemalist>

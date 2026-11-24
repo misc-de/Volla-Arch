@@ -1,0 +1,84 @@
+#!/bin/sh
+# The greeter's session (greetd default_session, user greeter): phoc with plinius-greeter as its
+# only client. Without -S: phoc's start-up logo would cover the greeter (phoc-plinius 0004/0028);
+# the boot logo of plinius-crypt stays until phoc draws.
+#
+# With a single login account there is nothing to choose: no greeter, that account is logged in
+# again at once (after its session ended; at boot greetd logs it in by itself), unless it has no
+# password yet (/run/plinius-login/first-start): the greeter asks for one first. Should the greeter
+# not come up (three ends within 10 s each in this boot), this logs in the account used last
+# instead, as the phone did before there was a greeter. Phosh locks itself either way.
+
+state=/run/plinius-greeter
+first=/run/plinius-login/first-start
+last=/var/lib/plinius-greeter/last-user
+
+# login_users [one]: the login accounts, one per line (plinius_greeter_accounts); with "one" only
+# the single account, nothing if there are more
+login_users() {
+	python3 -I -c 'import sys
+sys.path.insert(0, "/usr/lib/plinius-greeter")
+import plinius_greeter_accounts as a
+u = [e.pw_name for e in a.login_users()]
+if sys.argv[1:] == ["one"]:
+    u = u if len(u) == 1 else []
+print("\n".join(u))' "$@"
+}
+
+# request USER: name the account to log in (read by plinius-greeter-login.service)
+request() {
+	echo "$1" > "$state/request.tmp" && mv "$state/request.tmp" "$state/request"
+}
+
+only=$(login_users one)
+if [ -n "$only" ] && [ ! -s "$first" ]; then
+	echo "plinius-greeter: $only is the only account, logging it in" >&2
+	request "$only"
+	# greetd restarts for the account and ends this; should that not happen, the next start of
+	# this session asks again
+	exec sleep 60
+fi
+
+# What a user's session gets: /etc/profile (PATH, libhybris in profile.d) and environment.d
+# (GTK's renderer); greetd starts this with a minimal environment
+[ -r /etc/profile ] && . /etc/profile
+generator=/usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator
+if [ -x "$generator" ]; then
+	# One KEY=VALUE per line; values may hold spaces
+	eval "$("$generator" | sed -n "s/'/'\\\\''/g; s/^\([A-Za-z_][A-Za-z0-9_]*\)=\(.*\)$/export \1='\2'/p")"
+fi
+# The greeter user has no home of its own; nothing it writes needs to outlive the session
+export HOME="${XDG_RUNTIME_DIR:-/tmp}"
+export GSETTINGS_BACKEND=memory
+export XDG_CURRENT_DESKTOP=Phosh:GNOME
+[ -n "$WLR_BACKENDS" ] || WLR_BACKENDS=drm,libinput
+export WLR_BACKENDS
+
+phoc_ini=/usr/share/phosh/phoc.ini
+[ -f /etc/phosh/phoc.ini ] && phoc_ini=/etc/phosh/phoc.ini
+
+bus=
+[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || bus="dbus-run-session --"
+
+started=$(date +%s)
+# shellcheck disable=SC2086
+systemd-cat -t plinius-greeter $bus phoc -C "$phoc_ini" -E /usr/lib/plinius-greeter/plinius-greeter
+status=$?
+ended=$(date +%s)
+
+# A signal (greetd restarting for the picked account) or a clean end is no failure
+if [ "$status" -ne 0 ] && [ "$status" -lt 128 ] && [ $((ended - started)) -lt 10 ]; then
+	failures=$(( $(cat "$state/failures" 2>/dev/null || echo 0) + 1 ))
+	echo "$failures" > "$state/failures"
+	echo "plinius-greeter: phoc ended with $status after $((ended - started)) s (failure $failures)" >&2
+	if [ "$failures" -ge 3 ]; then
+		# The account used last, else the first login account (the phone's first user)
+		user=$(cat "$last" 2>/dev/null) || user=
+		[ -n "$user" ] || user=$(login_users | head -n1)
+		if [ -n "$user" ]; then
+			echo "plinius-greeter: logging in $user instead" >&2
+			request "$user"
+		fi
+	fi
+fi
+exit "$status"

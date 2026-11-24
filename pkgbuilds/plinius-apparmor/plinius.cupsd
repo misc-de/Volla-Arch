@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in. Starting profile in complain mode: it logs what the service does
+# beyond these rules; the rules are completed from those messages (tools/aa-denials.sh) before
+# the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# cupsd: printing, printers on the network
+profile plinius.cupsd flags=(complain, attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/openssl>
+  include <abstractions/ssl_certs>
+  include <abstractions/dbus-strict>
+  capability chown, capability fowner, capability fsetid, capability kill,
+  capability setuid, capability setgid, capability dac_override, capability net_bind_service,
+  network inet stream, network inet6 stream, network inet dgram, network inet6 dgram,
+  /usr/bin/cupsd mr,
+  /etc/cups/{,**} rwk,
+  /var/cache/cups/{,**} rwk,
+  /var/spool/cups/{,**} rwk,
+  /var/log/cups/{,**} rw,
+  /run/cups/{,**} rwk,
+  /usr/share/cups/{,**} r,
+  /usr/share/ppd/{,**} r,
+  # Filters and backends run in this profile for now; their own profiles come later
+  /usr/lib/cups/{backend,filter,daemon,cgi-bin}/* rix,
+}

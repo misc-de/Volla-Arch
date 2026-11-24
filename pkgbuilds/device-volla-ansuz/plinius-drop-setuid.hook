@@ -1,0 +1,15 @@
+# The setuid bit off programs the phone has no use for (see the script)
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = krb5
+Target = cifs-utils
+Target = lxc
+Target = util-linux
+Target = device-volla-ansuz
+
+[Action]
+Description = Removing the setuid bit from programs the phone does not need it for...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plinius-drop-setuid

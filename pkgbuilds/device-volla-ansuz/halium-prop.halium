@@ -1,0 +1,4 @@
+ro.product.vendor.device=ansuz
+# Android's EGL loader prefers persist.graphics.egl to ro.hardware.egl (meow). libGLES_meow, MediaTek's
+# layer in front of Mali, dlopens its helpers in a way libhybris' linker cannot resolve; Mali directly works.
+persist.graphics.egl=mali

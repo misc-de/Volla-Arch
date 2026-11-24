@@ -1,0 +1,90 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on Arch's xdg-desktop-portal-wlr 0.8.4-1 (Christian Rebischke, Carl Smedstad);
+# wlr-portals.conf is taken from there.
+
+pkgname=xdg-desktop-portal-wlr-plinius
+pkgver=0.9.0
+pkgrel=8
+pkgdesc="xdg-desktop-portal backend for wlroots, screencasts without a render node and without asking twice"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://github.com/emersion/xdg-desktop-portal-wlr"
+license=(MIT)
+# Why a custom build: the Plinius' display device (MediaTek KMS) has no render node, the GPU
+# runs through libhybris. Without one xdg-desktop-portal-wlr 0.8.4 crashed on the first
+# screencast (NULL device in xdpw_gbm_device_create). Patch 0001 falls back to shm buffers.
+# phoc offers only RGBA as shm; GStreamer picked the RGBx variant xdpw offers next to it, and
+# xdpw crashed again (patch 0002). When GStreamer renegotiated, xdpw asked phoc for a second
+# frame while one was in flight, and phoc dropped it: 0.9.0 cancels the frame along with its
+# buffer, patch 0003 covers the capture still delayed by max_fps when the stream resumes.
+# The chooser takes the built-in display when Phosh's cast quick setting asked for the
+# screencast. Otherwise it asks in a window of its own (screens, windows, Cancel; cancels itself
+# after a minute, as xdpw answers no other screencast request meanwhile). Upstream's slurp
+# covered the whole screen and took no tap, the phone stayed unusable until slurp was killed
+# (0.9.0-5).
+depends=(
+	glibc grim libdrm libinih libpipewire mesa pipewire pipewire-session-manager
+	systemd-libs wayland xdg-desktop-portal
+	# The chooser's window
+	python python-gobject gtk4 libadwaita
+)
+makedepends=(gettext git meson scdoc wayland-protocols)
+provides=("xdg-desktop-portal-wlr=$pkgver" xdg-desktop-portal-impl)
+conflicts=(xdg-desktop-portal-wlr)
+backup=(etc/xdg/xdg-desktop-portal-wlr/config)
+_langs=(de es fr it nl pl pt ru)
+# Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
+_commit=8388b8a6214470462146840e92909aff5983eeac
+source=(
+	"git+$url.git#commit=$_commit"
+	wlr-portals.conf
+	0001-screencast-Fall-back-to-shm-buffers-without-a-render.patch
+	0002-screencast-Find-the-shm-format-of-a-format-offered-w.patch
+	0003-ext-image-copy-Don-t-start-a-second-frame-while-one-.patch
+	chooser
+	config
+	"${_langs[@]/%/.po}"
+)
+sha256sums=('SKIP'
+            '85b84ba8ba69e41295e7f02045c67b547df6eab1b137502b089ddf354f2a04de'
+            '84b603168d82a9654dc3d5d39ad5aaa0c2e633f2be51669e49ab21ddf6c76cd8'
+            'd44d57742b9adfa53d0d041db6aee5c6b385d5dcefa1cec7b925bb2dc83e09f1'
+            'c2180b78c33b07eb1acf92a4840482f09d3a767ca7de797eb8fe4aadaed4b24d'
+            '78dc5e4d1ce7ab2d7af176f330099bc05c55c770d9b9f3470d6ba0ea411d96e1'
+            '53f0fc7b93a08035f3c5c6a99299baec7843fa247eb9330269b5d1d4856cf88b'
+            '9ebd1714e463d636aabe64f61683cbeb568b93674ebe88996da0ff2882b85473'
+            '00c71f8dc8918aa48ac05fb3b09242dd1d35e376e1cf8652d5989d06b7b8d17f'
+            '8ce45e6ac3ee385c893434cbd8090f21ae5360359af0a5c474055884c4e76921'
+            'acabdc8f705b5f3817e3d066996d523beda6366969c62055249402f5f50d0f9d'
+            '93ec5668ddf39d37f72eb6d6c662220d084b0870da6e8fa6947ebba3e8fb7f80'
+            '9064b095296130978e16ac113e7895ed9574a856c2ea43c92ebef27dbf72174a'
+            '901ddaf75595df7ecead5c939264b629d31c44c9bee1403d869870efba943473'
+            '252a3c11f3203e1513677bd704341e1fb4653ec04d04744ead3d52314e9497da')
+
+prepare() {
+	# No render node (GPU through libhybris): shm buffers instead of a crash
+	patch -d xdg-desktop-portal-wlr -Np1 -i "$srcdir/0001-screencast-Fall-back-to-shm-buffers-without-a-render.patch"
+	# RGBx picked for the compositor's RGBA shm buffers: same layout, no crash
+	patch -d xdg-desktop-portal-wlr -Np1 -i "$srcdir/0002-screencast-Find-the-shm-format-of-a-format-offered-w.patch"
+	# Stream paused and resumed: no second frame while one is in flight, phoc would disconnect
+	patch -d xdg-desktop-portal-wlr -Np1 -i "$srcdir/0003-ext-image-copy-Don-t-start-a-second-frame-while-one-.patch"
+}
+
+build() {
+	arch-meson -Dsd-bus-provider=libsystemd xdg-desktop-portal-wlr build
+	meson compile -C build
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+	install -Dm644 xdg-desktop-portal-wlr/LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	# From Arch: detection with xdg-desktop-portal 1.18
+	install -Dm644 wlr-portals.conf -t "$pkgdir/usr/share/xdg-desktop-portal"
+	install -Dm755 chooser -t "$pkgdir/usr/lib/$pkgname"
+	install -Dm644 config -t "$pkgdir/etc/xdg/xdg-desktop-portal-wlr"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/$pkgname.mo"
+	done
+}

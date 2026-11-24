@@ -1,0 +1,155 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu Nov 19 19:30:00 2026 +0100
+Subject: [PATCH] app-grid: The first folder's page is built ahead
+
+Plinius: the first opening of a folder after phosh started took 190 ms
+to its first frame (perf on the phone): folder_launched_cb built the
+buttons (46 ms, 19 ms of it decoding icons from files, which skip GTK's
+icon cache and so the preload), then the slide's first frame took 82 ms
+for CSS, labels and icons. Opened again it took 3-11 ms, as the page
+keeps its buttons.
+
+The preload of the folder icons now also loads icons from files into
+the app grid button's cache, and with no folder opened yet gives the
+folder page the first folder's buttons, as if it had been opened and
+closed.
+---
+ src/app-grid-button.c | 18 ++++++++++++++++++
+ src/app-grid-button.h |  3 +++
+ src/app-grid.c        | 44 ++++++++++++++++++++++++++++++++++++++------
+ 3 files changed, 59 insertions(+), 6 deletions(-)
+
+diff --git a/src/app-grid-button.c b/src/app-grid-button.c
+index f9358f92..ecf44000 100644
+--- a/src/app-grid-button.c
++++ b/src/app-grid-button.c
+@@ -790,6 +790,24 @@ plinius_get_file_icon (GIcon *icon, int size, int scale)
+ }
+ 
+ 
++/**
++ * phosh_app_grid_button_plinius_preload_icon:
++ * @icon: An app's icon
++ * @size: The icon size in application pixels
++ * @scale: The scale factor
++ *
++ * Plinius: loads an icon from a file into the cache of plinius_get_file_icon() so the first
++ * button that shows it does not decode it. Other icons are left to GTK's icon cache.
++ */
++void
++phosh_app_grid_button_plinius_preload_icon (GIcon *icon, int size, int scale)
++{
++  cairo_surface_t *surface = plinius_get_file_icon (icon, size, scale);
++
++  g_clear_pointer (&surface, cairo_surface_destroy);
++}
++
++
+ /* Plinius: an icon loaded from a file has the scale it was loaded for */
+ static void
+ on_plinius_image_scale_factor_changed (GtkImage *image)
+diff --git a/src/app-grid-button.h b/src/app-grid-button.h
+index 45758dc8..6982f00f 100644
+--- a/src/app-grid-button.h
++++ b/src/app-grid-button.h
+@@ -52,6 +52,9 @@ GIcon                 *phosh_app_grid_button_get_app_icon  (GAppInfo
+ void                   phosh_app_grid_button_plinius_set_icon (GtkImage           *image,
+                                                                GIcon              *icon,
+                                                                int                 size);
++void                   phosh_app_grid_button_plinius_preload_icon (GIcon *icon,
++                                                                   int    size,
++                                                                   int    scale);
+ GAppInfo              *phosh_app_grid_button_get_app_info  (PhoshAppGridButton     *self);
+ gboolean               phosh_app_grid_button_is_favorite   (PhoshAppGridButton     *self);
+ void                   phosh_app_grid_button_set_mode      (PhoshAppGridButton     *self,
+diff --git a/src/app-grid.c b/src/app-grid.c
+index e4481778..fc828556 100644
+--- a/src/app-grid.c
++++ b/src/app-grid.c
+@@ -252,6 +252,21 @@ on_folder_first_paint (GdkFrameClock *frame_clock, PhoshAppGrid *self)
+ }
+ 
+ 
++/* Plinius: the folder page gets the buttons of @info, kept until another folder is opened */
++static void
++plinius_bind_folder (PhoshAppGrid *self, PhoshFolderInfo *info)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++
++  g_set_object (&priv->bound_folder, info);
++  gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->folder_apps),
++                           phosh_folder_info_get_app_infos (info),
++                           create_folder_app_launcher,
++                           self,
++                           NULL);
++}
++
++
+ static void
+ folder_launched_cb (GtkWidget       *widget,
+                     PhoshFolderInfo *info,
+@@ -286,12 +301,7 @@ folder_launched_cb (GtkWidget       *widget,
+   if (priv->bound_folder == info)
+     return;
+ 
+-  g_set_object (&priv->bound_folder, info);
+-  gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->folder_apps),
+-                           model,
+-                           create_folder_app_launcher,
+-                           self,
+-                           NULL);
++  plinius_bind_folder (self, info);
+   g_debug ("Folder buttons built in %.1f ms",
+            (g_get_monotonic_time () - priv->folder_opened_us) / 1000.0);
+ }
+@@ -326,6 +336,7 @@ preload_folder_icons (gpointer data)
+   int scale = gtk_widget_get_scale_factor (GTK_WIDGET (self));
+   GtkIconLookupFlags flags = GTK_ICON_LOOKUP_USE_BUILTIN | GTK_ICON_LOOKUP_FORCE_SIZE;
+   GPtrArray *icons = g_ptr_array_new_with_free_func (g_object_unref);
++  g_autoptr (PhoshFolderInfo) first_folder = NULL;
+   guint n_folders = 0;
+ 
+   priv->preload_id = 0;
+@@ -348,6 +359,8 @@ preload_folder_icons (gpointer data)
+       continue;
+ 
+     n_folders++;
++    if (first_folder == NULL)
++      first_folder = g_object_ref (PHOSH_FOLDER_INFO (item));
+     folder_apps = phosh_folder_info_get_app_infos (PHOSH_FOLDER_INFO (item));
+     for (guint j = 0; j < g_list_model_get_n_items (folder_apps); j++) {
+       g_autoptr (GAppInfo) app_info = g_list_model_get_item (folder_apps, j);
+@@ -357,6 +370,12 @@ preload_folder_icons (gpointer data)
+       if (icon == NULL)
+         continue;
+ 
++      /* An icon from a file does not go through GTK's cache, see plinius_get_file_icon() */
++      if (G_IS_FILE_ICON (icon)) {
++        phosh_app_grid_button_plinius_preload_icon (icon, APP_ICON_SIZE, scale);
++        continue;
++      }
++
+       icon_info = gtk_icon_theme_lookup_by_gicon_for_scale (theme, icon, APP_ICON_SIZE,
+                                                             scale, flags);
+       if (icon_info == NULL)
+@@ -373,6 +392,19 @@ preload_folder_icons (gpointer data)
+   priv->preloaded_icons = icons;
+   g_debug ("Preloading %u icons of %u folders at scale %d", icons->len, n_folders, scale);
+ 
++  /*
++   * The first opening of a folder also built its buttons (CSS, labels, icons: 46 ms on the
++   * phone, then 82 ms for the first frame of the slide). With no folder opened yet the page
++   * gets the first folder's buttons now, as if it had been opened and closed.
++   */
++  if (priv->bound_folder == NULL && first_folder != NULL) {
++    gint64 start = g_get_monotonic_time ();
++
++    plinius_bind_folder (self, first_folder);
++    g_debug ("Folder buttons built ahead in %.1f ms",
++             (g_get_monotonic_time () - start) / 1000.0);
++  }
++
+   return G_SOURCE_REMOVE;
+ }
+ 

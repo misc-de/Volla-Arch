@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 17:30:00 +0100
+Subject: [PATCH] data: Start along with Phosh
+
+The keyboard waited until Phosh was ready, while Phosh already asks for
+the keyring password during its own start. A tap into that field found
+no input method for several seconds. Only the display and the session
+are needed, so use the ordering of Phosh itself. The unit gets pulled in
+by a drop-in of mobi.phosh.Shell.service (plinius-osk-early.conf).
+---
+ data/mobi.phosh.Stevia.service.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/data/mobi.phosh.Stevia.service.in b/data/mobi.phosh.Stevia.service.in
+index f8ecf75..ada5bd2 100644
+--- a/data/mobi.phosh.Stevia.service.in
++++ b/data/mobi.phosh.Stevia.service.in
+@@ -5,7 +5,7 @@ Description=Stevia, a user friendly on screen keyboard
+ Documentation=https://gitlab.gnome.org/World/Phosh/stevia
+ CollectMode=inactive-or-failed
+ 
+-After=gnome-session-initialized.target
++After=gnome-session-manager.target
+ PartOf=mobi.phosh.OSK.target
+ 
+ [Service]

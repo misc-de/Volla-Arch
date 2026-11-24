@@ -1,0 +1,835 @@
+From 9b4c914592b4f3bb11678012e6a0b5c2b60befda Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:34:53 +0100
+Subject: [PATCH] notch-search: Search apps from the notch
+
+Plinius: a tap on the notch of the folded top bar (touch only, not on
+the lock screen) opens a minimal app search right below the notch: a
+black card joined to the notch by a stem as wide as the notch, with an
+entry and up to six hits from GLib's desktop file index. A tap on a hit
+starts the app, Enter starts the first one. A tap next to the card, on
+the notch again or Escape closes the search, so does locking the
+screen. A tap counts up to 32 px next to the notch; without a notch the
+middle of the top bar takes its place. The key notch-search in
+org.plinius.display (GNOME Settings) turns the search off.
+
+The stem has no corners: it flows out of the screen's top edge and into
+the card with concave curves (8 and 12 px), so notch, stem and card
+read as one shape.
+---
+ src/layout-manager.c      |  26 +++
+ src/layout-manager.h      |   2 +
+ src/meson.build           |   1 +
+ src/notch-search.c        | 451 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/notch-search.h        |  20 ++
+ src/shell.c               |  70 +++++++
+ src/stylesheet/common.css |  50 +++++
+ src/top-panel.c           |  42 ++++-
+ 8 files changed, 661 insertions(+), 1 deletion(-)
+
+diff --git a/src/layout-manager.c b/src/layout-manager.c
+index bf6a2549..2cefb1b3 100644
+--- a/src/layout-manager.c
++++ b/src/layout-manager.c
+@@ -737,3 +737,29 @@ phosh_layout_manager_set_top_bar_widths (PhoshLayoutManager *self, int clock, in
+   if (self->builtin && phosh_monitor_is_configured (self->builtin) && self->panel)
+     update_layout (self);
+ }
++
++
++/**
++ * phosh_layout_manager_get_top_bar_notch:
++ * @self: The layout manager
++ * @notch: (out): The notch in the top bar (GTK coordinates)
++ *
++ * Plinius: where the notch reaches into the top bar, e.g. so that a tap on it can be
++ * told from a tap elsewhere on the bar.
++ *
++ * Returns: %TRUE if the built-in display is upright and has a notch in the top bar
++ */
++gboolean
++phosh_layout_manager_get_top_bar_notch (PhoshLayoutManager *self, GdkRectangle *notch)
++{
++  g_return_val_if_fail (PHOSH_IS_LAYOUT_MANAGER (self), FALSE);
++  g_return_val_if_fail (notch, FALSE);
++
++  if (self->layout != PHOSH_SHELL_LAYOUT_DEVICE || self->builtin == NULL || self->panel == NULL)
++    return FALSE;
++
++  if (phosh_monitor_get_transform (self->builtin) != PHOSH_MONITOR_TRANSFORM_NORMAL)
++    return FALSE;
++
++  return get_top_bar_notch (self, phosh_monitor_get_fractional_scale (self->builtin), notch);
++}
+diff --git a/src/layout-manager.h b/src/layout-manager.h
+index 1a1d5d14..628db662 100644
+--- a/src/layout-manager.h
++++ b/src/layout-manager.h
+@@ -30,4 +30,6 @@ void                         phosh_layout_manager_set_top_bar_widths   (PhoshLay
+                                                                         int clock,
+                                                                         int network,
+                                                                         int indicators);
++gboolean                     phosh_layout_manager_get_top_bar_notch    (PhoshLayoutManager *self,
++                                                                        GdkRectangle *notch);
+ G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index a2fd98ad..f5edcbb0 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -423,6 +423,7 @@ phosh_sources = files(
+   'monitor-manager.c',
+   'network-auth-manager.c',
+   'network-auth-prompt.c',
++  'notch-search.c',
+   'osk-manager.c',
+   'pattern-pad.c',
+   'polkit-auth-agent.c',
+diff --git a/src/notch-search.c b/src/notch-search.c
+new file mode 100644
+index 00000000..8825743d
+--- /dev/null
++++ b/src/notch-search.c
+@@ -0,0 +1,451 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-notch-search"
++
++#include "phosh-config.h"
++
++#include "app-tracker.h"
++#include "layout-manager.h"
++#include "notch-search.h"
++#include "shell-priv.h"
++
++#include <gio/gdesktopappinfo.h>
++#include <glib/gi18n.h>
++#include <handy.h>
++
++/**
++ * PhoshNotchSearch:
++ *
++ * Plinius: a minimal app search that unfolds from the notch when the notch is tapped.
++ * It covers the whole screen so that a tap next to the search, or on the notch again,
++ * closes it.
++ */
++
++#define MAX_RESULTS     6
++#define ICON_SIZE       32
++#define CARD_MARGIN     4    /* distance of the card to the screen's sides (and top without notch) */
++#define CARD_MAX_WIDTH  420
++#define REVEAL_DURATION 180  /* ms */
++#define STEM_TOP_RADIUS 8    /* the stem flows out of the screen's top edge with this radius */
++#define STEM_CARD_RADIUS 12  /* and into the card with this one */
++
++enum {
++  PROP_0,
++  PROP_MONITOR,
++  PROP_LAST_PROP,
++};
++static GParamSpec *props[PROP_LAST_PROP];
++
++enum {
++  APP_LAUNCHED,
++  N_SIGNALS
++};
++static guint signals[N_SIGNALS] = { 0 };
++
++struct _PhoshNotchSearch {
++  PhoshLayerSurface parent;
++
++  PhoshMonitor     *monitor;
++
++  GtkWidget        *revealer;
++  GtkWidget        *card;
++  GtkWidget        *entry;
++  GtkWidget        *results;
++
++  GtkGesture       *click_gesture;
++  gboolean          close_on_release;
++
++  /* The notch's left edge and width inside the stem's drawing area */
++  int               stem_notch_x;
++  int               stem_notch_width;
++};
++
++G_DEFINE_TYPE (PhoshNotchSearch, phosh_notch_search, PHOSH_TYPE_LAYER_SURFACE)
++
++
++static void
++close_search (PhoshNotchSearch *self)
++{
++  gtk_widget_destroy (GTK_WIDGET (self));
++}
++
++
++static void
++launch_app (PhoshNotchSearch *self, GAppInfo *info)
++{
++  PhoshAppTracker *app_tracker = phosh_shell_get_app_tracker (phosh_shell_get_default ());
++
++  g_debug ("Launching %s", g_app_info_get_id (info));
++  phosh_app_tracker_launch_app_info (app_tracker, info);
++  g_signal_emit (self, signals[APP_LAUNCHED], 0, info);
++  close_search (self);
++}
++
++
++static GtkWidget *
++create_result_row (GAppInfo *info)
++{
++  GtkWidget *row, *box, *icon, *label;
++  GIcon *gicon = g_app_info_get_icon (info);
++
++  box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
++
++  icon = gicon ? gtk_image_new_from_gicon (gicon, GTK_ICON_SIZE_DND) :
++    gtk_image_new_from_icon_name ("application-x-executable", GTK_ICON_SIZE_DND);
++  gtk_image_set_pixel_size (GTK_IMAGE (icon), ICON_SIZE);
++  gtk_container_add (GTK_CONTAINER (box), icon);
++
++  label = gtk_label_new (g_app_info_get_display_name (info));
++  gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
++  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
++  gtk_container_add (GTK_CONTAINER (box), label);
++
++  row = gtk_list_box_row_new ();
++  gtk_container_add (GTK_CONTAINER (row), box);
++  g_object_set_data_full (G_OBJECT (row), "app-info", g_object_ref (info), g_object_unref);
++  gtk_widget_show_all (row);
++
++  return row;
++}
++
++
++/* GLib's desktop file index ranks the hits in groups, best group first */
++static void
++update_results (PhoshNotchSearch *self)
++{
++  g_autoptr (GList) rows = gtk_container_get_children (GTK_CONTAINER (self->results));
++  g_autofree char *text = g_strstrip (g_strdup (gtk_entry_get_text (GTK_ENTRY (self->entry))));
++  char ***groups;
++  guint n = 0;
++
++  for (GList *l = rows; l; l = l->next)
++    gtk_widget_destroy (l->data);
++
++  groups = text[0] ? g_desktop_app_info_search (text) : NULL;
++  for (int i = 0; groups && groups[i]; i++) {
++    for (int j = 0; groups[i][j] && n < MAX_RESULTS; j++) {
++      g_autoptr (GDesktopAppInfo) info = g_desktop_app_info_new (groups[i][j]);
++
++      if (info == NULL || !g_app_info_should_show (G_APP_INFO (info)))
++        continue;
++
++      gtk_container_add (GTK_CONTAINER (self->results), create_result_row (G_APP_INFO (info)));
++      n++;
++    }
++    g_strfreev (groups[i]);
++  }
++  g_free (groups);
++
++  gtk_widget_set_visible (self->results, n > 0);
++}
++
++
++static void
++on_entry_activated (PhoshNotchSearch *self)
++{
++  GtkListBoxRow *row = gtk_list_box_get_row_at_index (GTK_LIST_BOX (self->results), 0);
++
++  if (row)
++    launch_app (self, g_object_get_data (G_OBJECT (row), "app-info"));
++}
++
++
++static void
++on_row_activated (PhoshNotchSearch *self, GtkListBoxRow *row)
++{
++  launch_app (self, g_object_get_data (G_OBJECT (row), "app-info"));
++}
++
++
++/* Whether a press at @x, @y (surface coordinates) closes the search */
++static gboolean
++is_outside (PhoshNotchSearch *self, double x, double y)
++{
++  GtkAllocation card;
++  int cx, cy;
++
++  /* The notch and its stem lie outside the card, so a tap on them closes too */
++  gtk_widget_get_allocation (self->card, &card);
++  if (!gtk_widget_translate_coordinates (GTK_WIDGET (self), self->card, x, y, &cx, &cy))
++    return TRUE;
++
++  return cx < 0 || cy < 0 || cx >= card.width || cy >= card.height;
++}
++
++
++static void
++on_pressed (PhoshNotchSearch *self, int n_press, double x, double y)
++{
++  self->close_on_release = is_outside (self, x, y);
++
++  /* Keep the press away from the entry and the results */
++  if (self->close_on_release)
++    gtk_gesture_set_state (self->click_gesture, GTK_EVENT_SEQUENCE_CLAIMED);
++}
++
++
++static void
++on_released (PhoshNotchSearch *self, int n_press, double x, double y)
++{
++  if (self->close_on_release)
++    close_search (self);
++}
++
++
++/* The stem: as wide as the notch, with concave curves into the screen's top edge and into the
++ * card, so notch, stem and card read as one shape */
++static gboolean
++on_stem_draw (PhoshNotchSearch *self, cairo_t *cr, GtkWidget *stem)
++{
++  GtkStyleContext *context = gtk_widget_get_style_context (stem);
++  double h = gtk_widget_get_allocated_height (stem);
++  double x0 = self->stem_notch_x;
++  double x1 = x0 + self->stem_notch_width;
++  /* Both curves have to fit, with a straight piece between them */
++  double rt = MIN (STEM_TOP_RADIUS, h / 3);
++  double rb = MIN (STEM_CARD_RADIUS, h / 3);
++  GdkRGBA color;
++
++  gtk_style_context_get_color (context, gtk_style_context_get_state (context), &color);
++  gdk_cairo_set_source_rgba (cr, &color);
++
++  cairo_move_to (cr, x0 - rt, 0);
++  cairo_line_to (cr, x1 + rt, 0);
++  cairo_arc_negative (cr, x1 + rt, rt, rt, -G_PI / 2, G_PI);
++  cairo_line_to (cr, x1, h - rb);
++  cairo_arc_negative (cr, x1 + rb, h - rb, rb, G_PI, G_PI / 2);
++  cairo_line_to (cr, x0 - rb, h);
++  cairo_arc_negative (cr, x0 - rb, h - rb, rb, G_PI / 2, 0);
++  cairo_line_to (cr, x0, rt);
++  cairo_arc_negative (cr, x0 - rt, rt, rt, 0, -G_PI / 2);
++  cairo_close_path (cr);
++  cairo_fill (cr);
++
++  return GDK_EVENT_PROPAGATE;
++}
++
++
++static gboolean
++on_key_press (PhoshNotchSearch *self, GdkEventKey *event)
++{
++  if (event->keyval != GDK_KEY_Escape)
++    return GDK_EVENT_PROPAGATE;
++
++  close_search (self);
++  return GDK_EVENT_STOP;
++}
++
++
++static void
++phosh_notch_search_set_property (GObject      *object,
++                                 guint         property_id,
++                                 const GValue *value,
++                                 GParamSpec   *pspec)
++{
++  PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (object);
++
++  switch (property_id) {
++  case PROP_MONITOR:
++    g_set_object (&self->monitor, g_value_get_object (value));
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++
++static void
++phosh_notch_search_get_property (GObject    *object,
++                                 guint       property_id,
++                                 GValue     *value,
++                                 GParamSpec *pspec)
++{
++  PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (object);
++
++  switch (property_id) {
++  case PROP_MONITOR:
++    g_value_set_object (value, self->monitor);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++
++static void
++phosh_notch_search_map (GtkWidget *widget)
++{
++  PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (widget);
++
++  GTK_WIDGET_CLASS (phosh_notch_search_parent_class)->map (widget);
++
++  /* The notch was tapped to search, so the entry takes the input right away */
++  gtk_revealer_set_reveal_child (GTK_REVEALER (self->revealer), TRUE);
++  gtk_widget_grab_focus (self->entry);
++}
++
++
++static void
++phosh_notch_search_dispose (GObject *object)
++{
++  PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (object);
++
++  g_clear_object (&self->click_gesture);
++  g_clear_object (&self->monitor);
++
++  G_OBJECT_CLASS (phosh_notch_search_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_notch_search_constructed (GObject *object)
++{
++  PhoshNotchSearch *self = PHOSH_NOTCH_SEARCH (object);
++  PhoshShell *shell = phosh_shell_get_default ();
++  PhoshWayland *wl = phosh_wayland_get_default ();
++  GtkWidget *clamp, *inner, *box;
++  GdkRectangle notch;
++  gboolean has_notch;
++
++  g_object_set (PHOSH_LAYER_SURFACE (self),
++                "layer-shell", phosh_wayland_get_zwlr_layer_shell_v1 (wl),
++                "wl-output", phosh_monitor_get_wl_output (self->monitor),
++                "anchor", ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
++                ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
++                ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
++                ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
++                "layer", ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
++                "kbd-interactivity", TRUE,
++                "exclusive-zone", -1,
++                "namespace", "phosh notch-search",
++                NULL);
++
++  self->card = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  gtk_style_context_add_class (gtk_widget_get_style_context (self->card), "card");
++
++  self->entry = gtk_search_entry_new ();
++  gtk_entry_set_placeholder_text (GTK_ENTRY (self->entry), _("Search apps…"));
++  gtk_container_add (GTK_CONTAINER (self->card), self->entry);
++  g_signal_connect_swapped (self->entry, "search-changed", G_CALLBACK (update_results), self);
++  g_signal_connect_swapped (self->entry, "activate", G_CALLBACK (on_entry_activated), self);
++
++  self->results = gtk_list_box_new ();
++  gtk_list_box_set_selection_mode (GTK_LIST_BOX (self->results), GTK_SELECTION_NONE);
++  gtk_widget_set_no_show_all (self->results, TRUE);
++  gtk_container_add (GTK_CONTAINER (self->card), self->results);
++  g_signal_connect_swapped (self->results, "row-activated", G_CALLBACK (on_row_activated), self);
++
++  clamp = hdy_clamp_new ();
++  hdy_clamp_set_maximum_size (HDY_CLAMP (clamp), CARD_MAX_WIDTH);
++  hdy_clamp_set_tightening_threshold (HDY_CLAMP (clamp), CARD_MAX_WIDTH);
++  gtk_container_add (GTK_CONTAINER (clamp), self->card);
++
++  /* The card opens right below the notch; a stem as wide as the notch joins the two. Its
++   * drawing area is wider than the notch by the curves on both sides. */
++  inner = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  has_notch = phosh_layout_manager_get_top_bar_notch (phosh_shell_get_layout_manager (shell), &notch);
++  if (has_notch) {
++    GtkWidget *stem = gtk_drawing_area_new ();
++    int curve = MAX (STEM_TOP_RADIUS, STEM_CARD_RADIUS);
++    int start = MAX (0, notch.x - CARD_MARGIN - curve);
++
++    self->stem_notch_x = notch.x - CARD_MARGIN - start;
++    self->stem_notch_width = notch.width;
++    gtk_style_context_add_class (gtk_widget_get_style_context (stem), "notch-stem");
++    gtk_widget_set_halign (stem, GTK_ALIGN_START);
++    gtk_widget_set_margin_start (stem, start);
++    gtk_widget_set_size_request (stem, self->stem_notch_x + notch.width + curve,
++                                 notch.y + notch.height);
++    g_signal_connect_swapped (stem, "draw", G_CALLBACK (on_stem_draw), self);
++    gtk_container_add (GTK_CONTAINER (inner), stem);
++  }
++  gtk_container_add (GTK_CONTAINER (inner), clamp);
++
++  self->revealer = gtk_revealer_new ();
++  gtk_revealer_set_transition_type (GTK_REVEALER (self->revealer),
++                                    GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
++  gtk_revealer_set_transition_duration (GTK_REVEALER (self->revealer), REVEAL_DURATION);
++  gtk_container_add (GTK_CONTAINER (self->revealer), inner);
++
++  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  gtk_widget_set_valign (self->revealer, GTK_ALIGN_START);
++  g_object_set (self->revealer,
++                "margin-top", has_notch ? 0 : CARD_MARGIN,
++                "margin-start", CARD_MARGIN,
++                "margin-end", CARD_MARGIN,
++                NULL);
++  gtk_container_add (GTK_CONTAINER (box), self->revealer);
++  gtk_widget_show_all (box);
++  gtk_container_add (GTK_CONTAINER (self), box);
++
++  /* Capture phase: sees the presses before the entry and the results do */
++  self->click_gesture = gtk_gesture_multi_press_new (GTK_WIDGET (self));
++  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (self->click_gesture), 0);
++  gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (self->click_gesture),
++                                              GTK_PHASE_CAPTURE);
++  g_signal_connect_swapped (self->click_gesture, "pressed", G_CALLBACK (on_pressed), self);
++  g_signal_connect_swapped (self->click_gesture, "released", G_CALLBACK (on_released), self);
++
++  g_signal_connect (self, "key-press-event", G_CALLBACK (on_key_press), NULL);
++
++  G_OBJECT_CLASS (phosh_notch_search_parent_class)->constructed (object);
++}
++
++
++static void
++phosh_notch_search_class_init (PhoshNotchSearchClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->set_property = phosh_notch_search_set_property;
++  object_class->get_property = phosh_notch_search_get_property;
++  object_class->constructed = phosh_notch_search_constructed;
++  object_class->dispose = phosh_notch_search_dispose;
++  widget_class->map = phosh_notch_search_map;
++
++  props[PROP_MONITOR] =
++    g_param_spec_object ("monitor", "", "",
++                         PHOSH_TYPE_MONITOR,
++                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
++
++  g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
++
++  /**
++   * PhoshNotchSearch::app-launched:
++   * @self: The notch search
++   * @info: The launched app
++   *
++   * An app was started from the search (which then closes).
++   */
++  signals[APP_LAUNCHED] = g_signal_new ("app-launched",
++                                        G_TYPE_FROM_CLASS (klass),
++                                        G_SIGNAL_RUN_LAST,
++                                        0, NULL, NULL, NULL,
++                                        G_TYPE_NONE,
++                                        1,
++                                        G_TYPE_APP_INFO);
++
++  gtk_widget_class_set_css_name (widget_class, "phosh-notch-search");
++}
++
++
++static void
++phosh_notch_search_init (PhoshNotchSearch *self)
++{
++}
++
++
++GtkWidget *
++phosh_notch_search_new (PhoshMonitor *monitor)
++{
++  g_return_val_if_fail (PHOSH_IS_MONITOR (monitor), NULL);
++
++  return g_object_new (PHOSH_TYPE_NOTCH_SEARCH, "monitor", monitor, NULL);
++}
+diff --git a/src/notch-search.h b/src/notch-search.h
+new file mode 100644
+index 00000000..1f91e682
+--- /dev/null
++++ b/src/notch-search.h
+@@ -0,0 +1,20 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "layersurface.h"
++#include "monitor/monitor.h"
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_NOTCH_SEARCH (phosh_notch_search_get_type ())
++
++G_DECLARE_FINAL_TYPE (PhoshNotchSearch, phosh_notch_search, PHOSH, NOTCH_SEARCH, PhoshLayerSurface)
++
++GtkWidget *phosh_notch_search_new (PhoshMonitor *monitor);
++
++G_END_DECLS
+diff --git a/src/shell.c b/src/shell.c
+index 8224d60f..76df21d4 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -72,6 +72,7 @@
+ #include "system-modal-dialog.h"
+ #include "mpris-manager.h"
+ #include "network-auth-manager.h"
++#include "notch-search.h"
+ #include "notifications/notify-manager.h"
+ #include "notifications/notification-banner.h"
+ #include "osk-manager.h"
+@@ -149,6 +150,8 @@ static PhoshShellDebugFlags debug_flags;
+ typedef struct {
+   PhoshDragSurface           *top_panel;
+   PhoshDragSurface           *home;
++  GtkWidget                  *notch_search; /* Plinius: weak, destroys itself when closed */
++  GSettings                  *plinius_display; /* Plinius: whether a tap on the notch searches */
+   gboolean                    overview_visible;
+   GPtrArray                  *faders; /* for final fade out */
+   GStrv log_domains;
+@@ -250,6 +253,54 @@ on_top_panel_activated (PhoshShell    *self,
+ }
+ 
+ 
++/* Plinius: an app started from the notch search is in front, not behind the overview */
++static void
++on_notch_search_app_launched (PhoshShell *self)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++
++  phosh_home_set_state (PHOSH_HOME (priv->home), PHOSH_HOME_STATE_FOLDED);
++}
++
++
++static void
++close_notch_search (PhoshShell *self)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++
++  if (priv->notch_search)
++    gtk_widget_destroy (priv->notch_search);
++}
++
++
++/* Plinius: the notch toggles the search; the search itself covers the notch, so a
++ * second tap reaches the search, which closes itself then */
++static void
++on_top_panel_notch_tapped (PhoshShell *self)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++
++  if (priv->notch_search) {
++    close_notch_search (self);
++    return;
++  }
++
++  if (priv->locked ||
++      (priv->plinius_display && !g_settings_get_boolean (priv->plinius_display, "notch-search")))
++    return;
++
++  priv->notch_search = phosh_notch_search_new (phosh_shell_get_builtin_monitor (self) ?:
++                                               phosh_shell_get_primary_monitor (self));
++  g_object_add_weak_pointer (G_OBJECT (priv->notch_search), (gpointer *)&priv->notch_search);
++  g_signal_connect_object (priv->notch_search,
++                           "app-launched",
++                           G_CALLBACK (on_notch_search_app_launched),
++                           self,
++                           G_CONNECT_SWAPPED);
++  gtk_widget_set_visible (priv->notch_search, TRUE);
++}
++
++
+ static void
+ update_top_level_layer (PhoshShell *self)
+ {
+@@ -440,6 +491,11 @@ panels_create (PhoshShell *self)
+                             G_CALLBACK (on_top_panel_activated),
+                             self);
+ 
++  g_signal_connect_swapped (priv->top_panel,
++                            "notch-tapped",
++                            G_CALLBACK (on_top_panel_notch_tapped),
++                            self);
++
+   g_signal_connect_swapped (priv->top_panel,
+                             "notify::state",
+                             G_CALLBACK (on_top_panel_state_changed),
+@@ -464,6 +520,7 @@ panels_dispose (PhoshShell *self)
+ {
+   PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
+ 
++  close_notch_search (self);
+   g_clear_pointer (&priv->top_panel, phosh_cp_widget_destroy);
+   g_clear_pointer (&priv->home, phosh_cp_widget_destroy);
+ }
+@@ -485,6 +542,7 @@ set_locked (PhoshShell *self, gboolean locked)
+      unblanking the screen which can be confusing */
+   if (priv->top_panel)
+     phosh_top_panel_fold (PHOSH_TOP_PANEL (priv->top_panel));
++  close_notch_search (self);
+ 
+   update_top_level_layer (self);
+   update_top_bar_transparency (self);
+@@ -658,6 +716,7 @@ phosh_shell_dispose (GObject *object)
+ 
+   g_clear_object (&priv->action_map);
+   g_clear_object (&priv->settings);
++  g_clear_object (&priv->plinius_display);
+ 
+   G_OBJECT_CLASS (phosh_shell_parent_class)->dispose (object);
+ }
+@@ -1482,6 +1541,17 @@ phosh_shell_init (PhoshShell *self)
+   priv->shell_state = PHOSH_STATE_SETTINGS;
+   priv->action_map = g_simple_action_group_new ();
+   priv->settings = g_settings_new ("mobi.phosh.shell");
++  /* Plinius: the schema comes with phosh-plinius (not there in the tests); without the
++   * key the notch searches */
++  {
++    GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++    g_autoptr (GSettingsSchema) schema = NULL;
++
++    if (source)
++      schema = g_settings_schema_source_lookup (source, "org.plinius.display", TRUE);
++    if (schema && g_settings_schema_has_key (schema, "notch-search"))
++      priv->plinius_display = g_settings_new_full (schema, NULL, NULL);
++  }
+ 
+   /* We bind this early since a wl_display_roundtrip () would make us miss
+      existing toplevels */
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 271b8bbc..320b2c28 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -631,6 +631,56 @@ phosh-lockscreen phosh-widget-box {
+   margin-right: 6px;
+ }
+ 
++/*
++ * Plinius: the search that unfolds from the notch, black like the notch itself
++ */
++
++phosh-notch-search {
++  background-color: alpha(black, 0.3);
++}
++
++phosh-notch-search .card {
++  background-color: black;
++  color: white;
++  border-radius: 24px;
++  padding: 4px 8px 8px 8px;
++}
++
++/* Drawn in code with this color: rounded into the screen's edge and into the card */
++phosh-notch-search .notch-stem {
++  color: black;
++}
++
++phosh-notch-search .card entry {
++  background: none;
++  border: none;
++  box-shadow: none;
++  color: white;
++  caret-color: white;
++  min-height: 40px;
++  font-size: 1.1em;
++}
++
++phosh-notch-search .card entry image {
++  color: alpha(white, 0.6);
++}
++
++phosh-notch-search .card list {
++  background: none;
++  margin-top: 4px;
++}
++
++phosh-notch-search .card list row {
++  color: white;
++  border-radius: 16px;
++  padding: 6px 8px;
++}
++
++phosh-notch-search .card list row:hover,
++phosh-notch-search .card list row:active {
++  background-color: alpha(white, 0.12);
++}
++
+ /*
+  * System modal dialogs (polkit, gcr, ...)
+  */
+diff --git a/src/top-panel.c b/src/top-panel.c
+index 9b3eb042..2359e6be 100644
+--- a/src/top-panel.c
++++ b/src/top-panel.c
+@@ -64,6 +64,7 @@ static GParamSpec *props[PROP_LAST_PROP];
+ 
+ enum {
+   ACTIVATED,
++  NOTCH_TAPPED,
+   N_SIGNALS
+ };
+ static guint signals[N_SIGNALS] = { 0 };
+@@ -549,6 +550,26 @@ on_input_setting_changed (PhoshTopPanel *self,
+ }
+ 
+ 
++/* Plinius: how far next to the notch a tap still counts as a tap on it */
++#define NOTCH_TAP_SLOP 32
++/* Without a notch the middle of the bar takes its place */
++#define NOTCH_TAP_FALLBACK_WIDTH 80
++
++static gboolean
++is_on_notch (PhoshTopPanel *self, double x)
++{
++  PhoshLayoutManager *layout_manager = phosh_shell_get_layout_manager (phosh_shell_get_default ());
++  GdkRectangle notch;
++
++  if (!phosh_layout_manager_get_top_bar_notch (layout_manager, &notch)) {
++    notch.width = NOTCH_TAP_FALLBACK_WIDTH;
++    notch.x = (gtk_widget_get_allocated_width (GTK_WIDGET (self)) - notch.width) / 2;
++  }
++
++  return x >= notch.x - NOTCH_TAP_SLOP && x < notch.x + notch.width + NOTCH_TAP_SLOP;
++}
++
++
+ static void
+ released_cb (PhoshTopPanel *self, int n_press, double x, double y, GtkGestureMultiPress *gesture)
+ {
+@@ -561,8 +582,14 @@ released_cb (PhoshTopPanel *self, int n_press, double x, double y, GtkGestureMul
+     return;
+   }
+ 
+-  if (phosh_util_gesture_is_touch (GTK_GESTURE_SINGLE (gesture)) == FALSE)
++  if (phosh_util_gesture_is_touch (GTK_GESTURE_SINGLE (gesture)) == FALSE) {
+     g_signal_emit (self, signals[ACTIVATED], 0);
++    return;
++  }
++
++  /* Plinius: a tap on the notch of the folded bar opens the search */
++  if (self->state == PHOSH_TOP_PANEL_STATE_FOLDED && !self->on_lockscreen && is_on_notch (self, x))
++    g_signal_emit (self, signals[NOTCH_TAPPED], 0);
+ }
+ 
+ 
+@@ -1007,6 +1034,19 @@ phosh_top_panel_class_init (PhoshTopPanelClass *klass)
+                                      G_TYPE_NONE,
+                                      0);
+ 
++  /**
++   * PhoshTopPanel::notch-tapped:
++   * @self: The top panel
++   *
++   * Plinius: the notch of the folded top bar got tapped (touch only).
++   */
++  signals[NOTCH_TAPPED] = g_signal_new ("notch-tapped",
++                                        G_TYPE_FROM_CLASS (klass),
++                                        G_SIGNAL_RUN_LAST,
++                                        0, NULL, NULL, NULL,
++                                        G_TYPE_NONE,
++                                        0);
++
+   g_type_ensure (PHOSH_TYPE_ARROW);
+   g_type_ensure (PHOSH_TYPE_STATUS_ICONS_BOX);
+ 

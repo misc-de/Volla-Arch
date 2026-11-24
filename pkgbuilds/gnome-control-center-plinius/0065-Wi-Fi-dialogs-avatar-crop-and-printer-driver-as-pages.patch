@@ -1,0 +1,303 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 11:19:08 +0100
+Subject: [PATCH] Wi-Fi dialogs, avatar crop and printer driver as pages
+
+Plinius: the last windows of their own in Settings that a phone meets
+open as pages of the window, with the back arrow and the back swipe:
+
+- Wi-Fi: connect to a hidden network, create a network and the 802.1X
+  dialog (libnma's NMAWifiDialog, a GtkDialog) and the avatar crop go
+  through cc_plinius_gtk_dialog_present_as_page() (shell/
+  cc-plinius-dialog-pages.c): the content moves into a page, the
+  confirming button ("Connect", "Create", "Select") to its header bar,
+  back answers "Cancel". The function is declared weak, so that
+  programs linking these files without the shell still link.
+- Printers: the driver selection was an AdwWindow; now an AdwDialog
+  without "Cancel". Back, the back swipe and Escape answer Cancel
+  ("closed"), an answer is given only once, as its page may also go
+  with the "Add Printer" page below it.
+
+Left as windows: the mouse test and the tablet and color calibration
+(full-screen tools) and the tablet's button mapping (only for tablets
+with buttons).
+---
+ panels/network/network-dialogs.c            | 11 ++++++++
+ panels/printers/pp-details-dialog.c         |  9 +++----
+ panels/printers/pp-new-printer-dialog.c     | 14 +++-------
+ panels/printers/pp-ppd-selection-dialog.blp | 23 +++++-----------
+ panels/printers/pp-ppd-selection-dialog.c   | 30 +++++++++------------
+ panels/printers/pp-ppd-selection-dialog.h   |  2 +-
+ panels/system/users/cc-avatar-chooser.c     | 12 +++++++++
+ 7 files changed, 50 insertions(+), 51 deletions(-)
+
+diff --git a/panels/network/network-dialogs.c b/panels/network/network-dialogs.c
+index 06d4e26..6c72d34 100644
+--- a/panels/network/network-dialogs.c
++++ b/panels/network/network-dialogs.c
+@@ -155,6 +155,10 @@ done:
+     gtk_window_destroy (GTK_WINDOW (dialog));
+ }
+ 
++/* Plinius: shell/cc-plinius-dialog-pages.c shows a GtkDialog as a page of the window; weak, so
++ * that programs linking this file without the shell (tests) still link */
++extern gboolean cc_plinius_gtk_dialog_present_as_page (GtkDialog *dialog, GtkWidget *parent) __attribute__ ((weak));
++
+ static void
+ show_wireless_dialog (GtkWidget *toplevel, NMClient *client, GtkWidget *dialog)
+ {
+@@ -170,6 +174,13 @@ show_wireless_dialog (GtkWidget *toplevel, NMClient *client, GtkWidget *dialog)
+     g_signal_connect_data (dialog, "response", G_CALLBACK (wireless_dialog_response_cb), closure,
+                            wireless_dialog_closure_closure_notify, 0);
+ 
++    /* Plinius: a page of the window with the back swipe, not a window of its own */
++    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++    if (cc_plinius_gtk_dialog_present_as_page &&
++        cc_plinius_gtk_dialog_present_as_page (GTK_DIALOG (dialog), toplevel))
++        return;
++    G_GNUC_END_IGNORE_DEPRECATIONS
++
+     g_object_bind_property (G_OBJECT (toplevel), "visible", G_OBJECT (dialog), "visible", G_BINDING_SYNC_CREATE);
+ }
+ 
+diff --git a/panels/printers/pp-details-dialog.c b/panels/printers/pp-details-dialog.c
+index b18c2b9..3782015 100644
+--- a/panels/printers/pp-details-dialog.c
++++ b/panels/printers/pp-details-dialog.c
+@@ -133,7 +133,7 @@ ppd_selection_dialog_response_cb (GtkWindow *dialog, gint response_id, gpointer
+         }
+     }
+ 
+-    gtk_window_destroy (GTK_WINDOW (self->pp_ppd_selection_dialog));
++    adw_dialog_force_close (ADW_DIALOG (self->pp_ppd_selection_dialog));
+     self->pp_ppd_selection_dialog = NULL;
+ }
+ 
+@@ -153,7 +153,6 @@ select_ppd_in_dialog (PpDetailsDialog *self)
+ {
+     g_autofree gchar *device_id = NULL;
+     g_autofree gchar *manufacturer = NULL;
+-    GtkWindow *toplevel;
+ 
+     g_set_str (&self->ppd_file_name, cupsGetPPD (self->printer_name));
+ 
+@@ -181,10 +180,8 @@ select_ppd_in_dialog (PpDetailsDialog *self)
+         self->pp_ppd_selection_dialog =
+             pp_ppd_selection_dialog_new (self->all_ppds_list, manufacturer, ppd_selection_dialog_response_cb, self);
+ 
+-        toplevel = GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self)));
+-        gtk_window_set_transient_for (GTK_WINDOW (self->pp_ppd_selection_dialog), toplevel);
+-
+-        gtk_widget_set_visible (GTK_WIDGET (self->pp_ppd_selection_dialog), TRUE);
++        /* Plinius: an AdwDialog now, a page of the window */
++        adw_dialog_present (ADW_DIALOG (self->pp_ppd_selection_dialog), GTK_WIDGET (self));
+     }
+ }
+ 
+diff --git a/panels/printers/pp-new-printer-dialog.c b/panels/printers/pp-new-printer-dialog.c
+index 38d4e66..bb91346 100644
+--- a/panels/printers/pp-new-printer-dialog.c
++++ b/panels/printers/pp-new-printer-dialog.c
+@@ -1369,9 +1369,6 @@ ppd_selection_cb (GtkWindow *_dialog, gint response_id, gpointer user_data)
+         }
+     }
+ 
+-    /* This is needed here since parent dialog is destroyed first. */
+-    gtk_window_set_transient_for (GTK_WINDOW (self->ppd_selection_dialog), NULL);
+-
+     self->user_callback (self, response_id, self->user_data);
+ }
+ 
+@@ -1403,12 +1400,9 @@ add_cb (PpNewPrinterDialog *self)
+             self->new_device = pp_print_device_copy (device);
+             self->ppd_selection_dialog = pp_ppd_selection_dialog_new (self->list, NULL, ppd_selection_cb, self);
+ 
+-            /* The dialog is no window itself; the driver window belongs to the window showing it */
+-            gtk_window_set_transient_for (GTK_WINDOW (self->ppd_selection_dialog),
+-                                          GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self))));
+-
+-            /* New device will be set at return from ppd selection */
+-            gtk_widget_set_visible (GTK_WIDGET (self->ppd_selection_dialog), TRUE);
++            /* New device will be set at return from ppd selection. Plinius: an AdwDialog now, a
++             * page of the window above this one */
++            adw_dialog_present (ADW_DIALOG (self->ppd_selection_dialog), GTK_WIDGET (self));
+         } else {
+             self->new_device = pp_print_device_copy (device);
+             self->user_callback (self, GTK_RESPONSE_OK, self->user_data);
+@@ -1479,7 +1473,7 @@ pp_new_printer_dialog_dispose (GObject *object)
+     g_clear_object (&self->samba_host);
+ 
+     if (self->ppd_selection_dialog != NULL) {
+-        gtk_window_destroy (GTK_WINDOW (self->ppd_selection_dialog));
++        adw_dialog_force_close (ADW_DIALOG (self->ppd_selection_dialog));
+         self->ppd_selection_dialog = NULL;
+     }
+ 
+diff --git a/panels/printers/pp-ppd-selection-dialog.blp b/panels/printers/pp-ppd-selection-dialog.blp
+index 5d49e4a..faae2b3 100644
+--- a/panels/printers/pp-ppd-selection-dialog.blp
++++ b/panels/printers/pp-ppd-selection-dialog.blp
+@@ -1,27 +1,16 @@
+ using Gtk 4.0;
+ using Adw 1;
+ 
+-template $PpPPDSelectionDialog: Adw.Window {
+-  /* Plinius: fits a phone screen of 360 logical pixels */
+-  width-request: 340;
+-  height-request: 400;
++/* Plinius: an AdwDialog, so that it opens as a page of the window (cc-plinius-dialog-pages.c)
++   with the back arrow and the back swipe instead of "Cancel" */
++template $PpPPDSelectionDialog: Adw.Dialog {
++  content-width: 340;
++  content-height: 400;
+   title: _("Select Printer Driver");
+-  modal: true;
+-  destroy-with-parent: true;
+ 
+-  content: Adw.ToolbarView {
++  child: Adw.ToolbarView {
+     [top]
+     Adw.HeaderBar {
+-      show-start-title-buttons: false;
+-      show-end-title-buttons: false;
+-
+-      [start]
+-      Button ppd_selection_cancel_button {
+-        label: _("_Cancel");
+-        use-underline: true;
+-        clicked => $cancel_cb(template);
+-      }
+-
+       [end]
+       Button ppd_selection_select_button {
+         label: _("_Select");
+diff --git a/panels/printers/pp-ppd-selection-dialog.c b/panels/printers/pp-ppd-selection-dialog.c
+index 39d2c3c..ff55b79 100644
+--- a/panels/printers/pp-ppd-selection-dialog.c
++++ b/panels/printers/pp-ppd-selection-dialog.c
+@@ -43,7 +43,9 @@ enum {
+ };
+ 
+ struct _PpPPDSelectionDialog {
+-    AdwWindow parent_instance;
++    AdwDialog parent_instance;
++
++    gboolean answered; /* Plinius: the callback heard Select or Cancel already */
+ 
+     GtkButton *ppd_selection_select_button;
+     GtkTreeView *ppd_selection_manufacturers_treeview;
+@@ -60,7 +62,7 @@ struct _PpPPDSelectionDialog {
+     PPDList *list;
+ };
+ 
+-G_DEFINE_FINAL_TYPE (PpPPDSelectionDialog, pp_ppd_selection_dialog, ADW_TYPE_WINDOW)
++G_DEFINE_FINAL_TYPE (PpPPDSelectionDialog, pp_ppd_selection_dialog, ADW_TYPE_DIALOG)
+ 
+ static void
+ manufacturer_selection_changed_cb (PpPPDSelectionDialog *self)
+@@ -241,13 +243,17 @@ select_cb (PpPPDSelectionDialog *self)
+         }
+     }
+ 
+-    self->user_callback (GTK_WINDOW (self), GTK_RESPONSE_OK, self->user_data);
++    self->answered = TRUE;
++    self->user_callback ((GtkWindow *) self, GTK_RESPONSE_OK, self->user_data);
+ }
+ 
+ static void
+ cancel_cb (PpPPDSelectionDialog *self)
+ {
+-    self->user_callback (GTK_WINDOW (self), GTK_RESPONSE_CANCEL, self->user_data);
++    if (self->answered)
++        return;
++    self->answered = TRUE;
++    self->user_callback ((GtkWindow *) self, GTK_RESPONSE_CANCEL, self->user_data);
+ }
+ 
+ PpPPDSelectionDialog *
+@@ -270,15 +276,6 @@ pp_ppd_selection_dialog_new (PPDList *ppd_list, const gchar *manufacturer, UserR
+     return self;
+ }
+ 
+-static gboolean
+-pp_ppd_selection_dialog_close_request (GtkWindow *window)
+-{
+-    PpPPDSelectionDialog *self = PP_PPD_SELECTION_DIALOG (window);
+-
+-    cancel_cb (self);
+-
+-    return GDK_EVENT_STOP;
+-}
+ 
+ static void
+ pp_ppd_selection_dialog_dispose (GObject *object)
+@@ -295,7 +292,6 @@ pp_ppd_selection_dialog_dispose (GObject *object)
+ void
+ pp_ppd_selection_dialog_class_init (PpPPDSelectionDialogClass *klass)
+ {
+-    GtkWindowClass *window_class = GTK_WINDOW_CLASS (klass);
+     GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+     GObjectClass *object_class = G_OBJECT_CLASS (klass);
+ 
+@@ -310,15 +306,15 @@ pp_ppd_selection_dialog_class_init (PpPPDSelectionDialogClass *klass)
+     gtk_widget_class_bind_template_callback (widget_class, cancel_cb);
+ 
+     object_class->dispose = pp_ppd_selection_dialog_dispose;
+-    window_class->close_request = pp_ppd_selection_dialog_close_request;
+-
+-    gtk_widget_class_add_binding_action (widget_class, GDK_KEY_Escape, GDK_NO_MODIFIER_MASK, "window.close", NULL);
+ }
+ 
+ void
+ pp_ppd_selection_dialog_init (PpPPDSelectionDialog *self)
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
++
++    /* Plinius: back, the back swipe or Escape close it as a page; that answers Cancel */
++    g_signal_connect (self, "closed", G_CALLBACK (cancel_cb), NULL);
+ }
+ 
+ gchar *
+diff --git a/panels/printers/pp-ppd-selection-dialog.h b/panels/printers/pp-ppd-selection-dialog.h
+index 51cc6d7..61db709 100644
+--- a/panels/printers/pp-ppd-selection-dialog.h
++++ b/panels/printers/pp-ppd-selection-dialog.h
+@@ -26,7 +26,7 @@
+ G_BEGIN_DECLS
+ 
+ #define PP_TYPE_PPD_SELECTION_DIALOG (pp_ppd_selection_dialog_get_type ())
+-G_DECLARE_FINAL_TYPE (PpPPDSelectionDialog, pp_ppd_selection_dialog, PP, PPD_SELECTION_DIALOG, AdwWindow);
++G_DECLARE_FINAL_TYPE (PpPPDSelectionDialog, pp_ppd_selection_dialog, PP, PPD_SELECTION_DIALOG, AdwDialog);
+ PpPPDSelectionDialog *pp_ppd_selection_dialog_new (PPDList *ppd_list, const gchar *manufacturer,
+                                                    UserResponseCallback user_callback, gpointer user_data);
+ gchar *pp_ppd_selection_dialog_get_ppd_name (PpPPDSelectionDialog *dialog);
+diff --git a/panels/system/users/cc-avatar-chooser.c b/panels/system/users/cc-avatar-chooser.c
+index fd30ce4..2703df9 100644
+--- a/panels/system/users/cc-avatar-chooser.c
++++ b/panels/system/users/cc-avatar-chooser.c
+@@ -50,6 +50,10 @@ struct _CcAvatarChooser {
+ 
+ G_DEFINE_FINAL_TYPE (CcAvatarChooser, cc_avatar_chooser, GTK_TYPE_POPOVER)
+ 
++/* Plinius: shell/cc-plinius-dialog-pages.c shows a GtkDialog as a page of the window; weak, so
++ * that programs linking this file without the shell (tests) still link */
++extern gboolean cc_plinius_gtk_dialog_present_as_page (GtkDialog *dialog, GtkWidget *parent) __attribute__ ((weak));
++
+ static void
+ crop_dialog_response (CcAvatarChooser *self, gint response_id, GtkWidget *dialog)
+ {
+@@ -108,6 +112,14 @@ cc_avatar_chooser_crop (CcAvatarChooser *self, GdkPixbuf *pixbuf)
+ 
+     gtk_window_set_default_size (GTK_WINDOW (dialog), 400, 300);
+ 
++    /* Plinius: a page of the window with the back swipe, not a window of its own; the crop area
++     * takes the page's height */
++    if (cc_plinius_gtk_dialog_present_as_page &&
++        cc_plinius_gtk_dialog_present_as_page (GTK_DIALOG (dialog), GTK_WIDGET (self))) {
++        gtk_widget_set_size_request (self->crop_area, -1, 300);
++        return;
++    }
++
+     gtk_window_present (GTK_WINDOW (dialog));
+ }
+ 

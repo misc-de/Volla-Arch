@@ -1,0 +1,16 @@
+[Unit]
+Description=Confirm or drop a kernel on trial (plinius-kernel)
+ConditionPathExists=/var/lib/plinius-kernel/trial
+After=multi-user.target
+
+[Service]
+# simple, not oneshot: the script waits for the end of the start, which a oneshot unit in the
+# start transaction would itself hold up
+Type=simple
+ExecStart=/usr/lib/plinius/kernel/plinius-kernel-install boot
+# While it writes boot<slot> and the card it ignores SIGTERM; a restart then waits for the end
+# (64 MiB to the boot partition, about 40 MiB to the card) instead of cutting it off
+TimeoutStopSec=5min
+
+[Install]
+WantedBy=multi-user.target

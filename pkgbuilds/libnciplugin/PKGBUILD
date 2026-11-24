@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=libnciplugin
+pkgver=1.2.3
+pkgrel=1
+pkgdesc="Base library for NCI-based nfcd plugins"
+arch=(aarch64 x86_64)
+url="https://github.com/mer-hybris/libnciplugin"
+license=(BSD-3-Clause)
+depends=(glib2 libglibutil libncicore nfcd)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('f5b20010f7286c89f991e08698afb6ccb145dfedb00fbf5f203ffb54bf5d6053')
+
+build() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib KEEP_SYMBOLS=1 release pkgconfig
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	make LIBDIR=/usr/lib DESTDIR="$pkgdir" install-dev
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -1,0 +1,150 @@
+From 3f2dc36b722079eb22a42a694e535d273771ee22 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:48:28 +0100
+Subject: [PATCH] brightness-manager: Fade when dimming and undimming
+
+Plinius: the idle dimming requested by gnome-settings-daemon set the
+dimmed and the restored brightness in one step. Both now use the
+smoothstep transition auto brightness already has: 1 s down to the dim
+level, 0.5 s back up. Auto brightness changes while dimmed are kept for
+undimming, the slider and the brightness keys cancel a running
+transition.
+---
+ src/brightness-manager.c | 57 ++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 53 insertions(+), 4 deletions(-)
+
+diff --git a/src/brightness-manager.c b/src/brightness-manager.c
+index 1585fa11..3df9eadc 100644
+--- a/src/brightness-manager.c
++++ b/src/brightness-manager.c
+@@ -82,6 +82,8 @@ struct _PhoshBrightnessManager {
+     double duration;
+     double elapsed;
+     uint   id;
++    /* Plinius: an auto brightness transition, not a dimming one */
++    gboolean is_auto;
+   } transition;
+ 
+   const char *icon_name;
+@@ -116,7 +118,7 @@ on_transition_step (gpointer user_data)
+   smooth = smoothstep (CLAMP (self->transition.elapsed / self->transition.duration, 0.0, 1.0));
+   next = self->transition.start + (self->transition.target - self->transition.start) * smooth;
+ 
+-  if (!self->auto_brightness.enabled) {
++  if (self->transition.is_auto && !self->auto_brightness.enabled) {
+     g_debug ("Brightness transition aborted");
+     goto end;
+   }
+@@ -170,10 +172,42 @@ transition_to_brightness (PhoshBrightnessManager *self, double target)
+   g_debug ("Starting auto brightness transition from %.2f to %.2f, duration: %.2fms",
+            self->transition.start, self->transition.target, self->transition.duration);
+ 
++  self->transition.is_auto = TRUE;
+   self->transition.id = g_timeout_add (self->transition.interval, on_transition_step, self);
+ }
+ 
+ 
++/*
++ * Plinius: dimming fades instead of jumping. Going dark takes a bit longer
++ * so it doesn't startle, coming back is quicker as the user is waiting
++ * for the screen then.
++ */
++#define DIM_DURATION   1000 /* ms */
++#define UNDIM_DURATION  500 /* ms */
++#define DIM_INTERVAL     20 /* ms */
++
++static void
++transition_dimming (PhoshBrightnessManager *self, double target, gboolean dim)
++{
++  g_clear_handle_id (&self->transition.id, g_source_remove);
++
++  self->transition.target = target;
++  self->transition.start = phosh_backlight_get_relative (self->backlight);
++  if (G_APPROX_VALUE (self->transition.start, self->transition.target, FLT_EPSILON))
++    return;
++
++  self->transition.is_auto = FALSE;
++  self->transition.interval = DIM_INTERVAL;
++  self->transition.duration = dim ? DIM_DURATION : UNDIM_DURATION;
++  self->transition.elapsed = 0;
++
++  g_debug ("Starting dimming transition from %.2f to %.2f, duration: %.2fms",
++           self->transition.start, self->transition.target, self->transition.duration);
++
++  self->transition.id = g_timeout_add (DIM_INTERVAL, on_transition_step, self);
++}
++
++
+ static double
+ compensate_night_light (PhoshBrightnessManager *self)
+ {
+@@ -250,6 +284,12 @@ on_auto_brightness_changed (PhoshBrightnessManager *self)
+   self->auto_brightness.base = CLAMP (new_brightness, 0.0, 1.0);
+   new_brightness = calc_auto_brightness (self);
+ 
++  /* Plinius: while dimmed the new value is restored when undimming */
++  if (self->saved_brightness >= 0.0) {
++    self->saved_brightness = new_brightness;
++    return;
++  }
++
+   transition_to_brightness (self, new_brightness);
+ }
+ 
+@@ -409,6 +449,10 @@ phosh_brightness_manager_handle_set_dimming (PhoshDBusBrightness   *object,
+   if (arg_enable) {
+     double current = phosh_backlight_get_relative (self->backlight);
+ 
++    /* Plinius: during a transition the brightness to come back to is its target */
++    if (self->transition.id)
++      current = self->transition.target;
++
+     target = g_settings_get_int (self->settings_power, "idle-brightness") * 0.01;
+ 
+     /* If current brightness is lower than dim brightness don't do anything */
+@@ -424,7 +468,7 @@ phosh_brightness_manager_handle_set_dimming (PhoshDBusBrightness   *object,
+   }
+ 
+   if (target >= 0.0)
+-    phosh_backlight_set_relative (self->backlight, target);
++    transition_dimming (self, target, arg_enable);
+ 
+  done:
+   phosh_dbus_brightness_complete_set_dimming (object, invocation);
+@@ -497,8 +541,6 @@ on_value_changed (PhoshBrightnessManager *self, GtkAdjustment *adjustment)
+     self->auto_brightness.offset = offset;
+ 
+     new_brightness = calc_auto_brightness (self);
+-    /* Cancel any ongoing transition, the user likely wants the new brightness right away */
+-    g_clear_handle_id (&self->transition.id, g_source_remove);
+ 
+     g_debug ("Updating auto-brightness offset %f", offset);
+     g_settings_set_double (self->settings_brightness,
+@@ -508,6 +550,9 @@ on_value_changed (PhoshBrightnessManager *self, GtkAdjustment *adjustment)
+     new_brightness = value;
+   }
+ 
++  /* Plinius: any transition, dimming too: the user likely wants the new brightness right away */
++  g_clear_handle_id (&self->transition.id, g_source_remove);
++
+   self->setting_brightness = TRUE;
+   phosh_backlight_set_relative (self->backlight, new_brightness);
+   self->setting_brightness = FALSE;
+@@ -523,6 +568,8 @@ set_backlight (PhoshBrightnessManager *self, PhoshBacklight *backlight)
+   if (self->backlight)
+     g_signal_handlers_disconnect_by_data (self->backlight, self);
+ 
++  /* Plinius: a running transition belongs to the old backlight */
++  g_clear_handle_id (&self->transition.id, g_source_remove);
+   g_set_object (&self->backlight, backlight);
+   self->saved_brightness = -1.0;
+ 
+@@ -619,6 +666,8 @@ adjust_brightness (PhoshBrightnessManager *self, gboolean up)
+     brightness -= step;
+ 
+   brightness = CLAMP (brightness, 0.0, 1.0);
++  /* Plinius: the keys win over a running transition */
++  g_clear_handle_id (&self->transition.id, g_source_remove);
+   phosh_backlight_set_relative (self->backlight, brightness);
+ 
+   show_osd (self, brightness);

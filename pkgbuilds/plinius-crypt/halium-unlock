@@ -1,0 +1,173 @@
+# Full-disk encryption in the Halium ramdisk of the phone (docs/PLAN-VERSCHLUESSELUNG.md): the
+# counterpart of the mkinitcpio hook, with the same screens and the same code. scripts/halium
+# runs this in a subshell once it knows the data partition, with $1 = that partition. If the
+# partition was opened, /run/plinius-crypt/data-dev names the device to mount instead.
+#  - The partition is LUKS2: ask for the password and open it.
+#  - It is plain and carries the request file: offer to encrypt it now.
+#  - Otherwise: nothing happens, not even the display comes up.
+# Runs in busybox 1.22 ash. The programs are in the vendor_boot ramdisk, each with its own libraries
+# (tools/crypt-ramdisk.sh). All output goes to the kernel log; passwords only travel through pipes.
+
+PATH=/plinius/bin:$PATH
+export PATH
+
+# Functions of the mkinitcpio hook, on top of which this one is built
+. /plinius/hook
+
+# The rating of a new password (plinius-security) is a wrapper like the other programs here
+PLINIUS_PWRATE=/plinius/bin/plinius-pwrate
+
+# What the mkinitcpio init provides for the hook
+msg() { echo "plinius-crypt: $*" > /dev/kmsg; }
+err() { echo "plinius-crypt: error: $*" > /dev/kmsg; }
+resolve_device() { echo "$1"; }
+
+# The whole data partition is encrypted, not just the root file system; rootfs.img is a file on it.
+# The request is at its top level (plinius-encrypt), since rootfs.img is not mounted yet.
+PLINIUS_CRYPT_NAME=plinius-data
+PLINIUS_CRYPT_REQUEST=.plinius-crypt-request
+# The language and the keyboard Plinius Boot chose at the installation, next to its request, in the
+# form look-files gives them (take_language): the keyboard goes here
+PLINIUS_CRYPT_KEYBOARD=/etc/unl0kr.conf.d/40-plinius-keyboard.conf
+# Boot logo from tools/crypt-ramdisk.sh, and what the system needs to end it (start_logo)
+PLINIUS_CRYPT_LOGO=/plinius/share/boot-logo
+PLINIUS_CRYPT_LOGO_PID=/run/plinius-crypt/logo.pid
+# Safety net: the logo ends by itself after this many seconds, should nothing end it
+PLINIUS_CRYPT_LOGO_TIMEOUT=120
+
+# The first start after Plinius Boot installed the system: the ramdisk speaks the language of the
+# image (English, US keyboard), as nothing has rebuilt it yet. Plinius Boot leaves the user's choice
+# on the plain data partition $1, and its files replace the ramdisk's for this start. Read only while
+# the partition is plain: an encrypted one has a ramdisk rebuilt by the system in its own language.
+take_language() {
+    local m=$PLINIUS_CRYPT_MNT
+    mkdir -p "$m"
+    mount -o ro "$1" "$m" 2>/dev/null || return 0
+    if [ -f "$m/.plinius-crypt-l10n" ]; then
+        cp "$m/.plinius-crypt-l10n" "$PLINIUS_CRYPT_L10N" && msg "language of the installation"
+    fi
+    if [ -f "$m/.plinius-crypt-keyboard" ]; then
+        mkdir -p "${PLINIUS_CRYPT_KEYBOARD%/*}"
+        cp "$m/.plinius-crypt-keyboard" "$PLINIUS_CRYPT_KEYBOARD" && msg "keyboard of the installation"
+    fi
+    umount "$m"
+}
+
+# Bring up what the prompts need. mountroot has loaded the modules from modules.load by now. The
+# touch driver is not among them: Android's init loads it later from the container. modprobe cannot
+# find it, as it is missing from modules.dep here. insmod needs none, and all that the driver
+# depends on is loaded already.
+prepare_display() {
+    local bl=/sys/class/leds/lcd-backlight max
+    /sbin/insmod "/lib/modules/$(uname -r)/focaltech_ft3681_spi.ko" > /dev/kmsg 2>&1
+    for _ in $(seq 20); do
+        grep -q '^N: Name="fts_ts"' /proc/bus/input/devices && break
+        sleep 0.5
+    done
+    # The driver logs every touch with its coordinates at its default log level 1, and journald
+    # keeps those lines: the password typed here could be read back from them. Level 0 keeps only
+    # its errors, before the first touch (the driver stays loaded, so this holds in the system too;
+    # device-volla-ansuz sets the same where Android loads the driver).
+    for f in /sys/bus/spi/drivers/fts_ts/*/fts_log_level; do
+        [ -w "$f" ] && echo 0 > "$f"
+    done
+    udevadm settle
+    # The vibration motor plays nothing until its driver has loaded the waveform RAM
+    # (haptic_ram.bin, in /lib/firmware of this ramdisk). By itself it does so only about 7 s
+    # after its probe, when most of the password is typed (07.11.: prompt at 7.7 s, RAM at
+    # 14.3 s); ram_update loads it right away (30 ms).
+    if [ -e /sys/class/leds/vibrator/ram_update ]; then
+        echo 1 > /sys/class/leds/vibrator/ram_update 2> /dev/kmsg
+    fi
+    # The panel driver may leave the backlight dark: half brightness
+    if [ -e "$bl/brightness" ]; then
+        max=$(cat "$bl/max_brightness")
+        echo $((max / 2)) > "$bl/brightness"
+    fi
+}
+
+# Show the boot logo from now until the session starts: after the password the screen would
+# otherwise stay dark for about 20 s (measured 07.11.: data partition open at 24.5 s, phoc's
+# own logo at 43.5 s). It is the picture phoc shows at its start, on the same spot, so one
+# hands over to the other. The program outlives the ramdisk; /run is carried over into the
+# system, and there a drop-in for user@.service hands the display over once the user's service
+# manager runs, right before greetd starts the session and phoc takes the display (40.3 s vs.
+# 41.3 s). Ending the logo there left the screen dark for about 3 s, until phoc's first frame
+# (07.11.: 46.7 s vs. 49.5 s); so it gives up DRM master but keeps its picture until phoc
+# replaces it. Nothing of this stays in the system: it all lives in /run.
+start_logo() {
+    [ -f "$PLINIUS_CRYPT_LOGO/mark.bin" ] || return 0
+    # Its errors go to the kernel log: it outlives this script and its console
+    # Below the logo the step of the start, as phoc names its own ("Starting Phosh…"). -L: phoc's
+    # modeset leaves the panel dark, the logo sets the backlight again once phoc has taken over.
+    plinius-progress -l "$PLINIUS_CRYPT_LOGO" -H -T "$PLINIUS_CRYPT_LOGO_TIMEOUT" \
+        -L /sys/class/leds/lcd-backlight/brightness \
+        -m "$(tr_msg "Starting the system…")" < /dev/null > /dev/null 2> /dev/kmsg &
+    echo $! > "$PLINIUS_CRYPT_LOGO_PID"
+    # /run is mounted noexec in the system, hence sh with a script file. It ends only our
+    # process: the PID was written in the ramdisk, so check that it is still the logo.
+    cat > /run/plinius-crypt/logo-quit <<-EOF
+	# Ends the boot logo of the ramdisk (plinius-crypt halium-unlock) before phoc needs the display
+	pid=\$(cat $PLINIUS_CRYPT_LOGO_PID 2>/dev/null) || exit 0
+	rm -f $PLINIUS_CRYPT_LOGO_PID
+	case \$(tr '\\0' ' ' < /proc/\$pid/cmdline 2>/dev/null) in
+	    *plinius-progress*) ;;
+	    *) exit 0 ;;
+	esac
+	# Gone or a zombie: it has let go of the display
+	gone() { ! grep -qs '^State:[[:space:]]*[^Z]' /proc/\$pid/status; }
+	echo "plinius-crypt: boot logo \$pid: \$(grep -s '^State:' /proc/\$pid/status)"
+	# Ask for the handover; it keeps its picture until phoc draws and renames itself once the
+	# display is free (at most 2 s for the answer)
+	kill -USR1 \$pid
+	for _ in \$(seq 20); do
+	    [ "\$(cat /proc/\$pid/comm 2>/dev/null)" = logo-handed ] &&
+	        { echo "plinius-crypt: boot logo handed over"; exit 0; }
+	    gone && { echo "plinius-crypt: boot logo ended"; exit 0; }
+	    sleep 0.1
+	done
+	# No answer: end it, the display must be free for phoc
+	echo "plinius-crypt: boot logo did not hand over, ending it"
+	kill \$pid
+	for _ in \$(seq 20); do
+	    gone && exit 0
+	    sleep 0.1
+	done
+	kill -9 \$pid
+	EOF
+    # "+": the hook runs as root, not as the user; "-": a failure must not stop the login
+    mkdir -p /run/systemd/system/user@.service.d
+    cat > /run/systemd/system/user@.service.d/plinius-crypt-logo.conf <<-EOF
+	[Service]
+	ExecStartPost=+-/bin/sh /run/plinius-crypt/logo-quit
+	EOF
+}
+
+path=$1
+mkdir -p /run/plinius-crypt /run/cryptsetup
+
+# In the kernel log, so that a broken cryptsetup does not look like a plain partition
+msg "$path: $(cryptsetup --version 2>&1)"
+# The programs come from the vendor_boot ramdisk: without them, what the kernel said about unpacking
+# the ramdisk is the clue, and it is gone from the kernel log by the time the journal starts
+if [ ! -x /plinius/bin/cryptsetup ]; then
+    msg "the programs of vendor_boot are missing ($(ls /plinius 2>&1 | tr '\n' ' '))"
+    dmesg | grep -i -E 'initramfs|initrd|unpack|bootconfig' | head -n 10 | while read -r line; do
+        msg "kernel: $line"
+    done
+fi
+
+# Not encrypted and nothing requested: the normal case stays free of any delay beyond these checks
+if ! cryptsetup isLuks "$path" && ! encrypt_requested "$path"; then
+    msg "$path: plain, no request"
+    exit 0
+fi
+
+cryptsetup isLuks "$path" || take_language "$path"
+prepare_display
+root=$path
+run_hook
+if [ "$root" != "$path" ]; then
+    echo "$root" > /run/plinius-crypt/data-dev
+fi
+start_logo

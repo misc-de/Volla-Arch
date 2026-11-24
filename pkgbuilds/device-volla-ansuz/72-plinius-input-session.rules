@@ -1,0 +1,12 @@
+# Volla Phone Plinius: input devices for the session only where one of its own services reads them.
+# The user plinius was in the group "input": every program of the session, also one an attacker
+# got onto the phone outside Flatpak, could read every touch, key and pen stroke, the PIN typed at
+# the lock screen included (attack review 2026-11-12, H3). Without the group, phoc gets its devices
+# from logind (TakeDevice) as before, and only these two get an ACL for the active user (uaccess):
+#   gpio-keys                    plinius-assist (long press of a key)
+#   mt6878-mt6369 Headset Jack   audio-hal-bridge (headset plugged in, its buttons)
+# The haptics device has its rule in feedbackd (72-feedbackd.rules).
+ACTION=="remove", GOTO="plinius_input_session_end"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="gpio-keys", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="mt6878-mt6369 Headset Jack", TAG+="uaccess"
+LABEL="plinius_input_session_end"

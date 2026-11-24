@@ -1,0 +1,6 @@
+# The account picked in plinius-greeter (written by the user greeter into its own directory)
+[Unit]
+Description=Account picked in the greeter
+
+[Path]
+PathExists=/run/plinius-greeter/request

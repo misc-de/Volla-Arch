@@ -1,0 +1,12 @@
+# Replaces systemd's 73-seat-late.rules, without the uaccess builtin, on kernels whose /dev holds no
+# ACLs (TMPFS_POSIX_ACL=n: UT's 6.1.145, plinius-kernel up to 6.1.192-11). The builtin sets ACLs
+# on device nodes; there it logged two errors on each event of such a device, about 1400 lines per
+# boot. plinius-dev-acl copies this file to /run/udev/rules.d only on such a kernel.
+ACTION=="remove", GOTO="seat_late_end"
+
+ENV{ID_SEAT}=="", ENV{ID_AUTOSEAT}=="1", ENV{ID_FOR_SEAT}!="", ENV{ID_SEAT}="seat-$env{ID_FOR_SEAT}"
+ENV{ID_SEAT}=="", IMPORT{parent}="ID_SEAT"
+
+ENV{ID_SEAT}!="", TAG+="$env{ID_SEAT}"
+
+LABEL="seat_late_end"

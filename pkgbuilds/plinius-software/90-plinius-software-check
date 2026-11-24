@@ -1,0 +1,16 @@
+#!/bin/sh
+# NetworkManager dispatcher: the check for system updates is due as soon as the phone reaches the
+# internet, not only at the next run of the daily timer. It runs in the session of each logged-in user,
+# because it notifies there. Before the login nothing happens here: the timer covers that case.
+case "$2:${CONNECTIVITY_STATE:-}" in
+connectivity-change:FULL | up:*) ;;
+*) exit 0 ;;
+esac
+
+loginctl list-users --no-legend 2>/dev/null | while read -r uid user _rest; do
+	[ "$uid" -ge 1000 ] 2>/dev/null || continue
+	home=$(getent passwd "$uid" | cut -d: -f6)
+	# Touched by a successful check only (LAST_CHECK in plinius-software)
+	[ -z "$(find "$home/.local/state/plinius-software/last-check" -mmin -1440 2>/dev/null)" ] || continue
+	systemctl --user -M "$user@" start --no-block plinius-software-check.service
+done

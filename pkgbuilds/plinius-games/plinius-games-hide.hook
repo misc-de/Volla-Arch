@@ -1,0 +1,14 @@
+# "RetroArch" (org.plinius.Games) starts RetroArch with the phone defaults. Its own launcher
+# would start it without, and two icons for the same app confuse. Runs on every install and
+# upgrade of retroarch, because the package brings its launcher back.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/share/applications/com.libretro.RetroArch.desktop
+
+[Action]
+Description = Hiding the launcher of RetroArch (plinius-games)...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plinius-hide-apps
+NeedsTargets

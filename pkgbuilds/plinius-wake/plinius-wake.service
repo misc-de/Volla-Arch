@@ -1,0 +1,46 @@
+[Unit]
+Description=Wake the screen by double tap or tilt
+# The touch driver and sensor-proxy-bridge (tilt, proximity) come from the Android container
+After=sensor-proxy-bridge.service
+
+[Service]
+Type=dbus
+BusName=org.plinius.Wake
+ExecStart=/usr/bin/plinius-wake
+Restart=on-failure
+RestartSec=3
+# Settings from GNOME Settings > Display
+StateDirectory=plinius-wake
+
+# Sandbox (docs/DIENSTE-HAERTEN.md). CAP_DAC_READ_SEARCH only to look for the always-on
+# display's flag in /run/user/<uid> (0700), so the user's directories stay visible read-only.
+# /sys stays writable for the touch driver's gesture mode, which it finds by scanning.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateIPC=yes
+DevicePolicy=closed
+DeviceAllow=/dev/uinput rw
+DeviceAllow=char-input r
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

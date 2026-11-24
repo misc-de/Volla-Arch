@@ -1,0 +1,43 @@
+# Decides per app whether it may use a camera, a security key, the network and the microphone, and
+# counts the attempts (plinius-appaccessd), for the app pages of GNOME Settings. Started early, so the apps
+# of the first session already meet their policy. Nothing is refused while it is not running.
+[Unit]
+Description=Decide and count per app: cameras, security keys, network, microphone
+After=dbus.socket
+Requires=dbus.socket
+Before=systemd-user-sessions.service
+ConditionPathExists=!/etc/plinius-appaccess/off
+
+[Service]
+Type=dbus
+BusName=org.plinius.AppAccess1
+ExecStart=/usr/lib/plinius-appaccess/plinius-appaccessd
+StateDirectory=plinius-appaccess
+StateDirectoryMode=0700
+# The microphone's verdicts for WirePlumber (microphone-<uid>.conf, each for its account's group):
+# gone when the daemon stops, so that nothing is refused then; kept over a restart
+RuntimeDirectory=plinius-appaccess
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+Restart=on-failure
+# Loading cgroup BPF programs and attaching them (BPF, NET_ADMIN), cgroup ids to paths
+# (DAC_READ_SEARCH), the executable of a D-Bus caller in /proc (SYS_PTRACE), the group of a
+# published file (CHOWN)
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_CHOWN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+# … except the uevent files: an allowed security key is announced again (keys_reannounce)
+ReadWritePaths=/sys/devices
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

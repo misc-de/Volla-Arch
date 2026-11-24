@@ -1,0 +1,66 @@
+From ca4b9de65b0908ec5bf16940f3dc96843ebb4c96 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 17:35:46 +0100
+Subject: [PATCH] ofono-binder: Send the IMS data profile with IWLAN allowed
+
+setDataProfile wrote every profile with an invalid profile id, an empty
+bearer bitmap and no DNN. Android (Volla OS on the Volla Phone Plinius)
+sends the IMS profile with the IMS profile id, every radio technology
+including IWLAN in the bearer bitmap and the APN as DNN. A MediaTek modem
+only starts handing its IMS PDN over to Wi-Fi when the profile it was set
+up with allows IWLAN.
+
+Send the IMS profile that way; the other profiles stay as they were.
+---
+ src/binder_network.c | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/src/binder_network.c b/src/binder_network.c
+index 124fa71..82ab897 100644
+--- a/src/binder_network.c
++++ b/src/binder_network.c
+@@ -2440,11 +2440,20 @@ binder_network_fill_radio_data_profile_aidl(
+      *   @nullable OsAppId osAppId;
+      * }
+      */
++    /*
++     * The IMS profile is sent like Android does (Volla OS on the Plinius):
++     * with its own profile id, every radio technology including IWLAN in
++     * the bearer bitmap (bit = RIL radio technology - 1, IWLAN 18 -> bit 17,
++     * NR 20 -> bit 19) and the APN as DNN. A MediaTek modem only hands its
++     * IMS PDN over to Wi-Fi when the profile allows IWLAN.
++     */
++    const gboolean ims = (src->id == RADIO_DATA_PROFILE_IMS);
++
+     gbinder_writer_start_parcelable(writer, &info);
+ 
+     /* Profile id is only meaningful when it's persistent on the modem. */
+     gbinder_writer_append_int32(&info,       /* profileId */
+-         RADIO_DATA_PROFILE_INVALID);
++         ims ? RADIO_DATA_PROFILE_IMS : RADIO_DATA_PROFILE_INVALID);
+     gbinder_writer_append_string16(&info, src->apn);
+     gbinder_writer_append_int32(&info,        /* protocol */
+         binder_proto_from_ofono_proto(src->proto));
+@@ -2461,7 +2470,8 @@ binder_network_fill_radio_data_profile_aidl(
+     gbinder_writer_append_bool(&info, TRUE);  /* enabled */
+     gbinder_writer_append_int32(&info,        /* supportedApnTypesBitmap */
+         binder_radio_apn_types_for_profile(src->id, dpc));
+-    gbinder_writer_append_int32(&info, 0);    /* bearerBitmap */
++    gbinder_writer_append_int32(&info,        /* bearerBitmap */
++        ims ? 0xfffff : 0);
+     gbinder_writer_append_int32(&info, 0);    /* mtuV4 */
+     gbinder_writer_append_int32(&info, 0);    /* mtuV6 */
+     gbinder_writer_append_bool(&info, TRUE);  /* preferred */
+@@ -2470,7 +2480,8 @@ binder_network_fill_radio_data_profile_aidl(
+ 
+     /* trafficDescriptor */
+     gbinder_writer_start_parcelable(&info, &trafficDescriptor);
+-    gbinder_writer_append_string16(&trafficDescriptor, NULL); /* dnn */
++    gbinder_writer_append_string16(&trafficDescriptor, /* dnn */
++        ims ? src->apn : NULL);
+     gbinder_writer_append_null_parcelable(&trafficDescriptor); /* osAppId */
+     gbinder_writer_finish_parcelable(&trafficDescriptor);
+ 
+-- 
+2.56.0
+

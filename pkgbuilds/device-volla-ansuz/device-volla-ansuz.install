@@ -1,0 +1,47 @@
+# /etc/bash.bashrc belongs to bash and has no drop-in directory: one line each sources our prompt
+# (plinius-prompt.sh) and our default aliases (plinius-aliases.sh). bash keeps the file over its
+# updates (backup=), a new version of its own lands next to it as .pacnew.
+_bashrc_files=(/usr/lib/plinius/bash-prompt.sh /usr/lib/plinius/bash-aliases.sh)
+
+post_install() {
+	local f
+	# image/mkimage.sh wrote the sudo rule for wheel with 0644 up to 2026-11-07; sudo accepts it,
+	# 0440 is what sudo itself installs (Lynis AUTH-9252). Only our root-owned file, never a link.
+	if [[ -f /etc/sudoers.d/wheel && ! -L /etc/sudoers.d/wheel ]] &&
+		[[ $(stat -c %u /etc/sudoers.d/wheel) == 0 ]]; then
+		chmod 0440 /etc/sudoers.d/wheel
+	fi
+	# The mobile data rule for a connection that is up already (else from its next change on)
+	/usr/lib/NetworkManager/dispatcher.d/10-plinius-mobile-firewall apply >/dev/null 2>&1 || true
+	# Camera nodes: 72-plinius-camera-no-uaccess.rules keeps the session off them from now on, but
+	# the ACLs uaccess gave before stay on a running /dev until the next boot. The webcam gadget's
+	# node keeps its ACL.
+	local node
+	for node in /sys/class/video4linux/* /sys/bus/media/devices/*; do
+		[[ -e $node && $(readlink -f "$node") != */gadget* ]] || continue
+		[[ -c /dev/${node##*/} ]] && setfacl -b "/dev/${node##*/}" 2>/dev/null
+	done
+	[[ -f /etc/bash.bashrc ]] || return 0
+	for f in "${_bashrc_files[@]}"; do
+		grep -qF "$f" /etc/bash.bashrc ||
+			printf '\n%s\n' "[[ -r $f ]] && . $f  # device-volla-ansuz" >>/etc/bash.bashrc
+	done
+}
+
+post_upgrade() {
+	post_install
+	# Out of the group input (72-plinius-input-session.rules): applies from the next login
+	if id -nG plinius 2>/dev/null | grep -qw input; then
+		gpasswd -d plinius input >/dev/null &&
+			echo "device-volla-ansuz: plinius is no longer in the group input; from the next restart of the phone"
+	fi
+}
+
+post_remove() {
+	local f
+	[[ -f /etc/bash.bashrc ]] || return 0
+	for f in "${_bashrc_files[@]}"; do
+		sed -i "\|$f|d" /etc/bash.bashrc
+	done
+	return 0
+}

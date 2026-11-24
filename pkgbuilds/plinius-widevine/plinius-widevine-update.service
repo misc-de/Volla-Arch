@@ -1,0 +1,48 @@
+# Fetches the Widevine CDM from Google (plinius-widevine-update; on arm64 the one of ChromeOS from
+# Google's LaCrOS image, 147 MiB), for DRM video in Firefox. Widevine may not be redistributed, so it comes onto the device this way.
+# Only while GNOME Settings > Privacy > Protected Content is on (plinius-widevine-set).
+[Unit]
+Description=Fetch or update the Widevine CDM from Google
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/plinius-widevine/enabled
+
+[Service]
+Type=oneshot
+# plinius-widevine-set waits for it; 147 MiB over a slow mobile connection take a while
+TimeoutStartSec=30min
+ExecStart=/usr/lib/plinius-widevine/plinius-widevine-update
+User=plinius-widevine
+Group=plinius-widevine
+StateDirectory=plinius-widevine
+# Firefox in the session reads the CDM from here
+StateDirectoryMode=0755
+UMask=0022
+# Offline: try again later
+Restart=on-failure
+RestartSec=1h
+Nice=19
+IOSchedulingClass=idle
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources

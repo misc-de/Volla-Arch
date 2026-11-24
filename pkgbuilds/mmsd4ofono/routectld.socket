@@ -1,0 +1,16 @@
+# routectld only runs while mmsd needs routes for an MMS (patch 0011): systemd listens on its
+# socket and starts it with the first connection, routectld ends itself when idle. No
+# After=ofono.service here: sockets.target comes before basic.target and ofono after it, so systemd
+# dropped the socket at every boot to break the cycle; routectld.service waits for oFono itself
+[Unit]
+Description=Mobile route control socket (MMS)
+
+[Socket]
+ListenStream=/run/mmsroutectl/socket
+DirectoryMode=0755
+SocketMode=0660
+# The image's user plinius (image/mkimage.sh), as routectld's own chown
+SocketGroup=32011
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- background-sync hands the user's wallpaper, rendered small, to background-install. No
+     authentication for the active session: the helper accepts only one fixed image format and
+     opens no paths from the caller. -->
+<policyconfig>
+  <action id="org.plinius.crypt.background">
+    <description>Use the wallpaper as background of the password prompt at startup</description>
+    <description xml:lang="de">Hintergrundbild für die Passwortabfrage beim Start übernehmen</description>
+    <message>Authentication is required to change the background of the password prompt at startup</message>
+    <message xml:lang="de">Zum Ändern des Hintergrunds der Passwortabfrage beim Start ist eine Legitimierung erforderlich</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-crypt/background-install</annotate>
+  </action>
+  <!-- background-sync hands the look of the on-screen keyboard to look-install. No authentication
+       for the active session: the helper accepts only exact values and opens no paths from them. -->
+  <action id="org.plinius.crypt.look">
+    <description>Use the look of the on-screen keyboard for the password prompt at startup</description>
+    <description xml:lang="de">Aussehen der Bildschirmtastatur für die Passwortabfrage beim Start übernehmen</description>
+    <message>Authentication is required to change the look of the password prompt at startup</message>
+    <message xml:lang="de">Zum Ändern des Aussehens der Passwortabfrage beim Start ist eine Legitimierung erforderlich</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius-crypt/look-install</annotate>
+  </action>
+</policyconfig>

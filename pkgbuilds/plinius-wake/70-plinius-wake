@@ -1,0 +1,6 @@
+#!/bin/sh
+# Display state hook (plinius-backlight-wake): plinius-wake runs the pick-up sensor with the screen
+# off only for Tilt. Over D-Bus: the hook runs in plinius-backlight-wake's sandbox.
+[ "$1" = on ] && on=true || on=false
+busctl call org.plinius.Wake /org/plinius/Wake org.plinius.Wake SetDisplay b "$on" 2>/dev/null
+exit 0

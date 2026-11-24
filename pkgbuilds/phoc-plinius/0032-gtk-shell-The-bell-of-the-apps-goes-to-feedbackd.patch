@@ -1,0 +1,128 @@
+From d0b276708c0fabddc12409c372a531090a9cf693 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 07:52:58 +0100
+Subject: [PATCH] gtk-shell: The bell of the apps goes to feedbackd
+
+gtk_shell1.system_bell did nothing, so GTK's error bell and a terminal's
+bell were never heard. Phoc now triggers bell-window-system in feedbackd
+with the app's id, so the feedback profile, the app's own settings and
+the theme decide what plays (a sound, a vibration or nothing). The
+default theme has nothing for the event: it stays silent until a theme
+gives it something. audible-bell off keeps it silent, and one bell in
+half a second at most goes through.
+---
+ src/gtk-shell.c | 72 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 71 insertions(+), 1 deletion(-)
+
+diff --git a/src/gtk-shell.c b/src/gtk-shell.c
+index 8241314..6f1c926 100644
+--- a/src/gtk-shell.c
++++ b/src/gtk-shell.c
+@@ -22,6 +22,14 @@
+ #include <gtk-shell-protocol.h>
+ #include <wlr/types/wlr_xdg_activation_v1.h>
+ 
++#include <gio/gio.h>
++
++/* The bell of the apps goes to feedbackd, which plays what its theme has for the event */
++#define BELL_EVENT "bell-window-system"
++#define BELL_APP_ID "mobi.phosh.Phoc"
++/* One bell in this time at most: a key held at the end of a text rings with each repeat */
++#define BELL_MIN_INTERVAL_US (500 * G_TIME_SPAN_MILLISECOND)
++
+ /**
+  * PhocGtkShell:
+  *
+@@ -34,6 +42,8 @@ struct _PhocGtkShell {
+   struct wl_global *global;
+   GSList *resources;
+   GSList *surfaces;
++  GSettings *wm_settings;
++  gint64 last_bell;
+ };
+ 
+ /**
+@@ -381,12 +391,71 @@ handle_set_startup_id (struct wl_client   *client,
+ }
+ 
+ 
++static void
++on_bell_bus_ready (GObject *source, GAsyncResult *res, gpointer data)
++{
++  g_autofree char *app_id = data;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GDBusConnection) bus = g_bus_get_finish (res, &err);
++  GVariantBuilder hints;
++
++  if (!bus) {
++    g_warning ("No session bus for the bell: %s", err->message);
++    return;
++  }
++
++  g_variant_builder_init (&hints, G_VARIANT_TYPE_VARDICT);
++  g_dbus_connection_call (bus,
++                          "org.sigxcpu.Feedback",
++                          "/org/sigxcpu/Feedback",
++                          "org.sigxcpu.Feedback",
++                          "TriggerFeedback",
++                          g_variant_new ("(ssa{sv}i)", app_id, BELL_EVENT, &hints, -1),
++                          G_VARIANT_TYPE ("(u)"),
++                          G_DBUS_CALL_FLAGS_NO_AUTO_START,
++                          -1,
++                          NULL,
++                          NULL,
++                          NULL);
++}
++
++/*
++ * Plinius: the bell an app rings (GTK's error bell, a terminal's bell) goes to feedbackd as
++ * bell-window-system with the app's id, so its feedback profile and theme apply; nothing when
++ * org.gnome.desktop.wm.preferences' audible-bell is off.
++ */
+ static void
+ handle_system_bell (struct wl_client   *client,
+                     struct wl_resource *resource,
+                     struct wl_resource *surface)
+ {
+-  g_debug ("%s not implemented", __func__);
++  PhocGtkShell *gtk_shell = phoc_gtk_shell_from_resource (resource);
++  const char *app_id = NULL;
++  gint64 now = g_get_monotonic_time ();
++
++  if (gtk_shell->wm_settings == NULL)
++    gtk_shell->wm_settings = g_settings_new ("org.gnome.desktop.wm.preferences");
++  if (!g_settings_get_boolean (gtk_shell->wm_settings, "audible-bell"))
++    return;
++
++  if (gtk_shell->last_bell && now - gtk_shell->last_bell < BELL_MIN_INTERVAL_US)
++    return;
++  gtk_shell->last_bell = now;
++
++  if (surface) {
++    PhocGtkSurface *gtk_surface = phoc_gtk_surface_from_resource (surface);
++    PhocView *view = gtk_surface->wlr_surface ?
++      phoc_view_from_wlr_surface (gtk_surface->wlr_surface) : NULL;
++
++    app_id = view ? phoc_view_get_app_id (view) : NULL;
++    if (app_id == NULL || *app_id == '\0')
++      app_id = gtk_surface->app_id;
++  }
++  if (app_id == NULL || *app_id == '\0')
++    app_id = BELL_APP_ID;
++
++  g_debug ("Bell of %s", app_id);
++  g_bus_get (G_BUS_TYPE_SESSION, NULL, on_bell_bus_ready, g_strdup (app_id));
+ }
+ 
+ 
+@@ -476,6 +545,7 @@ phoc_gtk_shell_destroy (PhocGtkShell *gtk_shell)
+ {
+   g_clear_pointer (&gtk_shell->resources, g_slist_free);
+   g_clear_pointer (&gtk_shell->surfaces, g_slist_free);
++  g_clear_object (&gtk_shell->wm_settings);
+   wl_global_destroy (gtk_shell->global);
+   g_free (gtk_shell);
+ }
+-- 
+2.56.0
+

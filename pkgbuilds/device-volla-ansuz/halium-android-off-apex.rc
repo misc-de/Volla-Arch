@@ -1,0 +1,11 @@
+# Halium overlay: replaces cas-default.rc, whose service stays off as well (see halium-android-off.rc).
+# These three come from APEX images, which the overlay cannot reach, so they are stopped once they
+# run. The system does not start them again by itself.
+on property:init.svc.media.swcodec=running
+    stop media.swcodec
+
+on property:init.svc.statsd=running
+    stop statsd
+
+on property:init.svc.vendor.drm-widevine-hal=running
+    stop vendor.drm-widevine-hal

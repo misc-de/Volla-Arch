@@ -1,0 +1,11 @@
+[Unit]
+Description=Read Firefox into memory for a fast first start
+ConditionPathExists=/usr/lib/firefox/firefox
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mobile-config-firefox/firefox-preload
+# Never compete with what the user is doing
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle

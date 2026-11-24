@@ -1,0 +1,252 @@
+using Gtk 4.0;
+using Adw 1;
+
+translation-domain "plinius-control-center";
+
+template $CcEsimDialog: Adw.Dialog {
+  title: _("eSIM");
+  content-width: 420;
+  content-height: 640;
+
+  child: Adw.ToastOverlay toast_overlay {
+    Adw.NavigationView navigation_view {
+      Adw.NavigationPage {
+        title: _("eSIM");
+        tag: "main";
+
+        child: Adw.ToolbarView {
+          [top]
+          Adw.HeaderBar {}
+
+          content: Stack main_stack {
+            StackPage {
+              name: "loading";
+
+              child: Adw.Spinner {
+                halign: center;
+                valign: center;
+                width-request: 32;
+                height-request: 32;
+              };
+            }
+
+            StackPage {
+              name: "error";
+
+              child: Adw.StatusPage error_page {
+                icon-name: "auth-sim-missing-symbolic";
+                title: _("eSIM Not Available");
+
+                Button {
+                  halign: center;
+                  label: _("_Try Again");
+                  use-underline: true;
+                  clicked => $retry_clicked_cb(template);
+
+                  styles [
+                    "pill",
+                  ]
+                }
+              };
+            }
+
+            StackPage {
+              name: "content";
+
+              child: Adw.PreferencesPage {
+                Adw.PreferencesGroup profiles_group {
+                  title: _("Profiles");
+                  description: _("Only one profile can be active at a time.");
+
+                  [header-suffix]
+                  Adw.Spinner busy_spinner {
+                    visible: false;
+                  }
+                }
+
+                Adw.PreferencesGroup {
+                  Adw.ButtonRow add_row {
+                    title: _("_Add Profile…");
+                    use-underline: true;
+                    start-icon-name: "list-add-symbolic";
+                    activated => $add_row_activated_cb(template);
+                  }
+                }
+
+                Adw.PreferencesGroup {
+                  title: _("eSIM Chip");
+
+                  Adw.ActionRow eid_row {
+                    title: _("EID");
+                    subtitle-selectable: true;
+
+                    styles [
+                      "property",
+                    ]
+
+                    [suffix]
+                    Button {
+                      valign: center;
+                      icon-name: "edit-copy-symbolic";
+                      tooltip-text: _("Copy EID");
+                      clicked => $copy_eid_clicked_cb(template);
+
+                      styles [
+                        "flat",
+                      ]
+                    }
+                  }
+
+                  Adw.ActionRow memory_row {
+                    title: _("Free Memory");
+
+                    styles [
+                      "property",
+                    ]
+                  }
+
+                  Adw.ActionRow version_row {
+                    title: _("Specification");
+
+                    styles [
+                      "property",
+                    ]
+                  }
+                }
+              };
+            }
+          };
+        };
+      }
+
+      Adw.NavigationPage profile_page {
+        title: _("Profile");
+        tag: "profile";
+
+        child: Adw.ToolbarView {
+          [top]
+          Adw.HeaderBar {}
+
+          content: Adw.PreferencesPage {
+            Adw.PreferencesGroup {
+              Adw.EntryRow label_row {
+                title: _("Label");
+                show-apply-button: true;
+                apply => $label_apply_cb(template);
+              }
+
+              Adw.ActionRow provider_row {
+                title: _("Provider");
+
+                styles [
+                  "property",
+                ]
+              }
+
+              Adw.ActionRow name_row {
+                title: _("Profile Name");
+
+                styles [
+                  "property",
+                ]
+              }
+
+              Adw.ActionRow iccid_row {
+                title: _("ICCID");
+                subtitle-selectable: true;
+
+                styles [
+                  "property",
+                ]
+              }
+
+              Adw.ActionRow class_row {
+                title: _("Type");
+
+                styles [
+                  "property",
+                ]
+              }
+            }
+
+            Adw.PreferencesGroup {
+              Adw.SwitchRow active_row {
+                title: _("_Active");
+                use-underline: true;
+                notify::active => $active_row_changed_cb(template);
+              }
+            }
+
+            Adw.PreferencesGroup {
+              Adw.ButtonRow delete_row {
+                title: _("_Delete Profile…");
+                use-underline: true;
+                activated => $delete_row_activated_cb(template);
+
+                styles [
+                  "destructive-action",
+                ]
+              }
+            }
+          };
+        };
+      }
+
+      Adw.NavigationPage add_page {
+        title: _("Add Profile");
+        tag: "add";
+
+        child: Adw.ToolbarView {
+          [top]
+          Adw.HeaderBar {}
+
+          content: Adw.PreferencesPage {
+            Adw.PreferencesGroup {
+              description: _("Enter the activation code from your provider. It starts with “LPA:1$”, the QR code from the provider contains the same text.");
+
+              Adw.EntryRow code_row {
+                title: _("Activation Code");
+                input-purpose: url;
+                changed => $add_input_changed_cb(template);
+              }
+
+              Adw.EntryRow confirmation_row {
+                title: _("Confirmation Code (if required)");
+              }
+            }
+
+            Adw.PreferencesGroup {
+              Adw.ButtonRow download_row {
+                title: _("_Download Profile");
+                use-underline: true;
+                sensitive: false;
+                activated => $download_row_activated_cb(template);
+
+                styles [
+                  "suggested-action",
+                ]
+              }
+
+              Box download_box {
+                visible: false;
+                spacing: 12;
+                halign: center;
+                margin-top: 12;
+
+                Adw.Spinner {}
+
+                Label download_label {
+                  wrap: true;
+
+                  styles [
+                    "dim-label",
+                  ]
+                }
+              }
+            }
+          };
+        };
+      }
+    }
+  };
+}

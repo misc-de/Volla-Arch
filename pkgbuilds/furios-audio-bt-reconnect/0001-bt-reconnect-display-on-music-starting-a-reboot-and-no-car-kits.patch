@@ -1,0 +1,658 @@
+From c33d01210d9276cfd542253f5ed7739db1cc76cd Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 13:32:33 +0100
+Subject: [PATCH] bt-reconnect: display on, music starting, a reboot, and no
+ car kits
+
+Earbuds do call back themselves when they leave their case, but their
+attempt is short and when it misses it is not repeated (a pair of
+earbuds on the Plinius, 2026-11-11: once connected within the second, an
+hour earlier nothing reached BlueZ at all). Three more occasions for that:
+
+- the display coming on, from MCE's display_status_ind
+- a media player starting to play (MPRIS), the one moment that says the
+  earbuds are wanted when the phone was in hand all along
+- a restart: the candidate is kept in $XDG_STATE_HOME and taken over
+  after a reboot, checked again against BlueZ
+
+Only headphones and wearable headsets are dialled, by class of device: a
+car kit calls itself audio-headset in BlueZ's Icon as well.
+
+Without audioctl the service runs instead of being skipped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ furios-audio-bt-reconnect.service  |   4 +-
+ tests/test-python.py               | 196 ++++++++++++++++++++-
+ tools/furios-audio-bt-reconnect.py | 268 ++++++++++++++++++++++++++++-
+ 3 files changed, 454 insertions(+), 14 deletions(-)
+
+diff --git a/furios-audio-bt-reconnect.service b/furios-audio-bt-reconnect.service
+index 7377c8c..3c66144 100644
+--- a/furios-audio-bt-reconnect.service
++++ b/furios-audio-bt-reconnect.service
+@@ -20,7 +20,9 @@ StartLimitIntervalSec=0
+ [Service]
+ # PipeWire only: under PulseAudio the phone behaves as shipped. Skipped, not
+ # failed, when another profile is stored - see PW_ONLY_HELPERS in audioctl.
+-ExecCondition=/bin/sh -c 'for a in /usr/local/bin/audioctl /usr/bin/audioctl; do [ -x "$$a" ] && exec "$$a" helper-allowed furios-audio-bt-reconnect.service; done; exit 1'
++# Without audioctl (the service installed on its own, as on the Plinius,
++# which has PipeWire only) there is no profile to ask, and it runs.
++ExecCondition=/bin/sh -c 'for a in /usr/local/bin/audioctl /usr/bin/audioctl; do [ -x "$$a" ] && exec "$$a" helper-allowed furios-audio-bt-reconnect.service; done; exit 0'
+ Type=simple
+ ExecStart=/usr/bin/furios-audio-bt-reconnect
+ Restart=on-failure
+diff --git a/tests/test-python.py b/tests/test-python.py
+index ccec7f2..d47b15f 100644
+--- a/tests/test-python.py
++++ b/tests/test-python.py
+@@ -2627,8 +2627,11 @@ class ReconnectBus:
+ 
+     def __init__(self, uuids=("0000110b-0000-1000-8000-00805f9b34fb",),
+                  trusted=True, idle=False, locked=False, fail_get=False,
+-                 connected=True, objects=None):
++                 connected=True, objects=None, cls=0x248404, bluez=True):
+         self.uuids = uuids if uuids is None else list(uuids)
++        # Class of device of earbuds, a wearable headset.
++        self.cls = cls
++        self.bluez = bluez       # is org.bluez on the bus
+         self.trusted = trusted
+         self.connected = connected
+         # What GetManagedObjects answers: path -> interfaces.
+@@ -2645,6 +2648,8 @@ class ReconnectBus:
+                   timeout, cancellable):
+         if method == "GetSession":
+             return FakeVariant(["/org/freedesktop/login1/session/_31"])
++        if method == "NameHasOwner":
++            return FakeVariant([self.bluez])
+         if method == "GetManagedObjects":
+             if self.objects is False:
+                 raise reconnect.GLib.Error("bluez is not answering")
+@@ -2661,7 +2666,13 @@ class ReconnectBus:
+         if wanted == "Trusted":
+             return FakeVariant([self.trusted])
+         if wanted == "Connected":
++            if self.connected is None:
++                raise reconnect.GLib.Error("no such device")
+             return FakeVariant([self.connected])
++        if wanted == "Class":
++            if self.cls is None:
++                raise reconnect.GLib.Error("no such property")
++            return FakeVariant([self.cls])
+         if wanted == "IdleHint":
+             return FakeVariant([self.idle])
+         if wanted == "LockedHint":
+@@ -2746,16 +2757,22 @@ class BluetoothReconnect(unittest.TestCase):
+         reconnect.GLib.timeout_add_seconds = add
+         reconnect.GLib.source_remove = remove
+         reconnect.GLib.get_monotonic_time = lambda: self.now * 1e6
++        # Never the real ~/.local/state: a test run must not leave a
++        # candidate behind for the service on the phone it runs on.
++        self.state_dir = tempfile.mkdtemp(prefix="bt-reconnect-")
++        self.state_file = os.path.join(self.state_dir, "bt-reconnect.json")
+ 
+     def tearDown(self):
+         (reconnect.GLib.timeout_add_seconds, reconnect.GLib.source_remove,
+          reconnect.GLib.get_monotonic_time) = self.saved
++        shutil_real.rmtree(self.state_dir, ignore_errors=True)
+ 
+     # -- helpers ----------------------------------------------------------
+ 
+     def build(self, system=None, session=None, active=False):
+         rc = reconnect.Reconnector(system or ReconnectBus(),
+-                                   session or CallAudioBus())
++                                   session or CallAudioBus(),
++                                   state_file=self.state_file)
+         rc.active = active
+         return rc
+ 
+@@ -3249,8 +3266,12 @@ class BluetoothReconnect(unittest.TestCase):
+         signals = [sub[2] for sub in system.subscriptions]
+         self.assertIn("PropertiesChanged", signals)
+         self.assertIn("InterfacesRemoved", signals)
+-        self.assertEqual(len(system.subscriptions), 3,
+-                         "BlueZ properties, BlueZ removals, logind")
++        self.assertIn("display_status_ind", signals)
++        self.assertEqual(len(system.subscriptions), 4,
++                         "BlueZ properties, BlueZ removals, logind, MCE")
++        session = buses[1]
++        self.assertEqual([sub[2] for sub in session.subscriptions],
++                         ["PropertiesChanged"], "MPRIS players")
+ 
+ 
+ 
+@@ -3450,6 +3471,173 @@ class BluetoothReconnect(unittest.TestCase):
+         self.assertTrue(reconnect.session_in_use(
+             ReconnectBus(), "/org/freedesktop/login1/session/_31"))
+ 
++    # -- the Plinius additions: device class, display, music, a reboot -----
++
++    def test_a_car_kit_is_not_dialled_even_though_it_says_headset(self):
++        """BlueZ gives the car kit the Icon "audio-headset" as well; its
++        class is hands-free (0x240408, measured on the Plinius)."""
++        system = ReconnectBus(cls=0x240408)
++        rc = self.build(system)
++        out = io.StringIO()
++        with redirect_stdout(out):
++            rc.on_disconnected("/org/bluez/hci0/dev_9C_DF_03_BB_8D_31")
++        self.assertIsNone(rc.candidate)
++        self.assertIn("not headphones", out.getvalue())
++        self.assertFalse(os.path.exists(self.state_file))
++
++    def test_a_device_without_a_class_is_left_alone(self):
++        rc = self.build(ReconnectBus(cls=None))
++        self.drop(rc)
++        self.assertIsNone(rc.candidate)
++
++    def test_headphones_by_class(self):
++        self.assertTrue(reconnect.is_headphones(
++            ReconnectBus(cls=0x240418), "/x"))      # minor 6, headphones
++        self.assertFalse(reconnect.is_headphones(
++            ReconnectBus(cls=0x240414), "/x"))      # minor 5, loudspeaker
++        self.assertFalse(reconnect.is_headphones(
++            ReconnectBus(cls=0x000504), "/x"))      # a peripheral
++
++    def display(self, rc, state):
++        with redirect_stdout(io.StringIO()):
++            rc.on_display(None, None, None, None, None, FakeVariant([state]))
++
++    def test_the_display_coming_on_dials_the_candidate(self):
++        system = ReconnectBus(connected=False)
++        rc = self.build(system, active=True)
++        self.drop(rc)
++        self.display(rc, "off")
++        self.assertEqual(system.connects, [])
++        self.display(rc, "on")
++        self.assertEqual(system.connects,
++                         ["/org/bluez/hci0/dev_F4_9D_8A_00_00_01"])
++
++    def test_display_and_unlock_together_are_one_attempt(self):
++        """The display comes on, and a moment later logind says the session
++        is no longer idle: the same event, seen twice."""
++        system = ReconnectBus(connected=False)
++        rc = self.build(system, active=True)
++        self.drop(rc)
++        self.display(rc, "on")
++        system.answer(ok=False)
++        self.now += 2
++        with redirect_stdout(io.StringIO()):
++            rc.on_wakeup()
++        self.assertEqual(len(system.connects), 1)
++
++    def play(self, rc, status="Playing",
++             iface="org.mpris.MediaPlayer2.Player"):
++        with redirect_stdout(io.StringIO()):
++            rc.on_player_props(None, None, None, None, None, FakeVariant(
++                [iface, {"PlaybackStatus": status}, []]))
++
++    def test_music_starting_dials_the_candidate(self):
++        """Earbuds taken out of their case with the phone already in hand:
++        no wake-up, no display change - pressing play is the occasion."""
++        system = ReconnectBus(connected=False)
++        rc = self.build(system, active=True)
++        self.drop(rc)
++        self.play(rc, "Paused")
++        self.play(rc, "Playing", iface="org.mpris.MediaPlayer2")
++        self.assertEqual(system.connects, [])
++        self.play(rc)
++        self.assertEqual(len(system.connects), 1)
++
++    def test_a_playlist_is_not_a_poller(self):
++        system = ReconnectBus(connected=False)
++        rc = self.build(system, active=True)
++        self.drop(rc)
++        self.play(rc)
++        system.answer(ok=False)
++        self.now += reconnect.MUSIC_MIN_GAP_S / 2.0
++        self.play(rc)
++        self.assertEqual(len(system.connects), 1)
++        self.now += reconnect.MUSIC_MIN_GAP_S
++        self.play(rc)
++        self.assertEqual(len(system.connects), 2)
++
++    def test_music_on_connected_earbuds_dials_nothing(self):
++        system = ReconnectBus()
++        rc = self.build(system, active=True)
++        self.drop(rc)
++        with redirect_stdout(io.StringIO()):
++            rc.on_connected("/org/bluez/hci0/dev_F4_9D_8A_00_00_01")
++        self.now += reconnect.KEPT_S + 1
++        self.play(rc)
++        self.assertEqual(system.connects, [])
++
++    def test_the_candidate_survives_a_restart(self):
++        """Earbuds put away before a reboot, taken out after it."""
++        system = ReconnectBus(connected=False)
++        rc = self.build(system, active=True)
++        self.drop(rc)
++        self.assertTrue(os.path.exists(self.state_file))
++
++        again = self.build(system, active=True)
++        with redirect_stdout(io.StringIO()):
++            again.restore()
++        self.assertIsNotNone(again.candidate)
++        self.assertEqual(again.candidate.attempts_left, 0,
++                         "a restart is not a new disconnect")
++        self.assertEqual(system.connects, [], "restoring dials nothing")
++        self.display(again, "on")
++        self.assertEqual(system.connects,
++                         ["/org/bluez/hci0/dev_F4_9D_8A_00_00_01"])
++
++    def test_a_remembered_candidate_still_expires(self):
++        system = ReconnectBus(connected=False)
++        self.drop(self.build(system, active=True))
++        saved = reconnect.time.time
++        reconnect.time.time = lambda: saved() + reconnect.CANDIDATE_TTL_S + 5
++        try:
++            again = self.build(system)
++            with redirect_stdout(io.StringIO()):
++                again.restore()
++        finally:
++            reconnect.time.time = saved
++        self.assertIsNone(again.candidate)
++        self.assertFalse(os.path.exists(self.state_file))
++
++    def test_a_remembered_device_that_was_unpaired_is_dropped(self):
++        system = ReconnectBus(connected=False)
++        self.drop(self.build(system, active=True))
++        system.connected = None          # BlueZ: no such device
++        again = self.build(system)
++        with redirect_stdout(io.StringIO()):
++            again.restore()
++        self.assertIsNone(again.candidate)
++        self.assertFalse(os.path.exists(self.state_file))
++
++    def test_bluez_not_up_yet_at_boot_is_not_an_unpairing(self):
++        system = ReconnectBus(connected=False, bluez=False)
++        self.drop(self.build(system, active=True))
++        again = self.build(system)
++        with redirect_stdout(io.StringIO()):
++            again.restore()
++        self.assertIsNone(again.candidate)
++        self.assertTrue(os.path.exists(self.state_file), "kept for later")
++        self.assertEqual(len(self.timers), 1, "asks again")
++        system.bluez = True
++        self.fire_next_timer(again)
++        self.assertIsNotNone(again.candidate)
++
++    def test_a_connected_remembered_device_is_not_taken_over(self):
++        system = ReconnectBus(connected=False)
++        self.drop(self.build(system, active=True))
++        system.connected = True
++        again = self.build(system)
++        with redirect_stdout(io.StringIO()):
++            again.restore()
++        self.assertIsNone(again.candidate)
++
++    def test_a_broken_state_file_is_ignored(self):
++        with open(self.state_file, "w", encoding="utf-8") as f:
++            f.write("{not json")
++        rc = self.build(ReconnectBus(connected=False))
++        with redirect_stdout(io.StringIO()):
++            rc.restore()
++        self.assertIsNone(rc.candidate)
++
+ 
+ BUILD_ID = "ab" * 20
+ 
+diff --git a/tools/furios-audio-bt-reconnect.py b/tools/furios-audio-bt-reconnect.py
+index f3ea796..929ae3c 100755
+--- a/tools/furios-audio-bt-reconnect.py
++++ b/tools/furios-audio-bt-reconnect.py
+@@ -18,7 +18,7 @@ that nobody dialled.
+ 
+ This dials. What it does NOT do is poll: every attempt is a page, which is
+ seconds of radio and a real cost on a phone that never suspends. So it works
+-by occasions, of which there are two:
++by occasions, of which there are four:
+ 
+   a disconnect     a short series of attempts with growing gaps, for earbuds
+                    that went briefly out of range or into a pocket.
+@@ -27,17 +27,41 @@ by occasions, of which there are two:
+                    the lock screen - you picked the phone up, so you are
+                    there, and so, probably, are the earbuds.
+ 
++  display on       one attempt when the display is switched on, as MCE
++                   announces it (MCE_SIGNAL_IFACE). Earlier than the lock
++                   screen going away, and it also happens on a phone without
++                   a lock screen.
++
++  music starts     one attempt when a media player starts playing (MPRIS).
++                   Taking the earbuds out of their case with the phone already
++                   in hand is no occasion at all otherwise, and pressing play
++                   is the moment the earbuds are wanted.
++
++Earbuds do try to connect themselves when they leave their case, and mostly it
++works. Measured on the Plinius on 2026-11-11 with a pair of earbuds: out
++of the case at 13:24:48, connected the same second, nothing dialled. An hour
++earlier the same earbuds came out of the same case and nothing arrived at the
++phone's BlueZ at all - their own attempt is short, and when it misses, it is not
++repeated. The occasions are for that.
++
+ Between the occasions it does nothing at all, which is the point: a phone that
+ pages a device every thirty seconds all night to find it switched off has
+ spent the battery this repository has spent months protecting.
+ 
+-The candidate is only ever a device this service watched disconnect. Paired
+-audio devices on this phone include a car kit and an OBD adapter, and paging
+-those because somebody's headset is missing would be noise on the air and a
+-car radio switching on in a parked car. Nothing is dialled that was not there
+-a moment ago.
++The candidate is only ever a device this service watched disconnect - and,
++since a reboot would forget it, one it watched disconnect before the reboot
++(STATE_FILE). Paired audio devices on this phone include a car kit and an OBD
++adapter, and paging those because somebody's headset is missing would be noise
++on the air and a car radio switching on in a parked car. A car kit calls itself
++an audio headset in BlueZ's Icon as well, so the device class decides: only
++headphones and wearable headsets are dialled (is_headphones). Nothing is
++dialled that was not there a moment ago.
+ """
+ 
++import json
++import os
++import time
++
+ import gi
+ 
+ gi.require_version("Gio", "2.0")
+@@ -78,6 +102,44 @@ KEPT_S = 30
+ # because it stops by itself after four.
+ WAKE_MIN_GAP_S = 300
+ 
++# The shortest gap before an attempt because music started. Shorter than the
++# one for waking up, because pressing play is something somebody did on
++# purpose, and there are not dozens of those an hour - but not none, because a
++# player that skips through a playlist reports Playing for every track.
++MUSIC_MIN_GAP_S = 60
++
++# The display state as MCE broadcasts it: display_status_ind("on" | "dimmed" |
++# "off") on the system bus, the interface Sailfish OS uses and ofono listens
++# to. On the Plinius it comes from plinius-mce, which is told by
++# plinius-backlight-wake - the always-on clock counting as off. Nothing else on
++# phosh publishes the display state. Without an MCE the signal never arrives
++# and this occasion simply does not happen.
++MCE_SERVICE = "com.nokia.mce"
++MCE_SIGNAL_PATH = "/com/nokia/mce/signal"
++MCE_SIGNAL_IFACE = "com.nokia.mce.signal"
++
++# Where the candidate is kept across a restart of this service or the phone:
++# earbuds that went into their case before a reboot are just as worth dialling
++# after it, and without this a reboot is a day of nothing being dialled.
++STATE_FILE = os.path.join(
++    os.environ.get("XDG_STATE_HOME")
++    or os.path.join(os.path.expanduser("~"), ".local", "state"),
++    "furios-audio", "bt-reconnect.json")
++RESTORE_TRIES = 6
++RESTORE_RETRY_S = 10
++
++# Bluetooth class of device: major class Audio/Video, and the minor classes
++# that are something worn on the head. A car kit is Audio/Video too, with the
++# minor class hands-free (2) or car audio (8) - and BlueZ gives it the same
++# Icon "audio-headset" as earbuds, so the Icon cannot tell them apart.
++# Measured on the Plinius: earbuds 0x248404 (minor 1), the
++# car kit 0x240408 (minor 2).
++CLASS_MAJOR_AUDIO_VIDEO = 4
++HEADPHONE_MINOR_CLASSES = (
++    1,      # wearable headset
++    6,      # headphones
++)
++
+ # How long a device stays worth dialling after it went. Earbuds left in a
+ # drawer over a weekend must not be paged on every unlock for the rest of the
+ # month; after a day of nothing, the next connection can be made by hand.
+@@ -151,6 +213,93 @@ def is_trusted(system, path):
+         return False
+ 
+ 
++def is_headphones(system, path):
++    """Is this something worn on the head - not a car kit, not a speaker?
++
++    By the class of device, see HEADPHONE_MINOR_CLASSES. A device without a
++    class (BLE only, or never seen in an inquiry) is left alone: doubt means
++    leave it alone here, as in carries_audio.
++    """
++    try:
++        cls = system.call_sync(
++            "org.bluez", path, "org.freedesktop.DBus.Properties", "Get",
++            GLib.Variant("(ss)", ("org.bluez.Device1", "Class")),
++            GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 1000, None,
++        ).unpack()[0]
++    except GLib.Error:
++        return False
++    if not isinstance(cls, int):
++        return False
++    return ((cls >> 8) & 0x1f == CLASS_MAJOR_AUDIO_VIDEO
++            and (cls >> 2) & 0x3f in HEADPHONE_MINOR_CLASSES)
++
++
++def bluez_answers(system):
++    """Is bluetoothd on the bus? Asked of the bus, not of BlueZ."""
++    try:
++        return bool(system.call_sync(
++            "org.freedesktop.DBus", "/org/freedesktop/DBus",
++            "org.freedesktop.DBus", "NameHasOwner",
++            GLib.Variant("(s)", ("org.bluez",)), GLib.VariantType("(b)"),
++            Gio.DBusCallFlags.NONE, 1000, None,
++        ).unpack()[0])
++    except GLib.Error:
++        return False
++
++
++def save_candidate(path, name, state_file=None):
++    """Remember the candidate on disk, with the wall-clock time it went.
++
++    Wall clock and not monotonic, because the point is to survive a reboot,
++    and the monotonic clock starts again at zero with every boot. Failing to
++    write is said and otherwise ignored: the service works as before, it only
++    forgets the candidate at the next restart.
++    """
++    state_file = state_file or STATE_FILE
++    try:
++        os.makedirs(os.path.dirname(state_file), exist_ok=True)
++        tmp = state_file + ".tmp"
++        with open(tmp, "w", encoding="utf-8") as f:
++            json.dump({"path": path, "name": name, "gone_at": time.time()}, f)
++        os.replace(tmp, state_file)
++    except OSError as err:
++        print("could not remember %s: %s" % (name, err), flush=True)
++
++
++def forget_candidate(state_file=None):
++    try:
++        os.unlink(state_file or STATE_FILE)
++    except FileNotFoundError:
++        pass
++    except OSError as err:
++        print("could not forget the candidate: %s" % err, flush=True)
++
++
++def load_candidate(state_file=None):
++    """(path, name, seconds since it went), or None.
++
++    None for anything that is not a candidate any more: no file, a file that
++    cannot be read, older than CANDIDATE_TTL_S, or from the future - a clock
++    that was wrong when it was written says nothing about how long ago that
++    was.
++    """
++    try:
++        with open(state_file or STATE_FILE, encoding="utf-8") as f:
++            data = json.load(f)
++        path = str(data["path"])
++        name = str(data["name"])
++        age = time.time() - float(data["gone_at"])
++    except FileNotFoundError:
++        return None
++    except (OSError, ValueError, KeyError, TypeError) as err:
++        print("could not read the remembered candidate: %s" % err,
++              flush=True)
++        return None
++    if not path.startswith("/org/bluez/") or age < 0 or age > CANDIDATE_TTL_S:
++        return None
++    return path, name, age
++
++
+ def in_a_call(session):
+     """Is callaudiod switching the card for a call right now?
+ 
+@@ -256,9 +405,10 @@ class Reconnector:
+     killswitch indicator on 2026-09-14. Keep the connection, keep the signal.
+     """
+ 
+-    def __init__(self, system, session):
++    def __init__(self, system, session, state_file=None):
+         self.system = system
+         self.session = session
++        self.state_file = state_file or STATE_FILE
+         self.candidate = None
+         self.last_attempt = 0.0    # monotonic, any attempt, any occasion
+         # Is the phone in someone's hand? Read from logind at startup and
+@@ -377,10 +527,15 @@ class Reconnector:
+             print("%s disconnected, but it is not trusted - leaving it alone"
+                   % name, flush=True)
+             return
++        if not is_headphones(self.system, path):
++            print("%s disconnected, but it is not headphones - leaving it "
++                  "to call back itself" % name, flush=True)
++            return
+ 
+         if cand is not None:
+             cand.cancel_timer()
+         self.candidate = Candidate(path, name)
++        save_candidate(path, name, self.state_file)
+ 
+         # Who hung up? There is no way to ask - BlueZ does not pass the
+         # disconnect reason to D-Bus - but there is a good proxy. If the phone
+@@ -416,6 +571,7 @@ class Reconnector:
+         if cand is not None and cand.path == path:
+             cand.cancel_timer()
+             self.candidate = None
++            forget_candidate(self.state_file)
+             print("%s is gone from BlueZ - nothing to reconnect"
+                   % cand.name, flush=True)
+ 
+@@ -527,6 +683,37 @@ class Reconnector:
+         measured on this phone the first time the service ran. Without the
+         gap, this occasion would be a poller with extra steps.
+         """
++        self.occasion("phone back in use", WAKE_MIN_GAP_S)
++
++    def on_display(self, _conn, _sender, _path, _iface, _signal, params):
++        """MCE: the display was switched on, dimmed or off.
++
++        Only "on" is an occasion. The rate limit is the one for waking up,
++        because it is the same event seen earlier: the display comes on, and
++        a moment later logind may say the session is no longer idle - the gap
++        makes that one attempt and not two.
++        """
++        try:
++            state = params.unpack()[0]
++        except (TypeError, IndexError, AttributeError):
++            return
++        if state == "on":
++            self.occasion("display on", WAKE_MIN_GAP_S)
++
++    def on_player_props(self, _conn, _sender, _path, _iface, _signal,
++                        params):
++        """MPRIS: a media player started playing."""
++        try:
++            iface, changed, _invalidated = params.unpack()
++        except (TypeError, ValueError, AttributeError):
++            return
++        if iface != "org.mpris.MediaPlayer2.Player":
++            return
++        if changed.get("PlaybackStatus") == "Playing":
++            self.occasion("music started", MUSIC_MIN_GAP_S)
++
++    def occasion(self, why, min_gap):
++        """One attempt for the candidate, if one is owed and not too soon."""
+         cand = self.candidate
+         if cand is None:
+             return
+@@ -536,12 +723,65 @@ class Reconnector:
+                   % cand.name, flush=True)
+             cand.cancel_timer()
+             self.candidate = None
++            forget_candidate(self.state_file)
+             return
+-        if self.last_attempt and now - self.last_attempt < WAKE_MIN_GAP_S:
++        if cand.connected or cand.busy:
++            return    # nothing to do, and not worth spending the gap on
++        if self.last_attempt and now - self.last_attempt < min_gap:
+             return
+         cand.cancel_timer()
+         cand.attempts_left = 0     # the series, if any, is over
+-        self.try_connect("phone back in use")
++        self.try_connect(why)
++
++    def restore(self, tries_left=RESTORE_TRIES):
++        """Take over the candidate remembered before a restart, if any.
++
++        Checked again against BlueZ, because a day is long enough to unpair
++        something. A device that is connected right now is not taken over:
++        its next disconnect makes it a candidate the ordinary way. No attempt
++        is made here - BlueZ dials paired devices itself when the adapter
++        powers on, and the occasions take it from there.
++
++        At boot this service can be up before bluetoothd, and a device BlueZ
++        cannot be asked about is not a device that was unpaired. So that case
++        asks again, RESTORE_TRIES times RESTORE_RETRY_S apart, and keeps the
++        file whatever happens; only BlueZ answering "no such device" drops it.
++        """
++        remembered = load_candidate(self.state_file)
++        if remembered is None:
++            forget_candidate(self.state_file)
++            return False
++        path, name, age = remembered
++        if not bluez_answers(self.system):
++            if tries_left > 1:
++                GLib.timeout_add_seconds(
++                    RESTORE_RETRY_S, lambda: self.restore(tries_left - 1))
++            else:
++                print("BlueZ is not answering - %s is not taken over this "
++                      "time" % name, flush=True)
++            return False
++        if self.candidate is not None:
++            return False    # something disconnected meanwhile; that one wins
++        connected = device_prop(self.system, path, "Connected")
++        if connected is None:
++            print("%s, remembered from before, is gone from BlueZ" % name,
++                  flush=True)
++            forget_candidate(self.state_file)
++            return False
++        if connected:
++            return False
++        if not (carries_audio(self.system, path)
++                and is_trusted(self.system, path)
++                and is_headphones(self.system, path)):
++            forget_candidate(self.state_file)
++            return False
++        cand = Candidate(path, name)
++        cand.attempts_left = 0     # the series belonged to the last run
++        cand.seen_at -= age
++        self.candidate = cand
++        print("remembered %s, gone for %d min" % (name, age // 60),
++              flush=True)
++        return False    # also ends the retry timer this may run from
+ 
+ 
+ def session_path(system):
+@@ -608,6 +848,16 @@ def main():
+             "PropertiesChanged", path, None, Gio.DBusSignalFlags.NONE,
+             rc.on_session_props,
+         )
++    system.signal_subscribe(
++        MCE_SERVICE, MCE_SIGNAL_IFACE, "display_status_ind", MCE_SIGNAL_PATH,
++        None, Gio.DBusSignalFlags.NONE, rc.on_display,
++    )
++    session.signal_subscribe(
++        None, "org.freedesktop.DBus.Properties", "PropertiesChanged",
++        "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player",
++        Gio.DBusSignalFlags.NONE, rc.on_player_props,
++    )
++    rc.restore()
+ 
+     print("watching for a Bluetooth audio device to dial back", flush=True)
+     GLib.MainLoop().run()
+-- 
+2.56.0
+

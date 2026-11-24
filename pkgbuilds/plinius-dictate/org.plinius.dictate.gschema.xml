@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.plinius.dictate" path="/org/plinius/dictate/">
+    <key name="enabled" type="b">
+      <default>false</default>
+      <summary>Speech to text in the on-screen keyboard</summary>
+      <description>Show a microphone key in the on-screen keyboard that types what you say. Recognition runs on the phone, audio is not stored.</description>
+    </key>
+    <key name="keep-model" type="u">
+      <range min="0" max="86400"/>
+      <default>300</default>
+      <summary>Keep the speech model loaded</summary>
+      <description>Seconds after the last dictation before the speech model (about 1 GB) is freed again.</description>
+    </key>
+  </schema>
+</schemalist>

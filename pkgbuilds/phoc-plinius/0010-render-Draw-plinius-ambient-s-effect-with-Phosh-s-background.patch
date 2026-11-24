@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 14:00:00 +0100
+Subject: [PATCH] render: Draw plinius-ambient's effect with Phosh's background
+
+plinius-ambient draws an animated effect (snow, rain, rolling balls ...)
+over the background. Phosh shows its background three times: on the
+background layer under the windows, as a copy on the top layer under the
+unfolded home screen, faded in and out with it, and on the overlay layer
+under the lock screen. A surface of another client cannot be stacked
+between those, so on the bottom layer the effect was never seen behind
+the app grid or the lock screen.
+
+The layer surface with the namespace "plinius-ambient" is therefore not
+drawn in its own place but right after each layer surface "phosh
+background" or "phosh lockscreen background", with that surface's
+alpha. It also gets frame callbacks only while the last frame showed it:
+on the top or overlay layer, or on the background layer without a window
+over it. So the effect animates in the app grid and on the lock screen
+and stops by itself under apps.
+---
+ src/output.c |  9 ++++++++
+ src/output.h |  3 +++
+ src/render.c | 67 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 79 insertions(+)
+
+diff --git a/src/output.c b/src/output.c
+index 8b177fb..90f0f5c 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -417,6 +417,15 @@ surface_send_frame_done_iterator (PhocOutput         *output,
+                                   void               *data)
+ {
+   struct timespec *when = data;
++  struct wlr_layer_surface_v1 *layer_surface;
++
++  /* Plinius: plinius-ambient gets frames only while its effect can be seen (render_layer()), so
++   * that it stops animating under windows */
++  if (!output->ambient_shown) {
++    layer_surface = wlr_layer_surface_v1_try_from_wlr_surface (wlr_surface);
++    if (layer_surface && g_strcmp0 (layer_surface->namespace, "plinius-ambient") == 0)
++      return;
++  }
+ 
+   wlr_surface_send_frame_done (wlr_surface, when);
+ }
+diff --git a/src/output.h b/src/output.h
+index 1e7f5b7..524e1e8 100644
+--- a/src/output.h
++++ b/src/output.h
+@@ -69,6 +69,9 @@ struct _PhocOutput {
+   struct wlr_box            usable_area;
+   int                       lx, ly;
+ 
++  /* Plinius: whether the last frame showed plinius-ambient's effect (see render.c) */
++  gboolean                  ambient_shown;
++
+   struct wl_listener        commit;
+   struct wl_listener        output_destroy;
+ };
+diff --git a/src/render.c b/src/render.c
+index 796523e..d1f806d 100644
+--- a/src/render.c
++++ b/src/render.c
+@@ -320,15 +320,68 @@ render_view (PhocOutput *output, PhocView *view, PhocRenderContext *ctx)
+ }
+ 
+ 
++/*
++ * Plinius: plinius-ambient draws an animated effect (snow, rain, ...) over the background. Phosh
++ * shows its background three times: on the background layer under the windows, as a copy on the
++ * top layer under the unfolded home screen (the app grid), faded in and out with it, and on the
++ * overlay layer under the lock screen. Another client cannot stack its surface between those, so
++ * the effect's layer surface is not drawn in its own place but right after each of Phosh's
++ * backgrounds, with that background's alpha.
++ */
++#define AMBIENT_NAMESPACE "plinius-ambient"
++#define BACKGROUND_NAMESPACE "phosh background"
++#define LOCKSCREEN_BACKGROUND_NAMESPACE "phosh lockscreen background"
++
++static gboolean
++layer_surface_is (PhocLayerSurface *layer_surface, const char *namespace)
++{
++  const char *name = phoc_layer_surface_get_namespace (layer_surface);
++
++  return name && g_str_equal (name, namespace);
++}
++
++
++static PhocLayerSurface *
++find_ambient (PhocOutput *output)
++{
++  for (enum zwlr_layer_shell_v1_layer layer = ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
++       layer <= ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY; layer++) {
++    GQueue *layer_surfaces = phoc_output_get_layer_surfaces_for_layer (output, layer);
++
++    for (GList *l = layer_surfaces->head; l; l = l->next) {
++      if (layer_surface_is (PHOC_LAYER_SURFACE (l->data), AMBIENT_NAMESPACE))
++        return PHOC_LAYER_SURFACE (l->data);
++    }
++  }
++  return NULL;
++}
++
++
++/* Whether a window covers the background layer */
++static gboolean
++has_visible_view (PhocDesktop *desktop, PhocWorkspace *workspace)
++{
++  for (GList *l = phoc_workspace_get_views (workspace)->tail; l; l = l->prev) {
++    if (phoc_desktop_view_check_visibility (desktop, PHOC_VIEW (l->data)))
++      return TRUE;
++  }
++  return FALSE;
++}
++
++
+ static void
+ render_layer (enum zwlr_layer_shell_v1_layer layer, PhocRenderContext *ctx)
+ {
+   GQueue *layer_surfaces = phoc_output_get_layer_surfaces_for_layer (ctx->output, layer);
++  PhocLayerSurface *ambient = find_ambient (ctx->output);
+ 
+   for (GList *l = layer_surfaces->head; l; l = l->next) {
+     PhocLayerSurface *layer_surface = PHOC_LAYER_SURFACE (l->data);
+     PhocPhoshThumbnail *thumbnail;
+ 
++    if (layer_surface == ambient)
++      continue;
++
+     ctx->alpha = phoc_layer_surface_get_alpha (layer_surface);
+     phoc_output_layer_surface_for_each_surface (ctx->output,
+                                                 layer_surface,
+@@ -340,6 +393,17 @@ render_layer (enum zwlr_layer_shell_v1_layer layer, PhocRenderContext *ctx)
+     thumbnail = phoc_phosh_thumbnail_from_layer_surface (layer_surface);
+     if (thumbnail)
+       render_thumbnail_overlay (thumbnail, ctx);
++
++    if (ambient && ctx->alpha > 0 && (layer_surface_is (layer_surface, BACKGROUND_NAMESPACE) ||
++                                      layer_surface_is (layer_surface, LOCKSCREEN_BACKGROUND_NAMESPACE))) {
++      PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++
++      phoc_output_layer_surface_for_each_surface (ctx->output, ambient, render_surface_iterator, ctx);
++      /* On the background layer the effect is only seen when no window lies over it */
++      if (layer > ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM ||
++          !has_visible_view (desktop, phoc_desktop_get_active_workspace (desktop)))
++        ctx->output->ambient_shown = TRUE;
++    }
+   }
+ }
+ 
+@@ -678,6 +742,9 @@ phoc_renderer_render_output (PhocRenderer *self, PhocOutput *output, PhocRenderC
+                               .clip = damage,
+                             });
+ 
++  /* Plinius: set again by render_layer() when plinius-ambient's effect is drawn and visible */
++  output->ambient_shown = FALSE;
++
+   /* If a view is fullscreen on this output, render it */
+   if (output->fullscreen_view && phoc_workspace_has_view (workspace, output->fullscreen_view)) {
+     PhocView *view = output->fullscreen_view;

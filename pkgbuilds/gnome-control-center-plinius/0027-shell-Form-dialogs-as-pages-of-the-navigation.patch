@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 01:20:00 +0100
+Subject: [PATCH] shell: Form dialogs as pages of the navigation
+
+Plinius: cc-plinius-dialog-pages.c (a file of its own) defines
+adw_dialog_present(), adw_dialog_close() and adw_dialog_force_close() in
+the executable, so the form dialogs of all panels open as pages of the
+window's navigation instead of sheets over the window. Alerts and
+libadwaita's own dialogs stay dialogs.
+---
+--- a/shell/meson.build
++++ b/shell/meson.build
+@@ -111,7 +111,8 @@ libshell_dep = declare_dependency(
+ # gnome-control-center #
+ ########################
+ 
+-shell_sources = common_sources + files('main.c')
++# Plinius: form dialogs as pages of the navigation (the executable overrides adw_dialog_present)
++shell_sources = common_sources + files('main.c', 'cc-plinius-dialog-pages.c')
+ 
+ shell_deps = common_deps + [
+   libdevice_dep,

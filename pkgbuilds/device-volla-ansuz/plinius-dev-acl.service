@@ -1,0 +1,11 @@
+[Unit]
+Description=Device access for the session only where /dev holds ACLs
+DefaultDependencies=no
+Before=systemd-udevd.service systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/plinius/plinius-dev-acl
+
+[Install]
+WantedBy=sysinit.target

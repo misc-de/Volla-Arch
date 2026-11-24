@@ -1,0 +1,481 @@
+From 3100f357fc76bbe5ca5e01155b8c441a50981474 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 17:14:41 +0100
+Subject: [PATCH] fingerprint: report touches on an under-display sensor to the
+ AIDL HAL
+
+An under-display sensor has no idea where the finger is: Android's UI
+draws the target, tells the HAL about a finger landing on it and lifting
+off (ISession::onPointerDown/onPointerUp) and, for an optical sensor,
+when the illumination is on screen (onUiReady). Without those the Goodix
+optical HAL of the Volla Phone Plinius never captures an image and
+enrollment ends in a timeout.
+
+Read the sensor type and location out of getSensorProps and offer them
+as the SensorType and SensorLocation properties, and forward the new
+PointerDown, PointerUp and UiReady methods to the session, so a UI in
+the user session can do Android's part. The backend hooks are optional;
+the HIDL backend leaves them NULL.
+---
+ include/fingerprint_backend.h     |  63 +++++++++++++++
+ include/fingerprint_binder_aidl.h |  33 ++++++++
+ include/introspect.h              |  13 +++
+ src/fingerprint.c                 |  50 +++++++++++-
+ src/fingerprint_aidl_backend.c    |  34 +++++++-
+ src/fingerprint_binder_aidl.c     | 130 +++++++++++++++++++++++++++++-
+ 6 files changed, 320 insertions(+), 3 deletions(-)
+
+diff --git a/include/fingerprint_backend.h b/include/fingerprint_backend.h
+index 5256615..3e7a368 100644
+--- a/include/fingerprint_backend.h
++++ b/include/fingerprint_backend.h
+@@ -121,6 +121,16 @@ typedef struct {
+     * @param self The backend instance
+     */
+    void (*cleanup)(FingerprintBackend *self);
++
++   /*
++    * Optional, for sensors under the display; NULL in backends without them.
++    * See fingerprint_aidl_pointer_down() for why they exist.
++    */
++   gboolean (*get_sensor_location)(FingerprintBackend *self, gint32 *type,
++                                   gint32 *x, gint32 *y, gint32 *radius);
++   gboolean (*pointer_down)(FingerprintBackend *self, gint32 x, gint32 y);
++   gboolean (*pointer_up)(FingerprintBackend *self);
++   gboolean (*ui_ready)(FingerprintBackend *self);
+ } FingerprintBackendVTable;
+ 
+ struct _FingerprintBackend {
+@@ -241,4 +251,57 @@ fingerprint_backend_cleanup(FingerprintBackend *backend)
+    backend->vtable.cleanup(backend);
+ }
+ 
++/**
++* Type and position of an under-display sensor
++* @return FALSE if the backend cannot tell
++*/
++static inline gboolean
++fingerprint_backend_get_sensor_location(FingerprintBackend *backend, gint32 *type,
++                                        gint32 *x, gint32 *y, gint32 *radius)
++{
++   g_return_val_if_fail(backend != NULL, FALSE);
++   if (!backend->vtable.get_sensor_location)
++       return FALSE;
++   return backend->vtable.get_sensor_location(backend, type, x, y, radius);
++}
++
++/**
++* A finger touched an under-display sensor at x, y
++* @return FALSE if the backend has no such sensor or the HAL refused
++*/
++static inline gboolean
++fingerprint_backend_pointer_down(FingerprintBackend *backend, gint32 x, gint32 y)
++{
++   g_return_val_if_fail(backend != NULL, FALSE);
++   if (!backend->vtable.pointer_down)
++       return FALSE;
++   return backend->vtable.pointer_down(backend, x, y);
++}
++
++/**
++* The finger left an under-display sensor
++* @return FALSE if the backend has no such sensor or the HAL refused
++*/
++static inline gboolean
++fingerprint_backend_pointer_up(FingerprintBackend *backend)
++{
++   g_return_val_if_fail(backend != NULL, FALSE);
++   if (!backend->vtable.pointer_up)
++       return FALSE;
++   return backend->vtable.pointer_up(backend);
++}
++
++/**
++* The illumination for an optical under-display sensor is on screen
++* @return FALSE if the backend has no such sensor or the HAL refused
++*/
++static inline gboolean
++fingerprint_backend_ui_ready(FingerprintBackend *backend)
++{
++   g_return_val_if_fail(backend != NULL, FALSE);
++   if (!backend->vtable.ui_ready)
++       return FALSE;
++   return backend->vtable.ui_ready(backend);
++}
++
+ #endif // FINGERPRINT_BACKEND_H
+diff --git a/include/fingerprint_binder_aidl.h b/include/fingerprint_binder_aidl.h
+index f9f0563..a5ec2c2 100644
+--- a/include/fingerprint_binder_aidl.h
++++ b/include/fingerprint_binder_aidl.h
+@@ -127,6 +127,39 @@ fingerprint_aidl_cancel_operation(BiomFingerprintAidl *aidl);
+ gboolean
+ fingerprint_aidl_remove_fingerprint(BiomFingerprintAidl *aidl, guint32 finger_id);
+ 
++/**
++ * Type and position of the sensor as the HAL reports them
++ * @param aidl The AIDL instance
++ * @param type FingerprintSensorType (3 = under-display optical)
++ * @param x, y Centre on the display in pixels
++ * @param radius Radius in pixels, 0 if the HAL reports no location
++ * @return TRUE if the HAL is available
++ */
++gboolean
++fingerprint_aidl_get_sensor_location(BiomFingerprintAidl *aidl, gint32 *type,
++                                     gint32 *x, gint32 *y, gint32 *radius);
++
++/**
++ * Under-display sensors: a finger touched the sensor area at x, y
++ * @return TRUE if the HAL took it
++ */
++gboolean
++fingerprint_aidl_pointer_down(BiomFingerprintAidl *aidl, gint32 x, gint32 y);
++
++/**
++ * Under-display sensors: the finger left the sensor area
++ * @return TRUE if the HAL took it
++ */
++gboolean
++fingerprint_aidl_pointer_up(BiomFingerprintAidl *aidl);
++
++/**
++ * Optical under-display sensors: the illumination is on screen
++ * @return TRUE if the HAL took it
++ */
++gboolean
++fingerprint_aidl_ui_ready(BiomFingerprintAidl *aidl);
++
+ /**
+  * Clean up AIDL resources
+  * @param aidl The AIDL instance to clean up
+diff --git a/include/introspect.h b/include/introspect.h
+index 89d1546..0643332 100644
+--- a/include/introspect.h
++++ b/include/introspect.h
+@@ -47,6 +47,17 @@ static const gchar fingerprint_introspection_xml[] =
+   "      <arg type='s' name='finger_name' direction='in'/>"
+   "      <arg type='x' name='enrollment_date' direction='out'/>"
+   "    </method>"
++  "    <method name='PointerDown'>"
++  "      <arg type='i' name='x' direction='in'/>"
++  "      <arg type='i' name='y' direction='in'/>"
++  "      <arg type='b' name='success' direction='out'/>"
++  "    </method>"
++  "    <method name='PointerUp'>"
++  "      <arg type='b' name='success' direction='out'/>"
++  "    </method>"
++  "    <method name='UiReady'>"
++  "      <arg type='b' name='success' direction='out'/>"
++  "    </method>"
+   "    <property name='State' type='i' access='read'/>"
+   "    <property name='EnrollmentProgress' type='i' access='read'/>"
+   "    <property name='EnrolledFingers' type='as' access='read'/>"
+@@ -54,6 +65,8 @@ static const gchar fingerprint_introspection_xml[] =
+   "    <property name='AcquisitionInfo' type='i' access='read'/>"
+   "    <property name='HardwareAvailable' type='b' access='read'/>"
+   "    <property name='ValidFingerNames' type='as' access='read'/>"
++  "    <property name='SensorType' type='i' access='read'/>"
++  "    <property name='SensorLocation' type='(iii)' access='read'/>"
+   "    <signal name='StateChanged'>"
+   "      <arg type='i' name='state'/>"
+   "    </signal>"
+diff --git a/src/fingerprint.c b/src/fingerprint.c
+index 6ebc9d8..dd7d040 100644
+--- a/src/fingerprint.c
++++ b/src/fingerprint.c
+@@ -465,8 +465,11 @@ handle_fingerprint_method_call(GDBusConnection *connection,
+ {
+     BiomFingerprint *self = (BiomFingerprint *)user_data;
+ 
++    /* Stopping and the under-display touch reports belong to a running operation */
+     if (self->current_state != STATE_IDLE &&
+-        !(g_strcmp0(method_name, "StopEnroll") == 0 || g_strcmp0(method_name, "StopIdentify") == 0)) {
++        !(g_strcmp0(method_name, "StopEnroll") == 0 || g_strcmp0(method_name, "StopIdentify") == 0 ||
++          g_strcmp0(method_name, "PointerDown") == 0 || g_strcmp0(method_name, "PointerUp") == 0 ||
++          g_strcmp0(method_name, "UiReady") == 0)) {
+ 
+         const gchar *state_name;
+         switch (self->current_state) {
+@@ -593,6 +596,35 @@ handle_fingerprint_method_call(GDBusConnection *connection,
+             }
+         }
+ 
++        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", success));
++    } else if (g_strcmp0(method_name, "PointerDown") == 0) {
++        /*
++         * Under-display sensors: the session's UI reports a finger on the
++         * sensor area (display pixels), then UiReady once an optical sensor's
++         * illumination shows, and PointerUp when the finger lifts.
++         */
++        gint32 x = 0, y = 0;
++        gboolean success = FALSE;
++
++        g_variant_get(parameters, "(ii)", &x, &y);
++        if (self->current_state != STATE_IDLE && self->backend_available && self->backend)
++            success = fingerprint_backend_pointer_down(self->backend, x, y);
++
++        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", success));
++    } else if (g_strcmp0(method_name, "PointerUp") == 0) {
++        gboolean success = FALSE;
++
++        /* Also when idle: the operation may have ended while the finger was down */
++        if (self->backend_available && self->backend)
++            success = fingerprint_backend_pointer_up(self->backend);
++
++        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", success));
++    } else if (g_strcmp0(method_name, "UiReady") == 0) {
++        gboolean success = FALSE;
++
++        if (self->current_state != STATE_IDLE && self->backend_available && self->backend)
++            success = fingerprint_backend_ui_ready(self->backend);
++
+         g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", success));
+     } else if (g_strcmp0(method_name, "RemoveFinger") == 0) {
+         const gchar *finger_name = NULL;
+@@ -738,6 +770,22 @@ handle_fingerprint_get_property(GDBusConnection *connection,
+         return g_variant_new_int32(self->acquisition_info);
+     } else if (g_strcmp0(property_name, "HardwareAvailable") == 0) {
+         return g_variant_new_boolean(self->backend_available);
++    } else if (g_strcmp0(property_name, "SensorType") == 0 ||
++               g_strcmp0(property_name, "SensorLocation") == 0) {
++        /*
++         * FingerprintSensorType (0 unknown, 1 rear, 2/3 under the display,
++         * ultrasonic/optical, 4 power button) and centre x, y and radius in
++         * display pixels; zeros where the backend cannot tell.
++         */
++        gint32 type = 0, x = 0, y = 0, radius = 0;
++
++        if (self->backend_available && self->backend &&
++            !fingerprint_backend_get_sensor_location(self->backend, &type, &x, &y, &radius))
++            type = x = y = radius = 0;
++
++        if (g_strcmp0(property_name, "SensorType") == 0)
++            return g_variant_new_int32(type);
++        return g_variant_new("(iii)", x, y, radius);
+     } else if (g_strcmp0(property_name, "ValidFingerNames") == 0) {
+         GVariantBuilder builder;
+         g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
+diff --git a/src/fingerprint_aidl_backend.c b/src/fingerprint_aidl_backend.c
+index e805204..be84b6f 100644
+--- a/src/fingerprint_aidl_backend.c
++++ b/src/fingerprint_aidl_backend.c
+@@ -103,6 +103,34 @@ aidl_remove_fingerprint(FingerprintBackend *self, guint32 finger_id)
+     return data && data->aidl && fingerprint_aidl_remove_fingerprint(data->aidl, finger_id);
+ }
+ 
++static gboolean
++aidl_get_sensor_location(FingerprintBackend *self, gint32 *type, gint32 *x, gint32 *y, gint32 *radius)
++{
++    FingerprintAidlData *data = (FingerprintAidlData *)self->impl_data;
++    return data && data->aidl && fingerprint_aidl_get_sensor_location(data->aidl, type, x, y, radius);
++}
++
++static gboolean
++aidl_pointer_down(FingerprintBackend *self, gint32 x, gint32 y)
++{
++    FingerprintAidlData *data = (FingerprintAidlData *)self->impl_data;
++    return data && data->aidl && fingerprint_aidl_pointer_down(data->aidl, x, y);
++}
++
++static gboolean
++aidl_pointer_up(FingerprintBackend *self)
++{
++    FingerprintAidlData *data = (FingerprintAidlData *)self->impl_data;
++    return data && data->aidl && fingerprint_aidl_pointer_up(data->aidl);
++}
++
++static gboolean
++aidl_ui_ready(FingerprintBackend *self)
++{
++    FingerprintAidlData *data = (FingerprintAidlData *)self->impl_data;
++    return data && data->aidl && fingerprint_aidl_ui_ready(data->aidl);
++}
++
+ static void
+ aidl_cleanup(FingerprintBackend *self)
+ {
+@@ -125,7 +153,11 @@ fingerprint_aidl_backend_new(FingerprintBackendCallbacks callbacks)
+         .perform_authentication = aidl_perform_authentication,
+         .cancel_operation = aidl_cancel_operation,
+         .remove_fingerprint = aidl_remove_fingerprint,
+-        .cleanup = aidl_cleanup
++        .cleanup = aidl_cleanup,
++        .get_sensor_location = aidl_get_sensor_location,
++        .pointer_down = aidl_pointer_down,
++        .pointer_up = aidl_pointer_up,
++        .ui_ready = aidl_ui_ready
+     };
+ 
+     FingerprintBackend *backend = fingerprint_backend_new(vtable, callbacks);
+diff --git a/src/fingerprint_binder_aidl.c b/src/fingerprint_binder_aidl.c
+index c2b5298..dd29998 100644
+--- a/src/fingerprint_binder_aidl.c
++++ b/src/fingerprint_binder_aidl.c
+@@ -45,6 +45,9 @@ enum SessionAidlFunctions {
+     SESSION_INVALIDATE_AUTHENTICATOR_ID,                    /* 9 */
+     SESSION_RESET_LOCKOUT,                                  /* 10 */
+     SESSION_CLOSE,                                          /* 11 */
++    SESSION_ON_POINTER_DOWN,                                /* 12 */
++    SESSION_ON_POINTER_UP,                                  /* 13 */
++    SESSION_ON_UI_READY,                                    /* 14 */
+ };
+ 
+ /* android.hardware.biometrics.common.ICancellationSignal */
+@@ -151,6 +154,15 @@ struct _BiomFingerprintAidl {
+     gint32 sensor_id;
+     gboolean available;
+ 
++    /*
++     * From getSensorProps: FingerprintSensorType and, for a sensor under the
++     * display, its centre and radius in display pixels (radius 0 if unknown).
++     */
++    gint32 sensor_type;
++    gint32 sensor_x;
++    gint32 sensor_y;
++    gint32 sensor_radius;
++
+     FingerprintAidlCallbacks callbacks;
+     gpointer user_data;
+ };
+@@ -766,7 +778,44 @@ fingerprint_aidl_session_callback(GBinderLocalObject* obj, GBinderRemoteRequest*
+         (gbinder_local_object_new_reply(obj), 0) : NULL;
+ }
+ 
+-/* only reads the sensor id of the first SensorProps.commonProps */
++/*
++ * The fields after CommonProps in the first SensorProps: the sensor type and,
++ * for a sensor under the display, where it sits. Whatever sees the touchscreen
++ * needs that to draw the target and to tell the HAL about a finger on it (see
++ * fingerprint_aidl_pointer_down()). Leaves the location at radius 0 if it is
++ * missing or cannot be read.
++ */
++static void
++fingerprint_aidl_read_sensor_location(BiomFingerprintAidl* self, GBinderReader* props)
++{
++    GBinderReader location;
++    gboolean location_ok = FALSE;
++    gint32 type = 0, count = 0, display_id = 0, x = 0, y = 0, radius = 0;
++
++    /* FingerprintSensorType is @Backing(type="byte"), an int32 on the wire */
++    if (!gbinder_reader_read_int32(props, &type))
++        return;
++    self->sensor_type = type;
++
++    /* SensorLocation[]: count, then parcelables of displayId (deprecated), x, y, radius, ... */
++    if (!gbinder_reader_read_int32(props, &count) || count <= 0 ||
++        !gbinder_reader_start_parcelable(props, &location, &location_ok))
++        return;
++
++    if (location_ok &&
++        gbinder_reader_read_int32(&location, &display_id) &&
++        gbinder_reader_read_int32(&location, &x) &&
++        gbinder_reader_read_int32(&location, &y) &&
++        gbinder_reader_read_int32(&location, &radius) && radius > 0) {
++        self->sensor_x = x;
++        self->sensor_y = y;
++        self->sensor_radius = radius;
++        g_debug("Fingerprint sensor type %d at %d,%d radius %d", type, x, y, radius);
++    }
++    gbinder_reader_finish_parcelable(&location);
++}
++
++/* only reads the sensor id of the first SensorProps.commonProps, then the location */
+ static gint32
+ fingerprint_aidl_get_sensor_id(BiomFingerprintAidl* self)
+ {
+@@ -793,6 +842,8 @@ fingerprint_aidl_get_sensor_id(BiomFingerprintAidl* self)
+                 ok = common_ok && gbinder_reader_read_int32(&common, &sensor_id);
+                 gbinder_reader_finish_parcelable(&common);
+             }
++            if (ok)
++                fingerprint_aidl_read_sensor_location(self, &props);
+             gbinder_reader_finish_parcelable(&props);
+         }
+ 
+@@ -1106,6 +1157,83 @@ fingerprint_aidl_remove_fingerprint(BiomFingerprintAidl* self, guint32 finger_id
+                                       req, "ISession::removeEnrollments");
+ }
+ 
++gboolean
++fingerprint_aidl_get_sensor_location(BiomFingerprintAidl* self, gint32* type,
++                                     gint32* x, gint32* y, gint32* radius)
++{
++    if (!self || !self->available)
++        return FALSE;
++
++    *type = self->sensor_type;
++    *x = self->sensor_x;
++    *y = self->sensor_y;
++    *radius = self->sensor_radius;
++    return TRUE;
++}
++
++/*
++ * Under-display sensors: the HAL does not see the touchscreen, so whoever does
++ * reports a finger landing on the sensor and lifting off again, and for an
++ * optical sensor when the illumination is on screen. Without them an optical
++ * sensor never takes an image (the Goodix HAL times out waiting for UI ready).
++ * The deprecated context-free methods are enough: they carry the same data
++ * minus the display state, which the HAL does not need from us.
++ */
++gboolean
++fingerprint_aidl_pointer_down(BiomFingerprintAidl* self, gint32 x, gint32 y)
++{
++    GBinderLocalRequest* req;
++    GBinderWriter writer;
++
++    if (!self || !self->available)
++        return FALSE;
++
++    /* void onPointerDown(int pointerId, int x, int y, float minor, float major); */
++    req = gbinder_client_new_request2(self->session_client, SESSION_ON_POINTER_DOWN);
++    gbinder_local_request_init_writer(req, &writer);
++    gbinder_writer_append_int32(&writer, 0);
++    gbinder_writer_append_int32(&writer, x);
++    gbinder_writer_append_int32(&writer, y);
++    /* Touch ellipse axes; a fingertip roughly covers the sensor */
++    gbinder_writer_append_float(&writer, (float)self->sensor_radius);
++    gbinder_writer_append_float(&writer, (float)self->sensor_radius);
++
++    return fingerprint_aidl_call_void(self->session_client, SESSION_ON_POINTER_DOWN, req,
++                                      "ISession::onPointerDown");
++}
++
++gboolean
++fingerprint_aidl_pointer_up(BiomFingerprintAidl* self)
++{
++    GBinderLocalRequest* req;
++    GBinderWriter writer;
++
++    if (!self || !self->available)
++        return FALSE;
++
++    /* void onPointerUp(int pointerId); */
++    req = gbinder_client_new_request2(self->session_client, SESSION_ON_POINTER_UP);
++    gbinder_local_request_init_writer(req, &writer);
++    gbinder_writer_append_int32(&writer, 0);
++
++    return fingerprint_aidl_call_void(self->session_client, SESSION_ON_POINTER_UP, req,
++                                      "ISession::onPointerUp");
++}
++
++gboolean
++fingerprint_aidl_ui_ready(BiomFingerprintAidl* self)
++{
++    GBinderLocalRequest* req;
++
++    if (!self || !self->available)
++        return FALSE;
++
++    /* void onUiReady(); */
++    req = gbinder_client_new_request2(self->session_client, SESSION_ON_UI_READY);
++    return fingerprint_aidl_call_void(self->session_client, SESSION_ON_UI_READY, req,
++                                      "ISession::onUiReady");
++}
++
+ void
+ fingerprint_aidl_cleanup(BiomFingerprintAidl* self)
+ {
+-- 
+2.56.0
+

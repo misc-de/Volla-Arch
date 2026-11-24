@@ -1,0 +1,23 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-callfocus
+pkgver=0.1
+pkgrel=6
+pkgdesc="Pauses music and videos while a call rings or runs or an app records, and resumes them afterwards"
+arch=(any)
+license=(MIT)
+# Calls from GNOME Calls' D-Bus objects, players over MPRIS, other streams through pactl
+depends=(python python-gobject libpulse gnome-calls)
+source=(plinius-callfocus.py
+	plinius-callfocus.desktop
+	LICENSE)
+sha256sums=('284076b8bebbc8fac27725c91ec304294ab4b43de1eb918869e096a3a9972d01'
+            '9a885f27f135a6eba62e7016e02c276e1e4e10d298467240bb886f4e1ae8953f'
+            '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-callfocus.py "$pkgdir/usr/bin/plinius-callfocus"
+	# Runs in the session: it talks to the session's players and Calls
+	install -Dm644 plinius-callfocus.desktop -t "$pkgdir/etc/xdg/autostart"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -1,0 +1,93 @@
+From 090dd8ca839ef1ef90e95c03b49bd6dc522d8147 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 18:35:47 +0100
+Subject: [PATCH] USB as a panel of its own below NFC
+
+Plinius: a panel "USB" in the sidebar after NFC with what the phone
+offers a computer on the cable (file sharing, network, internet for the
+computer) and the network preset at plug-in, the same as the USB quick
+setting (plinius-usb, org.plinius.Usb). The panel (cc-usb-panel.*) and
+its desktop file come as separate files; it is only listed when
+plinius-usb is installed.
+---
+ panels/meson.build      |  1 +
+ panels/usb/meson.build  | 20 ++++++++++++++++++++
+ shell/cc-panel-list.c   |  1 +
+ shell/cc-panel-loader.c |  3 +++
+ 4 files changed, 25 insertions(+)
+ create mode 100644 panels/usb/meson.build
+
+diff --git a/panels/meson.build b/panels/meson.build
+index 70541b3..181f4ce 100644
+--- a/panels/meson.build
++++ b/panels/meson.build
+@@ -24,6 +24,7 @@ panels = [
+   'streaming',
+   'system',
+   'universal-access',
++  'usb',
+   'wellbeing',
+   'wwan',
+ ]
+diff --git a/panels/usb/meson.build b/panels/usb/meson.build
+new file mode 100644
+index 0000000..a22df80
+--- /dev/null
++++ b/panels/usb/meson.build
+@@ -0,0 +1,20 @@
++# Plinius: USB panel. The sources and the desktop file (with its translations)
++# come as separate files of gnome-control-center-plinius.
++panels_list += cappletname
++
++install_data(
++  'gnome-usb-panel.desktop',
++  install_dir: control_center_desktopdir,
++)
++
++sources = files(
++  'cc-usb-panel.c',
++)
++
++panels_libs += static_library(
++  cappletname,
++  sources: sources,
++  include_directories: [ top_inc, common_inc ],
++  dependencies: common_deps,
++  c_args: cflags,
++)
+diff --git a/shell/cc-panel-list.c b/shell/cc-panel-list.c
+index ace5de6..f1cfa38 100644
+--- a/shell/cc-panel-list.c
++++ b/shell/cc-panel-list.c
+@@ -342,6 +342,7 @@ static const gchar *const panel_order[] = {
+     "bluetooth",
+     "streaming",
+     "nfc",
++    "usb",
+ 
+     "separator",
+ 
+diff --git a/shell/cc-panel-loader.c b/shell/cc-panel-loader.c
+index a0e3319..38f6048 100644
+--- a/shell/cc-panel-loader.c
++++ b/shell/cc-panel-loader.c
+@@ -38,6 +38,8 @@ extern GType cc_nfc_panel_get_type (void);
+ extern void cc_nfc_panel_static_init_func (void);
+ extern GType cc_streaming_panel_get_type (void);
+ extern void cc_streaming_panel_static_init_func (void);
++extern GType cc_usb_panel_get_type (void);
++extern void cc_usb_panel_static_init_func (void);
+ extern GType cc_background_panel_get_type (void);
+ #ifdef BUILD_BLUETOOTH
+ extern GType cc_bluetooth_panel_get_type (void);
+@@ -117,6 +119,7 @@ static CcPanelLoaderVtable default_panels[] = {
+     PANEL_TYPE ("streaming", cc_streaming_panel_get_type, cc_streaming_panel_static_init_func),
+     PANEL_TYPE ("system", cc_system_panel_get_type, NULL),
+     PANEL_TYPE ("universal-access", cc_ua_panel_get_type, NULL),
++    PANEL_TYPE ("usb", cc_usb_panel_get_type, cc_usb_panel_static_init_func),
+     /* Plinius: Users as a panel of its own, above Privacy & Security, not inside System */
+     PANEL_TYPE ("users", cc_users_page_get_type, NULL),
+ #ifdef BUILD_WACOM
+-- 
+2.56.0
+

@@ -1,0 +1,39 @@
+From be80f87fad85c192003d434bc48c814653401030 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 11:04:42 +0100
+Subject: [PATCH] obexd: Build the ebook phone book with evolution-data-server
+ 3.60
+
+evolution-data-server 3.60 replaced EVCardFormat with EVCardVersion:
+EVC_FORMAT_VCARD_21/30 are gone and e_vcard_to_string() no longer takes a
+format, e_vcard_convert_to_string() writes a given version. Map the old
+names onto the new API when building against 3.60 or later.
+---
+ obexd/plugins/phonebook-ebook.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/obexd/plugins/phonebook-ebook.c b/obexd/plugins/phonebook-ebook.c
+index 5fc0498..a0bfb31 100644
+--- a/obexd/plugins/phonebook-ebook.c
++++ b/obexd/plugins/phonebook-ebook.c
+@@ -29,6 +29,17 @@
+ #include <libebook/libebook.h>
+ #include <libedataserver/libedataserver.h>
+ 
++/* evolution-data-server 3.60 replaced the vCard formats (EVCardFormat) with
++ * versions (EVCardVersion); e_vcard_to_string() lost its format argument and
++ * e_vcard_convert_to_string() writes a given version.
++ */
++#if EDS_CHECK_VERSION(3, 60, 0)
++#define EVC_FORMAT_VCARD_21 E_VCARD_VERSION_21
++#define EVC_FORMAT_VCARD_30 E_VCARD_VERSION_30
++#define e_vcard_to_string(evcard, version) \
++	e_vcard_convert_to_string((evcard), (version))
++#endif
++
+ #include "obexd/src/log.h"
+ #include "phonebook.h"
+ 
+-- 
+2.56.0
+

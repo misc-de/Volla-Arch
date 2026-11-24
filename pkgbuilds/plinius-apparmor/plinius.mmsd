@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in (here a user unit). Starting profile in complain mode: it logs what the
+# service does beyond these rules; the rules are completed from those messages (tools/aa-denials.sh)
+# before the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# mmsd (mmsd4ofono): fetches MMS from the carrier's MMSC on a WAP push anyone can send by SMS, and
+# decodes them. Data from the network, in a process of the user: added 12.11.2026 (attack review).
+profile plinius.mmsd flags=(complain, attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/python>
+  include <abstractions/nameservice-strict>
+  include <abstractions/openssl>
+  include <abstractions/ssl_certs>
+  include <abstractions/dbus-strict>
+  include <abstractions/dbus-session-strict>
+  network inet stream, network inet6 stream, network inet dgram, network inet6 dgram,
+  /usr/bin/python3* ix,
+  /usr/lib/mmsd/{,**} r,
+  /usr/lib/mmsd/main.py rix,
+  # The MMS of the user and mmsd's settings
+  owner @{HOME}/.mms/ rw,
+  owner @{HOME}/.mms/** rwk,
+  # Routes for a fetch or a send (routectld, root)
+  /run/mmsroutectl/socket rw,
+}

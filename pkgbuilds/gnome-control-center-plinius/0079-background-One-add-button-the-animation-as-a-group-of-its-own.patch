@@ -1,0 +1,410 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 21:30:05 +0100
+Subject: [PATCH] background: One add button, the animation as a group of its
+ own
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plinius: each section of the Background page had a row of its own to add
+files (Add Video…, Add 360° Photo…, Add Picture…). There is one button in
+the page's header bar instead (+, "Add Pictures and Videos"): the file
+dialog offers pictures, and videos and GIFs with plinius-ambient 0.5, and
+each file goes into its section by its type: videos and GIFs to Video,
+equirectangular photos (GPano XMP) to 360° Photos, other pictures to Own
+Pictures. The sections that got something open. A section without
+anything shows "Nothing added yet".
+
+The animated effect and its amount are no section among the background's
+any more but the group "Animation" on top of the page (Effect, Amount):
+they are drawn over whatever the background is.
+
+The rows Style and Background on the Appearance page have nothing in front
+any more (no accent dot, no small picture); their subtitles say what is
+set. The panel no longer makes a thumbnail for the row.
+
+The sorting and copying are in cc-plinius-panorama.c, the group in
+cc-plinius-ambient.c, the rows in cc-plinius-appearance.c (our own files).
+---
+ panels/background/cc-background-chooser.blp |  9 ++-
+ panels/background/cc-background-chooser.c   | 73 ++++++++++++++-------
+ panels/background/cc-background-panel.blp   | 15 +++--
+ panels/background/cc-background-panel.c     | 44 ++++++++-----
+ 4 files changed, 95 insertions(+), 46 deletions(-)
+
+diff --git a/panels/background/cc-background-chooser.blp b/panels/background/cc-background-chooser.blp
+index 5e743f8..6b5d24f 100644
+--- a/panels/background/cc-background-chooser.blp
++++ b/panels/background/cc-background-chooser.blp
+@@ -1,12 +1,11 @@
+ using Gtk 4.0;
+ using Adw 1;
+ 
+-// Plinius: five sections, each opens on its own: the animated effect, videos and 360° photos
+-// (filled by cc-plinius-ambient.c and cc-plinius-panorama.c), own pictures and GNOME's; the titles
+-// are set in the code (our gettext domain)
++// Plinius: four sections, each opens on its own: videos and 360° photos (filled by
++// cc-plinius-panorama.c), own pictures and GNOME's; the titles are set in the code (our gettext
++// domain). The animated effect is a group of its own above (cc-plinius-ambient.c), files are
++// added with the button of the page's header bar.
+ template $CcBackgroundChooser: Adw.PreferencesGroup {
+-  Adw.ExpanderRow animated_row {}
+-
+   Adw.ExpanderRow video_row {}
+ 
+   Adw.ExpanderRow panorama_row {}
+diff --git a/panels/background/cc-background-chooser.c b/panels/background/cc-background-chooser.c
+index 06e3df4..4195ef3 100644
+--- a/panels/background/cc-background-chooser.c
++++ b/panels/background/cc-background-chooser.c
+@@ -30,7 +30,6 @@
+ #include "cc-background-chooser.h"
+ #include "cc-background-item.h"
+ #include "cc-background-paintable.h"
+-#include "cc-plinius-ambient.h"
+ #include "cc-plinius-panorama.h"
+ 
+ #define THUMBNAIL_WIDTH 144
+@@ -43,11 +42,11 @@ struct _CcBackgroundChooser {
+     GtkWidget *recent_box;
+     GtkFlowBox *recent_flowbox;
+     /* Plinius: the sections, each opens on its own */
+-    AdwExpanderRow *animated_row;
+     AdwExpanderRow *video_row;
+     AdwExpanderRow *panorama_row;
+     AdwExpanderRow *recent_row;
+     AdwExpanderRow *wallpapers_row;
++    GtkWidget *recent_empty_row; /* while there are no own pictures */
+     gboolean recent_bound;
+     gboolean wallpapers_bound;
+ 
+@@ -280,6 +279,7 @@ update_recent_visibility (CcBackgroundChooser *self)
+     has_items = g_list_model_get_n_items (G_LIST_MODEL (store)) != 0;
+ 
+     gtk_widget_set_visible (self->recent_box, has_items);
++    gtk_widget_set_visible (self->recent_empty_row, !has_items);
+ }
+ 
+ /* Plinius: the tiles (and their thumbnails) are made when their section is opened the first time */
+@@ -359,28 +359,57 @@ on_item_activated_cb (CcBackgroundChooser *self, GtkFlowBoxChild *child, GtkFlow
+     emit_background_chosen (self);
+ }
+ 
++/* Plinius: each file into its section, by its type: videos and GIFs to Video, equirectangular
++ * photos to 360° Photos (cc_plinius_files_sort), other pictures to Own Pictures; the sections that
++ * got something open */
+ static void
+ file_dialog_open_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
+ {
+-    CcBackgroundChooser *self = CC_BACKGROUND_CHOOSER (user_data);
++    g_autoptr(CcBackgroundChooser) self = CC_BACKGROUND_CHOOSER (user_data);
+     GtkFileDialog *file_dialog = GTK_FILE_DIALOG (source_object);
+     g_autoptr(GListModel) files = NULL;
+     g_autoptr(GError) error = NULL;
++    gboolean video = FALSE, photo = FALSE, own = FALSE;
+     guint i;
+ 
+     files = gtk_file_dialog_open_multiple_finish (file_dialog, res, &error);
+ 
+-    if (error != NULL) {
+-        g_warning ("Failed to pick backgrounds: %s", error->message);
++    if (files == NULL) {
++        if (!g_error_matches (error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED))
++            g_warning ("Failed to pick backgrounds: %s", error->message);
+         return;
+     }
+ 
+     for (i = 0; i < g_list_model_get_n_items (files); i++) {
+         g_autoptr(GFile) file = g_list_model_get_item (files, i);
+         g_autofree gchar *filename = g_file_get_path (file);
++        g_autofree gchar *type = NULL;
++        CcPliniusFilesKind kind;
++
++        if (cc_plinius_files_sort (file, &kind)) {
++            cc_plinius_files_add (kind, file);
++            if (kind == CC_PLINIUS_FILES_VIDEO)
++                video = TRUE;
++            else
++                photo = TRUE;
++            continue;
++        }
+ 
++        type = filename ? g_content_type_guess (filename, NULL, 0, NULL) : NULL;
++        if (!filename || !type || !g_content_type_is_a (type, "image/*")) {
++            g_warning ("Not a picture, not added: %s", filename ? filename : "(no path)");
++            continue;
++        }
+         bg_recent_source_add_file (self->recent_source, filename);
++        own = TRUE;
+     }
++
++    if (video)
++        adw_expander_row_set_expanded (self->video_row, TRUE);
++    if (photo)
++        adw_expander_row_set_expanded (self->panorama_row, TRUE);
++    if (own)
++        adw_expander_row_set_expanded (self->recent_row, TRUE);
+ }
+ 
+ /* GObject overrides */
+@@ -414,7 +443,6 @@ cc_background_chooser_class_init (CcBackgroundChooserClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, flowbox);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_box);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_flowbox);
+-    gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, animated_row);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, video_row);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, panorama_row);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundChooser, recent_row);
+@@ -426,8 +454,6 @@ cc_background_chooser_class_init (CcBackgroundChooserClass *klass)
+ static void
+ cc_background_chooser_init (CcBackgroundChooser *self)
+ {
+-    GtkWidget *add_row;
+-
+     gtk_widget_init_template (GTK_WIDGET (self));
+ 
+     self->recent_source = bg_recent_source_new ();
+@@ -437,30 +463,33 @@ cc_background_chooser_init (CcBackgroundChooser *self)
+     g_object_set_data (G_OBJECT (self->recent_source), "background-chooser", self);
+     g_object_set_data (G_OBJECT (self->wallpapers_source), "background-chooser", self);
+ 
++    /* Plinius: a row instead of the tiles while there are no own pictures */
++    self->recent_empty_row = cc_plinius_files_empty_row_new ();
++    adw_expander_row_add_row (self->recent_row, self->recent_empty_row);
++
+     setup_flowbox (self);
+ 
+-    /* Plinius: the sections' titles in our gettext domain; the animated effect, the videos and the
+-     * 360° photos from our files, each only with the plinius-ambient that has it */
+-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->animated_row), cc_plinius_panorama_heading ("animated"));
++    /* Plinius: the sections' titles in our gettext domain; the videos and the 360° photos from our
++     * files, each only with the plinius-ambient that has it */
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->video_row), cc_plinius_panorama_heading ("video"));
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->panorama_row), cc_plinius_panorama_heading ("panorama"));
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->recent_row), cc_plinius_panorama_heading ("recent"));
+     adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->wallpapers_row),
+                                    cc_plinius_panorama_heading ("wallpapers"));
+-    gtk_widget_set_visible (GTK_WIDGET (self->animated_row), cc_plinius_ambient_fill (self->animated_row));
+     gtk_widget_set_visible (GTK_WIDGET (self->video_row),
+                             cc_plinius_panorama_fill (self->video_row, CC_PLINIUS_FILES_VIDEO, on_panorama_changed,
+                                                       self));
+     gtk_widget_set_visible (GTK_WIDGET (self->panorama_row),
+                             cc_plinius_panorama_fill (self->panorama_row, CC_PLINIUS_FILES_PANORAMA,
+                                                       on_panorama_changed, self));
+-
+-    add_row = cc_plinius_panorama_add_row_new ("add-picture");
+-    g_signal_connect_object (add_row, "activated", G_CALLBACK (cc_background_chooser_select_file), self,
+-                             G_CONNECT_SWAPPED);
+-    adw_expander_row_add_row (self->recent_row, add_row);
+ }
+ 
++/**
++ * cc_background_chooser_select_file:
++ *
++ * Plinius: the one way to add backgrounds (the button of the page's header bar): pictures, and
++ * videos and GIFs with plinius-ambient 0.5, several at once; file_dialog_open_cb sorts them.
++ */
+ void
+ cc_background_chooser_select_file (CcBackgroundChooser *self)
+ {
+@@ -475,11 +504,13 @@ cc_background_chooser_select_file (CcBackgroundChooser *self)
+     toplevel = (GtkWindow *) gtk_widget_get_native (GTK_WIDGET (self));
+ 
+     file_dialog = gtk_file_dialog_new ();
+-    gtk_file_dialog_set_title (file_dialog, _("Select Picture"));
++    gtk_file_dialog_set_title (file_dialog, cc_plinius_panorama_heading ("add"));
+     gtk_file_dialog_set_modal (file_dialog, TRUE);
+ 
+     filter = gtk_file_filter_new ();
++    gtk_file_filter_set_name (filter, cc_plinius_panorama_heading ("add"));
+     gtk_file_filter_add_pixbuf_formats (filter);
++    cc_plinius_files_add_types (filter);
+ 
+     filters = g_list_store_new (GTK_TYPE_FILE_FILTER);
+     g_list_store_append (filters, filter);
+@@ -488,7 +519,7 @@ cc_background_chooser_select_file (CcBackgroundChooser *self)
+     pictures_folder = g_file_new_for_path (g_get_user_special_dir (G_USER_DIRECTORY_PICTURES));
+     gtk_file_dialog_set_initial_folder (file_dialog, pictures_folder);
+ 
+-    gtk_file_dialog_open_multiple (file_dialog, toplevel, NULL, file_dialog_open_cb, self);
++    gtk_file_dialog_open_multiple (file_dialog, toplevel, NULL, file_dialog_open_cb, g_object_ref (self));
+ }
+ 
+ static void
+@@ -547,8 +578,7 @@ active_item_is_recent (CcBackgroundChooser *self)
+  * cc_background_chooser_open_current:
+  *
+  * Plinius: opens the section of the current background (video, 360° photo, own or GNOME's
+- * picture) and closes the others; the animated effect's section is open while there is one.
+- * Called each time the page is shown.
++ * picture) and closes the others. Called each time the page is shown.
+  */
+ void
+ cc_background_chooser_open_current (CcBackgroundChooser *self)
+@@ -561,7 +591,6 @@ cc_background_chooser_open_current (CcBackgroundChooser *self)
+     photo = !video && cc_plinius_panorama_is_active ();
+     own = !video && !photo && active_item_is_recent (self);
+ 
+-    adw_expander_row_set_expanded (self->animated_row, cc_plinius_ambient_effect_label () != NULL);
+     adw_expander_row_set_expanded (self->video_row, video);
+     adw_expander_row_set_expanded (self->panorama_row, photo);
+     adw_expander_row_set_expanded (self->recent_row, own);
+diff --git a/panels/background/cc-background-panel.blp b/panels/background/cc-background-panel.blp
+index 67c84d8..1201c3e 100644
+--- a/panels/background/cc-background-panel.blp
++++ b/panels/background/cc-background-panel.blp
+@@ -209,8 +209,9 @@ template $CcBackgroundPanel: $CcPanel {
+     };
+   }
+ 
+-  // Plinius: the background in five sections (cc-background-chooser.blp), the one of the current
+-  // background open
++  // Plinius: the animated effect on top (a group of its own, cc-plinius-ambient.c), below it the
++  // background in four sections (cc-background-chooser.blp), the one of the current background
++  // open. One button in the header bar adds pictures and videos, each into its section.
+   [subpage]
+   Adw.NavigationPage background_page {
+     tag: "background";
+@@ -219,9 +220,15 @@ template $CcBackgroundPanel: $CcPanel {
+ 
+     child: Adw.ToolbarView {
+       [top]
+-      Adw.HeaderBar {}
++      Adw.HeaderBar {
++        [end]
++        Button background_add_button {
++          icon-name: "list-add-symbolic";
++          clicked => $on_background_add_clicked_cb(template);
++        }
++      }
+ 
+-      content: Adw.PreferencesPage {
++      content: Adw.PreferencesPage background_prefs_page {
+         $CcBackgroundChooser background_chooser {
+           background-chosen => $on_chooser_background_chosen_cb(template);
+         }
+diff --git a/panels/background/cc-background-panel.c b/panels/background/cc-background-panel.c
+index 0e4b570..510bc8a 100644
+--- a/panels/background/cc-background-panel.c
++++ b/panels/background/cc-background-panel.c
+@@ -26,19 +26,19 @@
+ #include <string.h>
+ 
+ #include <gdesktop-enums.h>
+-#include <libgnome-desktop/gnome-desktop-thumbnail.h>
+ 
+ #include "cc-background-panel.h"
+ 
+ #include "cc-background-chooser.h"
+ #include "cc-background-item.h"
+-#include "cc-background-paintable.h"
+ #include "cc-background-preview.h"
+ #include "panels/common/cc-list-row.h"
+ #include "panels/common/cc-plinius-display.h"
+ #include "cc-plinius-accent.h"
++#include "cc-plinius-ambient.h"
+ #include "cc-plinius-appearance.h"
+ #include "cc-plinius-bgcolor.h"
++#include "cc-plinius-panorama.h"
+ #include "cc-background-resources.h"
+ 
+ #define WP_PATH_ID "org.gnome.desktop.background"
+@@ -73,13 +73,15 @@ struct _CcBackgroundPanel {
+     AdwPreferencesGroup *pages_group;
+     AdwActionRow *style_row;
+     AdwActionRow *background_row;
+-    GnomeDesktopThumbnailFactory *thumbnail_factory;
+ 
+     GtkWidget *accent_box;
+     /* Plinius: the background color, shown when no background is chosen */
+     AdwPreferencesGroup *bgcolor_group;
+     GtkWidget *bgcolor_box;
+     CcBackgroundChooser *background_chooser;
++    /* Plinius: the Background page, its add button */
++    AdwPreferencesPage *background_prefs_page;
++    GtkWidget *background_add_button;
+     CcBackgroundPreview *default_preview;
+     CcBackgroundPreview *dark_preview;
+     GtkToggleButton *default_toggle;
+@@ -292,16 +294,9 @@ update_preview (CcBackgroundPanel *self)
+     cc_background_preview_set_item (self->default_preview, current_background);
+     cc_background_preview_set_item (self->dark_preview, current_background);
+ 
+-    /* Plinius: and small in front of the row Background, as the chooser's tiles draw it */
+-    {
+-        g_autoptr(CcBackgroundPaintable) paintable = NULL;
+-
+-        paintable = cc_background_paintable_new (self->thumbnail_factory, current_background,
+-                                                 CC_BACKGROUND_PAINT_LIGHT_DARK, 64, 48,
+-                                                 GTK_WIDGET (self->background_row));
+-        cc_plinius_appearance_background_row_set_picture (self->background_row, GDK_PAINTABLE (paintable),
+-                                                          cc_background_item_get_uri (current_background));
+-    }
++    /* Plinius: the row Background names the kind of picture (own or GNOME's) */
++    cc_plinius_appearance_background_row_set_uri (self->background_row,
++                                                  cc_background_item_get_uri (current_background));
+ }
+ 
+ static void
+@@ -442,6 +437,13 @@ on_background_page_showing_cb (CcBackgroundPanel *self)
+     cc_background_chooser_open_current (self->background_chooser);
+ }
+ 
++/* Plinius: pictures, videos and 360° photos, each into its section */
++static void
++on_background_add_clicked_cb (CcBackgroundPanel *self)
++{
++    cc_background_chooser_select_file (self->background_chooser);
++}
++
+ static const char *
+ cc_background_panel_get_help_uri (CcPanel *panel)
+ {
+@@ -467,7 +469,6 @@ cc_background_panel_finalize (GObject *object)
+     CcBackgroundPanel *self = CC_BACKGROUND_PANEL (object);
+ 
+     g_clear_object (&self->current_background);
+-    g_clear_object (&self->thumbnail_factory);
+ 
+     G_OBJECT_CLASS (cc_background_panel_parent_class)->finalize (object);
+ }
+@@ -496,6 +497,8 @@ cc_background_panel_class_init (CcBackgroundPanelClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, bgcolor_box);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, appearance_page);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, background_chooser);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, background_prefs_page);
++    gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, background_add_button);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, default_preview);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, dark_preview);
+     gtk_widget_class_bind_template_child (widget_class, CcBackgroundPanel, default_toggle);
+@@ -507,6 +510,7 @@ cc_background_panel_class_init (CcBackgroundPanelClass *klass)
+     gtk_widget_class_bind_template_callback (widget_class, on_color_scheme_toggle_active_cb);
+     gtk_widget_class_bind_template_callback (widget_class, on_chooser_background_chosen_cb);
+     gtk_widget_class_bind_template_callback (widget_class, on_background_page_showing_cb);
++    gtk_widget_class_bind_template_callback (widget_class, on_background_add_clicked_cb);
+ }
+ 
+ static void
+@@ -533,7 +537,17 @@ cc_background_panel_init (CcBackgroundPanel *self)
+     }
+     cc_plinius_appearance_style_row_setup (self->style_row);
+     cc_plinius_appearance_background_row_setup (self->background_row);
+-    self->thumbnail_factory = gnome_desktop_thumbnail_factory_new (GNOME_DESKTOP_THUMBNAIL_SIZE_LARGE);
++    /* Plinius: the animated effect above the background's sections, apart from them; the add
++     * button's name in our gettext domain */
++    {
++        GtkWidget *animation = cc_plinius_ambient_group_new ();
++
++        if (animation)
++            adw_preferences_page_insert (self->background_prefs_page, ADW_PREFERENCES_GROUP (animation), 0);
++    }
++    gtk_widget_set_tooltip_text (self->background_add_button, cc_plinius_panorama_heading ("add"));
++    gtk_accessible_update_property (GTK_ACCESSIBLE (self->background_add_button), GTK_ACCESSIBLE_PROPERTY_LABEL,
++                                    cc_plinius_panorama_heading ("add"), -1);
+ 
+     self->connection = g_application_get_dbus_connection (g_application_get_default ());
+ 
+-- 
+2.56.0
+

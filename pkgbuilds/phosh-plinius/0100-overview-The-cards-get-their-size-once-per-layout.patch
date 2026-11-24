@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu Nov 19 06:50:00 2026 +0100
+Subject: [PATCH] overview: The cards get their size once per layout
+
+Plinius: with the band of 0094 the carousel got its size twice in one
+layout of the overview: from the box, then band lower from
+plinius_move_band_to_grid (). The passing size made GTK draw all cards
+anew in every layout, and the overview was laid out in every frame
+while the grid scrolled (its scrollbar). perf with paint uprobes on the
+phone: frames of ~30 ms while dragging the grid, 35-50 % of them the
+cards' icons with their blurred shadows and the cards' thumbnails.
+
+The carousel now gets the band as a margin towards the grid before the
+box's allocation. The box shares out the room beyond the natural sizes
+in halves, so a margin of 2 bands makes the cards one band lower; the
+grid gets 2 bands more room upwards afterwards. Cards and grid end up
+where they were.
+---
+diff --git a/src/overview.c b/src/overview.c
+index 4e05541c..d02e6cff 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -1073,33 +1073,46 @@ plinius_fade_band (PhoshOverview *self, const GtkAllocation *alloc)
+ 
+ 
+ /*
+- * Plinius: above the grid both expand and the box shares the room out, so the band moves from
+- * the carousel to the grid after the box's allocation. Below the grid the carousel asks for that
+- * much less (plinius_lay_out_bottom ()) and the box gives it to the grid by itself.
++ * Plinius: above the grid both expand and the box shares the room out. The band moves from the
++ * carousel to the grid: the cards get that much lower, the grid that much higher. The carousel
++ * gets it as a margin towards the grid before the box's allocation, so its cards get their final
++ * size at once: allocated a second time, every layout of the overview (the grid's scrollbar while
++ * scrolling) gave them a passing size, and GTK drew all cards anew, their icons' blurred shadows
++ * included (35-50 % of a frame of 30 ms while scrolling). The box shares out what is left beyond
++ * the natural sizes, so a margin of twice the band takes one band from the cards: the grid
++ * gets 2 bands more room upwards afterwards, the margin of PLINIUS_CARD_GRID_MARGIN stays.
++ * Below the grid the carousel asks for that much less (plinius_lay_out_bottom ()) and the box
++ * gives it to the grid by itself.
+  */
+ static void
+-plinius_move_band_to_grid (PhoshOverview *self, int band)
++plinius_lay_out_band (PhoshOverview *self, int band)
+ {
+   PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
+   GtkWidget *carousel = GTK_WIDGET (priv->carousel_running_activities);
++  int margin = PLINIUS_CARD_GRID_MARGIN + 2 * band;
++
++  if (priv->plinius_bottom)
++    return;
++
++  /* Only when it changed: each change lays the overview out once more */
++  if (gtk_widget_get_margin_bottom (carousel) != margin)
++    gtk_widget_set_margin_bottom (carousel, margin);
++}
++
++
++static void
++plinius_move_band_to_grid (PhoshOverview *self, int band)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
+   GtkWidget *grid_box = gtk_widget_get_parent (priv->app_grid);
+-  GtkAllocation cards, grid;
++  GtkAllocation grid;
+ 
+   if (!band || priv->plinius_bottom)
+     return;
+ 
+-  /* The allocations lack the margins, the allocation to give includes them */
+-  gtk_widget_get_allocation (carousel, &cards);
+-  cards.x -= gtk_widget_get_margin_start (carousel);
+-  cards.y -= gtk_widget_get_margin_top (carousel);
+-  cards.width += gtk_widget_get_margin_start (carousel) + gtk_widget_get_margin_end (carousel);
+-  cards.height += gtk_widget_get_margin_top (carousel) + gtk_widget_get_margin_bottom (carousel);
+-  cards.height -= band;
+-  gtk_widget_size_allocate (carousel, &cards);
+-
+   gtk_widget_get_allocation (grid_box, &grid);
+-  grid.y -= band;
+-  grid.height += band;
++  grid.y -= 2 * band;
++  grid.height += 2 * band;
+   gtk_widget_size_allocate (grid_box, &grid);
+ }
+ 
+@@ -1125,6 +1138,7 @@ phosh_overview_size_allocate (GtkWidget     *widget,
+ 
+   band = plinius_fade_band (self, alloc);
+   plinius_lay_out_bottom (self, alloc, band);
++  plinius_lay_out_band (self, band);
+ 
+   GTK_WIDGET_CLASS (phosh_overview_parent_class)->size_allocate (widget, alloc);
+ 

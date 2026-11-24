@@ -1,0 +1,14 @@
+[Unit]
+Description=Watch ScummVM's game list and icon packs for new launchers
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Path]
+# Directories, so a file written through a temporary name and renamed counts as well. The icons
+# directory only exists once ScummVM downloaded icons; systemd waits for it to appear.
+PathChanged=%h/.config/scummvm
+PathChanged=%h/.cache/scummvm/icons
+Unit=plinius-scummvm-launchers.service
+
+[Install]
+WantedBy=graphical-session.target

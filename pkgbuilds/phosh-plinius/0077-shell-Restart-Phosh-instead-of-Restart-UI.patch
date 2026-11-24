@@ -1,0 +1,330 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 07:15:16 +0100
+Subject: [PATCH] shell: "Restart Phosh" instead of "Restart UI"
+
+Plinius: the entry in the system menu of the quick settings, the one in
+the power menu and the question before restarting name what restarts:
+Phosh. The compositor and the apps keep running, so "the interface" was
+too broad.
+
+Translations for de, es, fr, it, nl, pl, pt, pt_BR and ru.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ po/de.po                 | 12 ++++++------
+ po/es.po                 | 12 ++++++------
+ po/fr.po                 | 12 ++++++------
+ po/it.po                 | 12 ++++++------
+ po/nl.po                 | 12 ++++++------
+ po/pl.po                 | 12 ++++++------
+ po/pt.po                 | 12 ++++++------
+ po/pt_BR.po              | 12 ++++++------
+ po/ru.po                 | 12 ++++++------
+ src/end-session-dialog.c |  4 ++--
+ src/ui/power-menu.ui     |  2 +-
+ src/ui/top-panel.ui      |  2 +-
+ 12 files changed, 58 insertions(+), 58 deletions(-)
+
+diff --git a/po/de.po b/po/de.po
+index 645aaff8..46fc8c77 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1364,18 +1364,18 @@ msgstr "Hotspot aus"
+ #, c-format
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Oberfläche neu starten"
++msgid "Restart Phosh"
++msgstr "Phosh neu starten"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "_Oberfläche neu starten"
++msgid "Restart _Phosh"
++msgstr "_Phosh neu starten"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Oberfläche wirklich neu starten? Geöffnete Apps laufen weiter und das Telefon wird gesperrt."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Phosh wirklich neu starten? Geöffnete Apps laufen weiter und das Telefon wird gesperrt."
+ 
+ #~ msgid "In %u day"
+ #~ msgid_plural "In %u days"
+diff --git a/po/es.po b/po/es.po
+index 3457baf2..ab5b42b5 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -760,18 +760,18 @@ msgstr "Evento sin título"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Reiniciar la interfaz"
++msgid "Restart Phosh"
++msgstr "Reiniciar Phosh"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "Reiniciar la _interfaz"
++msgid "Restart _Phosh"
++msgstr "Reiniciar _Phosh"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "¿Seguro que quieres reiniciar la interfaz? Las aplicaciones abiertas siguen funcionando y el teléfono se bloqueará."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "¿Seguro que quieres reiniciar Phosh? Las aplicaciones abiertas siguen funcionando y el teléfono se bloqueará."
+ 
+ msgid "Emergency"
+ msgstr "Emergencia"
+diff --git a/po/fr.po b/po/fr.po
+index 0b6f236e..e4649758 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1110,18 +1110,18 @@ msgstr "Point d’accès désactivé"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Redémarrer l’interface"
++msgid "Restart Phosh"
++msgstr "Redémarrer Phosh"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "Redémarrer l’_interface"
++msgid "Restart _Phosh"
++msgstr "Redémarrer _Phosh"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Voulez-vous vraiment redémarrer l’interface ? Les applications ouvertes continuent de fonctionner et le téléphone sera verrouillé."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Voulez-vous vraiment redémarrer Phosh ? Les applications ouvertes continuent de fonctionner et le téléphone sera verrouillé."
+ 
+ #~ msgid "Add"
+ #~ msgstr "Ajouter"
+diff --git a/po/it.po b/po/it.po
+index 45b1576d..7966502d 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -840,18 +840,18 @@ msgstr "Evento senza titolo"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Riavvia l'interfaccia"
++msgid "Restart Phosh"
++msgstr "Riavvia Phosh"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "Riavvia l'_interfaccia"
++msgid "Restart _Phosh"
++msgstr "Riavvia _Phosh"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Vuoi davvero riavviare l'interfaccia? Le app aperte restano in esecuzione e il telefono verrà bloccato."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Vuoi davvero riavviare Phosh? Le app aperte restano in esecuzione e il telefono verrà bloccato."
+ 
+ 
+ #: src/emergency-menu.c
+diff --git a/po/nl.po b/po/nl.po
+index 3d8a85ef..cb3c3481 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1374,18 +1374,18 @@ msgstr "Hotspot uit"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Interface herstarten"
++msgid "Restart Phosh"
++msgstr "Phosh herstarten"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "_Interface herstarten"
++msgid "Restart _Phosh"
++msgstr "_Phosh herstarten"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Wil je de interface echt herstarten? Geopende apps blijven draaien en de telefoon wordt vergrendeld."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Wil je Phosh echt herstarten? Geopende apps blijven draaien en de telefoon wordt vergrendeld."
+ 
+ #~ msgid "Screenshot copied to clipboard"
+ #~ msgstr "Schermafdruk gekopieerd naar klembord"
+diff --git a/po/pl.po b/po/pl.po
+index 87d66e3e..16f34857 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1424,18 +1424,18 @@ msgstr "Hotspot wyłączony"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Uruchom ponownie interfejs"
++msgid "Restart Phosh"
++msgstr "Uruchom ponownie Phosh"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "Uruchom ponownie _interfejs"
++msgid "Restart _Phosh"
++msgstr "Uruchom ponownie _Phosh"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Czy na pewno uruchomić ponownie interfejs? Otwarte aplikacje będą nadal działać, a telefon zostanie zablokowany."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Czy na pewno uruchomić ponownie Phosh? Otwarte aplikacje będą nadal działać, a telefon zostanie zablokowany."
+ 
+ 
+ #: src/emergency-menu.c
+diff --git a/po/pt.po b/po/pt.po
+index 50548c8f..6da0a876 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1410,18 +1410,18 @@ msgstr "Ponto de acesso desligado"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Reiniciar a interface"
++msgid "Restart Phosh"
++msgstr "Reiniciar o Phosh"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "Reiniciar a _interface"
++msgid "Restart _Phosh"
++msgstr "Reiniciar o _Phosh"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Quer mesmo reiniciar a interface? As aplicações abertas continuam a funcionar e o telefone será bloqueado."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Quer mesmo reiniciar o Phosh? As aplicações abertas continuam a funcionar e o telefone será bloqueado."
+ 
+ 
+ #: src/emergency-menu.c
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index c145a4cc..05d1e80a 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1414,18 +1414,18 @@ msgstr "Ponto de acesso desligado"
+ #, c-format
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Reiniciar a interface"
++msgid "Restart Phosh"
++msgstr "Reiniciar o Phosh"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "Reiniciar a _interface"
++msgid "Restart _Phosh"
++msgstr "Reiniciar o _Phosh"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Quer mesmo reiniciar a interface? Os aplicativos abertos continuam em execução e o telefone será bloqueado."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Quer mesmo reiniciar o Phosh? Os aplicativos abertos continuam em execução e o telefone será bloqueado."
+ 
+ #~ msgid "In %u day"
+ #~ msgid_plural "In %u days"
+diff --git a/po/ru.po b/po/ru.po
+index 8678869f..1d528765 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1437,18 +1437,18 @@ msgstr "Точка доступа выключена"
+ #, c-format
+ #. Plinius: restart only the shell
+ #: src/ui/power-menu.ui
+-msgid "Restart UI"
+-msgstr "Перезапустить интерфейс"
++msgid "Restart Phosh"
++msgstr "Перезапустить Phosh"
+ 
+ #. Plinius: restart only the shell
+ #: src/ui/top-panel.ui
+-msgid "Restart _UI"
+-msgstr "Перезапустить _интерфейс"
++msgid "Restart _Phosh"
++msgstr "Перезапустить _Phosh"
+ 
+ #. Plinius: the question before restarting only the shell
+ #: src/end-session-dialog.c
+-msgid "Do you really want to restart the interface? Open apps keep running and the phone gets locked."
+-msgstr "Действительно перезапустить интерфейс? Открытые приложения продолжат работать, а телефон будет заблокирован."
++msgid "Do you really want to restart Phosh? Open apps keep running and the phone gets locked."
++msgstr "Действительно перезапустить Phosh? Открытые приложения продолжат работать, а телефон будет заблокирован."
+ 
+ #~ msgid "In %u day"
+ #~ msgid_plural "In %u days"
+diff --git a/src/end-session-dialog.c b/src/end-session-dialog.c
+index b824d032..c458ee1a 100644
+--- a/src/end-session-dialog.c
++++ b/src/end-session-dialog.c
+@@ -194,8 +194,8 @@ end_session_dialog_update (PhoshEndSessionDialog *self)
+     break;
+   case PHOSH_END_SESSION_ACTION_RESTART_UI:
+     /* Plinius: no countdown, without an answer nothing happens */
+-    title = _("Restart UI");
+-    description = g_strdup (_("Do you really want to restart the interface? "
++    title = _("Restart Phosh");
++    description = g_strdup (_("Do you really want to restart Phosh? "
+                               "Open apps keep running and the phone gets locked."));
+     break;
+   default:
+diff --git a/src/ui/power-menu.ui b/src/ui/power-menu.ui
+index dbc0d598..e65244b9 100644
+--- a/src/ui/power-menu.ui
++++ b/src/ui/power-menu.ui
+@@ -278,7 +278,7 @@
+                     <child>
+                       <object class="PhoshFadingLabel">
+                         <property name="visible">1</property>
+-                        <property name="label" translatable="yes">Restart UI</property>
++                        <property name="label" translatable="yes">Restart Phosh</property>
+                       </object>
+                     </child>
+                   </object>
+diff --git a/src/ui/top-panel.ui b/src/ui/top-panel.ui
+index d950b33d..3788fc41 100644
+--- a/src/ui/top-panel.ui
++++ b/src/ui/top-panel.ui
+@@ -84,7 +84,7 @@
+                 <child>
+                   <object class="GtkLabel">
+                     <property name="visible">1</property>
+-                    <property name="label" translatable="yes">Restart _UI</property>
++                    <property name="label" translatable="yes">Restart _Phosh</property>
+                     <property name="xalign">0</property>
+                     <property name="use-underline">1</property>
+                   </object>

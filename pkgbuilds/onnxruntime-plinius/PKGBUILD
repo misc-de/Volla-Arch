@@ -1,0 +1,62 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=onnxruntime-plinius
+pkgver=1.32.0
+pkgrel=1
+pkgdesc="ONNX Runtime inference engine (CPU), shared library for sherpa-onnx"
+arch=(aarch64 x86_64)  # x86_64 for the KVM preview
+url="https://github.com/microsoft/onnxruntime"
+# Own build only; statically inside: ONNX Runtime, onnx, protobuf (lite), abseil, re2, flatbuffers,
+# Eigen, cpuinfo, pthreadpool, nlohmann-json, GSL, SafeInt, date, mp11 and others from deps.txt
+license=(MIT Apache-2.0 BSD-3-Clause BSD-2-Clause MPL-2.0 BSL-1.0)
+depends=(gcc-libs glibc)
+makedepends=(cmake ninja python)
+provides=(onnxruntime onnxruntime-cpu "libonnxruntime.so=1-64")
+conflicts=(onnxruntime-cpu)
+# Newer than the prebuilt library sherpa-onnx 2.0.1 is tested with (1.28.2): the C API is
+# versioned and stays backward compatible, but sherpa-onnx built against these headers asks for
+# API 32 and so needs at least this version (see its depends). The CMake build fetches its
+# dependencies at configure time (FetchContent, pinned with SHA1 in cmake/deps.txt); that needs
+# the network in build(), as plinius-tflite.
+options=(!lto)
+source=("onnxruntime-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('8bb6dde72d89509b8c014a440bf113505d86af99e8f143da3de1a3feb8132561')
+
+prepare() {
+	cd "onnxruntime-$pkgver"
+	# Newer GCC warns in places upstream treats as errors; warnings are not our build's concern
+	find cmake -type f \( -name '*.cmake' -o -name CMakeLists.txt \) -exec sed -i 's/-Werror//g' {} +
+}
+
+build() {
+	# CMAKE_POLICY_VERSION_MINIMUM: some fetched dependencies still ask for CMake < 3.5.
+	# --compile-no-warning-as-error: upstream sets COMPILE_WARNING_AS_ERROR on its targets, and
+	# GCC 16 finds new maybe-uninitialized warnings in it (matmul_nbits_fusion.cc)
+	# onnxruntime_USE_TELEMETRY: off by default in CMake, but build.py turns 1DS telemetry on since
+	# 1.31; pinned off so a changed default can never compile it in (it would also fetch curl/mbedtls)
+	cmake -B build -S "onnxruntime-$pkgver/cmake" -G Ninja --compile-no-warning-as-error \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+		-DPython_EXECUTABLE=/usr/bin/python \
+		-DFETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER \
+		-Donnxruntime_BUILD_SHARED_LIB=ON \
+		-Donnxruntime_BUILD_UNIT_TESTS=OFF \
+		-Donnxruntime_BUILD_BENCHMARKS=OFF \
+		-Donnxruntime_RUN_ONNX_TESTS=OFF \
+		-Donnxruntime_ENABLE_PYTHON=OFF \
+		-Donnxruntime_ENABLE_LTO=OFF \
+		-Donnxruntime_ENABLE_CPUINFO=ON \
+		-Donnxruntime_USE_TELEMETRY=OFF
+	cmake --build build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+	# Only the runtime and its C/C++ API; no static helper libraries or CMake files of dependencies
+	rm -rf "$pkgdir"/usr/lib/*.a "$pkgdir"/usr/lib/cmake/{absl,protobuf,utf8_range,re2,flatbuffers,Eigen3} \
+		"$pkgdir"/usr/include/{absl,google,re2,flatbuffers,eigen3,upb,upb_generator,utf8_range.h,utf8_validity.h} \
+		"$pkgdir"/usr/bin
+	install -Dm644 "onnxruntime-$pkgver/LICENSE" -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm644 "onnxruntime-$pkgver/ThirdPartyNotices.txt" -t "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+# Checks the freshness stamp of [plinius] (tools/lib.sh write_stamp) against the database pacman
+# just fetched. The stamp names the channel, the time it was signed and the SHA-256 of the
+# channel's database (the file plinius.db links to) and of its signature, signed with the repo
+# key. A server in someone else's hands could otherwise hand out an old, correctly signed database
+# (no updates ever again, without a word) or beta's under stable (same key). Used by
+# plinius-software (the update check, as the user, on the database copy of checkupdates) and by
+# plinius-pkg upgrade (as root, on /var/lib/pacman/sync after the sync, before the transaction).
+#
+# Usage: plinius-repo-stamp check --db FILE [--user-state PREFIX] [--text]
+#   --db          the database pacman fetched for [plinius] (…/sync/plinius.db; its signature
+#                 FILE.sig is compared too when it is there)
+#   --user-state  as a user: PREFIX-<channel> keeps the newest stamp this user has seen, next to
+#                 the system-wide state (SYSTEM_STATE, written only by root)
+#   --text        print one English line instead of JSON
+# Output: {"result": …, "message": English text, "channel": …, "time": …, "days": …}
+# Exit:   0 ok, or nothing to check (no https Server for [plinius], or no stamp yet before
+#         HASH_REQUIRED_FROM on a device that never saw one), 2 genuine and matching, but older
+#         than MAX_AGE_DAYS, 3 the database does not match the stamp (an upload may be switching
+#         them over: fetch both again, then check once more), 4 no stamp could be had (no
+#         answer, an HTTP error, or none on the server once one was seen): a warning, but for
+#         now plinius-pkg installs anyway, 1 any other warning (a stamp that is there but wrong,
+#         or a database that could not be read here, "unreadable": no verdict on the server)
+# SPDX-License-Identifier: MIT
+
+import base64
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+PACMAN_CONF = "/etc/pacman.conf"
+KEYRING = "/usr/share/pacman/keyrings/plinius.gpg"
+TRUSTED = "/usr/share/pacman/keyrings/plinius-trusted"
+REVOKED = "/usr/share/pacman/keyrings/plinius-revoked"
+# Shared by all accounts: the newest stamp seen per channel (SYSTEM_STATE-beta, -stable), whether
+# it named its database, and when it was last verified. Root (plinius-pkg upgrade) writes it,
+# everyone reads it; a new account starts from there, not from nothing.
+SYSTEM_STATE = "/var/lib/plinius-pkg/repo-stamp"
+MAX_AGE_DAYS = 30
+# From 2026-12-01 00:00 UTC on, every stamp must name its database (db_sha256), and a missing
+# stamp is a warning even on a device that never saw one. Before, an old stamp without it is
+# accepted until a stamp with it has been seen on that channel. Both channels are stamped with
+# the database since plinius-software 0.12-23 (tools/lib.sh write_stamp).
+HASH_REQUIRED_FROM = 1796083200
+TIMEOUT = 30
+# A stamp that could not be fetched is fetched once more after this many seconds
+RETRY_DELAY = 5
+MAX_SIZE = 4096
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+MESSAGES = {
+    "ok": "the stamp of {channel} matches the database",
+    "skip": "no https server for [plinius], nothing to check",
+    "none": "the update server has no stamp yet",
+    "unreachable": "the update server did not hand out its stamp",
+    "missing": "the update server has no stamp",
+    "http": "the update server refused its stamp (HTTP {status})",
+    "unsigned": "the stamp is not signed by a trusted Plinius key",
+    "malformed": "the stamp is malformed",
+    "channel": "the stamp is of channel {got}, not {want}",
+    "replay": "the stamp is older than one seen before",
+    "unhashed": "the stamp does not name its database",
+    "mismatch": "the database does not match the stamp",
+    "unreadable": "the database {db} could not be read: {error}",
+    "stale": "the stamp is {days} days old",
+}
+EXIT = {"ok": 0, "skip": 0, "none": 0, "stale": 2, "mismatch": 3,
+        "unreachable": 4, "http": 4, "missing": 4}
+
+
+def plinius_server():
+    """The Server of [plinius] in pacman.conf (stable: <repo>/<arch>, beta: <repo>/beta/<arch>)."""
+    section = None
+    try:
+        with open(PACMAN_CONF, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    section = line
+                elif section == "[plinius]" and re.match(r"Server\s*=", line):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+def fingerprints(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return {line.split(":")[0].strip().upper() for line in f
+                    if line.strip() and not line.startswith("#")}
+    except OSError:
+        return set()
+
+
+def dearmor(text):
+    """The binary key data of an ASCII armored key block (gpgv reads binary keyrings only)."""
+    lines = [line.strip() for line in text.splitlines()]
+    begin = next(i for i, line in enumerate(lines) if line.startswith("-----BEGIN PGP"))
+    end = next(i for i, line in enumerate(lines) if i > begin and line.startswith("-----END PGP"))
+    body = lines[begin + 1:end]
+    if "" in body:
+        body = body[body.index("") + 1:]
+    body = [line for line in body if line and not (line.startswith("=") and len(line) == 5)]
+    return base64.b64decode("".join(body), validate=True)
+
+
+def signed(data, signature):
+    """Whether signature is a valid signature of data by a key in plinius-trusted that is not in
+    plinius-revoked (as the CVE assessments and the DOS presets check theirs)."""
+    trusted = fingerprints(TRUSTED) - fingerprints(REVOKED)
+    if not trusted:
+        return False
+    try:
+        with open(KEYRING, "rb") as f:
+            keyring = f.read()
+        if keyring.lstrip().startswith(b"-----BEGIN"):
+            keyring = dearmor(keyring.decode("ascii"))
+    except (OSError, ValueError, StopIteration):
+        return False
+    with tempfile.TemporaryDirectory(prefix="plinius-repo-stamp-") as tmp:
+        paths = {}
+        for name, content in (("keyring.gpg", keyring), ("stamp", data), ("stamp.sig", signature)):
+            paths[name] = os.path.join(tmp, name)
+            with open(paths[name], "wb") as f:
+                f.write(content)
+        try:
+            r = subprocess.run(["gpgv", "--homedir", tmp, "--status-fd", "1",
+                                "--keyring", paths["keyring.gpg"], paths["stamp.sig"], paths["stamp"]],
+                               capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    if r.returncode != 0:
+        return False
+    for line in r.stdout.splitlines():
+        fields = line.split()
+        # VALIDSIG <signing key> … <primary key>
+        if fields[:2] == ["[GNUPG:]", "VALIDSIG"] and len(fields) > 2:
+            if fields[2].upper() in trusted or fields[-1].upper() in trusted:
+                return True
+    return False
+
+
+def fetch(server):
+    """(stamp, signature); raises urllib.error.HTTPError, OSError or ValueError."""
+    files = []
+    for name in ("plinius.stamp", "plinius.stamp.sig"):
+        with urllib.request.urlopen(server.rstrip("/") + "/" + name, timeout=TIMEOUT) as response:
+            files.append(response.read(MAX_SIZE))
+    return files
+
+
+def read_state(path):
+    """{"time": newest stamp time seen, "hashed": it named its database, "checked": when}.
+    Up to 0.12-22 the user's file held only the time."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except OSError:
+        return {}
+    if text.isdigit():
+        return {"time": int(text)}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_state(path, state):
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".repo-stamp.", dir=os.path.dirname(path))
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"plinius-repo-stamp: cannot write {path}: {e}", file=sys.stderr)
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def check(db, user_state=None):
+    """The verdict on the stamp of the configured channel: a dict with "result" (a key of
+    MESSAGES) and its details."""
+    server = plinius_server()
+    if not server or not server.startswith("https://"):
+        return {"result": "skip"}
+    want = "beta" if re.search(r"/beta/[^/]+$", server) else "stable"
+    system_path = f"{SYSTEM_STATE}-{want}"
+    user_path = f"{user_state}-{want}" if user_state else None
+    states = [read_state(system_path)] + ([read_state(user_path)] if user_path else [])
+    seen = max((s.get("time", 0) for s in states if isinstance(s.get("time"), int)), default=0)
+    hashed = any(s.get("hashed") is True for s in states)
+    now = int(time.time())
+    required = hashed or now >= HASH_REQUIRED_FROM
+    verdict = {"channel": want}
+
+    for attempt in range(2):
+        try:
+            stamp, signature = fetch(server)
+            break
+        except urllib.error.HTTPError as e:
+            # Before the first stamped publication there was none; once one was seen (on this
+            # device, by anyone) or from HASH_REQUIRED_FROM on, it must be there
+            if e.code == 404:
+                return dict(verdict, result="missing" if seen or required else "none")
+            return dict(verdict, result="http", status=e.code)
+        except (OSError, ValueError):
+            # Reset, timeout, no route: checkupdates reached the server a moment ago, so a
+            # server that only withholds the stamp would otherwise switch the check off
+            if attempt:
+                return dict(verdict, result="unreachable")
+            time.sleep(RETRY_DELAY)
+
+    if not signed(stamp, signature):
+        return dict(verdict, result="unsigned")
+    fields = dict(line.split("=", 1) for line in stamp.decode("utf-8", "replace").splitlines()
+                  if "=" in line)
+    when = fields.get("time", "")
+    db_hash, sig_hash = fields.get("db_sha256"), fields.get("sig_sha256")
+    if not re.fullmatch(r"[0-9]{1,12}", when) or any(h is not None and not HEX64.match(h) for h in (db_hash, sig_hash)):
+        return dict(verdict, result="malformed")
+    when = int(when)
+    verdict["time"] = when
+    if fields.get("channel") != want:
+        return dict(verdict, result="channel", got=fields.get("channel"), want=want)
+    if when < seen:
+        return dict(verdict, result="replay")
+    if db_hash is None:
+        if required:
+            return dict(verdict, result="unhashed")
+    else:
+        try:
+            if sha256(db) != db_hash:
+                return dict(verdict, result="mismatch")
+            if sig_hash is not None and os.path.exists(db + ".sig") and sha256(db + ".sig") != sig_hash:
+                return dict(verdict, result="mismatch")
+        except OSError as e:
+            # A local problem (permissions, a missing file), not a sign of the server
+            return dict(verdict, result="unreadable", db=db, error=e.strerror or str(e))
+    state = {"time": when, "hashed": hashed or db_hash is not None, "checked": now}
+    if os.geteuid() == 0:
+        write_state(system_path, state)
+    elif user_path:
+        write_state(user_path, state)
+    days = max(0, (now - when) // 86400)
+    verdict["days"] = days
+    return dict(verdict, result="stale" if days > MAX_AGE_DAYS else "ok")
+
+
+def main(argv):
+    args = argv[1:]
+    if not args or args[0] != "check":
+        print("usage: plinius-repo-stamp check --db FILE [--user-state PREFIX] [--text]", file=sys.stderr)
+        return 1
+    db = user_state = None
+    text = False
+    rest = iter(args[1:])
+    for a in rest:
+        if a == "--db":
+            db = next(rest, None)
+        elif a == "--user-state":
+            user_state = next(rest, None)
+        elif a == "--text":
+            text = True
+        else:
+            print(f"plinius-repo-stamp: unknown option {a}", file=sys.stderr)
+            return 1
+    if not db:
+        print("plinius-repo-stamp: --db is missing", file=sys.stderr)
+        return 1
+    verdict = check(db, user_state)
+    details = {k: v for k, v in verdict.items() if k != "result"}
+    verdict["message"] = MESSAGES[verdict["result"]].format_map(
+        dict(details, status=details.get("status", ""), got=details.get("got", ""), want=details.get("want", ""),
+             db=details.get("db", ""), error=details.get("error", "")))
+    if text:
+        print(f"plinius-repo-stamp: {verdict['message']}")
+    else:
+        print(json.dumps(verdict))
+    return EXIT.get(verdict["result"], 1)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

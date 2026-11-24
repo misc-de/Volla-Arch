@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Plinius: display settings that Phosh reads (phosh-plinius), set in GNOME Settings -->
+<schemalist>
+  <schema id="org.plinius.display" path="/org/plinius/display/">
+    <key name="notch" type="s">
+      <choices>
+        <choice value="auto"/>
+        <choice value="none"/>
+        <choice value="left"/>
+        <choice value="center"/>
+        <choice value="right"/>
+      </choices>
+      <default>'auto'</default>
+      <summary>Position of the camera notch</summary>
+      <description>
+        Where the camera cutout sits at the top edge of the built-in display. The top bar
+        moves its clock and icons out of the way. "auto" takes the cutout from the panel
+        data of the device (/usr/share/plinius/display-panel.json, else gmobile).
+      </description>
+    </key>
+    <key name="notch-search" type="b">
+      <default>true</default>
+      <summary>Search from the notch</summary>
+      <description>
+        Whether a tap on the camera notch in the top bar opens a search for apps. A tap next
+        to the search or on the notch again closes it.
+      </description>
+    </key>
+    <key name="app-grid-search" type="b">
+      <default>true</default>
+      <summary>Show the search in the app overview</summary>
+      <description>
+        Whether the app overview shows its search field. Without it, typing on a keyboard
+        does not search either.
+      </description>
+    </key>
+    <key name="app-grid-app-names" type="b">
+      <default>true</default>
+      <summary>Show app names in the app overview</summary>
+      <description>
+        Whether the apps in the overview show their names under the icons. Folders and the
+        apps inside a folder keep their names.
+      </description>
+    </key>
+    <key name="overview-running-apps" type="s">
+      <choices>
+        <choice value="top"/>
+        <choice value="bottom"/>
+      </choices>
+      <default>'top'</default>
+      <summary>Edge of the running apps in the overview</summary>
+      <description>
+        Whether the cards of the running apps stand above the app grid ("top", as in
+        upstream Phosh) or below it ("bottom"). The overview follows at once.
+      </description>
+    </key>
+    <key name="app-grid-folder-dock" type="b">
+      <default>false</default>
+      <summary>Folders in a bar at the bottom of the app overview</summary>
+      <description>
+        Whether the folders of the app overview stand in a single row at the bottom edge
+        that scrolls sideways, instead of between the apps.
+      </description>
+    </key>
+    <key name="always-on-display" type="b">
+      <default>false</default>
+      <summary>Always-on display</summary>
+      <description>
+        Whether the screen shows the time, the date, the battery and the apps with
+        notifications in the OLED's low-power mode instead of going off. Not during calls.
+        Needs a panel with a low-power mode (phoc-plinius, MediaTek DOZE_ACTIVE); others go
+        off as before.
+      </description>
+    </key>
+  </schema>
+</schemalist>

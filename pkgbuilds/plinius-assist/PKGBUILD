@@ -1,0 +1,39 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-assist
+pkgver=0.3
+pkgrel=1
+pkgdesc="Actions for the assistant button of the Volla Phone Plinius (short, double, long press), flip cover"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# The actions use logind (torch), Phosh (screenshot, lock), feedbackd (silent) and Snapshot
+# (camera) when they are there; the choice is made in GNOME Settings > Power. The flip cover
+# blanks and unblanks through Phosh.
+depends=(glib2)
+optdepends=('gnome-control-center-plinius: choosing the actions'
+	'plinius-torch>=0.5: the torch at the brightness picked in the quick settings'
+	'snapshot: camera action'
+	'feedbackd: silent mode action')
+source=(plinius-assist.c
+	plinius-assist.desktop
+	org.plinius.assistant-button.gschema.xml
+	LICENSE)
+sha256sums=('e3ede450127232805d76ca95055239646941cf0e191f48b0753212e0a5b6fbe2'
+	'efa5111bcb713c6e12a665bbef8ccbedca7020ea7f626da6ed75adef45dad31e'
+	'050a063fe2fdd9b16cb6f74a90cb7ea16a8324d4b0521004e54fbfe211bf1923'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-assist plinius-assist.c \
+		$(pkg-config --cflags --libs gio-unix-2.0) $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-assist -t "$pkgdir/usr/bin"
+	# Runs in the session (needs its environment for apps and custom commands)
+	install -Dm644 plinius-assist.desktop -t "$pkgdir/etc/xdg/autostart"
+	install -Dm644 org.plinius.assistant-button.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=WLAN driver and power on (NVRAM from the Android container)
+After=lxc-android-config.service systemd-udevd.service
+Requires=lxc-android-config.service
+# Not before NetworkManager: it picks up wlan0 when it appears. Waiting for the NVRAM takes about
+# 10 s and would hold up network.target and with it the login (systemd-user-sessions)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/plinius/plinius-wlan
+ExecStop=/bin/sh -c 'echo 0 > /dev/wmtWifi'
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,85 @@
+# Phosh only shows the on-screen keyboard with this setting (GNOME default: off)
+[org.gnome.desktop.a11y.applications]
+screen-keyboard-enabled=true
+
+# The phone has GPS (gnss-nmea-bridge -> geoclue): offer the location toggle in the quick
+# settings. This replaces the list from 00_mobi.Phosh.gschema.override, so its entries are kept.
+[mobi.phosh.shell.plugins:Phosh]
+quick-settings=['wifi-hotspot-quick-setting', 'mobile-data-quick-setting', 'location-quick-setting']
+
+# plinius-suspend puts the phone to sleep whenever the display is off. gsd-power's own suspend
+# after inactivity would go through logind instead (seat pause, no check of the display; a suspend
+# with the display on hangs the display driver), so it stays off (docs/STANDBY.md).
+[org.gnome.settings-daemon.plugins.power]
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+
+# phoc 0.57 draws a frame in the accent color around the focused window whenever it floats. On
+# the phone that is every dialog (Gtk.Dialog, e.g. SIM Lock): a colored band around the dialog's
+# shadow. Off, dialogs show only their own shadow.
+[mobi.phosh.phoc]
+focus-frame=false
+
+# Accent color: the blue of the Arch Linux logo. The custom color (org.plinius.appearance, schema
+# in phosh-plinius) is what Phosh, phoc and the keyboard draw; GNOME's key gets the nearest of
+# its nine colors (blue, by the OKLab distance of cc-plinius-accent.c) for everything that only
+# knows those. libadwaita apps take the color from ~/.config/gtk-4.0/gtk.css, which new users get
+# from /etc/skel (skel-gtk.css); Settings rewrites it whenever the color changes.
+[org.plinius.appearance]
+accent-color='#1793d1'
+
+[org.gnome.desktop.interface]
+accent-color='blue'
+# The battery percentage in the top bar; Phosh then hides the battery tile in the quick settings
+# and puts Airplane Mode in its place (phosh-plinius patch 0081).
+show-battery-percentage=true
+
+# Background: no picture, plain black (also on the lock screen), with plinius-ambient's dust
+# drifting over it. arch-black.png stays installed as a picture to choose in Settings.
+[org.gnome.desktop.background]
+picture-uri=''
+picture-uri-dark=''
+picture-options='none'
+color-shading-type='solid'
+primary-color='#000000'
+secondary-color='#000000'
+
+[org.gnome.desktop.screensaver]
+picture-uri=''
+picture-options='none'
+color-shading-type='solid'
+primary-color='#000000'
+secondary-color='#000000'
+
+[org.plinius.ambient]
+effect='dust'
+
+# Phosh's own 00_mobi.Phosh.gschema.override sets these keys for XDG_CURRENT_DESKTOP=Phosh
+# (blobs wallpaper and lock screen, yellow accent). A section for the desktop beats the plain one
+# whatever the file order, so a new phone showed blobs instead of the sections above. The same
+# values once more for Phosh; this file sorts after 00_mobi, so it wins there.
+[org.gnome.desktop.interface:Phosh]
+accent-color='blue'
+
+[org.gnome.desktop.background:Phosh]
+picture-uri=''
+picture-uri-dark=''
+
+[org.gnome.desktop.screensaver:Phosh]
+picture-uri=''
+picture-options='none'
+
+# App overview: the phone apps at the top (Calls, Chats, Contacts, Calendar, Camera), every app
+# below them without the button that filters for phone apps, and no search field (the search
+# opens from the notch, notch-search). Settings > Display switches both back on.
+[mobi.phosh.shell:Phosh]
+favorites=['org.gnome.Calls.desktop', 'sm.puri.Chatty.desktop', 'org.gnome.Contacts.desktop', 'org.gnome.Calendar.desktop', 'org.gnome.Snapshot.desktop']
+app-filter-mode=[]
+
+[org.plinius.display]
+app-grid-search=false
+
+# Stevia remembers the layout picked in its menu for each app (stevia-plinius patch 0011), but only
+# with this on, so it is the default here. GNOME's default is one layout for all windows.
+[org.gnome.desktop.input-sources]
+per-window=true

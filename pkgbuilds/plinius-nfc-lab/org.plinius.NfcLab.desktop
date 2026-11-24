@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=NFC Lab
+Name[de]=NFC-Labor
+Comment=Read NFC tags and cards and talk to them
+Comment[de]=NFC-Tags und Karten lesen und mit ihnen sprechen
+Exec=plinius-nfc-lab
+Icon=org.plinius.NfcLab
+Terminal=false
+Type=Application
+Categories=Utility;GTK;
+Keywords=NFC;Tag;RFID;Card;APDU;NDEF;
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;

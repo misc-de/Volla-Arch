@@ -1,0 +1,74 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-satellite
+pkgver=0.2
+pkgrel=2
+pkgdesc="Satellite mode: tells when the phone is on a satellite network (Starlink Direct to Cell and alike), meters the connection, tells the user what works and scans for networks with a forecast"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+license=(MIT)
+# Talks to oFono (network registration) and NetworkManager (metered connection) over the
+# system bus only; it follows them when they come and go and works on without them
+depends=(glib2)
+makedepends=(gettext)
+# Phosh shows a satellite instead of the signal bars (patch 0073)
+optdepends=('phosh-plinius>=0.57.0-82: satellite icon in the top bar')
+backup=(etc/plinius-satellite/satellite.conf)
+_langs=(de es fr it nl pl pt ru)
+source=(plinius-satellite.c
+	plinius-satellite-notify.c
+	plinius-satellite.service
+	plinius-satellite-notify.service
+	org.plinius.Satellite.conf
+	providers.conf
+	satellite.conf
+	plinius-satellite-symbolic.svg
+	"${_langs[@]/%/.po}"
+	LICENSE)
+sha256sums=('5bec601ce70123756edcd7c3e60a12a0fd39f383e5291e1bd1d670e8611a4ed2'
+	'f936337c0fa55f2dcb5cea527b93c2fa433ad7b843eb7328c660dad23cad0068'
+	'956cf0e9745b53565d4d889311698c5851f640a83e63afa1e11f4ff1f36396cb'
+	'f0b347e4061df5a6562918cc3adab58738d1e87f0e89bf22bd439fedd68fe8d5'
+	'e77f17dc6cee359515778ed2ed05f3091f72b9e17ea4926ca4057674b71e60a4'
+	'a1ef03b50a6b7481ea1fe57228e41b4ff4f54b4d22438d1c151c0c5f549be3f8'
+	'44618c0f5e924eb41ed141066b806db46888d56827e0b83482fad9f924691f0d'
+	'4d26bdad6bd1087cc5f3acba68d788efb04ee9cf389509a534196060228372bc'
+	'e788b3309871efb7410891fd5fd192eb3cdc201d0c520ba7458f7a2eeb85534a'
+	'33ddb5939b8dc5d8f3093388dcf867c79c9b50fb792d7a173c30f12a26498cff'
+	'2c6fda1cd70bfc87ec58bc5d09a5fe4fd62f55dba972660051aed72ae2d6eb08'
+	'668134f58976e5ab6c75d78e29108dfef93a3811f297902f16f18b4c68c5f87d'
+	'd908475995cb65c6861ea2fffc5d98939a77f50ef9119c3b7fed3cc575c25659'
+	'ed058c27ace447a3b4230eee5ac64e056dafb8b5b4e5b5a0086d6a2ef068a862'
+	'29e967a9caec68df32e94b4ed45bde1959ea74fda5f8186a71aa54ec85df1d36'
+	'68c08c0cb471c0e9408eee39064e296a19b3631251ff46d0795719216b6cfcda'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	for prog in plinius-satellite plinius-satellite-notify; do
+		# shellcheck disable=SC2046
+		${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+			-o $prog $prog.c $(pkg-config --cflags --libs gio-unix-2.0) $LDFLAGS
+	done
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm755 plinius-satellite plinius-satellite-notify -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-satellite.service -t "$pkgdir/usr/lib/systemd/system"
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-satellite.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	# The notification, in the session of whoever is signed in
+	install -Dm644 plinius-satellite-notify.service -t "$pkgdir/usr/lib/systemd/user"
+	install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+	ln -s ../plinius-satellite-notify.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/"
+	install -Dm644 org.plinius.Satellite.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+	install -Dm644 providers.conf -t "$pkgdir/usr/share/plinius-satellite"
+	install -Dm644 satellite.conf -t "$pkgdir/etc/plinius-satellite"
+	install -d "$pkgdir/etc/plinius-satellite/providers.d"
+	install -Dm644 plinius-satellite-symbolic.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/status"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-satellite.mo"
+	done
+}

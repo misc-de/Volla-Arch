@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 20:35:33 +0100
+Subject: [PATCH] wwan: MMS switch for each SIM card
+
+Below Data Roaming, an MMS switch for the SIM card of the page, kept by its
+ICCID in the key sims of org.plinius.mms (mmsd4ofono). mmsd-sim-gate runs mmsd
+while the SIM for mobile data is one of them, as mmsd serves that SIM only;
+off, mmsd and routectld take no memory. Off by default: MMS is switched off in
+Germany since 2026-06-30 and of use with a SIM from abroad.
+
+The row is only there with the schema installed and a card with an ICCID.
+---
+ wwan/cc-wwan-device-page.c | 73 ++++++++++++++++++++++++++++++++++++++
+ wwan/cc-wwan-device.c      |  9 +++++
+ wwan/cc-wwan-device.h      |  1 +
+ 3 files changed, 83 insertions(+)
+
+diff --git a/panels/wwan/cc-wwan-device-page.c b/panels/wwan/cc-wwan-device-page.c
+index 10dbad8..4e5a924 100644
+--- a/panels/wwan/cc-wwan-device-page.c
++++ b/panels/wwan/cc-wwan-device-page.c
+@@ -78,6 +78,10 @@ struct _CcWwanDevicePage {
+ 
+     AdwToastOverlay *toast_overlay;
+ 
++    /* Plinius: MMS for this SIM card (org.plinius.mms of mmsd4ofono) */
++    AdwSwitchRow *mms_row;
++    GSettings *mms_settings;
++
+     CcWwanDevice *device;
+     CcWwanData *wwan_data;
+     GDBusProxy *wwan_proxy;
+@@ -505,6 +509,72 @@ cc_wwan_device_page_set_property (GObject *object, guint prop_id, const GValue *
+     }
+ }
+ 
++/* Plinius: MMS for this SIM card. The key sims of org.plinius.mms holds the ICCIDs of the cards
++ * with MMS on; mmsd-sim-gate (mmsd4ofono) runs mmsd while the SIM for mobile data is one of them,
++ * as mmsd serves that SIM only. Off by default: mmsd uses memory, and MMS is switched off in
++ * Germany since 2026-06-30 (of use with a SIM from abroad). */
++static void wwan_mms_toggled_cb (CcWwanDevicePage *self);
++
++static void
++wwan_mms_sync (CcWwanDevicePage *self)
++{
++    const gchar *iccid = cc_wwan_device_get_sim_identifier (self->device);
++    g_auto(GStrv) sims = g_settings_get_strv (self->mms_settings, "sims");
++    gboolean active = iccid && g_strv_contains ((const gchar * const *) sims, iccid);
++
++    g_signal_handlers_block_by_func (self->mms_row, wwan_mms_toggled_cb, self);
++    adw_switch_row_set_active (self->mms_row, active);
++    g_signal_handlers_unblock_by_func (self->mms_row, wwan_mms_toggled_cb, self);
++}
++
++static void
++wwan_mms_toggled_cb (CcWwanDevicePage *self)
++{
++    const gchar *iccid = cc_wwan_device_get_sim_identifier (self->device);
++    g_autoptr(GStrvBuilder) builder = NULL;
++    g_auto(GStrv) sims = NULL;
++    g_auto(GStrv) result = NULL;
++
++    if (!iccid || !*iccid)
++        return;
++
++    sims = g_settings_get_strv (self->mms_settings, "sims");
++    builder = g_strv_builder_new ();
++    for (guint i = 0; sims[i]; i++)
++        if (g_strcmp0 (sims[i], iccid) != 0)
++            g_strv_builder_add (builder, sims[i]);
++    if (adw_switch_row_get_active (self->mms_row))
++        g_strv_builder_add (builder, iccid);
++    result = g_strv_builder_end (builder);
++
++    g_settings_set_strv (self->mms_settings, "sims", (const gchar * const *) result);
++}
++
++static void
++wwan_mms_setup (CcWwanDevicePage *self)
++{
++    GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++    const gchar *iccid = cc_wwan_device_get_sim_identifier (self->device);
++    g_autoptr(GSettingsSchema) schema = NULL;
++
++    /* Only with mmsd4ofono (it brings the schema) and a card that has an ICCID */
++    if (!source || !iccid || !*iccid)
++        return;
++    schema = g_settings_schema_source_lookup (source, "org.plinius.mms", TRUE);
++    if (!schema)
++        return;
++
++    self->mms_settings = g_settings_new_full (schema, NULL, NULL);
++    self->mms_row = ADW_SWITCH_ROW (adw_switch_row_new ());
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->mms_row), g_dgettext (PLINIUS_DOMAIN, "MMS"));
++    gtk_list_box_append (self->data_settings_list, GTK_WIDGET (self->mms_row));
++
++    wwan_mms_sync (self);
++    g_signal_connect_object (self->mms_settings, "changed::sims", G_CALLBACK (wwan_mms_sync), self,
++                             G_CONNECT_SWAPPED);
++    g_signal_connect_swapped (self->mms_row, "notify::active", G_CALLBACK (wwan_mms_toggled_cb), self);
++}
++
+ static void
+ cc_wwan_device_page_constructed (GObject *object)
+ {
+@@ -540,6 +610,8 @@ cc_wwan_device_page_constructed (GObject *object)
+                                  g_dgettext (PLINIUS_DOMAIN, "Add, switch and delete profiles"));
+     cc_esim_probe_async (cc_wwan_device_get_identifier (self->device), self->cancellable,
+                          wwan_esim_probe_cb, g_object_ref (self));
++
++    wwan_mms_setup (self);
+ }
+ 
+ static void
+@@ -554,6 +626,7 @@ cc_wwan_device_page_dispose (GObject *object)
+     g_clear_object (&self->cancellable);
+     g_clear_pointer (&self->esim_modem, g_free);
+     g_clear_object (&self->wwan_proxy);
++    g_clear_object (&self->mms_settings);
+     g_clear_object (&self->device);
+ 
+     G_OBJECT_CLASS (cc_wwan_device_page_parent_class)->dispose (object);
+diff --git a/panels/wwan/cc-wwan-device.c b/panels/wwan/cc-wwan-device.c
+index f5d8703..8a06ba9 100644
+--- a/panels/wwan/cc-wwan-device.c
++++ b/panels/wwan/cc-wwan-device.c
+@@ -1222,6 +1222,15 @@ cc_wwan_device_get_identifier (CcWwanDevice *self)
+     return mm_modem_get_equipment_identifier (self->modem);
+ }
+ 
++/* Plinius: the ICCID of the SIM card, which tells cards apart where the slot does not */
++const gchar *
++cc_wwan_device_get_sim_identifier (CcWwanDevice *self)
++{
++    g_return_val_if_fail (CC_IS_WWAN_DEVICE (self), NULL);
++
++    return self->sim ? mm_sim_get_identifier (self->sim) : NULL;
++}
++
+ const gchar *
+ cc_wwan_device_get_simple_error (CcWwanDevice *self)
+ {
+diff --git a/panels/wwan/cc-wwan-device.h b/panels/wwan/cc-wwan-device.h
+index c0992b2..f69cebb 100644
+--- a/panels/wwan/cc-wwan-device.h
++++ b/panels/wwan/cc-wwan-device.h
+@@ -74,6 +74,7 @@ const gchar *cc_wwan_device_get_manufacturer (CcWwanDevice *self);
+ const gchar *cc_wwan_device_get_model (CcWwanDevice *self);
+ const gchar *cc_wwan_device_get_firmware_version (CcWwanDevice *self);
+ const gchar *cc_wwan_device_get_identifier (CcWwanDevice *self);
++const gchar *cc_wwan_device_get_sim_identifier (CcWwanDevice *self);
+ gboolean cc_wwan_device_get_current_mode (CcWwanDevice *self, MMModemMode *allowed, MMModemMode *preferred);
+ gboolean cc_wwan_device_is_auto_network (CcWwanDevice *self);
+ CcWwanState cc_wwan_device_get_network_state (CcWwanDevice *self);
+-- 
+2.56.0
+

@@ -1,0 +1,227 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 12:00:00 +0100
+Subject: [PATCH] power-menu: Two columns while the screen is wider than high
+
+Plinius: since the buttons stand one below the other (0092) the power
+menu is taller than the screen in landscape (360 px logical on the
+phone): seven buttons of about 62 px plus the dialog's margins. While
+the menu's monitor is wider than high the buttons stand in two columns:
+Power Off (Suspend on the lock screen), Restart, Restart Phosh and, with
+a second account, Log Out on the left, Lock, Screenshot and Emergency on
+the right. The card may then be up to 640 px wide and keeps 8 px instead
+of 48 px above and below.
+
+The monitor decides, when the menu is made and again when the monitor
+is configured anew (the phone turned while the menu is open). The menu's
+own size can't: laid out in one column first, the surface keeps that
+column's height and the two columns run off the screen.
+---
+ src/power-menu.c          | 86 +++++++++++++++++++++++++++++++++++++++
+ src/stylesheet/common.css |  5 +++
+ src/system-modal-dialog.c | 21 ++++++++++
+ src/system-modal-dialog.h |  1 +
+ src/ui/power-menu.ui      |  2 +-
+ 5 files changed, 114 insertions(+), 1 deletion(-)
+
+diff --git a/src/power-menu.c b/src/power-menu.c
+index 9eb522f5..1eb4beee 100644
+--- a/src/power-menu.c
++++ b/src/power-menu.c
+@@ -11,9 +11,11 @@
+ #include "phosh-config.h"
+ 
+ #include "fading-label.h"
++#include "monitor/monitor.h"
+ #include "power-menu.h"
+ #include "shell-priv.h"
+ #include "session-manager.h"
++#include "util.h"
+ 
+ /**
+  * PhoshPowerMenu:
+@@ -42,6 +44,15 @@ struct _PhoshPowerMenu {
+   GtkStack *stack;
+   GtkWidget *btn_logout;  /* Plinius */
+   gboolean  show_suspend;
++
++  /* Plinius: two columns while the screen is wider than high */
++  GtkWidget *grid;
++  GtkWidget *btn_restart;
++  GtkWidget *btn_restart_shell;
++  GtkWidget *btn_lock;
++  GtkWidget *btn_screenshot;
++  GtkWidget *btn_emergency_call;
++  gboolean   landscape;
+ };
+ G_DEFINE_TYPE (PhoshPowerMenu, phosh_power_menu, PHOSH_TYPE_SYSTEM_MODAL_DIALOG)
+ 
+@@ -55,6 +66,74 @@ on_power_menu_done (PhoshPowerMenu *self)
+ 
+ 
+ 
++/*
++ * Plinius: upright the buttons stand in one column (power-menu.ui). While the screen is wider
++ * than high they don't fit below each other, so they stand in two: Power Off (Suspend),
++ * Restart, Restart Phosh and Log Out on the left, Lock, Screenshot and Emergency on the right.
++ */
++static void
++set_landscape (PhoshPowerMenu *self, gboolean landscape)
++{
++  const struct {
++    GtkWidget *button;
++    int        row;
++    int        turned_column;
++    int        turned_row;
++  } places[] = {
++    { GTK_WIDGET (self->stack),   0, 0, 0 },
++    { self->btn_restart,          1, 0, 1 },
++    { self->btn_restart_shell,    2, 0, 2 },
++    { self->btn_lock,             3, 1, 0 },
++    { self->btn_screenshot,       4, 1, 1 },
++    { self->btn_emergency_call,   5, 1, 2 },
++    { self->btn_logout,           6, 0, 3 },
++  };
++
++  if (self->landscape == landscape)
++    return;
++
++  g_debug ("Power menu in %s", landscape ? "two columns" : "one column");
++  self->landscape = landscape;
++  for (guint i = 0; i < G_N_ELEMENTS (places); i++) {
++    gtk_container_child_set (GTK_CONTAINER (self->grid), places[i].button,
++                             "left-attach", landscape ? places[i].turned_column : 0,
++                             "top-attach", landscape ? places[i].turned_row : places[i].row,
++                             NULL);
++  }
++  phosh_util_toggle_style_class (GTK_WIDGET (self), "landscape", landscape);
++  phosh_system_modal_dialog_set_wide (PHOSH_SYSTEM_MODAL_DIALOG (self), landscape);
++}
++
++
++/*
++ * Decided by the monitor, before the menu has a size: laid out in one column first, the
++ * surface keeps that column's height and the two columns don't fit in it.
++ */
++static void
++on_monitor_configured (PhoshPowerMenu *self, PhoshMonitor *monitor)
++{
++  set_landscape (self, monitor->logical.width > monitor->logical.height);
++}
++
++
++static void
++phosh_power_menu_constructed (GObject *object)
++{
++  PhoshPowerMenu *self = PHOSH_POWER_MENU (object);
++  g_autoptr (PhoshMonitor) monitor = NULL;
++
++  G_OBJECT_CLASS (phosh_power_menu_parent_class)->constructed (object);
++
++  g_object_get (self, "monitor", &monitor, NULL);
++  if (!monitor)
++    return;
++
++  on_monitor_configured (self, monitor);
++  g_signal_connect_object (monitor, "configured", G_CALLBACK (on_monitor_configured), self,
++                           G_CONNECT_SWAPPED);
++}
++
++
+ static void
+ phosh_power_menu_set_property (GObject      *object,
+                                guint         property_id,
+@@ -101,6 +180,7 @@ phosh_power_menu_class_init (PhoshPowerMenuClass *klass)
+ 
+   object_class->get_property = phosh_power_menu_get_property;
+   object_class->set_property = phosh_power_menu_set_property;
++  object_class->constructed = phosh_power_menu_constructed;
+ 
+   /**
+    * PowerMenu:show-suspend:
+@@ -126,6 +206,12 @@ phosh_power_menu_class_init (PhoshPowerMenuClass *klass)
+                                                "/mobi/phosh/ui/power-menu.ui");
+   gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, stack);
+   gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, btn_logout);
++  gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, grid);
++  gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, btn_restart);
++  gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, btn_restart_shell);
++  gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, btn_lock);
++  gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, btn_screenshot);
++  gtk_widget_class_bind_template_child (widget_class, PhoshPowerMenu, btn_emergency_call);
+   gtk_widget_class_bind_template_callback (widget_class, on_power_menu_done);
+ 
+   gtk_widget_class_set_css_name (widget_class, "phosh-power-menu");
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 62e7035a..10bbcac0 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -1333,6 +1333,11 @@ phosh-power-menu .phosh-system-modal-dialog {
+   margin: 24px;
+ }
+ 
++/* Plinius: two columns while the screen is wider than high, less room above and below */
++phosh-power-menu.landscape .phosh-system-modal-dialog {
++  margin: 8px 24px;
++}
++
+ /* Plinius: icon and label side by side, one button below the other */
+ phosh-power-menu grid button {
+   min-height: 52px;
+diff --git a/src/system-modal-dialog.c b/src/system-modal-dialog.c
+index f3c30ea0..b1ab2c15 100644
+--- a/src/system-modal-dialog.c
++++ b/src/system-modal-dialog.c
+@@ -409,6 +409,27 @@ phosh_system_modal_dialog_fill_screen (PhoshSystemModalDialog *self)
+ }
+ 
+ 
++/**
++ * phosh_system_modal_dialog_set_wide:
++ * @self: The dialog
++ * @wide: Whether the card may be wider and keep less room above and below
++ *
++ * Plinius: for a dialog that lays its content out in more columns while the screen is
++ * wider than high, so it fits the lower height.
++ */
++void
++phosh_system_modal_dialog_set_wide (PhoshSystemModalDialog *self, gboolean wide)
++{
++  PhoshSystemModalDialogPrivate *priv;
++
++  g_return_if_fail (PHOSH_IS_SYSTEM_MODAL_DIALOG (self));
++  priv = phosh_system_modal_dialog_get_instance_private (self);
++
++  hdy_clamp_set_maximum_size (HDY_CLAMP (priv->clamp), wide ? 640 : 400);
++  gtk_widget_set_margin_top (priv->box_dialog, wide ? 0 : 24);
++  gtk_widget_set_margin_bottom (priv->box_dialog, wide ? 0 : 24);
++}
++
+ /**
+  * phosh_system_modal_dialog_get_buttons:
+  * @self: A modal dialog
+diff --git a/src/system-modal-dialog.h b/src/system-modal-dialog.h
+index 32c56f98..f98dc5ac 100644
+--- a/src/system-modal-dialog.h
++++ b/src/system-modal-dialog.h
+@@ -32,3 +32,4 @@ void        phosh_system_modal_dialog_remove_button (PhoshSystemModalDialog *sel
+ GList      *phosh_system_modal_dialog_get_buttons (PhoshSystemModalDialog *self);
+ void        phosh_system_modal_dialog_close (PhoshSystemModalDialog *self);
+ void        phosh_system_modal_dialog_fill_screen (PhoshSystemModalDialog *self);
++void        phosh_system_modal_dialog_set_wide (PhoshSystemModalDialog *self, gboolean wide);
+diff --git a/src/ui/power-menu.ui b/src/ui/power-menu.ui
+index 101cca62..07c3fdc2 100644
+--- a/src/ui/power-menu.ui
++++ b/src/ui/power-menu.ui
+@@ -33,7 +33,7 @@
+           </object>
+         </child>
+         <child>
+-          <object class="GtkGrid">
++          <object class="GtkGrid" id="grid">
+             <property name="visible">1</property>
+             <property name="column-homogeneous">1</property>
+             <property name="row-homogeneous">1</property>
+-- 
+2.56.0
+

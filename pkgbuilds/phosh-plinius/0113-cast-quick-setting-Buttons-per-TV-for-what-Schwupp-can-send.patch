@@ -1,0 +1,297 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 13:00:00 +0100
+Subject: [PATCH] cast-quick-setting: Buttons per TV for what Schwupp can send
+
+Plinius: a TV's row gets a button for each thing Schwupp offers for it
+(its Actions property): the phone's screen (Connect, with the consent
+stamp like a tap on the row), a YouTube link (ChooseLink), a video from
+the phone (ChooseFile) and, with plinius-desktop, a desktop of its own
+(ConnectDesktop; Schwupp names that screen in the consent stamp itself
+once it is there). For a link or a video Schwupp asks in a window of its
+own, so the quick settings fold away first. Speakers get no buttons.
+
+The buttons stay while a TV is in use, the one it gets right now marked
+(Source): a tap on another one switches over, a tap on the marked one or
+on the row stops. The row says what the TV gets: the screen, the
+desktop, a video or a link. Once the desktop shows on the TV, the quick
+settings fold away and the touchpad and keyboard for it open
+(plinius-remote, its desktop action).
+
+The spinner of the list runs from the moment the list is open: D-Bus
+starts Schwupp on demand, and until it reported its search the list
+looked idle for several seconds.
+---
+ .../cast-quick-setting/cast-quick-setting.c   | 180 ++++++++++++++++--
+ 1 file changed, 167 insertions(+), 13 deletions(-)
+
+diff --git a/plugins/cast-quick-setting/cast-quick-setting.c b/plugins/cast-quick-setting/cast-quick-setting.c
+index c771639..35de38d 100644
+--- a/plugins/cast-quick-setting/cast-quick-setting.c
++++ b/plugins/cast-quick-setting/cast-quick-setting.c
+@@ -6,12 +6,14 @@
+ 
+ #include "cast-quick-setting.h"
+ #include "quick-setting.h"
++#include "shell.h"
+ #include "status-icon.h"
+ #include "status-page.h"
+ #include "status-page-placeholder.h"
+ 
+ #include <handy.h>
+ #include <glib/gi18n.h>
++#include <gio/gdesktopappinfo.h>
+ 
+ #define CAST_BUS_NAME "de.cais.Schwupp"
+ #define CAST_OBJECT_PATH "/de/cais/Schwupp/Cast"
+@@ -23,6 +25,28 @@
+ /* Schwupp marks speakers (sound instead of the screen) with this icon */
+ #define SPEAKER_ICON "audio-speakers-symbolic"
+ 
++/* The touchpad and keyboard for the desktop on a TV, started once that desktop shows */
++#define REMOTE_APP "org.plinius.Remote.desktop"
++#define REMOTE_ACTION "desktop"
++
++/* What Schwupp offers per TV (its Actions), each a button in the TV's row in this order, and
++ * what the TV then gets (its Source) */
++static const struct {
++  const char *action;
++  const char *icon;
++  const char *method;
++  const char *label;
++  const char *source;
++} cast_actions[] = {
++  { "mirror", "phone-symbolic", "Connect", N_("Mirror the phone's screen on this TV"), "screen" },
++  { "youtube", "media-playback-start-symbolic", "ChooseLink", N_("Play a YouTube link on this TV"),
++    "link" },
++  { "video", "folder-videos-symbolic", "ChooseFile", N_("Play a video from the phone on this TV"),
++    "video" },
++  { "desktop", "computer-symbolic", "ConnectDesktop", N_("Show the desktop on this TV"),
++    "desktop" },
++};
++
+ /**
+  * PhoshCastQuickSetting:
+  *
+@@ -31,6 +55,11 @@
+  * a second tap stops. Schwupp searches only while the list is shown and keeps
+  * the settings per TV (resolution, bitrate, sound); the footer and a long press open
+  * them on the "Streaming" page of GNOME Settings, Schwupp has no window of its own there.
++ *
++ * A TV's row has a button for each thing Schwupp can send it (Actions): the phone's screen, a
++ * YouTube link, a video from the phone and, with the Plinius' plinius-desktop, a desktop of its
++ * own (a virtual screen with a bar). For a link or a video Schwupp asks in a window of its own,
++ * so the quick settings fold away.
+  */
+ struct _PhoshCastQuickSetting {
+   PhoshQuickSetting  parent;
+@@ -47,9 +76,15 @@ struct _PhoshCastQuickSetting {
+   GDBusProxy        *proxy;
+   GCancellable      *cancel;
+   gboolean           searching;
++  /* The TV showed the desktop at the last update: the remote starts once per desktop */
++  gboolean           desktop_shown;
+ };
+ G_DEFINE_TYPE (PhoshCastQuickSetting, phosh_cast_quick_setting, PHOSH_TYPE_QUICK_SETTING);
+ 
++static void call (PhoshCastQuickSetting *self, const char *method, GVariant *params,
++                  GDBusCallFlags flags);
++static void write_consent_stamp (void);
++
+ 
+ static char *
+ get_string (PhoshCastQuickSetting *self, const char *name)
+@@ -76,13 +111,120 @@ get_discovering (PhoshCastQuickSetting *self)
+ }
+ 
+ 
++/* The actions Schwupp offers for one device, NULL when there are none (speakers) */
++static GStrv
++get_actions (PhoshCastQuickSetting *self, const char *id)
++{
++  g_autoptr (GVariant) actions = NULL;
++  g_autoptr (GVariant) list = NULL;
++
++  if (self->proxy)
++    actions = g_dbus_proxy_get_cached_property (self->proxy, "Actions");
++  if (!actions || !g_variant_is_of_type (actions, G_VARIANT_TYPE ("a{sas}")))
++    return NULL;
++  list = g_variant_lookup_value (actions, id, G_VARIANT_TYPE_STRING_ARRAY);
++  return list ? g_variant_dup_strv (list, NULL) : NULL;
++}
++
++
++static void
++on_action_clicked (PhoshCastQuickSetting *self, GtkButton *button)
++{
++  const char *id = g_object_get_data (G_OBJECT (button), "cast-id");
++  const char *method = g_object_get_data (G_OBJECT (button), "cast-method");
++
++  if (!id || !method)
++    return;
++
++  if (g_str_equal (method, "Disconnect")) {
++    /* The button of what the TV gets right now: a tap ends it, it does not start it again */
++    call (self, "Disconnect", NULL, G_DBUS_CALL_FLAGS_NONE);
++    return;
++  }
++
++  if (g_str_equal (method, "Connect")) {
++    /* The tap is the consent to share the phone's screen, as a tap on the row */
++    write_consent_stamp ();
++  } else if (g_str_has_prefix (method, "Choose")) {
++    /* Schwupp asks for the link or the file in a window: get the quick settings out of its way */
++    phosh_shell_fold_top_panel (phosh_shell_get_default ());
++  }
++  /* ConnectDesktop: Schwupp writes the desktop's screen into the stamp once it is there */
++  call (self, method, g_variant_new ("(s)", id), G_DBUS_CALL_FLAGS_NONE);
++}
++
++
++static void
++add_action_buttons (PhoshCastQuickSetting *self, GtkWidget *row, const char *id,
++                    const char *source)
++{
++  g_auto (GStrv) actions = get_actions (self, id);
++
++  if (!actions)
++    return;
++
++  for (guint i = 0; i < G_N_ELEMENTS (cast_actions); i++) {
++    GtkWidget *button;
++    gboolean in_use;
++
++    if (!g_strv_contains ((const char * const *) actions, cast_actions[i].action))
++      continue;
++    in_use = g_strcmp0 (source, cast_actions[i].source) == 0;
++    button = gtk_button_new_from_icon_name (cast_actions[i].icon, GTK_ICON_SIZE_BUTTON);
++    gtk_widget_set_valign (button, GTK_ALIGN_CENTER);
++    /* What the TV gets right now stands out; a tap on another one switches over */
++    gtk_style_context_add_class (gtk_widget_get_style_context (button),
++                                 in_use ? "suggested-action" : "flat");
++    gtk_widget_set_tooltip_text (button, in_use ? _("Stop casting to this TV") : _(cast_actions[i].label));
++    atk_object_set_name (gtk_widget_get_accessible (button),
++                         in_use ? _("Stop casting to this TV") : _(cast_actions[i].label));
++    g_object_set_data_full (G_OBJECT (button), "cast-id", g_strdup (id), g_free);
++    g_object_set_data (G_OBJECT (button), "cast-method",
++                       (gpointer) (in_use ? "Disconnect" : cast_actions[i].method));
++    g_signal_connect_object (button, "clicked", G_CALLBACK (on_action_clicked), self,
++                             G_CONNECT_SWAPPED);
++    gtk_container_add (GTK_CONTAINER (row), button);
++  }
++}
++
++
++/* Once the TV shows the desktop: fold the quick settings and open the touchpad and keyboard for
++ * it (plinius-remote), in full screen */
++static void
++on_desktop_shown (PhoshCastQuickSetting *self)
++{
++  g_autoptr (GDesktopAppInfo) remote = g_desktop_app_info_new (REMOTE_APP);
++
++  phosh_shell_fold_top_panel (phosh_shell_get_default ());
++  if (remote)
++    g_desktop_app_info_launch_action (remote, REMOTE_ACTION, NULL);
++}
++
++
++static const char *
++streaming_subtitle (const char *icon_name, const char *source)
++{
++  if (g_strcmp0 (icon_name, SPEAKER_ICON) == 0)
++    return _("Playing the sound – tap to stop");
++  if (g_strcmp0 (source, "desktop") == 0)
++    return _("Desktop – tap to stop");
++  if (g_strcmp0 (source, "video") == 0)
++    return _("Playing a video – tap to stop");
++  if (g_strcmp0 (source, "link") == 0)
++    return _("Playing a link – tap to stop");
++  return _("Mirroring – tap to stop");
++}
++
++
+ static GtkWidget *
+-create_row (const char *id,
++create_row (PhoshCastQuickSetting *self,
++            const char *id,
+             const char *name,
+             const char *description,
+             const char *icon_name,
+             gboolean    active,
+-            const char *state)
++            const char *state,
++            const char *source)
+ {
+   GtkWidget *row = hdy_action_row_new ();
+   GtkWidget *icon = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_BUTTON);
+@@ -94,15 +236,17 @@ create_row (const char *id,
+ 
+   if (!active) {
+     hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), description);
++    add_action_buttons (self, row, id, NULL);
+   } else if (g_strcmp0 (state, "streaming") == 0) {
+-    GtkWidget *check = gtk_image_new_from_icon_name ("object-select-symbolic",
+-                                                     GTK_ICON_SIZE_BUTTON);
+-
+-    if (g_strcmp0 (icon_name, SPEAKER_ICON) == 0)
+-      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), _("Playing the sound – tap to stop"));
+-    else
+-      hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), _("Mirroring – tap to stop"));
+-    gtk_container_add (GTK_CONTAINER (row), check);
++    hdy_action_row_set_subtitle (HDY_ACTION_ROW (row), streaming_subtitle (icon_name, source));
++    if (g_strcmp0 (icon_name, SPEAKER_ICON) == 0) {
++      gtk_container_add (GTK_CONTAINER (row),
++                         gtk_image_new_from_icon_name ("object-select-symbolic",
++                                                       GTK_ICON_SIZE_BUTTON));
++    } else {
++      /* The buttons stay, the one in use marked: switch between them while connected */
++      add_action_buttons (self, row, id, source);
++    }
+   } else {
+     GtkWidget *spinner = gtk_spinner_new ();
+ 
+@@ -127,10 +271,12 @@ update (PhoshCastQuickSetting *self)
+   g_autofree char *active = get_string (self, "ActiveDevice");
+   g_autofree char *state = get_string (self, "State");
+   g_autofree char *error = get_string (self, "Error");
++  g_autofree char *source = get_string (self, "Source");
+   g_autofree char *active_name = NULL;
+   g_autoptr (GList) children = NULL;
+   gboolean discovering = get_discovering (self);
+   gboolean busy = *active != '\0' && g_strcmp0 (state, "idle") != 0;
++  gboolean desktop_shown;
+   GVariantIter iter;
+   const char *id, *name, *description, *icon_name;
+   guint n_rows = 0;
+@@ -152,11 +298,18 @@ update (PhoshCastQuickSetting *self)
+       if (is_active)
+         active_name = g_strdup (name);
+       gtk_list_box_insert (self->list_box,
+-                           create_row (id, name, description, icon_name, is_active, state), -1);
++                           create_row (self, id, name, description, icon_name, is_active,
++                                       state, source), -1);
+       n_rows++;
+     }
+   }
+ 
++  /* The desktop just came up on the TV: off with the quick settings, on with the remote */
++  desktop_shown = busy && g_strcmp0 (state, "streaming") == 0 && g_strcmp0 (source, "desktop") == 0;
++  if (desktop_shown && !self->desktop_shown)
++    on_desktop_shown (self);
++  self->desktop_shown = desktop_shown;
++
+   /* Tile: the TV while mirroring, otherwise what is going on */
+   phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), busy);
+   if (!busy)
+@@ -168,8 +321,9 @@ update (PhoshCastQuickSetting *self)
+   else
+     phosh_status_icon_set_info (self->info, _("Connecting…"));
+ 
+-  /* Status page */
+-  if (discovering)
++  /* Status page: the spinner from the first moment the list is open, not only once Schwupp
++   * has started (D-Bus starts it on demand, which takes a few seconds on a phone) */
++  if (discovering || self->searching)
+     gtk_spinner_start (self->spinner);
+   else
+     gtk_spinner_stop (self->spinner);

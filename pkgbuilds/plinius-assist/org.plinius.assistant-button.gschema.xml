@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- plinius-assist: what the assistant button (KEY_ASSISTANT) does, set in GNOME Settings > Power;
+     and whether a flip cover (Hall sensor) switches the screen -->
+<schemalist>
+  <enum id="org.plinius.assistant-button.Action">
+    <value nick="none" value="0"/>
+    <value nick="torch" value="1"/>
+    <value nick="screenshot" value="2"/>
+    <value nick="camera" value="3"/>
+    <value nick="silent" value="4"/>
+    <value nick="lock" value="5"/>
+    <value nick="custom" value="6"/>
+  </enum>
+  <schema id="org.plinius.assistant-button" path="/org/plinius/assistant-button/">
+    <key name="short-press" enum="org.plinius.assistant-button.Action">
+      <default>'none'</default>
+      <summary>Action on a short press</summary>
+    </key>
+    <key name="double-press" enum="org.plinius.assistant-button.Action">
+      <default>'none'</default>
+      <summary>Action on a double press</summary>
+      <description>
+        While this is “none”, a short press acts at once instead of waiting whether a second
+        press follows.
+      </description>
+    </key>
+    <key name="long-press" enum="org.plinius.assistant-button.Action">
+      <default>'none'</default>
+      <summary>Action on a long press</summary>
+    </key>
+    <key name="short-press-command" type="s">
+      <default>''</default>
+      <summary>Command for “custom” on a short press</summary>
+      <description>Path of a program or script, optionally with arguments (shell quoting).</description>
+    </key>
+    <key name="double-press-command" type="s">
+      <default>''</default>
+      <summary>Command for “custom” on a double press</summary>
+    </key>
+    <key name="long-press-command" type="s">
+      <default>''</default>
+      <summary>Command for “custom” on a long press</summary>
+    </key>
+    <key name="cover" type="b">
+      <default>true</default>
+      <summary>Flip cover switches the screen</summary>
+      <description>
+        Closing a cover with a magnet over the Hall sensor turns the screen off (and locks it as
+        set for blanking), opening it turns the screen on.
+      </description>
+    </key>
+  </schema>
+</schemalist>

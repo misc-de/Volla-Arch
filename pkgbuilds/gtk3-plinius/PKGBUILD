@@ -1,0 +1,138 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on Arch's gtk3 (Jan Alexander Steffens (heftig) <heftig@archlinux.org>, Ionut Biru <ibiru@archlinux.org>)
+
+pkgname=gtk3-plinius
+pkgver=3.24.52
+pkgrel=4
+epoch=1
+pkgdesc="GObject-based multi-platform GUI toolkit, with touch drags that follow the finger while the content moves"
+url="https://www.gtk.org/"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+# Debug symbols in a -debug package (ALARM's makepkg.conf has !debug): perf names Phosh's functions
+options=(debug)
+license=(LGPL-2.1-or-later)
+# As Arch's gtk3
+depends=(
+	adwaita-fonts
+	adwaita-icon-theme
+	at-spi2-core
+	cairo
+	dconf
+	desktop-file-utils
+	fontconfig
+	fribidi
+	gdk-pixbuf2
+	glib2
+	glibc
+	gtk-update-icon-cache
+	harfbuzz
+	iso-codes
+	libcloudproviders
+	libcolord
+	libcups
+	libegl
+	libepoxy
+	libgl
+	librsvg
+	libx11
+	libxcomposite
+	libxcursor
+	libxdamage
+	libxext
+	libxfixes
+	libxi
+	libxinerama
+	libxkbcommon
+	libxrandr
+	libxrender
+	pango
+	shared-mime-info
+	tinysparql
+	wayland
+	zlib
+)
+makedepends=(
+	git
+	glib2-devel
+	gobject-introspection
+	hicolor-icon-theme
+	meson
+	sassc
+	wayland-protocols
+)
+optdepends=(
+	'papers: default print previewer'
+	'evince: legacy print previewer'
+)
+provides=(
+	"gtk3=$epoch:$pkgver"
+	gtk3-print-backends
+	libgailutil-3.so
+	libgdk-3.so
+	libgtk-3.so
+)
+conflicts=(gtk3 gtk3-print-backends)
+# An update takes gtk3-plinius in place of gtk3 by itself: a plain conflict asks "Remove gtk3?",
+# which --noconfirm (plinius-pkg) answers with no, and the whole update stops
+replaces=(gtk3)
+source=(
+	"git+https://gitlab.gnome.org/GNOME/gtk.git#tag=$pkgver"
+	gtk-query-immodules-3.0.hook
+	gtk-remove-immodules-cache.hook
+	0001-Allow-disabling-legacy-Tracker-search.patch
+	0002-gesture-Don-t-let-a-moving-window-move-the-finger.patch
+)
+b2sums=('b351d0e48b074ea0b6d75dd8b47bd5ff5897dce01b2c69894a5d20fff0205b8cfc4603ce556331fdf3afe4f0380c58212ebac7cd832c9b6d3fd05cbf822250d8'
+        '920c797546da3a6698c86fe53872be8ccaec627cb687b163e144f65d1a6ad7cb80d2e6f53a7ba26b91642cedec5432c3f1d4ec41f8d972fb6098580b31cb43a5'
+        'bec30b4a00a885b03a49d49c8cdd3be2c9c81a375478fd4358e823845f292b410e033ddf728fb52aef4a3e99bfed3ce657131f17d8d68ae0d0d32c5621a85939'
+        '72075b7a95b61dacae009310f5884ea4474c2fd248f5cb65d6cc5fdfe2c0e55ea6f954f77d818ff27f531fba61baca13d178b93310a95459e629a9ec11b053c0'
+        '407023f9dd79f6b00827d2a6fa0599735baa18316c4f9e2b9ea341db137fc0cce0181f893167288370b9ae846bfd2117ce2310b0ba33cc2968e5d49e0464dd5c')
+
+prepare() {
+	cd gtk
+
+	# Arch: don't try to use the old Tracker
+	git apply -3 ../0001-Allow-disabling-legacy-Tracker-search.patch
+	# Scrolling Phosh's app grid jumped back and forth by whole rows: the viewport's own movement
+	# went into the finger's position (same as libhandy-plinius 0001 for the lock screen)
+	git apply -3 ../0002-gesture-Don-t-let-a-moving-window-move-the-finger.patch
+}
+
+build() {
+	# As Arch, without documentation, man pages and demos (gtk3-docs and gtk3-demos are separate
+	# packages there, the phone needs neither)
+	local meson_options=(
+		-D broadway_backend=true
+		-D cloudproviders=true
+		-D colord=yes
+		-D gtk_doc=false
+		-D introspection=true
+		-D man=false
+		-D demos=false
+		-D examples=false
+		-D tests=false
+		-D installed_tests=false
+		-D tracker=false
+		-D tracker3=true
+	)
+
+	CFLAGS+=" -DG_DISABLE_CAST_CHECKS"
+	arch-meson gtk build "${meson_options[@]}"
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+
+	install -Dm644 /dev/stdin "$pkgdir/usr/share/gtk-3.0/settings.ini" <<END
+[Settings]
+gtk-icon-theme-name = Adwaita
+gtk-theme-name = Adwaita
+gtk-font-name = Adwaita Sans 11
+END
+
+	install -Dm644 gtk-*.hook -t "$pkgdir/usr/share/libalpm/hooks"
+
+	# Built by GTK 4, shared with GTK 3
+	rm -f "$pkgdir/usr/bin/gtk-update-icon-cache"
+}

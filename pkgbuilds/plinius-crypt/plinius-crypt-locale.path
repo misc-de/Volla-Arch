@@ -1,0 +1,19 @@
+# The password prompt at startup speaks the system language and uses the system keyboard layout,
+# both taken into the initramfs when it is built (install hook plinius-crypt). Rebuilds it when
+# they change: GNOME Settings changes them through systemd-localed (language of the system and
+# keyboard of the login screen), which writes these files. Watched paths are the ones the
+# install hook reads; keep in sync with install and rebuild-initramfs.
+[Unit]
+Description=Watch the system language and keyboard layout for the password prompt at startup
+# Only if this system's initramfs runs the plinius-crypt hook (it creates the directory, the
+# running system inherits /run); otherwise the next mkinitcpio run picks the changes up
+ConditionPathIsDirectory=/run/plinius-crypt
+
+[Path]
+PathChanged=/etc/locale.conf
+PathChanged=/etc/vconsole.conf
+PathChanged=/etc/X11/xorg.conf.d/00-keyboard.conf
+Unit=plinius-crypt-initramfs.service
+
+[Install]
+WantedBy=paths.target

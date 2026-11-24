@@ -1,0 +1,89 @@
+From b50be6ce07506c38e4c896c08ecd615b3ed57ba6 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 08:09:22 +0100
+Subject: [PATCH] osk: The microphone key buzzes once it really listens
+
+The key buzzed on the press like any other key, but the microphone was
+not open yet: the service still had to start and the first sound came
+a moment later. Words spoken at the buzz were lost. A press that
+switches dictation on now stays quiet, and the buzz comes with the
+first Level signal, which the service sends with the first sound from
+the microphone. If the microphone never delivers, nothing buzzes.
+---
+ src/pos-input-surface.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index adc1cb5..362dc05 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -218,6 +218,8 @@ struct _PosInputSurface {
+   guint                       dictate_tail_id;   /* stop shortly after the key was let go */
+   gboolean                    dictate_start_pending; /* Start() not answered yet */
+   gboolean                    dictate_stop_pending;  /* send Stop() once Start() is answered */
++  gboolean                    dictate_quiet_press;   /* no key feedback for this press */
++  gboolean                    dictate_buzz_pending;  /* buzz once the microphone delivers */
+ };
+ 
+ 
+@@ -642,7 +644,11 @@ on_osk_key_down (PosInputSurface *self, const char *symbol, GtkWidget *osk_widge
+   g_return_if_fail (POS_IS_INPUT_SURFACE (self));
+   g_return_if_fail (POS_IS_OSK_WIDGET (osk_widget));
+ 
+-  pos_input_surface_trigger_feedback (self, KEY_PRESS_EVENT);
++  /* A press that switches the microphone on buzzes once it really listens */
++  if (self->dictate_quiet_press)
++    self->dictate_quiet_press = FALSE;
++  else
++    pos_input_surface_trigger_feedback (self, KEY_PRESS_EVENT);
+ 
+   pos_input_surface_set_backspace_pressed (self, symbol);
+ }
+@@ -1742,6 +1748,7 @@ dictate_stop (PosInputSurface *self)
+ {
+   g_clear_handle_id (&self->dictate_tail_id, g_source_remove);
+   self->dictate_held = FALSE;
++  self->dictate_buzz_pending = FALSE;
+ 
+   if (!self->dictating)
+     return;
+@@ -1788,6 +1795,7 @@ on_dictate_start_done (GObject *source, GAsyncResult *res, gpointer data)
+   self->dictate_stop_pending = FALSE;
+   g_warning ("Starting dictation failed: %s", err->message);
+   self->dictating = FALSE;
++  self->dictate_buzz_pending = FALSE;
+   self->dictate_accept = FALSE;
+   set_dictation_active (self, FALSE);
+   set_dictation_activity (self, "idle");
+@@ -1803,6 +1811,7 @@ dictate_start (PosInputSurface *self)
+   self->dictating = TRUE;
+   self->dictate_accept = TRUE;
+   self->dictate_vk_typed = FALSE;
++  self->dictate_buzz_pending = TRUE;
+   /* Light the key at once; the service confirms with StateChanged or the call fails */
+   set_dictation_active (self, TRUE);
+   /* Starting the service takes a moment: turn the arc until it tells its activity */
+@@ -1867,6 +1876,8 @@ dictate_press_activated (GSimpleAction *action, GVariant *parameter, gpointer da
+   dictate_start (self);
+   self->dictate_held = self->dictating;
+   self->dictate_press_time = g_get_monotonic_time ();
++  /* The key-down that follows stays quiet: the buzz comes with the first sound */
++  self->dictate_quiet_press = self->dictating;
+ }
+ 
+ 
+@@ -2076,6 +2087,14 @@ on_dictate_level (GDBusConnection *bus, const char *sender, const char *path, co
+   if (!g_variant_is_of_type (params, G_VARIANT_TYPE ("(d)")))
+     return;
+   g_variant_get (params, "(d)", &level);
++  /*
++   * The first Level comes with the first sound from the microphone: only now does the
++   * service really listen, so this is when a held key may be spoken into
++   */
++  if (self->dictate_buzz_pending && self->dictating) {
++    self->dictate_buzz_pending = FALSE;
++    pos_input_surface_trigger_feedback (self, KEY_PRESS_EVENT);
++  }
+   for (guint i = 0; i < self->osks->len; i++)
+     pos_osk_widget_set_dictation_level (g_ptr_array_index (self->osks, i), level);
+ }

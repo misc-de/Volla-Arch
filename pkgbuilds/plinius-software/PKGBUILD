@@ -1,0 +1,127 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-software
+pkgver=0.12
+pkgrel=27
+pkgdesc="Install phone-ready apps and update the whole system, without partial upgrades"
+arch=(any)
+# The app icon is GNOME Software's (GPL-2.0-or-later), renamed so it does not clash with an
+# installed gnome-software
+license=(MIT GPL-2.0-or-later)
+_gs=51.1
+# Catalog: Arch's AppStream data (archlinux-appstream-data), filtered to the packages in the
+# installed sync database; its icons are JPEG XL (glycin). Screenshots via libsoup3.
+# Update check: checkupdates (pacman-contrib, needs fakeroot). No PackageKit,
+# see docs/PAKETIERUNG.md. UI strings are English, translated in *.po (template
+# plinius-software.pot; gettext).
+# Since 0.12-8 Settings (gnome-control-center-plinius 51.1-43) has the same pages: Apps with
+# Explore, Installed and Settings, Updates on System and Security. The app is no longer in the
+# app grid (NoDisplay); Settings uses its root helper and "plinius-software --updates-json", the
+# update notification opens Settings.
+# Since 0.12-9 an update ends with the restart it needs: plinius-restart finds the running
+# programs that still use replaced files and sorts them by their control group (nothing, apps,
+# the user interface in place, or a reboot); Settings and the app offer that restart.
+# Since 0.12-15 plinius-pkg switches [plinius] between the channels stable and beta
+# (channel-beta, channel-stable); Settings → Apps → Settings has the switch.
+# Since 0.12-16 FuriHub (https://furihub.github.io/repo/, Flatpak apps of the FuriLabs user
+# community) can be turned on next to Flathub (furihub-enable, furihub-disable). It has no
+# runtimes, so Flathub comes with it and stays on while FuriHub is; flatpak-install takes an app
+# from FuriHub if it has it. --updates-json names the remote of each Flatpak update.
+# Since 0.12-20 plinius.xml adds the apps of [plinius] to the catalog (Arch's data does not know
+# them), first plinius-games and plinius-dos-installer; an entry only shows while the repository
+# has its package.
+# 0.12-21: the catalog names RetroArch by its name and lists the DOS Installer.
+# 0.12-22: RetroArch and the DOS Installer are one entry, plinius-retro-games, which pulls in
+# both and is rated for phones (apps.conf); it is offered under "Recommended", not preinstalled.
+# Also since 0.12-16 updates waiting for approval (plinius-freigabe) are no longer shown: the
+# list then has no system packages, and upgrade puts the sync databases back and only updates
+# the Flatpak apps instead of failing with exit 8.
+# Since 0.12-17 an upgrade that pacman refuses only because of files no package owns, each
+# brought by a package of [plinius], is repeated with --overwrite for exactly those files (copy
+# in /var/lib/plinius-pkg/overwritten); otherwise such leftovers would block every update.
+# 0.12-23: the stamp names the database
+# (db_sha256, sig_sha256, tools/lib.sh write_stamp). plinius-repo-stamp compares it with the
+# database pacman fetched, in the update check and in plinius-pkg upgrade between -Sy and -Su
+# (exit 12 if it does not match; the sync databases are put back). The stamps seen are kept
+# system-wide in /var/lib/plinius-pkg (by root). A stamp that cannot be had (no answer, HTTP
+# error, none on the server) is a warning and the upgrade goes on; a wrong or badly signed one
+# also stops plinius-pkg upgrade (exit 12), plinius-revoked counts. Updates held back by plinius-freigabe are reported again:
+# "held" in --updates-json and a notification, at the start and after 7 days.
+# 0.12-24: a database plinius-repo-stamp cannot read here is "unreadable" (exit 1), no longer
+# a "mismatch" with the server.
+# 0.12-25: when fetching once more after a stamp that did not match yet fails, plinius-pkg
+# upgrade says so and ends as a failed sync (exit 1, or 4 for a 404), not as exit 12. Closing
+# the window while an operation runs keeps it open with a toast again (the close handler's
+# arguments hid gettext's _).
+depends=(python python-gobject gtk4 libadwaita appstream archlinux-appstream-data libsoup3 glycin
+	pacman pacman-contrib fakeroot polkit systemd util-linux plinius-freigabe gnupg)
+makedepends=(gettext)
+_langs=(de fr es it pt nl pl ru)
+source=(plinius-software
+	plinius-pkg
+	plinius-restart
+	plinius-repo-stamp
+	apps.conf
+	plinius.xml
+	org.plinius.Software.desktop
+	org.plinius.Software.service
+	org.plinius.software.policy
+	plinius-software-check.service
+	plinius-software-check.timer
+	90-plinius-software-check
+	"org.plinius.Software.svg::https://gitlab.gnome.org/GNOME/gnome-software/-/raw/$_gs/data/icons/hicolor/scalable/org.gnome.Software.svg"
+	"org.plinius.Software-symbolic.svg::https://gitlab.gnome.org/GNOME/gnome-software/-/raw/$_gs/data/icons/hicolor/symbolic/org.gnome.Software-symbolic.svg"
+	de.po fr.po es.po it.po pt.po nl.po pl.po ru.po
+	LICENSE)
+sha256sums=('7cf96bf116d940426f35b9a9a59cc139379904c94152e9be18b7ccad1c9b3352'
+	'519d54ae57bece1a4480294bb84ed16a4ec876aa9b9b94250424625f73930c94'
+	'ecc866cadc4ae0ec246f310b2cc3544c5290c9b5a0d1f45204401adcefc274e9'
+	'b21ce8f0a11e405e21dc610dd656eaf85814a0447b57e3e5d3d619525b032a9e'
+	'0ae873d8546f1ab9d9d868f288a191c87a3c80f82420f24ae199cbfb4dc7df8f'
+	'8f76f9830e43efef8b330dc87b2d7479661c5d7563245b6066f26ec683f3de89'
+	'adf3bb4d26fe431894ad431637705c653e7d59db60b76e74ef4b63daf41344a5'
+	'6ce45cbfa94718c6f7c825a85d52ead6921e94fd6364ae2663f73ea0457efd5a'
+	'ec542d7487851885d5994d0f748adc7618bfe23098ffa0971a4db891bac1b403'
+	'fb56026da2b864ff737699129e508779d185d02d30f8fdc116789b320f1502cf'
+	'f6078b433343dee8f5ece929309543ffce85dd988ec1a4fbc284c91e0328407a'
+	'bd7f2e601bdcb1463f150564f12224a545cbcac378e03615bf389c6200a47e86'
+	'e51489d0fb7c722b0b52d089a34948ca15da693e3a80e7395ecd572cf68beaef'
+	'f2bad571f9c24491f863bec1b32f95a9be5eb0fd85d250af975a75bb7c185c3c'
+	'dfa725a390ebbf3a2b85c588917d61cfcd240ce69c715409cdeba5d024c39eb6'
+	'e26a9547f35607f917498d2d87df448de88ea37ced2f80966ad6dc6b1c49534e'
+	'd6418da26acb7f38b6a1578ac8c7aa596180ad2fedc298def8bb524ffc2dbd35'
+	'26a19a66a9163e2592e1f9ef5e653bc332aa4586d9106374223de1c82ff19498'
+	'11ad921d0d8979581bbfaa869ad50241e7076a722c7742318076e5f715c464dd'
+	'dd71ab8653845a18729f8252bfca9b0ce351dfe37eca7f8037c55515a27e241e'
+	'1102c4b523b6f789e308e22e3873a5697a4cf4e767bb26e4e848912206a3b791'
+	'98f97df747a06a5d11df37aaef67ce6942b7f0683a07a5f373eafdc2ff66d75c'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+# Compile the translations; --check catches broken format strings in *.po
+build() {
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	# Due at the first connection, not only by the daily timer
+	install -Dm755 90-plinius-software-check -t "$pkgdir/usr/lib/NetworkManager/dispatcher.d"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-software -t "$pkgdir/usr/bin"
+	install -Dm755 plinius-pkg plinius-restart plinius-repo-stamp -t "$pkgdir/usr/lib/plinius-software"
+	install -Dm644 apps.conf -t "$pkgdir/usr/share/plinius-software"
+	install -Dm644 plinius.xml -t "$pkgdir/usr/share/swcatalog/xml"
+	install -Dm644 org.plinius.Software.desktop -t "$pkgdir/usr/share/applications"
+	install -Dm644 org.plinius.Software.service -t "$pkgdir/usr/share/dbus-1/services"
+	install -Dm644 org.plinius.Software.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+	install -Dm644 org.plinius.Software-symbolic.svg -t "$pkgdir/usr/share/icons/hicolor/symbolic/apps"
+	install -Dm644 org.plinius.software.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	install -Dm644 plinius-software-check.service plinius-software-check.timer \
+		-t "$pkgdir/usr/lib/systemd/user"
+	install -d "$pkgdir/usr/lib/systemd/user/timers.target.wants"
+	ln -s ../plinius-software-check.timer "$pkgdir/usr/lib/systemd/user/timers.target.wants/"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-software.mo"
+	done
+}

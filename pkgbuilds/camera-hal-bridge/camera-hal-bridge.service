@@ -1,0 +1,12 @@
+[Unit]
+Description=Android cameras as PipeWire camera nodes
+After=pipewire.service
+BindsTo=pipewire.service
+
+[Service]
+ExecStart=/usr/bin/camera-hal-bridge
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=pipewire.service

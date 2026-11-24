@@ -1,0 +1,139 @@
+From c38b7bcf32e6e64e4ec39e17849b153f775d8398 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 09:41:23 +0100
+Subject: [PATCH] power-menu: Add a restart button
+
+A long press on the power button opens the power menu. Offer a restart
+there as well, next to power off. Like power off it goes through
+gnome-session, which asks for confirmation, and is disabled on the lock
+screen.
+---
+ src/power-menu-manager.c | 16 +++++++++++++++
+ src/ui/power-menu.ui     | 52 +++++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 63 insertions(+), 5 deletions(-)
+
+diff --git a/src/power-menu-manager.c b/src/power-menu-manager.c
+index 24965358..befc29fa 100644
+--- a/src/power-menu-manager.c
++++ b/src/power-menu-manager.c
+@@ -62,6 +62,19 @@ on_power_off_activated (GSimpleAction *action, GVariant *param, gpointer data)
+ }
+ 
+ 
++static void
++on_restart_activated (GSimpleAction *action, GVariant *param, gpointer data)
++{
++  PhoshPowerMenuManager *self = PHOSH_POWER_MENU_MANAGER (data);
++  PhoshSessionManager *sm = phosh_shell_get_session_manager (phosh_shell_get_default ());
++
++  g_return_if_fail (PHOSH_IS_POWER_MENU_MANAGER (self));
++
++  close_menu (self);
++  phosh_session_manager_reboot (sm);
++}
++
++
+ static void
+ on_suspend_activated (GSimpleAction *action, GVariant *param, gpointer data)
+ {
+@@ -161,6 +174,8 @@ on_shell_locked_changed (PhoshPowerMenuManager *self, GParamSpec *pspec, PhoshSh
+   g_simple_action_set_enabled (G_SIMPLE_ACTION (action), !locked);
+   action = g_action_map_lookup_action (G_ACTION_MAP (self->menu_actions), "poweroff");
+   g_simple_action_set_enabled (G_SIMPLE_ACTION (action), !locked);
++  action = g_action_map_lookup_action (G_ACTION_MAP (self->menu_actions), "restart");
++  g_simple_action_set_enabled (G_SIMPLE_ACTION (action), !locked);
+ }
+ 
+ 
+@@ -190,6 +205,7 @@ phosh_power_menu_manager_class_init (PhoshPowerMenuManagerClass *klass)
+ static GActionEntry menu_entries[] = {
+   { .name = "emergency-call", .activate = on_emergency_call_activated },
+   { .name = "poweroff", .activate = on_power_off_activated },
++  { .name = "restart", .activate = on_restart_activated },
+   { .name = "screen-lock", .activate = on_screen_lock_activated },
+   { .name = "screenshot", .activate = on_screenshot_activated },
+   { .name = "suspend", .activate = on_suspend_activated },
+diff --git a/src/ui/power-menu.ui b/src/ui/power-menu.ui
+index 6c792687..e3ec1481 100644
+--- a/src/ui/power-menu.ui
++++ b/src/ui/power-menu.ui
+@@ -128,6 +128,47 @@
+                 <property name="top-attach">0</property>
+               </packing>
+             </child>
++            <child>
++              <object class="GtkButton" id="btn_restart">
++                <property name="visible">1</property>
++                <property name="vexpand">1</property>
++                <property name="valign">center</property>
++                <property name="action-name">power-menu.restart</property>
++                <child>
++                  <object class="GtkBox">
++                    <property name="visible">1</property>
++                    <property name="margin-start">12</property>
++                    <property name="margin-top">12</property>
++                    <property name="margin-end">12</property>
++                    <property name="margin-bottom">12</property>
++                    <property name="spacing">8</property>
++                    <property name="halign">center</property>
++                    <property name="hexpand">1</property>
++                    <property name="orientation">vertical</property>
++                    <child>
++                      <object class="GtkImage">
++                        <property name="visible">1</property>
++                        <property name="icon-name">system-reboot-symbolic</property>
++                        <property name="pixel-size">32</property>
++                      </object>
++                    </child>
++                    <child>
++                      <object class="PhoshFadingLabel">
++                        <property name="visible">1</property>
++                        <property name="label" translatable="yes">Restart</property>
++                      </object>
++                    </child>
++                  </object>
++                </child>
++                <style>
++                  <class name="flat"/>
++                </style>
++              </object>
++              <packing>
++                <property name="left-attach">1</property>
++                <property name="top-attach">0</property>
++              </packing>
++            </child>
+             <child>
+               <object class="GtkButton" id="btn_lock">
+                 <property name="visible">1</property>
+@@ -165,8 +206,8 @@
+                 </style>
+               </object>
+               <packing>
+-                <property name="left-attach">1</property>
+-                <property name="top-attach">0</property>
++                <property name="left-attach">0</property>
++                <property name="top-attach">1</property>
+               </packing>
+             </child>
+             <child>
+@@ -206,7 +247,7 @@
+                 </style>
+               </object>
+               <packing>
+-                <property name="left-attach">0</property>
++                <property name="left-attach">1</property>
+                 <property name="top-attach">1</property>
+               </packing>
+             </child>
+@@ -248,8 +289,9 @@
+                 </style>
+               </object>
+               <packing>
+-                <property name="left-attach">1</property>
+-                <property name="top-attach">1</property>
++                <property name="left-attach">0</property>
++                <property name="top-attach">2</property>
++                <property name="width">2</property>
+               </packing>
+             </child>
+           </object>

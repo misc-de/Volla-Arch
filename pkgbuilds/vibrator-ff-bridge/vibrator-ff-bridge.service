@@ -1,0 +1,42 @@
+[Unit]
+Description=Force-feedback device for the Android vibrator (feedbackd)
+# The device package adds After= on the Android container service via drop-in
+
+[Service]
+ExecStart=/usr/bin/vibrator-ff-bridge
+Restart=on-failure
+RestartSec=3
+
+# Sandbox (docs/DIENSTE-HAERTEN.md): no capabilities; its uinput device, the kernel's haptics
+# input device or the LED-class sysfs vibrator (world-writable), the AIDL HAL as a fallback.
+# /sys stays writable for the LED-class attributes.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateIPC=yes
+DevicePolicy=closed
+DeviceAllow=/dev/uinput rw
+DeviceAllow=char-input rw
+DeviceAllow=/dev/binderfs/binder rw
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

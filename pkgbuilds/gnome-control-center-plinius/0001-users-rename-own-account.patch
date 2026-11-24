@@ -1,0 +1,142 @@
+Plinius: rename your own login name under System > Users.
+
+New row "Username" below "Name", only for your own local account and only if
+plinius-account is installed. The dialog (cc-username-dialog.*) lives as separate
+files in the package directory and is copied to panels/system/users/ in prepare().
+
+diff --git a/panels/system/meson.build b/panels/system/meson.build
+index 1282449..a8dccdd 100644
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -68,6 +68,7 @@ sources = files(
+   'users/cc-password-dialog.c',
+   'users/cc-realm-manager.c',
+   'users/cc-user-page.c',
++  'users/cc-username-dialog.c',
+   'users/cc-users-page.c',
+   'users/pw-utils.c',
+   'users/run-passwd.c',
+diff --git a/panels/system/system.gresource.xml b/panels/system/system.gresource.xml
+index 3eb6981..5eb71fd 100644
+--- a/panels/system/system.gresource.xml
++++ b/panels/system/system.gresource.xml
+@@ -24,6 +24,7 @@
+     <file preprocess="xml-stripblanks">users/cc-password-dialog.ui</file>
+     <file preprocess="xml-stripblanks">users/cc-users-page.ui</file>
+     <file preprocess="xml-stripblanks">users/cc-user-page.ui</file>
++    <file preprocess="xml-stripblanks">users/cc-username-dialog.ui</file>
+     <file alias="wordlist.txt">eff_short_wordlist_2_0.txt</file>
+   </gresource>
+ 
+diff --git a/panels/system/users/cc-user-page.blp b/panels/system/users/cc-user-page.blp
+index b6b808a..b74147f 100644
+--- a/panels/system/users/cc-user-page.blp
++++ b/panels/system/users/cc-user-page.blp
+@@ -79,6 +79,18 @@ template $CcUserPage: Adw.NavigationPage {
+             apply => $fullname_entry_apply_cb(template);
+           }
+ 
++          $CcListRow username_row {
++            sensitive: bind template.editable;
++            has-tooltip: bind template.editable no-sync-create inverted;
++            tooltip-text: _("Unlock to Change This Setting");
++            visible: false;
++            title: _("_Username");
++            use-underline: true;
++            activatable: true;
++            show-arrow: true;
++            activated => $change_username(template);
++          }
++
+           $CcListRow password_row {
+             sensitive: bind template.editable;
+             has-tooltip: bind template.editable no-sync-create inverted;
+diff --git a/panels/system/users/cc-user-page.c b/panels/system/users/cc-user-page.c
+index caa4c6c..7b5443e 100644
+--- a/panels/system/users/cc-user-page.c
++++ b/panels/system/users/cc-user-page.c
+@@ -38,6 +38,7 @@
+ #include "cc-password-dialog.h"
+ #include "cc-permission-infobar.h"
+ #include "cc-user-page.h"
++#include "cc-username-dialog.h"
+ #include "user-utils.h"
+ 
+ #include <config.h>
+@@ -78,6 +79,7 @@ struct _CcUserPage {
+     AdwSwitchRow *remove_local_files_choice;
+     GtkWidget *remove_user_button;
+     AdwAlertDialog *remove_local_user_dialog;
++    CcListRow *username_row;
+ 
+     ActUser *user;
+     GSettings *login_screen_settings;
+@@ -317,6 +319,33 @@ change_password (CcUserPage *self)
+     adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
+ }
+ 
++static void
++update_username_row (CcUserPage *self)
++{
++    g_autofree gchar *pending = NULL;
++    g_autofree gchar *label = NULL;
++    gboolean available;
++
++    available = cc_username_dialog_available (self->user);
++    gtk_widget_set_visible (GTK_WIDGET (self->username_row), available);
++    if (!available)
++        return;
++
++    pending = cc_username_dialog_get_pending (self->user);
++    if (pending)
++        label = g_strdup_printf ("%s → %s", act_user_get_user_name (self->user), pending);
++    cc_list_row_set_secondary_label (self->username_row, label ? label : act_user_get_user_name (self->user));
++}
++
++static void
++change_username (CcUserPage *self)
++{
++    CcUsernameDialog *dialog = cc_username_dialog_new (self->user);
++
++    g_signal_connect_object (dialog, "closed", G_CALLBACK (update_username_row), self, G_CONNECT_SWAPPED);
++    adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
++}
++
+ static void
+ autologin_changed (CcUserPage *self)
+ {
+@@ -641,12 +670,14 @@ cc_user_page_class_init (CcUserPageClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, remove_local_files_choice);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, remove_local_user_dialog);
+     gtk_widget_class_bind_template_child (widget_class, CcUserPage, remove_user_button);
++    gtk_widget_class_bind_template_child (widget_class, CcUserPage, username_row);
+ 
+     gtk_widget_class_bind_template_callback (widget_class, account_type_changed);
+     gtk_widget_class_bind_template_callback (widget_class, autologin_changed);
+     gtk_widget_class_bind_template_callback (widget_class, change_fingerprint);
+     gtk_widget_class_bind_template_callback (widget_class, show_language_chooser);
+     gtk_widget_class_bind_template_callback (widget_class, change_password);
++    gtk_widget_class_bind_template_callback (widget_class, change_username);
+     gtk_widget_class_bind_template_callback (widget_class, fullname_entry_apply_cb);
+     gtk_widget_class_bind_template_callback (widget_class, remove_local_user_response);
+     gtk_widget_class_bind_template_callback (widget_class, remove_user);
+@@ -708,6 +739,7 @@ cc_user_page_set_user (CcUserPage *self, ActUser *user, GPermission *permission)
+                             adw_avatar_get_custom_image (self->avatar) != NULL);
+ 
+     gtk_editable_set_text (GTK_EDITABLE (self->fullname_row), act_user_get_real_name (user));
++    update_username_row (self);
+ 
+     gtk_widget_set_visible (GTK_WIDGET (self->account_type_row), !would_demote_only_admin (user));
+     is_admin = act_user_get_account_type (user) == ACT_USER_ACCOUNT_TYPE_ADMINISTRATOR;
+diff --git a/panels/system/users/meson.build b/panels/system/users/meson.build
+index e920526..d38a3fa 100644
+--- a/panels/system/users/meson.build
++++ b/panels/system/users/meson.build
+@@ -16,6 +16,7 @@ ui_sources = files(
+   'cc-fingerprint-dialog.blp',
+   'cc-password-dialog.blp',
+   'cc-user-page.blp',
++  'cc-username-dialog.blp',
+   'cc-users-page.blp',
+ )
+ 

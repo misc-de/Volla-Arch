@@ -1,0 +1,46 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=audio-hal-bridge
+pkgver=0.6
+pkgrel=19
+pkgdesc="Vendor legacy audio HAL (through libhybris) as PipeWire speaker, earpiece and microphone, with callaudiod's call API, echo cancellation for voice apps, Bluetooth hands-free through the HAL and the FM tuner's sound as a source"
+arch=(aarch64)  # needs the Android HAL through libhybris
+license=(MIT)
+depends=(libhybris pipewire wireplumber glib2 webrtc-audio-processing-1 alsa-lib)
+makedepends=(android-headers)
+source=(audio-hal-bridge.c
+	aec.cpp
+	aec.h
+	audio-hal-bridge.service
+	alerts-to-speaker.lua
+	sco-to-hal.lua
+	60-audio-hal-bridge.conf
+	LICENSE)
+sha256sums=('a608ac5bb95dd3dbecaff9bd902fec493bc06d1e0e56765a941f995294a6b728'
+	'2116e3e2264ffe5f110b2146bdeb5691080fdf27220a47d8cae93f0b8f1dc207'
+	'27cc88e004e0d73e60ed2f650c397d3c9708012e21d316498572021f17fad79e'
+	'df0f5f7b5ccbee7a9b6ac1f323bebc58d0d6f7f97f943da06309183cdc4a23d7'
+	'91bf1e134818f3f4102f5d98a74c609612032b4bc0461e9182ae48a6ff6e44a4'
+	'ea1117178c44dfb27091444a9184554b26d67ec6169cec795442db236d7dc751'
+	'934192f0c688ef8e21b81e0e700682575552c97f007d12c788b63050be402d5d'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CXX:-c++} $CXXFLAGS $CPPFLAGS -std=c++17 -Wall -Wextra -Wno-unused-parameter -c aec.cpp \
+		$(pkg-config --cflags webrtc-audio-processing-1)
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o audio-hal-bridge audio-hal-bridge.c aec.o \
+		$(pkg-config --cflags --libs libhardware libpipewire-0.3 gio-unix-2.0 webrtc-audio-processing-1 alsa) \
+		-lstdc++ -lpthread -lm $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 audio-hal-bridge -t "$pkgdir/usr/bin"
+	install -Dm644 audio-hal-bridge.service -t "$pkgdir/usr/lib/systemd/user"
+	# WirePlumber: alerts never play in the earpiece
+	install -Dm644 alerts-to-speaker.lua sco-to-hal.lua -t "$pkgdir/usr/share/wireplumber/scripts/audio-hal-bridge"
+	install -Dm644 60-audio-hal-bridge.conf -t "$pkgdir/usr/share/wireplumber/wireplumber.conf.d"
+}

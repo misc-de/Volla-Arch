@@ -1,0 +1,29 @@
+[Desktop Entry]
+Name=Remote Input
+Name[de]=Eingabegerät
+Comment=Use the phone as touchpad and keyboard for a computer, tablet or TV
+Comment[de]=Das Telefon als Touchpad und Tastatur für Computer, Tablet oder Fernseher nutzen
+Exec=plinius-remote
+Icon=org.plinius.Remote
+Terminal=false
+Type=Application
+Categories=Utility;GTK;
+Keywords=Bluetooth;Mouse;Touchpad;Keyboard;Remote;HID;
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;
+Actions=touchpad;keyboard;desktop;
+
+[Desktop Action touchpad]
+Name=Touchpad
+Name[de]=Touchpad
+Exec=plinius-remote --touchpad
+
+[Desktop Action keyboard]
+Name=Keyboard
+Name[de]=Tastatur
+Exec=plinius-remote --keyboard
+
+[Desktop Action desktop]
+Name=Desktop on the TV
+Name[de]=Desktop auf dem Fernseher
+Exec=plinius-remote --desktop

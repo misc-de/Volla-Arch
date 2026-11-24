@@ -1,0 +1,97 @@
+using Gtk 4.0;
+using Adw 1;
+
+translation-domain "plinius-control-center";
+
+template $CcUsernameDialog: Adw.Dialog {
+  title: _("Change Username");
+  content-width: 500;
+
+  child: Adw.ToastOverlay toast_overlay {
+    child: Adw.ToolbarView {
+      [top]
+      Adw.HeaderBar {
+        show-start-title-buttons: false;
+        show-end-title-buttons: false;
+
+        [start]
+        Button {
+          label: _("_Cancel");
+          use-underline: true;
+          valign: center;
+          clicked => $adw_dialog_force_close(template);
+        }
+
+        [end]
+        Button rename_button {
+          label: _("_Rename");
+          receives-default: true;
+          use-underline: true;
+          sensitive: false;
+          valign: center;
+          clicked => $rename_button_clicked_cb(template);
+
+          styles [
+            "suggested-action",
+          ]
+        }
+      }
+
+      content: Adw.PreferencesPage {
+        Adw.PreferencesGroup {
+          description: _("The name you log in with. Your home folder, groups, automatic login and references in your settings are renamed along with it. Password and PIN stay the same. The renaming happens at the next restart, before login.");
+
+          Adw.ActionRow current_row {
+            title: _("Current Username");
+
+            styles [
+              "property",
+            ]
+          }
+
+          Adw.EntryRow username_row {
+            title: _("_New Username");
+            use-underline: true;
+            input-purpose: free_form;
+            changed => $username_changed_cb(template);
+            entry-activated => $rename_button_clicked_cb(template);
+          }
+
+          $CcEntryFeedback username_feedback {
+            entry: username_row;
+            default-text: _("Lower case letters, numbers, hyphens and underscores, starting with a letter, at most 32 characters.");
+            default-icon-name: "info-outline-symbolic";
+          }
+        }
+
+        Adw.PreferencesGroup pending_group {
+          visible: false;
+
+          Adw.ActionRow pending_row {
+            title: _("Scheduled for the Next Restart");
+
+            [suffix]
+            Button {
+              label: _("_Undo");
+              use-underline: true;
+              valign: center;
+              clicked => $cancel_pending_cb(template);
+            }
+          }
+        }
+      };
+    };
+  };
+}
+
+Adw.AlertDialog restart_dialog {
+  heading: _("Restart Now?");
+  default-response: "restart";
+  close-response: "later";
+  response::restart => $restart_response_cb(template);
+
+  responses [
+    later: _("_Later"),
+    restart: _("_Restart") suggested,
+  ]
+}

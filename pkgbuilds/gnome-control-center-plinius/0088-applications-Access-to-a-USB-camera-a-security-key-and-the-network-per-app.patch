@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 12:15:41 +0100
+Subject: [PATCH] applications: Access to the camera, a security key and the
+ network per app
+
+The group Access on an app's page: Ask, Allow or Don't Allow for the camera
+(the camera portal's answer for the phone's own cameras, plinius-appaccess
+for cameras on USB), a security key and the network, with how often the app
+used them or was blocked (plinius-appaccess, org.plinius.AppAccess1), for
+the network also its connections of the last 24 hours (plinius-netlog). It is
+the page's group of Required Permissions, the three rows on top of Required
+Permissions and Global Shortcuts, so that what the app may use is one group.
+The code is a file of its own, cc-plinius-appaccess.c, called after the
+usage section has set that group's rows; GNOME's camera switch of Flatpak
+apps is hidden while the group shows, without the daemon the group is as
+GNOME has it.
+---
+ panels/applications/cc-applications-panel.c | 5 +++++
+ panels/applications/meson.build             | 1 +
+ 2 files changed, 6 insertions(+)
+
+diff --git a/panels/applications/cc-applications-panel.c b/panels/applications/cc-applications-panel.c
+index f4c14e8cf..e55793c2d 100644
+--- a/panels/applications/cc-applications-panel.c
++++ b/panels/applications/cc-applications-panel.c
+@@ -37,6 +37,7 @@
+ #include "cc-list-row-info-button.h"
+ #include "cc-list-row.h"
+ #include "cc-plinius-software.h"
++#include "cc-plinius-appaccess.h"
+ #include "cc-removable-media-settings.h"
+ #include "shell/cc-window.h"
+ #ifdef HAVE_SNAP
+@@ -1460,6 +1461,10 @@ update_panel (CcApplicationsPanel *self, GtkListBoxRow *row)
+     update_permissions_group (self, info);
+     update_handler_dialog (self, info);
+     update_usage_section (self, info);
++    /* Plinius: camera, microphone, security key and network per app (plinius-appaccess), on top
++     * of the group of Required Permissions */
++    cc_plinius_appaccess_update_app_page (CC_PANEL (self), info, GTK_WIDGET (self->required_permissions_group),
++                                          GTK_WIDGET (self->camera_row), GTK_WIDGET (self->microphone_row));
+ 
+     g_set_object (&self->current_app_info, info);
+     self->current_app_id = get_app_id (info);
+diff --git a/panels/applications/meson.build b/panels/applications/meson.build
+index 2018c992f..72e7aca0e 100644
+--- a/panels/applications/meson.build
++++ b/panels/applications/meson.build
+@@ -44,6 +44,7 @@ sources = files(
+   'cc-default-apps-row.c',
+   'cc-plinius-software.c',
+   'cc-plinius-webapps.c',
++  'cc-plinius-appaccess.c',
+   'cc-removable-media-settings.c',
+   'globs.c',
+   'search.c',

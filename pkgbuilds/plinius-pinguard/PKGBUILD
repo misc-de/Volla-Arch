@@ -1,0 +1,76 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-pinguard
+pkgver=0.6
+pkgrel=3
+pkgdesc="PIN checks with a growing wait after wrong PINs: root daemon, PAM module and switch"
+arch=(aarch64 x86_64)
+license=(MIT)
+depends=(pam libxcrypt)
+# The lock screen lists the module in /etc/pam.d/phosh (phosh-plinius, which also shows the
+# wait), polkit in /etc/pam.d/polkit-1 of this package, sudo, su and su-l through the install
+# script (su and su-l also get pam_wheel: only members of wheel may use su).
+# plinius-pattern counts its tries through the client header in /usr/include/plinius-pinguard,
+# GNOME Settings checks the PIN with plinius-pinguard-check.
+backup=(etc/pam.d/polkit-1)
+install=plinius-pinguard.install
+source=(plinius-pinguard.h
+	plinius-pinguard-client.h
+	plinius-pinguard.c
+	pam_plinius_pinguard.c
+	plinius-pinguard-check.c
+	test-pinguard.c
+	plinius-pinguard.socket
+	plinius-pinguard.service
+	polkit-1.pam
+	plinius-pinguard-set
+	org.plinius.pinguard.policy
+	LICENSE)
+sha256sums=('057b8922a90b417ce0dd4abe1cfd7e086d2381b253ffcf5c04382fc34e2886fd'
+	'06ddf96f95ac44d2ed35be4d5b7bdbf6965fde97f8edabf33e19c603a01b2dc3'
+	'aa77d73c5a7d68087d8597776fda0bcafbe30702836fc7d738ffc0e72ae03a74'
+	'ae4f6abc2dc46c7bf9ebd5c5c0f6c5dd6b3c8a4c09a6140026fb4e2fe6af440e'
+	'33f81e09da99fd9b480ac4b553629168de3589bd7854059750da1d70fd9d31d3'
+	'9ea64f9d98244f52627767d3f5ce700efa72bf81e24b2b194c7d113b9b58a02a'
+	'50b12e3de256295ccc29da3b5b4abc29c00b4ee6b21d49341960e2cf3711756b'
+	'5cbf3d6b1234ec53280bed28e110ae91b446d7c5248474952cbd64dcd280ad88'
+	'2d68f12c781e34533ce07732dcc37adcab5b56edc3f4453ea5ea4eb4d698908e'
+	'384e84316ef713e0f1cf69966ba9de9e3500040f84ac7d660b1a77982d2dde28'
+	'1cbf559ca9f7a3099d2eb752e7322c64a4e4f10642f5e909eb1d0c56b7b1b39c'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2086
+	cc $CPPFLAGS $CFLAGS -Wall -Wextra -Wno-unused-parameter -o plinius-pinguard plinius-pinguard.c $LDFLAGS -lcrypt
+	# shellcheck disable=SC2086
+	cc $CPPFLAGS $CFLAGS -Wall -Wextra -Wno-unused-parameter -fPIC -shared -o pam_plinius_pinguard.so \
+		pam_plinius_pinguard.c $LDFLAGS -lpam
+	# shellcheck disable=SC2086
+	cc $CPPFLAGS $CFLAGS -Wall -Wextra -o plinius-pinguard-check plinius-pinguard-check.c $LDFLAGS
+	# shellcheck disable=SC2086
+	cc $CPPFLAGS $CFLAGS -Wall -Wextra -o test-pinguard test-pinguard.c $LDFLAGS
+}
+
+check() {
+	# The daemon on a socket and state of its own, as the building user (see test-pinguard.c)
+	rm -rf test
+	mkdir test
+	./test-pinguard ./plinius-pinguard test
+}
+
+package() {
+	install -Dm755 plinius-pinguard plinius-pinguard-set plinius-pinguard-check \
+		-t "$pkgdir/usr/lib/plinius-pinguard"
+	install -Dm644 plinius-pinguard.h plinius-pinguard-client.h -t "$pkgdir/usr/include/plinius-pinguard"
+	install -Dm644 org.plinius.pinguard.policy -t "$pkgdir/usr/share/polkit-1/actions"
+	# Holds the marker "enabled" while the wait is on (plinius-pinguard-set)
+	install -dm755 "$pkgdir/etc/plinius-pinguard"
+	install -Dm755 pam_plinius_pinguard.so -t "$pkgdir/usr/lib/security"
+	install -Dm644 plinius-pinguard.socket plinius-pinguard.service -t "$pkgdir/usr/lib/systemd/system"
+	# Enabled by the package: the socket costs nothing until a PAM stack lists the module
+	install -d "$pkgdir/usr/lib/systemd/system/sockets.target.wants"
+	ln -s ../plinius-pinguard.socket "$pkgdir/usr/lib/systemd/system/sockets.target.wants/"
+	# polkit reads /etc/pam.d/polkit-1 before its own file in /usr/lib/pam.d
+	install -Dm644 polkit-1.pam "$pkgdir/etc/pam.d/polkit-1"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

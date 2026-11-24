@@ -1,0 +1,183 @@
+#!/bin/sh
+# Collects the phone's chips and the versions of their firmware for Settings > System > Hardware
+# (gnome-control-center-plinius, cc-plinius-hardware.c). Most of it is only readable by root: the
+# firmware partitions of the active slot (MediaTek image headers are followed by the build strings
+# grepped below), the kernel log and Android's build.prop files. Written once per boot as a key
+# file; each group is one row in Settings, the keys are described in cc-plinius-hardware.c.
+# Usage: plinius-hardware-info   (plinius-hardware-info.service)
+set -u
+
+OUT=/run/plinius-hardware
+TMP=$OUT.tmp
+VENDOR=/android/vendor
+
+# Value of a bootconfig key ($1), without the quotes
+bootconfig() {
+	sed -n "s/^$1 = \"\\([^\"]*\\)\".*/\\1/p" /proc/bootconfig
+}
+
+SLOT=$(bootconfig androidboot.slot_suffix)
+
+# First $2 MiB of partition $1 of the active slot ($3 = "-" for partitions without a slot)
+part() {
+	if [ "${3:-}" = - ]; then
+		dd if="/dev/disk/by-partlabel/$1" bs=1M count="$2" 2>/dev/null
+	else
+		dd if="/dev/disk/by-partlabel/$1$SLOT" bs=1M count="$2" 2>/dev/null
+	fi
+}
+
+# First match of extended regex $1 in binary input
+first() {
+	grep -aoE -m1 "$1" | head -n1
+}
+
+# Value of property $1 in build.prop file $2
+prop() {
+	sed -n "s/^$1=//p" "$2" 2>/dev/null | head -n1
+}
+
+# Date of "Mon DD YYYY" ($1) or of a Unix time ("@seconds") as YYYY-MM-DD
+iso_date() {
+	[ -n "$1" ] && date -u -d "$1" +%F 2>/dev/null
+}
+
+# "Android <release> (<build id>)", empty without a release
+android() {
+	[ -n "$1" ] && echo "Android $1${2:+ ($2)}"
+}
+
+# YYYYMMDD at the start of $1 as YYYY-MM-DD
+ymd() {
+	echo "$1" | sed -n 's/^\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\).*/\1-\2-\3/p'
+}
+
+# One group of the key file: group $1, then key=value pairs; empty values are left out, and so
+# is the whole group when all of them are empty
+group() {
+	name=$1
+	shift
+	lines=
+	for kv in "$@"; do
+		value=$(printf '%s' "${kv#*=}" | tr -cd '[:print:]')
+		[ -n "$value" ] && lines="$lines${kv%%=*}=$value
+"
+	done
+	[ -n "$lines" ] && printf '[%s]\n%s\n' "$name" "$lines" >> "$TMP"
+}
+
+printf '# Written by plinius-hardware-info at boot, shown in Settings > System > Hardware\n\n' > "$TMP"
+
+# --- Components ---
+
+soc=$(bootconfig androidboot.hardware | tr a-z A-Z)
+group soc "Name=${soc:+MediaTek $soc}"
+
+# "Mali-G615 2 cores r1p3 0xB8A3" -> "Mali-G615 MC2 (r1p3)"
+gpu=$(sed -n 's/^\(Mali-[^ ]*\) \([0-9]*\) cores \(r[0-9]*p[0-9]*\).*/\1 MC\2 (\3)/p' \
+	/sys/class/misc/mali0/device/gpuinfo 2>/dev/null)
+group gpu "Name=$gpu"
+
+# The user area is the largest LUN of the UFS drive (the two boot LUNs hold the preloader)
+disk=$(for b in /sys/block/sd*; do echo "$(cat "$b/size") ${b##*/}"; done | sort -n | tail -n1 | cut -d' ' -f2)
+if [ -n "$disk" ]; then
+	d=/sys/block/$disk/device
+	group storage "Name=$(cat $d/vendor $d/model 2>/dev/null | tr -s ' \n' ' ' | sed 's/^ //; s/ $//')" \
+		"Firmware=$(cat $d/rev 2>/dev/null)"
+fi
+
+# The connectivity chip (A-die) that the FM driver reads at boot: MT6631 or MT6637
+adie=$(journalctl -k -b -o cat -g 'adie=0x' 2>/dev/null | first 'adie=0x[0-9a-fA-F]+' | sed 's/adie=0x//')
+group connectivity "Name=${adie:+MediaTek MT$adie}"
+
+for f in /sys/bus/spi/devices/*/fts_fw_version; do
+	[ -e "$f" ] || continue
+	d=${f%/*}
+	ic=$(sed -n 's/^IC ID:\(0x[0-9a-fA-F]*\).*/\1/p' "$d/fts_driver_info" 2>/dev/null)
+	group touch "Name=FocalTech${ic:+ (IC $ic)}" "Firmware=$(cat "$f")"
+done
+
+for d in /sys/bus/i2c/devices/*; do
+	case $(cat "$d/name" 2>/dev/null) in
+	st21nfc)
+		[ -e "$VENDOR/firmware/st54l_fw.bin" ] && group nfc "Name=STMicroelectronics ST54L" ;;
+	mt5706)
+		group wireless-charging "Name=MT5706" "Firmware=$(cat "$d/fw_version" 2>/dev/null)" ;;
+	esac
+done
+
+# "chip:MT6878+MT6369+AW87565": the SoC, the codec in the PMIC and the amplifier
+audio=$VENDOR/firmware/AudioParamVersionInfo.txt
+group audio "Name=$(sed -n 's/^chip:[^+]*+//p' "$audio" 2>/dev/null | sed 's/+/, /g')"
+
+# --- Boot and security ---
+
+# The preloader sits in the UFS boot LUNs, both hold the same build
+pl=$(dd if=/dev/sda bs=1M count=4 2>/dev/null | tr -c '[:print:]' '\n')
+group preloader "Version=$(echo "$pl" | first '^V[0-9]+\.[0-9]+\.[0-9]+$')" \
+	"Date=$(ymd "$(echo "$pl" | first '^20[0-9]{6}-[0-9]{6}$')")"
+
+lk=$(part lk 4 | first '[0-9a-f]{8}_20[0-9]{10}')
+group bootloader "Name=LK" "Version=${lk%%_*}" "Date=$(ymd "${lk#*_}")"
+
+# tee: BL31 (Trusted Firmware-A) and Trustonic's Kinibi
+tee=$(part tee 4 | tr -c '[:print:]' '\n')
+atf=$(echo "$tee" | first 'lts-v[0-9.]+')
+atf_built=$(echo "$tee" | first 'Built : [0-9:]+, [A-Z][a-z]{2} +[0-9]+ 20[0-9]{2}' | sed 's/.*, //')
+group atf "Version=${atf#lts-v}" "Date=$(iso_date "$atf_built")"
+kinibi=$(echo "$tee" | first 'Kinibi-[A-Za-z0-9_-]+')
+group tee "Name=Trustonic Kinibi" "Version=$(echo "$kinibi" | sed -n 's/^Kinibi-\(.*\)-\(20[0-9]\{6\}\)_.*/\1/p')" \
+	"Date=$(ymd "$(echo "$kinibi" | sed -n 's/.*-\(20[0-9]\{6\}\)_.*/\1/p')")"
+
+# gz: MediaTek's GenieZone hypervisor and the Trusty-based TEE it runs
+gz=$(part gz 4 | tr -c '[:print:]' '\n')
+line=$(echo "$gz" | first 'mTEE_SDK: [0-9.]+[^,]*, Built: [0-9:]+ [A-Z][a-z]{2} +[0-9]+ 20[0-9]{2}')
+group trusty "Name=MediaTek mTEE (Trusty)" \
+	"Version=$(echo "$line" | sed -n 's/^mTEE_SDK: \([0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')" \
+	"Date=$(iso_date "$(echo "$line" | sed 's/.*Built: [0-9:]* //')")"
+line=$(echo "$gz" | first 'GZ_hypervisor: [0-9.]+[^,]*, Built: [0-9:]+ [A-Z][a-z]{2} +[0-9]+ 20[0-9]{2}')
+group hypervisor "Name=MediaTek GenieZone" \
+	"Version=$(echo "$line" | sed -n 's/^GZ_hypervisor: \([0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')" \
+	"Date=$(iso_date "$(echo "$line" | sed 's/.*Built: [0-9:]* //')")"
+
+spm=$(part spmfw 1 | first 'pcm_[a-z_]+v[0-9.]+_20[0-9]{6}')
+group spm "Name=SPM" "Version=$(echo "$spm" | sed -n 's/.*_v\([0-9.]*\)_.*/\1/p')" "Date=$(ymd "${spm##*_}")"
+
+avb=$(bootconfig androidboot.vbmeta.avb_version)
+group verified-boot "Name=${avb:+AVB $avb}" "State=$(bootconfig androidboot.vbmeta.device_state)" "Slot=${SLOT#_}"
+
+# --- Radios ---
+
+# md1rom: the version comes first, the build time ("2025/06/26 12:29*TK_MD") at its end
+md=$(part modem 48 | grep -aoE 'MOLY\.[A-Z0-9.]*[0-9]|20[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9:]{5}\*TK_MD')
+group modem "Version=$(echo "$md" | first '^MOLY.*')" \
+	"Date=$(echo "$md" | first '^20[0-9]{2}/[0-9]{2}/[0-9]{2}' | tr / -)"
+
+# The connsys partitions hold one image per possible A-die: take the one of this phone's
+chip=${adie:-6637}
+wifi=$(part connsys_wifi 4 | first "t-neptune-[A-Za-z0-9_-]+_MT$chip-20[0-9]{12}")
+group wifi "Date=$(ymd "${wifi##*-}")"
+bt=$(part connsys_bt 4 | first "t-neptune-[A-Za-z0-9_-]+_${chip}_BT[A-Za-z0-9_-]*-20[0-9]{12}")
+group bluetooth "Date=$(ymd "${bt##*-}")"
+
+# --- Android base (the vendor side the Android container runs) ---
+
+p=$VENDOR/build.prop
+group vendor "Version=$(android "$(prop ro.vendor.build.version.release $p)" "$(prop ro.vendor.build.id $p)")" \
+	"Patch=$(prop ro.vendor.build.security_patch $p)"
+group bsp "Version=$(prop ro.vendor.mediatek.version.release $p)"
+
+p=/android/vendor_dlkm/etc/build.prop
+group vendor-modules "Version=$(android "$(prop ro.vendor_dlkm.build.version.release $p)" "$(prop ro.vendor_dlkm.build.id $p)")" \
+	"Date=$(iso_date "@$(prop ro.vendor_dlkm.build.date.utc $p)")"
+
+group gpu-driver "Version=$(first 'r[0-9]+p[0-9]+-[0-9]{2}[a-z]{3}[0-9]+' < $VENDOR/lib64/egl/libGLES_mali.so 2>/dev/null)"
+
+group audio-params "Version=$(sed -n 's/^version://p' "$audio" 2>/dev/null)"
+
+p=/android/system/build.prop
+group system "Name=Halium" "Version=$(android "$(prop ro.build.version.release $p)" "$(prop ro.build.id $p)")" \
+	"Date=$(iso_date "@$(prop ro.build.date.utc $p)")" "Patch=$(prop ro.build.version.security_patch $p)"
+
+chmod 644 "$TMP"
+mv "$TMP" "$OUT"

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Before udev starts: does /dev hold POSIX ACLs? systemd's uaccess grants the user of the active
+# session access to a device by an ACL on its node. Without ACLs (kernel without TMPFS_POSIX_ACL)
+# it only logs errors, so then systemd's 73-seat-late.rules is replaced by one without it
+# (/run/udev/rules.d comes before /usr/lib/udev/rules.d).
+rule=/run/udev/rules.d/73-seat-late.rules
+t=$(mktemp -p /dev .plinius-acl.XXXXXX) || exit 0
+if setfacl -m u:root:r "$t" 2>/dev/null; then
+	rm -f "$rule"
+else
+	install -Dm644 /usr/lib/plinius/udev/73-seat-late-noacl.rules "$rule"
+fi
+rm -f "$t"

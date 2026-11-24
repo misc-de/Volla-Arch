@@ -1,0 +1,416 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+"""Fetch Google's Widevine CDM onto this device, for Firefox.
+
+Widevine may not be redistributed, so it is in no package; it comes from Google:
+
+arm64: the CDM of ChromeOS, from Google's last LaCrOS (Chrome for ChromeOS) image for arm64,
+  made loadable on plain Linux by widevine_fixup.py (Asahi Linux; it adds two helper functions
+  and the GLIBC_ABI_DT_RELR version, the CDM itself stays as it is). Google's CDM for Linux arm64
+  (from the update server, below) loads too, but Netflix gives no licence to it (E100, measured
+  13.11.2026 with a clean profile); the ChromeOS one gets them. The image is never updated
+  again, so the result is known: it must match FIXED_FILES byte for byte, or nothing is installed.
+
+x64: like Chrome's component updater, it asks Google's update server for the current CDM,
+  downloads it from Google, checks the SHA-256 the server named, checks the CRX3's signature by
+  the key whose hash is the CDM's component ID (as Chrome does it, so neither the update
+  server's answer nor TLS alone decides what Firefox loads) and unpacks it.
+
+Either is installed under the state directory:
+
+  versions/<version>/{libwidevinecdm.so,manifest.json,LICENSE}
+  current -> versions/<version>
+  gmp-widevinecdm/system-installed/{libwidevinecdm.so,manifest.json} -> ../../current/...
+
+MOZ_GMP_PATH (environment.d, profile.d) points Firefox at gmp-widevinecdm/system-installed.
+A newer version replaces the link "current" in one step; the one before stays as a fallback.
+It runs only while GNOME Settings > Privacy > Protected Content is on (the marker
+/etc/plinius-widevine/enabled, ConditionPathExists of the service).
+"""
+
+import base64
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import urllib.request
+import zipfile
+from pathlib import Path
+
+APPID = "oimompecagnajdejgnnjijobebaeigek"  # Chrome's component ID of the Widevine CDM
+UPDATE_URL = "https://update.googleapis.com/service/update2/json"
+# The server answers by platform and Chrome version; a Chrome of the same time as the CDM
+CHROME_VERSION = "142.0.7444.0"
+STATE = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/plinius-widevine"))
+# uname -m: Google's architecture name, the ELF machine (e_machine) of the library
+ARCHES = {"aarch64": ("arm64", 183), "x86_64": ("x64", 62)}
+MAX_CRX = 100 * 1024 * 1024
+TIMEOUT = 60
+VERSION_RE = re.compile(r"^[0-9]{1,6}(\.[0-9]{1,6}){3}$")
+KEEP_VERSIONS = 2
+
+# arm64: the LaCrOS image with the CDM (the one Asahi Linux's widevine-installer uses)
+LACROS_URL = ("https://commondatastorage.googleapis.com/chromeos-localmirror/distfiles/"
+              "chromeos-lacros-arm64-squash-zstd-120.0.6098.0")
+LACROS_SIZE = 154140672
+CROS_VERSION = "4.10.2662.3"
+FIXUP = Path("/usr/lib/plinius-widevine/widevine_fixup.py")
+# What the image and widevine_fixup.py give on 4 KiB pages (the same files on FuriOS)
+FIXED_FILES = {
+    "libwidevinecdm.so": "8cb3119cd4f319ea16546d3260b47fc8c81350e311cc053fc557ee3d994f693d",
+    "manifest.json": "50dbcd6130a69b6796068a119ec279f9e895929eecb9b626c06bb3e5d58f99ca",
+    "LICENSE": "20de375707692099b3132084695377ce5fec0aec05813dedcce094b8eda44386",
+}
+
+
+def log(message):
+    print(message, flush=True)
+
+
+def version_key(version):
+    return tuple(int(part) for part in version.split("."))
+
+
+def installed_version():
+    try:
+        version = os.readlink(STATE / "current").rsplit("/", 1)[-1]
+    except OSError:
+        return None
+    if VERSION_RE.match(version) and (STATE / "versions" / version / "libwidevinecdm.so").is_file():
+        return version
+    return None
+
+
+def ask_server(current, arch):
+    body = {
+        "request": {
+            "@os": "Linux",
+            "@updater": "chromecrx",
+            "acceptformat": "crx3",
+            "app": [{"appid": APPID, "updatecheck": {}, "version": current or "0.0.0.0"}],
+            "arch": arch,
+            "nacl_arch": arch,
+            "os": {"arch": arch, "platform": "Linux", "version": os.uname().release},
+            "prodversion": CHROME_VERSION,
+            "protocol": "3.1",
+            "updaterversion": CHROME_VERSION,
+        }
+    }
+    request = urllib.request.Request(
+        UPDATE_URL, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        text = response.read(1024 * 1024).decode("utf-8")
+    # The JSON is preceded by )]}' against JSON hijacking
+    text = text[text.index("{"):]
+    check = json.loads(text)["response"]["app"][0]["updatecheck"]
+    if check.get("status") == "noupdate":
+        return None
+    if check.get("status") != "ok":
+        raise RuntimeError(f"update server: status {check.get('status')!r}")
+    manifest = check["manifest"]
+    version = manifest["version"]
+    package = manifest["packages"]["package"][0]
+    name, digest, size = package["name"], package["hash_sha256"].lower(), int(package["size"])
+    if not VERSION_RE.match(version):
+        raise RuntimeError(f"update server: odd version {version!r}")
+    if not re.match(r"^[A-Za-z0-9_.-]+\.crx3$", name) or not re.match(r"^[0-9a-f]{64}$", digest):
+        raise RuntimeError("update server: odd package entry")
+    if not 0 < size <= MAX_CRX:
+        raise RuntimeError(f"update server: odd size {size}")
+    bases = [url["codebase"] for url in check["urls"]["url"]
+             if url.get("codebase", "").startswith("https://")]
+    if not bases:
+        raise RuntimeError("update server: no HTTPS download address")
+    return version, name, digest, size, bases
+
+
+def download(bases, name, digest, size):
+    errors = []
+    for base in bases:
+        url = base.rstrip("/") + "/" + name
+        try:
+            with urllib.request.urlopen(url, timeout=TIMEOUT) as response:
+                data = response.read(MAX_CRX + 1)
+        except OSError as error:
+            errors.append(f"{url}: {error}")
+            continue
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            errors.append(f"{url}: size or SHA-256 differs from the update server's")
+            continue
+        return data
+    raise RuntimeError("download failed: " + "; ".join(errors))
+
+
+def protobuf_fields(buffer):
+    """(field number, value) of a protobuf message: varints and length-delimited fields only,
+    which is all a CRX3 header has (components/crx_file/crx3.proto)."""
+    position = 0
+
+    def varint():
+        nonlocal position
+        value = shift = 0
+        while True:
+            if position >= len(buffer) or shift > 63:
+                raise RuntimeError("CRX3 header: broken varint")
+            byte = buffer[position]
+            position += 1
+            value |= (byte & 0x7F) << shift
+            shift += 7
+            if not byte & 0x80:
+                return value
+
+    while position < len(buffer):
+        key = varint()
+        number, wire = key >> 3, key & 7
+        if wire == 0:
+            yield number, varint()
+        elif wire == 2:
+            length = varint()
+            if position + length > len(buffer):
+                raise RuntimeError("CRX3 header: field beyond its end")
+            yield number, buffer[position:position + length]
+            position += length
+        else:
+            raise RuntimeError(f"CRX3 header: unexpected wire type {wire}")
+
+
+def crx_id(public_key):
+    """Chrome's ID of an extension or component: the first 16 bytes of SHA-256 of its key,
+    each nibble written as a letter a-p."""
+    return "".join(chr(ord("a") + int(c, 16)) for c in hashlib.sha256(public_key).hexdigest()[:32])
+
+
+def rsa_verifies(public_key, signature, message):
+    """SHA-256 with RSA (PKCS#1 v1.5), as CRX3's sha256_with_rsa proofs are, by openssl."""
+    pem = ("-----BEGIN PUBLIC KEY-----\n"
+           + "\n".join(re.findall(".{1,64}", base64.b64encode(public_key).decode()))
+           + "\n-----END PUBLIC KEY-----\n")
+    with tempfile.TemporaryDirectory() as folder:
+        key_path, signature_path = Path(folder, "key.pem"), Path(folder, "signature")
+        key_path.write_text(pem)
+        signature_path.write_bytes(signature)
+        result = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(key_path),
+                                 "-signature", str(signature_path)],
+                                input=message, capture_output=True, timeout=TIMEOUT)
+    return result.returncode == 0
+
+
+def verify_crx3(header, archive):
+    """The CRX3 must be signed by the key whose ID is APPID. The ID is a hash of the key, so a
+    file from anyone else, even over a trusted TLS connection, can't pass."""
+    proofs, signed_header = [], None
+    for number, value in protobuf_fields(header):
+        if number == 2 and isinstance(value, bytes):        # sha256_with_rsa
+            proof = dict(protobuf_fields(value))
+            if isinstance(proof.get(1), bytes) and isinstance(proof.get(2), bytes):
+                proofs.append((proof[1], proof[2]))
+        elif number == 10000 and isinstance(value, bytes):  # signed_header_data
+            signed_header = value
+    if signed_header is None:
+        raise RuntimeError("CRX3 without signed header data")
+    signed_id = dict(protobuf_fields(signed_header)).get(1)
+    if not isinstance(signed_id, bytes) or len(signed_id) != 16:
+        raise RuntimeError("CRX3 without its ID")
+    if "".join(chr(ord("a") + int(c, 16)) for c in signed_id.hex()) != APPID:
+        raise RuntimeError("CRX3 of another component than the Widevine CDM")
+    message = (b"CRX3 SignedData\x00" + struct.pack("<I", len(signed_header)) + signed_header
+               + archive)
+    for public_key, signature in proofs:
+        if crx_id(public_key) == APPID:
+            if not rsa_verifies(public_key, signature, message):
+                raise RuntimeError("the CRX3 signature of the Widevine CDM's key is wrong")
+            return
+    raise RuntimeError("CRX3 not signed by the Widevine CDM's key")
+
+
+def unpack(data, version, arch, machine):
+    """The files of a CRX3: magic, version 3, header length, header (protobuf), ZIP."""
+    magic, crx_version, header_length = struct.unpack_from("<4sII", data)
+    if magic != b"Cr24" or crx_version != 3 or 12 + header_length >= len(data):
+        raise RuntimeError("not a CRX3 file")
+    verify_crx3(data[12:12 + header_length], data[12 + header_length:])
+    archive = zipfile.ZipFile(io.BytesIO(data[12 + header_length:]))
+    files = {}
+    for member, target, limit in (("manifest.json", "manifest.json", 64 * 1024),
+                                  ("LICENSE", "LICENSE", 64 * 1024),
+                                  (f"_platform_specific/linux_{arch}/libwidevinecdm.so",
+                                   "libwidevinecdm.so", MAX_CRX)):
+        info = archive.getinfo(member)
+        if info.file_size > limit:
+            raise RuntimeError(f"{member} is too large")
+        files[target] = archive.read(info)
+    manifest = json.loads(files["manifest.json"])
+    if manifest.get("name") != "WidevineCdm" or manifest.get("version") != version:
+        raise RuntimeError("manifest.json does not match the update server's version")
+    library = files["libwidevinecdm.so"]
+    # ELF, 64 bit, little endian, shared object, this machine
+    if (library[:6] != b"\x7fELF\x02\x01"
+            or struct.unpack_from("<HH", library, 16) != (3, machine)):
+        raise RuntimeError(f"libwidevinecdm.so is no library for linux_{arch}")
+    return files
+
+
+def install(version, files):
+    versions = STATE / "versions"
+    versions.mkdir(mode=0o755, exist_ok=True)
+    target = versions / version
+    staging = versions / f".{version}.new"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(mode=0o755)
+    for name, content in files.items():
+        path = staging / name
+        path.write_bytes(content)
+        path.chmod(0o755 if name.endswith(".so") else 0o644)
+    for path in staging.iterdir():
+        with open(path, "rb") as handle:
+            os.fsync(handle.fileno())
+    shutil.rmtree(target, ignore_errors=True)
+    staging.rename(target)
+    link = STATE / ".current.new"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(f"versions/{version}")
+    os.replace(link, STATE / "current")
+
+
+def ensure_gmp_links():
+    folder = STATE / "gmp-widevinecdm" / "system-installed"
+    folder.mkdir(mode=0o755, parents=True, exist_ok=True)
+    for name in ("libwidevinecdm.so", "manifest.json"):
+        path = folder / name
+        wanted = f"../../current/{name}"
+        if path.is_symlink() and os.readlink(path) == wanted:
+            continue
+        if path.is_symlink() or path.exists():
+            path.unlink()
+        path.symlink_to(wanted)
+
+
+def prune(keep):
+    versions = STATE / "versions"
+    if not versions.is_dir():
+        return
+    found = sorted((path for path in versions.iterdir()
+                    if path.is_dir() and VERSION_RE.match(path.name)),
+                   key=lambda path: version_key(path.name), reverse=True)
+    for path in found[KEEP_VERSIONS:]:
+        if path.name != keep:
+            shutil.rmtree(path, ignore_errors=True)
+    for path in versions.glob(".*.new"):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def cros_installed():
+    folder = STATE / "versions" / CROS_VERSION
+    try:
+        return all(file_sha256(folder / name) == digest for name, digest in FIXED_FILES.items())
+    except OSError:
+        return False
+
+
+def fetch_cros(work):
+    """The CDM of ChromeOS from the LaCrOS image: download (to disk, it is 147 MiB), take
+    WidevineCdm/ out of the squashfs, fix the library up, compare everything with FIXED_FILES."""
+    if os.sysconf("SC_PAGE_SIZE") != 4096:
+        raise RuntimeError("the ChromeOS CDM is only known to work with 4 KiB pages")
+    image = work / "lacros.squashfs"
+    log(f"Downloading Google's LaCrOS image ({LACROS_SIZE} bytes) for the Widevine CDM of ChromeOS")
+    received = 0
+    with urllib.request.urlopen(LACROS_URL, timeout=TIMEOUT) as response, open(image, "wb") as out:
+        for block in iter(lambda: response.read(1024 * 1024), b""):
+            received += len(block)
+            if received > LACROS_SIZE:
+                raise RuntimeError("the LaCrOS image is larger than expected")
+            out.write(block)
+    if received != LACROS_SIZE:
+        raise RuntimeError(f"the LaCrOS image has {received} bytes instead of {LACROS_SIZE}")
+    root = work / "root"
+    subprocess.run(["unsquashfs", "-no-progress", "-quiet", "-no-xattrs", "-d", str(root), str(image),
+                    "WidevineCdm/manifest.json", "WidevineCdm/LICENSE",
+                    "WidevineCdm/_platform_specific/cros_arm64/libwidevinecdm.so"],
+                   check=True, stdout=subprocess.DEVNULL, timeout=10 * TIMEOUT)
+    image.unlink()
+    cdm = root / "WidevineCdm"
+    fixed = work / "libwidevinecdm.so"
+    subprocess.run([sys.executable, "-I", str(FIXUP),
+                    str(cdm / "_platform_specific" / "cros_arm64" / "libwidevinecdm.so"), str(fixed)],
+                   check=True, stdout=subprocess.DEVNULL, timeout=10 * TIMEOUT)
+    files = {"libwidevinecdm.so": fixed.read_bytes(),
+             "manifest.json": (cdm / "manifest.json").read_bytes(),
+             "LICENSE": (cdm / "LICENSE").read_bytes()}
+    for name, digest in FIXED_FILES.items():
+        if hashlib.sha256(files[name]).hexdigest() != digest:
+            raise RuntimeError(f"{name} of the ChromeOS CDM is not the known one")
+    if json.loads(files["manifest.json"]).get("version") != CROS_VERSION:
+        raise RuntimeError("manifest.json does not name the expected version")
+    return files
+
+
+def main_cros():
+    current = installed_version()
+    if current == CROS_VERSION and cros_installed():
+        log(f"Widevine CDM {CROS_VERSION} of ChromeOS is installed")
+    else:
+        work = STATE / ".work"
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(mode=0o700)
+        try:
+            files = fetch_cros(work)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        install(CROS_VERSION, files)
+        log(f"Widevine CDM {CROS_VERSION} of ChromeOS installed" + (f", replacing {current}" if current else ""))
+    ensure_gmp_links()
+    prune(CROS_VERSION)
+    return 0
+
+
+def main():
+    if os.uname().machine not in ARCHES:
+        log(f"Google offers no Widevine CDM for {os.uname().machine}.")
+        return 1
+    if os.uname().machine == "aarch64":
+        return main_cros()
+    arch, machine = ARCHES[os.uname().machine]
+    current = installed_version()
+    offer = ask_server(current, arch)
+    if offer and current and version_key(offer[0]) <= version_key(current):
+        offer = None
+    if offer:
+        version, name, digest, size, bases = offer
+        log(f"Downloading Widevine CDM {version} ({size} bytes) from Google")
+        files = unpack(download(bases, name, digest, size), version, arch, machine)
+        install(version, files)
+        log(f"Widevine CDM {version} installed" + (f", replacing {current}" if current else ""))
+        current = version
+    elif current:
+        log(f"Widevine CDM {current} is current")
+    else:
+        raise RuntimeError(f"update server offers no Widevine CDM for Linux {arch}")
+    ensure_gmp_links()
+    prune(current)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, KeyError, IndexError, RuntimeError, zipfile.BadZipFile,
+            struct.error, subprocess.SubprocessError) as error:
+        log(f"plinius-widevine-update: {error}")
+        sys.exit(1)

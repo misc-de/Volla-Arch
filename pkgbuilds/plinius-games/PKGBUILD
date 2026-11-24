@@ -1,0 +1,57 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-games
+pkgver=0.1
+pkgrel=3
+pkgdesc="Plinius game emulators: RetroArch with phone defaults, touch gamepad and common systems"
+arch=(any)
+license=(MIT)
+# Batocera's idea on the phone: one entry point, one folder for the games, one controller setup.
+# Stage 1 is RetroArch with the systems below; the own game list, a touch controller for every
+# emulator and DOSBox Pure follow (docs/ROADMAP.md, Emulators). Native packages on purpose:
+# Flatpak apps render on llvmpipe here. No ROMs or BIOS files are shipped.
+# Only systems that were tested on the phone stay in depends; the others move to optdepends.
+depends=(
+	retroarch
+	# Touch menu, core descriptions, on-screen gamepads
+	retroarch-assets-glui libretro-core-info libretro-overlays
+	# NES, SNES, Mega Drive / Master System / Game Gear
+	libretro-nestopia libretro-snes9x libretro-genesis-plus-gx
+	# Game Boy / Color, Game Boy Advance
+	libretro-gambatte libretro-mgba
+	# PlayStation, Nintendo 64, Nintendo DS, Dreamcast. PlayStation is Beetle PSX: ALARM's
+	# libretro-pcsx-rearmed is a build from 2016 whose .info file clashes with libretro-core-info
+	libretro-beetle-psx libretro-mupen64plus-next libretro-melonds libretro-flycast
+	# PSP: own app with its own touch controls
+	ppsspp
+	# The hook below uses its launcher hiding script
+	device-volla-ansuz
+)
+optdepends=('libretro-shaders-glsl: picture filters such as CRT scanlines'
+	'plinius-dos-installer: MS-DOS games and point-and-click adventures (DOSBox, ScummVM)'
+	'libretro-mame: arcade machines (MAME)'
+	'libretro-dolphin: GameCube and Wii (slow on this phone)'
+	'libretro-duckstation: faster PlayStation emulator (core from 2021)')
+# StartupNotify=false: RetroArch never reports its startup to the compositor, so Phosh kept a
+# splash screen over it until its timeout (~30 s), although RetroArch is up after 2 s.
+# Hides RetroArch's own launcher also when it was installed first, shows it again on removal.
+# MS-DOS games and ScummVM went to plinius-dos-installer in 0.1-3.
+install=plinius-games.install
+source=(plinius-games
+	retroarch.cfg
+	org.plinius.Games.desktop
+	plinius-games-hide.hook
+	LICENSE)
+sha256sums=('7e804a70297221c2bcc0e8b7460d5dad2c4926a8f40ed88d302d216e17eea6dc'
+	'73aefb218fc4c52c01a165f893b87ad85eadbdc005cf7f0d7c756caf1c51e4cf'
+	'e4f488fed60faa3e81d888b8fd7f934b0fbdc31a6d4770aafe6ce1b93726167e'
+	'd3ee5a8732c69a57d2c4259b02b51f0592d2004f604a3a8c77ebaa9bb7b224ce'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+package() {
+	install -Dm755 plinius-games -t "$pkgdir/usr/bin"
+	install -Dm644 retroarch.cfg -t "$pkgdir/usr/share/plinius-games"
+	install -Dm644 org.plinius.Games.desktop -t "$pkgdir/usr/share/applications"
+	install -Dm644 plinius-games-hide.hook -t "$pkgdir/usr/share/libalpm/hooks"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

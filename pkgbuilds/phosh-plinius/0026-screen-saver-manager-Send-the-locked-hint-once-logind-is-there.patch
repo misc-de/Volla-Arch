@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 15:30:00 +0100
+Subject: [PATCH] screen-saver-manager: Send the locked hint once logind is
+ there
+
+Phosh locks right at startup, before the login1 session proxy is ready,
+so the change of the lockscreen manager's locked property found no proxy
+and logind's LockedHint stayed false. The first unlock with the PIN then
+changed nothing at logind, and services that follow LockedHint (here the
+face unlock service) missed it. Send the current state once the proxy is
+there.
+---
+ src/screen-saver-manager.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/screen-saver-manager.c b/src/screen-saver-manager.c
+index 16031e19..63a8c6e6 100644
+--- a/src/screen-saver-manager.c
++++ b/src/screen-saver-manager.c
+@@ -675,6 +675,14 @@ on_logind_get_session_proxy_finish  (GObject                 *object,
+     "swapped-object-signal::lock", G_CALLBACK (on_logind_lock), self,
+     "swapped-object-signal::unlock", G_CALLBACK (on_logind_unlock), self,
+     NULL);
++
++  /* The shell may have locked before the proxy was there (lock on startup):
++   * send the current state so logind's LockedHint matches */
++  phosh_dbus_login_session_call_set_locked_hint (self->logind_session_proxy,
++                                                 phosh_lockscreen_manager_get_locked (self->lockscreen_manager),
++                                                 self->cancel,
++                                                 on_locked_hint_set,
++                                                 NULL);
+ }
+ 
+ 

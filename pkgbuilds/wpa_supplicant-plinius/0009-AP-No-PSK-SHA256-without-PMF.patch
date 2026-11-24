@@ -1,0 +1,37 @@
+From 475ce60b6141d264f94cf4982bfda58018f3c9eb Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 10:39:36 +0100
+Subject: [PATCH] AP: No PSK-SHA256 without PMF
+
+Without PMF a station may still pick PSK-SHA256 when it is offered next
+to PSK. Some drivers (MediaTek gen4m) reject that in AP mode with status
+43 (invalid AKMP), so no station can connect. NetworkManager offers
+WPA-PSK WPA-PSK-SHA256 for every WPA-PSK hotspot, also with PMF disabled.
+Offer plain PSK only when PMF is disabled.
+---
+ wpa_supplicant/ap.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/wpa_supplicant/ap.c b/wpa_supplicant/ap.c
+index d0a1a96..91dbdf7 100644
+--- a/wpa_supplicant/ap.c
++++ b/wpa_supplicant/ap.c
+@@ -752,6 +752,15 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
+ 			bss->ieee80211w = wpa_s->conf->pmf;
+ 	}
+ 
++	/*
++	 * Without PMF a station may still pick PSK-SHA256 when it is offered
++	 * next to PSK, and some drivers (MediaTek gen4m) reject that in AP mode
++	 * with status 43 (invalid AKMP). Offer plain PSK only in that case.
++	 */
++	if (bss->ieee80211w == NO_MGMT_FRAME_PROTECTION &&
++	    (bss->wpa_key_mgmt & WPA_KEY_MGMT_PSK))
++		bss->wpa_key_mgmt &= ~WPA_KEY_MGMT_PSK_SHA256;
++
+ #ifdef CONFIG_OCV
+ 	bss->ocv = ssid->ocv;
+ #endif /* CONFIG_OCV */
+-- 
+2.55.0
+

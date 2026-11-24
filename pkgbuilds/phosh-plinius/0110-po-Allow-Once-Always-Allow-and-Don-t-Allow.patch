@@ -1,0 +1,176 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 12:00:00 +0100
+Subject: [PATCH] po: Allow Once, Always Allow and Don't Allow
+
+Translations of the access dialog's buttons (0109) for de, es, fr, it,
+nl, pl, pt, pt_BR (as pt) and ru, the same as plinius-appaccess uses,
+kept apart so that 0109 stays free of po hunks.
+---
+ po/de.po    | 9 +++++++++
+ po/es.po    | 9 +++++++++
+ po/fr.po    | 9 +++++++++
+ po/it.po    | 9 +++++++++
+ po/nl.po    | 9 +++++++++
+ po/pl.po    | 9 +++++++++
+ po/pt.po    | 9 +++++++++
+ po/pt_BR.po | 9 +++++++++
+ po/ru.po    | 9 +++++++++
+ 9 files changed, 81 insertions(+)
+
+diff --git a/po/de.po b/po/de.po
+index 1d832e2f..b2bf5492 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1667,3 +1667,12 @@ msgstr "Das Telefon liefert den Strom"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Dieses Telefon lädt über das Kabel"
++
++msgid "Allow Once"
++msgstr "Einmal erlauben"
++
++msgid "Always Allow"
++msgstr "Immer erlauben"
++
++msgid "Don't Allow"
++msgstr "Nicht erlauben"
+diff --git a/po/es.po b/po/es.po
+index d1d1b0ec..5d14ce20 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -977,3 +977,12 @@ msgstr "El teléfono suministra la energía"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Este teléfono se carga por el cable"
++
++msgid "Allow Once"
++msgstr "Permitir una vez"
++
++msgid "Always Allow"
++msgstr "Permitir siempre"
++
++msgid "Don't Allow"
++msgstr "No permitir"
+diff --git a/po/fr.po b/po/fr.po
+index 9e9a212c..3b435bac 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1325,3 +1325,12 @@ msgstr "Le téléphone fournit l'alimentation"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Ce téléphone se recharge par le câble"
++
++msgid "Allow Once"
++msgstr "Autoriser une fois"
++
++msgid "Always Allow"
++msgstr "Toujours autoriser"
++
++msgid "Don't Allow"
++msgstr "Ne pas autoriser"
+diff --git a/po/it.po b/po/it.po
+index f9bd365a..025ba85f 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -1059,3 +1059,12 @@ msgstr "Il telefono fornisce l'alimentazione"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Questo telefono si ricarica dal cavo"
++
++msgid "Allow Once"
++msgstr "Consenti una volta"
++
++msgid "Always Allow"
++msgstr "Consenti sempre"
++
++msgid "Don't Allow"
++msgstr "Non consentire"
+diff --git a/po/nl.po b/po/nl.po
+index 99dcd83b..94d2f4dd 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1670,3 +1670,12 @@ msgstr "De telefoon levert de stroom"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Deze telefoon laadt op via de kabel"
++
++msgid "Allow Once"
++msgstr "Eén keer toestaan"
++
++msgid "Always Allow"
++msgstr "Altijd toestaan"
++
++msgid "Don't Allow"
++msgstr "Niet toestaan"
+diff --git a/po/pl.po b/po/pl.po
+index 4b260b64..a502fa5e 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1635,3 +1635,12 @@ msgstr "Telefon dostarcza zasilanie"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Ten telefon ładuje się z kabla"
++
++msgid "Allow Once"
++msgstr "Zezwól raz"
++
++msgid "Always Allow"
++msgstr "Zawsze zezwalaj"
++
++msgid "Don't Allow"
++msgstr "Nie zezwalaj"
+diff --git a/po/pt.po b/po/pt.po
+index 30ca1148..69b43eb5 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1620,3 +1620,12 @@ msgstr "O telefone fornece a energia"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Este telefone carrega pelo cabo"
++
++msgid "Allow Once"
++msgstr "Permitir uma vez"
++
++msgid "Always Allow"
++msgstr "Permitir sempre"
++
++msgid "Don't Allow"
++msgstr "Não permitir"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index eb379666..6485ac21 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1712,3 +1712,12 @@ msgstr "O telefone fornece a energia"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Este telefone carrega pelo cabo"
++
++msgid "Allow Once"
++msgstr "Permitir uma vez"
++
++msgid "Always Allow"
++msgstr "Permitir sempre"
++
++msgid "Don't Allow"
++msgstr "Não permitir"
+diff --git a/po/ru.po b/po/ru.po
+index d7a107f5..6479b94c 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1732,3 +1732,12 @@ msgstr "Телефон подаёт питание"
+ 
+ msgid "This phone charges from the cable"
+ msgstr "Этот телефон заряжается от кабеля"
++
++msgid "Allow Once"
++msgstr "Разрешить один раз"
++
++msgid "Always Allow"
++msgstr "Всегда разрешать"
++
++msgid "Don't Allow"
++msgstr "Не разрешать"
+-- 
+2.56.0
+

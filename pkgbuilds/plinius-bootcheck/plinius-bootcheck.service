@@ -1,0 +1,21 @@
+[Unit]
+Description=Check the boot chain for changes
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/plinius-bootcheck check
+# 2 = changed: not a unit failure, the notification comes via plinius-bootcheck-notify
+SuccessExitStatus=2
+StateDirectory=plinius-bootcheck
+RuntimeDirectory=plinius-bootcheck
+RuntimeDirectoryPreserve=yes
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ProtectHome=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

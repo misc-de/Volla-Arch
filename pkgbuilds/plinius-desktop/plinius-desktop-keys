@@ -1,0 +1,28 @@
+#!/bin/sh
+# plinius-desktop-keys: makes this phone's keys for VNC if it has none yet and prints the
+# SHA-256 fingerprint of its certificate, to compare with what the viewer shows on its first
+# connection. They are made on the device, never in an image: phones must not share a key.
+#
+# SPDX-License-Identifier: MIT
+set -eu
+
+dir=${XDG_STATE_HOME:-$HOME/.local/state}/plinius-desktop
+umask 077
+mkdir -p "$dir"
+
+# Written under another name and renamed: a broken run leaves no half a key
+if [ ! -s "$dir/tls_cert.pem" ] || [ ! -s "$dir/tls_key.pem" ]; then
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -sha256 -days 3650 -nodes \
+		-keyout "$dir/tls_key.pem.new" -out "$dir/tls_cert.pem.new" \
+		-subj "/CN=$(cat /proc/sys/kernel/hostname)" 2>/dev/null
+	mv -f "$dir/tls_key.pem.new" "$dir/tls_key.pem"
+	mv -f "$dir/tls_cert.pem.new" "$dir/tls_cert.pem"
+fi
+# wayvnc reads an RSA key in PEM form for clients that use RSA-AES instead of TLS
+if [ ! -s "$dir/rsa_key.pem" ]; then
+	rm -f "$dir/rsa_key.pem.new"
+	openssl genrsa -traditional -out "$dir/rsa_key.pem.new" 2048 2>/dev/null
+	mv -f "$dir/rsa_key.pem.new" "$dir/rsa_key.pem"
+fi
+
+openssl x509 -in "$dir/tls_cert.pem" -noout -fingerprint -sha256 | sed 's/^[^=]*=//'

@@ -1,0 +1,863 @@
+{
+  "assessments": {
+    "CVE-2020-16156": {
+      "status": "fixed",
+      "note": "Fixed in the CPAN client 2.29, hardened further in 2.33 (Perl 5.36 and later); Perl 5.44 contains both. The cpan tool is not used on the phone.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2020-16156",
+        "https://github.com/andk/cpanpm/commit/b27c51adf0fda25dee84cb72cb2b1bf7d832148c"
+      ]
+    },
+    "CVE-2020-23109": {
+      "status": "fixed",
+      "note": "Upstream analysis and Debian place the fix in libheif 1.7.0 (commit bca0162); the installed 1.23.7 contains it. Upstream never named an exact release, so this rests on that analysis.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2020-23109",
+        "https://github.com/strukturag/libheif/issues/207",
+        "https://github.com/strukturag/libheif/commit/bca0162018df9a32d21c05aad1fa203881fa7813"
+      ]
+    },
+    "CVE-2020-23922": {
+      "status": "not_affected",
+      "note": "The bug was only in the gif2rgb command-line tool, not in the GIF library. It was fixed upstream in giflib 5.2.2, and the installed package does not contain gif2rgb at all.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2020-23922",
+        "https://sourceforge.net/p/giflib/bugs/151/"
+      ]
+    },
+    "CVE-2020-27748": {
+      "status": "mitigated",
+      "note": "xdg-email 1.2.1 still turns attach= in a mailto: link into a Thunderbird attachment, so a crafted link could add a file such as a key to a new e-mail; the upstream fix (passing attachments separately) is in no release yet. Thunderbird is the mail app here, but nothing on the phone hands links from elsewhere to xdg-email: browsers and Flatpak apps open mailto: through GIO or the portal, which start Thunderbird directly, and Muga calls it only with --attach for the pictures you chose. It only matters if you run xdg-email yourself with a link from someone else; check the attachments in the compose window before sending.",
+      "date": "2026-11-07",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2020-27748",
+        "https://bugzilla.redhat.com/show_bug.cgi?id=CVE-2020-27748",
+        "https://bugs.gentoo.org/show_bug.cgi?id=756838",
+        "https://gitlab.freedesktop.org/xdg/xdg-utils/-/commit/5f3f563d69ae72bbefe9031c68d8167935abcba5"
+      ]
+    },
+    "CVE-2021-31879": {
+      "status": "mitigated",
+      "note": "wget 1.25.0 still sends a user-given Authorization or Cookie header on to another host after a redirect; the fix is upstream but in no release yet. Nothing on the phone runs wget with login details, so it only matters if you do that yourself (use --max-redirect 0 then).",
+      "date": "2026-10-31",
+      "sources": [
+        "https://cgit.git.savannah.gnu.org/cgit/wget.git/commit/?id=581b53633159200125bcdee697762c62449b1067",
+        "https://security-tracker.debian.org/tracker/CVE-2021-31879"
+      ]
+    },
+    "CVE-2021-3575": {
+      "status": "fixed",
+      "note": "Fixed upstream in OpenJPEG 2.5.1; the installed 2.5.4 contains the fix. The bug was in the opj_decompress command-line tool, not in the library that apps use.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2021-3575",
+        "https://github.com/uclouvain/openjpeg/issues/1347",
+        "https://github.com/uclouvain/openjpeg/commit/7bd884f8750892de4f50bf4642fcfbe7011c6bdf"
+      ]
+    },
+    "CVE-2021-36770": {
+      "status": "fixed",
+      "note": "Only Encode 3.05 to 3.11 were affected; fixed in Encode 3.12. The installed Perl 5.44 ships Encode 3.24.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2021-36770"
+      ]
+    },
+    "CVE-2021-3773": {
+      "status": "not_affected",
+      "note": "The weakness (\"port shadow\") is in the NAT of a VPN server that several clients share: another client of the same server can find out or redirect a victim's connection. It is not a bug in OpenVPN, and there is no kernel fix; the protection belongs on the server. The phone uses OpenVPN only as a client (no OpenVPN server and no server configuration), so nothing on this system can be attacked this way. Whether a VPN you connect to is safe depends on how its provider set up the server.",
+      "date": "2026-11-07",
+      "sources": [
+        "https://www.breakpointingbad.com/2021/09/08/Port-Shadows-via-Network-Alchemy.html",
+        "https://access.redhat.com/security/cve/cve-2021-3773",
+        "https://security.archlinux.org/CVE-2021-3773"
+      ]
+    },
+    "CVE-2022-1354": {
+      "status": "fixed",
+      "note": "Heap buffer overflow reported in tiffinfo, fixed in the library's directory reading code. Fixed upstream in libtiff 4.4.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-1354",
+        "https://gitlab.com/libtiff/libtiff/-/issues/319",
+        "https://gitlab.com/libtiff/libtiff/-/commit/87f580f39011109b3bb5f6eca13fac543a542798"
+      ]
+    },
+    "CVE-2022-1355": {
+      "status": "fixed",
+      "note": "Stack buffer overflow in the tiffcp command-line tool. Fixed upstream in libtiff 4.4.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://libtiff.gitlab.io/libtiff/releases/v4.4.0.html",
+        "https://security-tracker.debian.org/tracker/CVE-2022-1355",
+        "https://gitlab.com/libtiff/libtiff/-/commit/c1ae29f9ebacd29b7c3e0c7db671af7db3584bc2"
+      ]
+    },
+    "CVE-2022-1622": {
+      "status": "fixed",
+      "note": "Out-of-bounds read in the library's LZW decoder. Fixed upstream in libtiff 4.4.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-1622",
+        "https://gitlab.com/libtiff/libtiff/-/issues/410",
+        "https://gitlab.com/libtiff/libtiff/-/commit/b4e79bfa0c7d2d08f6f1e7ec38143fc8cb11394a"
+      ]
+    },
+    "CVE-2022-1623": {
+      "status": "fixed",
+      "note": "Out-of-bounds read in the library's LZW decoder. Fixed upstream in libtiff 4.4.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-1623",
+        "https://gitlab.com/libtiff/libtiff/-/issues/410",
+        "https://gitlab.com/libtiff/libtiff/-/commit/b4e79bfa0c7d2d08f6f1e7ec38143fc8cb11394a"
+      ]
+    },
+    "CVE-2022-2056": {
+      "status": "fixed",
+      "note": "Divide-by-zero crash in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2056",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/merge_requests/346"
+      ]
+    },
+    "CVE-2022-2057": {
+      "status": "fixed",
+      "note": "Divide-by-zero crash in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2057",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/merge_requests/346"
+      ]
+    },
+    "CVE-2022-2058": {
+      "status": "fixed",
+      "note": "Divide-by-zero crash in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2058",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/merge_requests/346"
+      ]
+    },
+    "CVE-2022-2068": {
+      "status": "fixed",
+      "note": "Fixed upstream in OpenSSL 3.0.4 (and 1.1.1p); the installed 3.6.5 contains the fix. The bug was in the c_rehash script, which nothing on the phone runs on its own.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://openssl-library.org/news/vulnerabilities-3.0/",
+        "https://security-tracker.debian.org/tracker/CVE-2022-2068"
+      ]
+    },
+    "CVE-2022-2519": {
+      "status": "fixed",
+      "note": "Double free (rotateImage) in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2519",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/merge_requests/378"
+      ]
+    },
+    "CVE-2022-2520": {
+      "status": "fixed",
+      "note": "Assertion crash (rotateImage) in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2520",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/merge_requests/378"
+      ]
+    },
+    "CVE-2022-2521": {
+      "status": "fixed",
+      "note": "Invalid memory free, a crash without security impact according to Debian, in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2521",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/merge_requests/378"
+      ]
+    },
+    "CVE-2022-2867": {
+      "status": "fixed",
+      "note": "Integer underflow causing out-of-bounds access in the tiffcrop command-line tool. Fixed upstream in libtiff 4.4.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2867",
+        "https://gitlab.com/libtiff/libtiff/-/commit/07d79fcac2ead271b60e32aeb80f7b4f3be9ac8c"
+      ]
+    },
+    "CVE-2022-2868": {
+      "status": "fixed",
+      "note": "Missing input check causing an out-of-bounds read in the tiffcrop command-line tool. Fixed upstream in libtiff 4.4.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2868",
+        "https://gitlab.com/libtiff/libtiff/-/merge_requests/294",
+        "https://gitlab.com/libtiff/libtiff/-/commit/07d79fcac2ead271b60e32aeb80f7b4f3be9ac8c"
+      ]
+    },
+    "CVE-2022-2869": {
+      "status": "fixed",
+      "note": "Integer underflow causing out-of-bounds access in the tiffcrop command-line tool. Fixed upstream in libtiff 4.4.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2869",
+        "https://gitlab.com/libtiff/libtiff/-/commit/07d79fcac2ead271b60e32aeb80f7b4f3be9ac8c"
+      ]
+    },
+    "CVE-2022-2953": {
+      "status": "fixed",
+      "note": "Out-of-bounds read (extractImageSection), a crash without security impact according to Debian, in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-2953",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/issues/414",
+        "https://gitlab.com/libtiff/libtiff/-/commit/8fe3735942ea1d90d8cef843b55b3efe8ab6feaf"
+      ]
+    },
+    "CVE-2022-34526": {
+      "status": "fixed",
+      "note": "Stack overflow reported in tiffsplit and tiffcrop, fixed in the library's tag checking code. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://security-tracker.debian.org/tracker/CVE-2022-34526",
+        "https://gitlab.com/libtiff/libtiff/-/commit/275735d0354e39c0ac1dc3c0db2120d6f31d1990"
+      ]
+    },
+    "CVE-2022-3570": {
+      "status": "fixed",
+      "note": "Heap buffer overflows in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-3570",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/commit/cfbb883bf6ea7bedcb04177cc4e52d304522fdff"
+      ]
+    },
+    "CVE-2022-3597": {
+      "status": "fixed",
+      "note": "Out-of-bounds write (extractImageSection) in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-3597",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/commit/236b7191f04c60d09ee836ae13b50f812c841047"
+      ]
+    },
+    "CVE-2022-3599": {
+      "status": "fixed",
+      "note": "Out-of-bounds read reported in tiffcrop, fixed in how the library handles ink names. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://security-tracker.debian.org/tracker/CVE-2022-3599",
+        "https://gitlab.com/libtiff/libtiff/-/commit/e813112545942107551433d61afd16ac094ff246"
+      ]
+    },
+    "CVE-2022-3627": {
+      "status": "fixed",
+      "note": "Out-of-bounds write (extractImageSection) in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-3627",
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://gitlab.com/libtiff/libtiff/-/commit/236b7191f04c60d09ee836ae13b50f812c841047"
+      ]
+    },
+    "CVE-2022-3970": {
+      "status": "fixed",
+      "note": "Integer overflow in the library's RGBA tile reading code. Fixed upstream in libtiff 4.5.0; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://libtiff.gitlab.io/libtiff/releases/v4.5.0.html",
+        "https://security-tracker.debian.org/tracker/CVE-2022-3970",
+        "https://gitlab.com/libtiff/libtiff/-/commit/227500897dfb07fb7d27f7aa570050e62617e3be"
+      ]
+    },
+    "CVE-2022-48281": {
+      "status": "fixed",
+      "note": "Heap buffer overflow (processCropSelections) in the tiffcrop command-line tool. Fixed upstream in libtiff 4.5.1; the installed 4.7.2 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2022-48281",
+        "https://gitlab.com/libtiff/libtiff/-/issues/488",
+        "https://gitlab.com/libtiff/libtiff/-/commit/d1b6b9c1b3cae2d9e37754506c1ad8f4f7b646b5"
+      ]
+    },
+    "CVE-2023-52770": {
+      "status": "mitigated",
+      "note": "A file whose compression was switched off can crash the kernel while its extent cache is updated. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/ff9bc1161cd0209d6f5bee8128a1f078576eea42",
+        "https://www.cve.org/CVERecord?id=CVE-2023-52770"
+      ]
+    },
+    "CVE-2023-53447": {
+      "status": "mitigated",
+      "note": "A remount racing with fallocate can crash the kernel through a null extent tree. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/f6464b3c31344af4964443dbbcb4596ac9b46519",
+        "https://www.cve.org/CVERecord?id=CVE-2023-53447"
+      ]
+    },
+    "CVE-2023-53846": {
+      "status": "mitigated",
+      "note": "A crafted f2fs image makes truncating a file read and write past a node block (out-of-bounds access in the kernel). The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/f5d46fc48b032b1e1c16f82862bf22b830fdb27b",
+        "https://www.cve.org/CVERecord?id=CVE-2023-53846"
+      ]
+    },
+    "CVE-2024-26869": {
+      "status": "mitigated",
+      "note": "A race between garbage collection and in-place writes can corrupt data on an f2fs filesystem. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/0721a4f85d12a364002a9476c84b930fbc993f83",
+        "https://www.cve.org/CVERecord?id=CVE-2024-26869"
+      ]
+    },
+    "CVE-2024-38620": {
+      "status": "mitigated",
+      "note": "Leftover Bluetooth code for 'AMP' high-speed controllers can corrupt memory when a nearby device talks to such a controller. This phone's Bluetooth controller is a normal (primary) one; an AMP controller can only be created by root or by inserting special SDIO hardware, so a nearby attacker cannot reach the broken code.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/9e6cf0eccfe15b67bf9773ecd101162dfdfed5e2",
+        "https://git.kernel.org/stable/c/84a4bb6548a29326564f0e659fb8064503ecc1c7"
+      ]
+    },
+    "CVE-2024-41935": {
+      "status": "mitigated",
+      "note": "Shrinking a very large extent tree holds a lock for too long and can hang the kernel. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/e05d3eab90d6657bdcaa40ed129e9c767ed43188",
+        "https://www.cve.org/CVERecord?id=CVE-2024-41935"
+      ]
+    },
+    "CVE-2024-44941": {
+      "status": "mitigated",
+      "note": "Reading the extent cache without its lock can access freed memory. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/9bd5d5e3244242e7be26e86025b74eff3cf20d8c",
+        "https://www.cve.org/CVERecord?id=CVE-2024-44941"
+      ]
+    },
+    "CVE-2024-44942": {
+      "status": "mitigated",
+      "note": "A crafted inode with an inconsistent inline-data flag crashes the kernel during garbage collection. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/54a8da38b70553b61e2265ee0f26d034349dde25",
+        "https://www.cve.org/CVERecord?id=CVE-2024-44942"
+      ]
+    },
+    "CVE-2024-56565": {
+      "status": "mitigated",
+      "note": "A discard after creating an LVM snapshot of an f2fs volume triggers a kernel warning. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/0f3b00763dae90e94eed94a39d32d252d8750e9d",
+        "https://www.cve.org/CVERecord?id=CVE-2024-56565"
+      ]
+    },
+    "CVE-2024-56692": {
+      "status": "mitigated",
+      "note": "A crafted node block address crashes the kernel when the inode is removed. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/a6d51de6bf729edc9fc7f87ffaae4e6bbda6329a",
+        "https://www.cve.org/CVERecord?id=CVE-2024-56692"
+      ]
+    },
+    "CVE-2025-22127": {
+      "status": "mitigated",
+      "note": "Overwriting compressed data can loop forever and hang the kernel. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/353b262268c1646a0e7c96d4ed14c5d72a30ccb4",
+        "https://www.cve.org/CVERecord?id=CVE-2025-22127"
+      ]
+    },
+    "CVE-2025-40054": {
+      "status": "mitigated",
+      "note": "Merging write requests can use freed memory and crash the kernel. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/410337c2301ae78a081e1b5ebbe8ec374fef4cb6",
+        "https://www.cve.org/CVERecord?id=CVE-2025-40054"
+      ]
+    },
+    "CVE-2025-40077": {
+      "status": "mitigated",
+      "note": "A shift overflow in a position calculation can make f2fs work on the wrong file offset. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/7fb12f75da1da83b29964c02646f851d919301ea",
+        "https://www.cve.org/CVERecord?id=CVE-2025-40077"
+      ]
+    },
+    "CVE-2025-40137": {
+      "status": "mitigated",
+      "note": "An error while truncating a corrupted inline inode leaves a page behind and crashes the kernel. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/3500d7e1ba53f39bdb8a5aa9c2066b2f08e8c92e",
+        "https://www.cve.org/CVERecord?id=CVE-2025-40137"
+      ]
+    },
+    "CVE-2025-40909": {
+      "status": "fixed",
+      "note": "Fixed in Perl 5.41.13, first stable release 5.42.0; the installed 5.44.0 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2025-40909",
+        "https://github.com/Perl/perl5/issues/23010"
+      ]
+    },
+    "CVE-2025-4575": {
+      "status": "fixed",
+      "note": "Only OpenSSL 3.5.0 was affected (the -addreject option of openssl x509); fixed in 3.5.1. The installed 3.6.5 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://openssl-library.org/news/vulnerabilities-3.5/",
+        "https://security-tracker.debian.org/tracker/CVE-2025-4575"
+      ]
+    },
+    "CVE-2025-4598": {
+      "status": "fixed",
+      "note": "Fixed in systemd 257.6 and 258; the installed 262.1 contains the fix. The phone does not use systemd-coredump either: crash dumps go to a plain file.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2025-4598",
+        "https://github.com/systemd/systemd/commit/0c49e0049b7665bb7769a13ef346fef92e1ad4d6"
+      ]
+    },
+    "CVE-2025-49794": {
+      "status": "fixed",
+      "note": "Fixed upstream in libxml2 2.14.5 (also 2.13.9); the installed 2.15.4 contains the fix. Only Schematron validation was affected, a rarely used feature that is off by default since 2.15.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2025-49794",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/issues/931",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/commit/71e1e8af5ee46dad1b57bb96cfbf1c3ad21fbd7b"
+      ]
+    },
+    "CVE-2025-49795": {
+      "status": "fixed",
+      "note": "Fixed upstream in libxml2 2.14.5 (also 2.13.9), with a follow-up in 2.15.0; the installed 2.15.4 contains both. The worst case was a crash during Schematron validation, a rarely used feature.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2025-49795",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/issues/932",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/commit/c24909ba2601848825b49a60f988222da3019667"
+      ]
+    },
+    "CVE-2025-49796": {
+      "status": "fixed",
+      "note": "Fixed upstream in libxml2 2.14.5 (also 2.13.9); the installed 2.15.4 contains the fix. Only Schematron validation was affected, a rarely used feature that is off by default since 2.15.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2025-49796",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/issues/933",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/commit/71e1e8af5ee46dad1b57bb96cfbf1c3ad21fbd7b"
+      ]
+    },
+    "CVE-2025-5278": {
+      "status": "fixed",
+      "note": "Fixed in coreutils 9.8 (sort); the installed 9.12 contains the fix.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://lists.gnu.org/archive/html/coreutils-announce/2025-09/msg00000.html",
+        "https://security-tracker.debian.org/tracker/CVE-2025-5278"
+      ]
+    },
+    "CVE-2025-6020": {
+      "status": "fixed",
+      "note": "Fixed in Linux-PAM 1.7.1; the installed 1.7.3 contains the fix. On this phone pam_namespace is only listed for run0 and has no active rules, so it would not be used anyway.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2025-6020",
+        "https://github.com/linux-pam/linux-pam/security/advisories/GHSA-f9p8-gjr4-j9gx"
+      ]
+    },
+    "CVE-2025-6170": {
+      "status": "fixed",
+      "note": "Fixed upstream in libxml2 2.14.5 (also 2.13.9); the installed 2.15.4 contains the fix. Only the interactive shell of the xmllint tool was affected.",
+      "date": "2026-10-31",
+      "sources": [
+        "https://security-tracker.debian.org/tracker/CVE-2025-6170",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/issues/941",
+        "https://gitlab.gnome.org/GNOME/libxml2/-/commit/c340e419505cf4bf1d9ed7019a87cc00ec200434"
+      ]
+    },
+    "CVE-2026-45949": {
+      "status": "mitigated",
+      "note": "A race in the hardware random number core can free a kernel thread twice when random number drivers are removed at the same time. On this phone that only happens when root unloads or unbinds the RNG drivers, which normal apps cannot do.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/d60bd663b746f17fc01fdc44dd01642594176344",
+        "https://git.kernel.org/stable/c/cc2f39d6ac48e6e3cb2d6240bc0d6df839dd0828"
+      ]
+    },
+    "CVE-2026-46175": {
+      "status": "mitigated",
+      "note": "Garbage collection of node blocks can leave a filesystem that fsck reports as inconsistent after a power loss. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/3b7a0bbb3444addddb139f42a74ab4492052fa27",
+        "https://www.cve.org/CVERecord?id=CVE-2026-46175"
+      ]
+    },
+    "CVE-2026-53017": {
+      "status": "mitigated",
+      "note": "fsync of a new file during a checkpoint can lose that file's data after a power loss. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/eb65e8c7bd0a78a470cbdd3ff96232ba4a2ace89",
+        "https://www.cve.org/CVERecord?id=CVE-2026-53017"
+      ]
+    },
+    "CVE-2026-53018": {
+      "status": "mitigated",
+      "note": "Garbage collection can read pages that were already updated, which corrupts data or crashes the kernel. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/ecf53b5c9ccba6e6a7db111722cc8bbfc92d4558",
+        "https://www.cve.org/CVERecord?id=CVE-2026-53018"
+      ]
+    },
+    "CVE-2026-53368": {
+      "status": "mitigated",
+      "note": "A missing lock around node flags can leave an inconsistent filesystem after a power loss. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/bb1275802b482bc5854e434e212589fe253eab22",
+        "https://www.cve.org/CVERecord?id=CVE-2026-53368"
+      ]
+    },
+    "CVE-2026-68147": {
+      "status": "mitigated",
+      "note": "When a file encrypted with the kernel's file encryption (fscrypt) and inline crypto is dropped from memory and a tiny memory allocation fails, the key is freed while still in use. plinius-kernel 6.1.177 and 6.1.192 contain the fix; the vendor kernel 6.1.145 does not. There it needs a filesystem mounted with 'inlinecrypt' and fscrypt keys, which nothing on the phone sets up; a prepared disk image could bring both, but since device-volla-ansuz 0.5-69 attaching one takes the PIN.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/bab016bb80d74a9d1f7d4121a7fc1cb529b470e0",
+        "https://git.kernel.org/stable/c/6fe4e4b8259e1330945b5f3c9476e08473b8e0e8"
+      ]
+    },
+    "CVE-2026-68164": {
+      "status": "mitigated",
+      "note": "DAMON (memory access monitoring) accepts overlapping address ranges, which can create broken regions and in the worst case a kernel crash. Only root can configure DAMON on this phone (its control files are root-only).",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/a5c453fffb6f2ce75fc10b5d8bc475f1758010bd",
+        "https://git.kernel.org/stable/c/954157679ec34661c2e87e7eb796104a797c32db"
+      ]
+    },
+    "CVE-2026-68165": {
+      "status": "mitigated",
+      "note": "DAMON (memory access monitoring) accepts empty address ranges, which can lead to a division by zero in the kernel. Only root can configure DAMON on this phone.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/71cf8a3ee1c18cfa8b88cc14bac9c2f43dd29f9b",
+        "https://git.kernel.org/stable/c/1292c0ecb1caefb8ca064a3639d5673991e8810c"
+      ]
+    },
+    "CVE-2026-68396": {
+      "status": "not_affected",
+      "note": "A race can leave the SCSI error handler asleep for drivers that use scsi_schedule_eh(), so a disk could hang after errors. On this phone no built driver uses that function (it is used by SATA/SAS drivers, which are not built; UFS and USB storage use other paths).",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/d1280822db11c423ad47b43c9d69a5e56199161e",
+        "https://git.kernel.org/stable/c/dccf3b1798b70f94e958b3d00b83010399e6fb05"
+      ]
+    },
+    "CVE-2026-72493": {
+      "status": "not_affected",
+      "note": "Use-after-free when a packet passes the netif_running() check in enqueue_to_backlog() before the backlog lock and escapes the flush while the device is unregistered. Newer kernels had moved that check in front of the lock; the fix (6.12.114) moves it back behind it. The 6.1 kernels of this phone (UT's 6.1.145 and plinius-kernel 6.1.177) still check it after rps_lock_irqsave(), which is the state the fix restores, so the race window does not exist. The kernel CNA marks every version since 4.2 as affected because it names the commit that introduced the check.",
+      "date": "2026-11-08",
+      "sources": [
+        "https://git.kernel.org/stable/c/cbe10ea090ea9d6fa5ff50c9b44f2a86fe56f0b7",
+        "https://git.kernel.org/stable/c/46762cefe7f4e5bffc1eb467810a7bbb02e461d7"
+      ]
+    },
+    "CVE-2026-89796": {
+      "status": "mitigated",
+      "note": "With extreme DAMON timing settings the kernel's region merging loop can run forever and hang a CPU. Only root can configure DAMON on this phone.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/65edd8b3a88278c9f8e5c7d8c15d4f296ce35078",
+        "https://git.kernel.org/stable/c/123e4619ab6c8ab1c4cb1d7a58311a2af13929cd"
+      ]
+    },
+    "CVE-2026-89832": {
+      "status": "mitigated",
+      "note": "A corrupted node block keeps a dirty flag on its error path, which can crash the kernel or corrupt data. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/9e0d9a317ce2cae3768626599d857bb3f0fd96fc",
+        "https://www.cve.org/CVERecord?id=CVE-2026-89832"
+      ]
+    },
+    "CVE-2026-89833": {
+      "status": "mitigated",
+      "note": "fsync racing with a truncate can loop forever and hang the kernel. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/64a47dc8286ff98d8c231ae035bdfe16be1b93bf",
+        "https://www.cve.org/CVERecord?id=CVE-2026-89833"
+      ]
+    },
+    "CVE-2026-89834": {
+      "status": "mitigated",
+      "note": "Shrinking a filesystem misses some active segments, which corrupts data. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/7ffac0deea2d84cf79051f16fed8e215c4bcf0e6",
+        "https://www.cve.org/CVERecord?id=CVE-2026-89834"
+      ]
+    },
+    "CVE-2026-89835": {
+      "status": "mitigated",
+      "note": "Writing a sysfs value of a read-only f2fs mount dereferences a missing checkpoint thread (kernel crash). The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/54196bcfde998fb37009f50e0ef16498f651f0f9",
+        "https://www.cve.org/CVERecord?id=CVE-2026-89835"
+      ]
+    },
+    "CVE-2026-89837": {
+      "status": "mitigated",
+      "note": "An error while looking up a file name leaks a page reference. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/3b8593f7965fcb22672d98b55ae2e9410ea3d9f7",
+        "https://www.cve.org/CVERecord?id=CVE-2026-89837"
+      ]
+    },
+    "CVE-2026-89838": {
+      "status": "mitigated",
+      "note": "Recovering a 255-byte file name from a crafted image reads past the name into other kernel data when it is logged. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/3d02c7c8446f5d6793ac67f93bf3f84bf24e3f25",
+        "https://www.cve.org/CVERecord?id=CVE-2026-89838"
+      ]
+    },
+    "CVE-2026-89840": {
+      "status": "mitigated",
+      "note": "F2FS_IOC_MOVE_RANGE does not check the destination size and can make a file larger than allowed. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/454de20a5a36c000b75f49337aae8c92045c5242",
+        "https://www.cve.org/CVERecord?id=CVE-2026-89840"
+      ]
+    },
+    "CVE-2026-93150": {
+      "status": "mitigated",
+      "note": "A counter of real-time 'deadline' tasks in cpusets can be updated by two code paths at once and get corrupted. Creating deadline tasks needs root rights (CAP_SYS_NICE); the running 6.1.192 kernel already has the fix, the 6.1.145 and 6.1.177 kernels do not.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/4987d336abf3fa575a2d953f69e11154ac9802c3",
+        "https://git.kernel.org/stable/c/95220e1f18f6321008f021abc7d6f581f64bcb82"
+      ]
+    },
+    "CVE-2026-93285": {
+      "status": "mitigated",
+      "note": "A remount or shutdown racing with a sysfs write can use the freed garbage collection thread. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/8592a6238d6071fa22228f151abb002db7383750",
+        "https://www.cve.org/CVERecord?id=CVE-2026-93285"
+      ]
+    },
+    "CVE-2026-93816": {
+      "status": "mitigated",
+      "note": "Converting inline directory entries of a crafted image reads past the stored file names. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/4dd81faa63fd54b9ba1a83c304e6d0bd03f1898d",
+        "https://www.cve.org/CVERecord?id=CVE-2026-93816"
+      ]
+    },
+    "CVE-2026-97534": {
+      "status": "mitigated",
+      "note": "Shrinking a filesystem miscounts free sections, which can corrupt it. The fix is held back in plinius-kernel 6.1.192 up to -9 to keep the interface of the vendor modules, and the vendor kernel 6.1.145 does not have it either. f2fs code only runs for a mounted f2fs filesystem, and nothing on the phone uses one. Since device-volla-ansuz 0.5-69 a disk image only mounts after the PIN, and an f2fs USB stick is not mounted on its own, so this needs someone at the phone. plinius-kernel 6.1.192-10 leaves f2fs out entirely.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/9e7a744c9db8c2d33ed6ac2ff9bca9323a38b038",
+        "https://www.cve.org/CVERecord?id=CVE-2026-97534"
+      ]
+    },
+    "CVE-2026-99223": {
+      "status": "affected",
+      "note": "The order in which the kernel lists keys of a keyring depends on kernel memory addresses, so a normal local program can add some keys and work out where the kernel sits in memory (defeating address randomisation, KASLR). This alone does not give control of the phone, but makes other kernel bugs easier to exploit.",
+      "date": "2026-11-11",
+      "sources": [
+        "https://git.kernel.org/stable/c/9f084ef0beb68091e96ab96f0e95579aac8a77f9",
+        "https://git.kernel.org/stable/c/de891c73c1cf41ac8de12c07fa2c84d6a912ad0c"
+      ]
+    },
+    "CVE-2026-72463": {
+      "status": "fixed",
+      "note": "The kernel CNA lists this as unfixed in 6.1, but the kernel of this project already has the corrected code: xfrm_input() keeps the original device in a local variable for the asynchronous path and holds RCU across xfrm_rcv_cb(), and the transport_finish functions no longer drop the device themselves (checked in the source of plinius-kernel 6.1.192-19).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/fed4d3195a31125566876952ce66113ec1eb9008",
+        "https://git.kernel.org/stable/c/8045c0df98d4f14c54e5cb875f1c9c0ce89fe4ff",
+        "https://www.cve.org/CVERecord?id=CVE-2026-72463"
+      ]
+    },
+    "CVE-2025-38675": {
+      "status": "fixed",
+      "note": "The CNA lists this as unfixed in 6.1 since the backport of the hash pointer lookup in 6.1.191. In the kernel of this project xfrm_state_find() fills state_ptrs right after rcu_read_lock(), before any path that uses it, and 6.1 has no per-CPU state cache that could jump ahead (checked in the source of plinius-kernel 6.1.192-19).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/6bf2daafc51bcb9272c0fdff2afd38217337d0d3",
+        "https://git.kernel.org/stable/c/94d077c331730510d5611b438640a292097341f0",
+        "https://www.cve.org/CVERecord?id=CVE-2025-38675"
+      ]
+    },
+    "CVE-2026-64017": {
+      "status": "fixed",
+      "note": "Fixed in 6.1.191; the CNA also names a second backport in 6.1.75 without a fix in this branch. The kernel of this project has the corrected blk_mq_submit_bio(): the cached request is taken off the plug list before anything can sleep (checked in the source of plinius-kernel 6.1.192-19).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/a3fefe65b94b095c9b66420ee0ecabd9fc2e1568",
+        "https://git.kernel.org/stable/c/dc278e9bf2b9513a763353e6b9cc21e0f532954e",
+        "https://www.cve.org/CVERecord?id=CVE-2026-64017"
+      ]
+    },
+    "CVE-2023-54164": {
+      "status": "mitigated",
+      "note": "A locking race in Bluetooth ISO sockets (LE Audio). The main fix is in 6.1.42; the CNA also names an older backport without a fix in this branch. ISO sockets are not active on the phone: the kernel only registers them when the experimental ISO feature is switched on through the Bluetooth management interface, which needs root, and BlueZ does not do it (Experimental and KernelExperimental are off; no /proc/net/bluetooth/iso, checked 2026-11-18).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/e969bfed84c1f88dc722a678ee08488e86f0ec1a",
+        "https://git.kernel.org/stable/c/d40ae85ee62e3666f45bc61864b22121346f88ef",
+        "https://www.cve.org/CVERecord?id=CVE-2023-54164"
+      ]
+    },
+    "CVE-2026-74531": {
+      "status": "not_affected",
+      "note": "The code with the bug, abort_conn_sync() queued with a pointer to the connection, is not in this kernel: in its 6.1 source hci_abort_conn() sends the disconnect itself, and the management interface queues the abort by connection handle and looks the connection up again (checked in plinius-kernel 6.1.192-19).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/fa812cfa81aa3d4a7b6ce8277979af57b3f79712",
+        "https://git.kernel.org/stable/c/e8f9fef362bab431d95371d3406bc720350290c3",
+        "https://www.cve.org/CVERecord?id=CVE-2026-74531"
+      ]
+    },
+    "CVE-2026-31648": {
+      "status": "not_affected",
+      "note": "The overflow is in the nr_pages calculation of filemap_map_pages() for large folios in newer kernels. The 6.1 code of this kernel maps one page at a time and has no such calculation (checked in plinius-kernel 6.1.192-19).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/576543bedd616254032d4ebe54a90076f9e31740",
+        "https://git.kernel.org/stable/c/9316a820b9aae07d44469d6485376dad824c5b3f",
+        "https://www.cve.org/CVERecord?id=CVE-2026-31648"
+      ]
+    },
+    "CVE-2026-23451": {
+      "status": "not_affected",
+      "note": "The endless loop is in the bonding driver, which this kernel does not build (CONFIG_BONDING is not set); the other files of the fix only change an interface for it.",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/9532d0d0ad1d726c06f807e8f0f1ec93cbabb452",
+        "https://git.kernel.org/stable/c/4172a7901cf43fe1cc63ef7a2ef33735ff7b7d13",
+        "https://www.cve.org/CVERecord?id=CVE-2026-23451"
+      ]
+    },
+    "CVE-2026-74753": {
+      "status": "mitigated",
+      "note": "A use-after-free through perf event groups. The fix is not in this kernel, but perf_event_open() is refused to every program except root: kernel.perf_event_paranoid is 3 (Android's restriction), measured on the phone 2026-11-18 as the normal user (Permission denied).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/ce12e1170c0c78dffb9b28af6d287492ae7dd99d",
+        "https://git.kernel.org/stable/c/7ce010275c531475f9d6e7efb11b9e522c74ed2e",
+        "https://www.cve.org/CVERecord?id=CVE-2026-74753"
+      ]
+    },
+    "CVE-2026-68085": {
+      "status": "mitigated",
+      "note": "The fix is not in this kernel. The bug is in the Bluetooth UART line discipline, which can only be attached to a terminal with CAP_NET_ADMIN in the initial namespace, so by root. The phone does not use it: its Bluetooth reaches the kernel through bluebinder as a virtual controller (vhci).",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/d52446b3e735cfdbdc2a58342163803bc2e64249",
+        "https://git.kernel.org/stable/c/1b0d946d6f08bd39211385bc703a440911b41e46",
+        "https://www.cve.org/CVERecord?id=CVE-2026-68085"
+      ]
+    },
+    "CVE-2024-58241": {
+      "status": "mitigated",
+      "note": "The fix (it uses disable_work, which 6.1 does not have) is not in this kernel. The race only occurs while a Bluetooth controller is being removed. The phone's controller is a virtual one (vhci) that bluebinder, a root service, opens for the Android Bluetooth HAL; it only goes away when bluebinder stops, and only root can open /dev/vhci.",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/cfdb13a54e05eb98d9940cb6d1a13e7f994d811f",
+        "https://git.kernel.org/stable/c/989fa5171f005ecf63440057218d8aeb1795287d",
+        "https://www.cve.org/CVERecord?id=CVE-2024-58241"
+      ]
+    },
+    "CVE-2025-68304": {
+      "status": "affected",
+      "note": "A race in the Bluetooth receive path: data arriving on a connection while it is being torn down can use the freed connection. The fix (a rework of the receive path in five files) is not in this kernel. On the phone the teardown that can race with it only happens when Bluetooth is switched off or a device is disconnected or unpaired in the settings: plinius-kernel's plinius-btsuspend keeps the links at suspend. So an attacker has to be connected already and send data at the very moment the user drops the connection; no exploit is known.",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/ec74cdf77310c43b01b83ee898a9bd4b4b0b8e93",
+        "https://git.kernel.org/stable/c/79a2d4678ba90bdba577dc3af88cc900d6dcd5ee",
+        "https://www.cve.org/CVERecord?id=CVE-2025-68304"
+      ]
+    },
+    "CVE-2025-39965": {
+      "status": "affected",
+      "note": "Allocating an IPsec SPI could hand out 0, and such a state is later used after it was freed. Any program on the phone can reach it: it can create its own user namespace and in it IPsec states (measured 2026-11-18 as the normal user), so this is a possible way to root for a malicious app. Fixed in plinius-kernel 6.1.192-20.",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/0baf92d0b1590b903c1f4ead75e61715e50e8146",
+        "https://git.kernel.org/stable/c/cd8ae32e4e4652db55bce6b9c79267d8946765a9",
+        "https://www.cve.org/CVERecord?id=CVE-2025-39965"
+      ]
+    },
+    "CVE-2026-53132": {
+      "status": "affected",
+      "note": "A vsock connection can be fed empty messages that are queued without limit, and the vsock loopback transport is built in, so any program on the phone can make the kernel use up memory until the system stalls. No access to data or control of the phone. Fixed in plinius-kernel 6.1.192-20.",
+      "date": "2026-11-18",
+      "sources": [
+        "https://git.kernel.org/stable/c/1eca304f97a34ed5e921e1f0e06c8b241f25bf12",
+        "https://git.kernel.org/stable/c/059b7dbd20a6f0c539a45ddff1573cb8946685b5",
+        "https://www.cve.org/CVERecord?id=CVE-2026-53132"
+      ]
+    }
+  },
+  "extra": [
+    {
+      "cve": "CVE-2026-98432",
+      "package": "kernel",
+      "installed": "6.1.145",
+      "fixed": "6.1.190",
+      "severity": "Critical",
+      "type": "arbitrary code execution",
+      "status": "affected",
+      "note": "Use-after-free in the IPv4 TCP handshake: a SYN with IP options sent to a listening IPv4 TCP port can crash the kernel and possibly lead to remote code execution. Fixed upstream in 6.1.190; the vendor kernel 6.1.145 and the kernel source of this project do not contain the fix. The published root exploit needs an MPTCP listener, which this kernel cannot provide (no MPTCP). The only IPv4 listener reachable from outside is SSH, and its firewall chain admits only USB and private networks on Wi-Fi, hotspot and USB Ethernet, never mobile data. So an attacker has to be in the same local network.",
+      "date": "2026-11-08",
+      "sources": [
+        "https://access.redhat.com/security/cve/cve-2026-98432",
+        "https://ma.ttias.be/linux-cve-2026-98432-vulnerable-kernels/"
+      ]
+    }
+  ]
+}

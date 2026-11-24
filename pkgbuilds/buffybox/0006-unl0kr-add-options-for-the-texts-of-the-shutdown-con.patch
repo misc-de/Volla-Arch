@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 10:00:00 +0100
+Subject: [PATCH] unl0kr: add options for the texts of the shutdown
+ confirmation
+
+The shutdown button asks "Shutdown device?" with the buttons "Yes" and
+"No", fixed in English. Callers that show a translated message and
+placeholder can now pass matching texts with --shutdown-title,
+--shutdown-yes and --shutdown-no. The defaults stay as they were.
+---
+ man/unl0kr.1.scd      |  7 +++++++
+ unl0kr/command_line.c | 29 +++++++++++++++++++++++++++++
+ unl0kr/command_line.h |  5 +++++
+ unl0kr/main.c         |  6 +++---
+ 4 files changed, 44 insertions(+), 3 deletions(-)
+
+diff --git a/man/unl0kr.1.scd b/man/unl0kr.1.scd
+index df7e17f..0d1459d 100644
+--- a/man/unl0kr.1.scd
++++ b/man/unl0kr.1.scd
+@@ -25,6 +25,13 @@ password is printed to STDOUT. All other output happens on STDERR.
+ 	A message that will be displayed to a user.
+ *-p, --placeholder*
+ 	Placeholder text of the password field. Default: "Enter password...".
++*--shutdown-title*
++	Title of the confirmation shown by the shutdown button. Default:
++	"Shutdown device?".
++*--shutdown-yes*
++	Label of the button that confirms the shutdown. Default: "Yes".
++*--shutdown-no*
++	Label of the button that declines the shutdown. Default: "No".
+ *-C, --config-override*
+ 	Path to a config override file. Can be supplied multiple times. Config
+ 	files are merged in the following order:
+diff --git a/unl0kr/command_line.c b/unl0kr/command_line.c
+index 6c0c953..2c6fc20 100644
+--- a/unl0kr/command_line.c
++++ b/unl0kr/command_line.c
+@@ -16,6 +16,16 @@
+ #include <string.h>
+ 
+ 
++/**
++ * Long-only options (values outside the range of short option characters)
++ */
++enum {
++    OPT_SHUTDOWN_TITLE = 256,
++    OPT_SHUTDOWN_YES,
++    OPT_SHUTDOWN_NO
++};
++
++
+ /**
+  * Static prototypes
+  */
+@@ -43,6 +53,9 @@ static void init_opts(ul_cli_opts *opts) {
+     opts->config_files = NULL;
+     opts->message = NULL;
+     opts->placeholder = "Enter password...";
++    opts->shutdown_title = "Shutdown device?";
++    opts->shutdown_yes = "Yes";
++    opts->shutdown_no = "No";
+     opts->newline = true;
+ }
+ 
+@@ -58,6 +71,10 @@ static void print_usage() {
+         "  -m, --message             A message that will be displayed to a user\n"
+         "  -p, --placeholder         Placeholder text of the password field\n"
+         "                            (default: \"Enter password...\")\n"
++        "      --shutdown-title=TEXT Title of the shutdown confirmation\n"
++        "                            (default: \"Shutdown device?\")\n"
++        "      --shutdown-yes=TEXT   Button that confirms the shutdown (default: \"Yes\")\n"
++        "      --shutdown-no=TEXT    Button that declines the shutdown (default: \"No\")\n"
+         "  -C, --config-override     Path to a config override file. Can be supplied\n"
+         "                            multiple times. Config files are merged in the\n"
+         "                            following order:\n"
+@@ -88,6 +105,9 @@ void ul_cli_parse_opts(int argc, char *argv[], ul_cli_opts *opts) {
+     struct option long_opts[] = {
+         { "message",         required_argument, NULL, 'm' },
+         { "placeholder",     required_argument, NULL, 'p' },
++        { "shutdown-title",  required_argument, NULL, OPT_SHUTDOWN_TITLE },
++        { "shutdown-yes",    required_argument, NULL, OPT_SHUTDOWN_YES },
++        { "shutdown-no",     required_argument, NULL, OPT_SHUTDOWN_NO },
+         { "config-override", required_argument, NULL, 'C' },
+         { "geometry",        required_argument, NULL, 'g' },
+         { "dpi",             required_argument, NULL, 'd' },
+@@ -107,6 +127,15 @@ void ul_cli_parse_opts(int argc, char *argv[], ul_cli_opts *opts) {
+         case 'p':
+             opts->placeholder = strdup(optarg);
+             break;
++        case OPT_SHUTDOWN_TITLE:
++            opts->shutdown_title = strdup(optarg);
++            break;
++        case OPT_SHUTDOWN_YES:
++            opts->shutdown_yes = strdup(optarg);
++            break;
++        case OPT_SHUTDOWN_NO:
++            opts->shutdown_no = strdup(optarg);
++            break;
+         case 'C':
+             opts->config_files = realloc(opts->config_files, (opts->num_config_files + 1) * sizeof(char *));
+             if (!opts->config_files) {
+diff --git a/unl0kr/command_line.h b/unl0kr/command_line.h
+index fcbfbfa..f0e234e 100644
+--- a/unl0kr/command_line.h
++++ b/unl0kr/command_line.h
+@@ -25,6 +25,11 @@ typedef struct {
+     const char *message;
+     /* Placeholder text of the password field */
+     const char *placeholder;
++    /* Title of the shutdown confirmation */
++    const char *shutdown_title;
++    /* Labels of the buttons that confirm and decline the shutdown */
++    const char *shutdown_yes;
++    const char *shutdown_no;
+     bool newline;
+ } ul_cli_opts;
+ 
+diff --git a/unl0kr/main.c b/unl0kr/main.c
+index 06abb2a..dc26b8b 100644
+--- a/unl0kr/main.c
++++ b/unl0kr/main.c
+@@ -307,10 +307,10 @@ static void layout_dropdown_value_changed_cb(lv_event_t *event) {
+ static void shutdown_btn_clicked_cb(lv_event_t *event) {
+     LV_UNUSED(event);
+     lv_obj_t *mbox = lv_msgbox_create(NULL);
+-    lv_msgbox_add_title(mbox, "Shutdown device?");
+-    lv_obj_t *confirm_btn = lv_msgbox_add_footer_button(mbox, "Yes");
++    lv_msgbox_add_title(mbox, cli_opts.shutdown_title);
++    lv_obj_t *confirm_btn = lv_msgbox_add_footer_button(mbox, cli_opts.shutdown_yes);
+     lv_obj_add_event_cb(confirm_btn, shutdown_mbox_confirmed_cb, LV_EVENT_CLICKED, NULL);
+-    lv_obj_t *decline_btn = lv_msgbox_add_footer_button(mbox, "No");
++    lv_obj_t *decline_btn = lv_msgbox_add_footer_button(mbox, cli_opts.shutdown_no);
+     lv_obj_add_event_cb(decline_btn, shutdown_mbox_declined_cb, LV_EVENT_CLICKED, NULL);
+     lv_obj_set_size(mbox, 400, LV_SIZE_CONTENT);
+     lv_obj_center(mbox);
+-- 
+2.55.0
+

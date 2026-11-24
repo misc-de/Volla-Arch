@@ -1,0 +1,169 @@
+From 8a93fb0017da9517fbd467e7319a619e2cdf4958 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 09:04:02 +0100
+Subject: [PATCH 2/2] contact-provider: Follow address books that appear or go
+ away
+
+Chatty runs from the start of the session and looked at the address books
+once. Those of an online account come later, so its contacts could not be
+selected until Chatty was restarted.
+---
+ src/chatty-contact-provider.c | 87 ++++++++++++++++++++++++++++++++---
+ 1 file changed, 80 insertions(+), 7 deletions(-)
+
+diff --git a/src/chatty-contact-provider.c b/src/chatty-contact-provider.c
+index 72e9bf38..6720a626 100644
+--- a/src/chatty-contact-provider.c
++++ b/src/chatty-contact-provider.c
+@@ -37,6 +37,9 @@ struct _ChattyEds
+ 
+   ESourceRegistry  *source_registry;
+   GCancellable     *cancellable;
++  /* The connections of one round of loading the address books */
++  GCancellable     *load_cancellable;
++  guint             reload_id;
+ 
+   /* contacts to be saved to contacts_list */
+   GPtrArray        *contacts_array;
+@@ -388,8 +391,9 @@ chatty_eds_client_connected_cb (GObject      *object,
+ 
+   client = e_book_client_connect_finish (result, &error);
+ 
++  /* There is no client to name when it failed, for example when a new round of loading began */
+   g_debug ("Loading eds, getting ebook client '%s' %s",
+-           e_source_get_display_name (e_client_get_source (client)),
++           client ? e_source_get_display_name (e_client_get_source (client)) : "",
+            CHATTY_LOG_SUCESS (!error));
+ 
+   if (!error)
+@@ -420,7 +424,7 @@ chatty_eds_client_connected_cb (GObject      *object,
+ 
+   e_book_client_get_view (E_BOOK_CLIENT (client),
+                           sexp,
+-                          NULL,
++                          self->load_cancellable,
+                           chatty_eds_get_view_cb,
+                           g_object_ref (self));
+   g_clear_object (&client);
+@@ -440,12 +444,15 @@ chatty_eds_load_contacts (ChattyEds *self)
+ 
+   for (GList *l = sources; l != NULL; l = l->next)
+     {
++      if (!e_source_registry_check_enabled (self->source_registry, l->data))
++        continue;
++
+       g_debug ("Loading eds source: %s", e_source_get_display_name (l->data));
+ 
+       self->providers_to_load++;
+       e_book_client_connect (l->data,
+                              -1,    /* timeout seconds */
+-                             NULL,
++                             self->load_cancellable,
+                              chatty_eds_client_connected_cb,
+                              g_object_ref (self));
+     }
+@@ -453,6 +460,50 @@ chatty_eds_load_contacts (ChattyEds *self)
+   g_list_free_full (sources, g_object_unref);
+ }
+ 
++static gboolean
++chatty_eds_reload_cb (gpointer user_data)
++{
++  ChattyEds *self = user_data;
++
++  g_assert (CHATTY_IS_EDS (self));
++
++  self->reload_id = 0;
++
++  g_debug ("Loading eds again, the address books changed");
++
++  g_cancellable_cancel (self->load_cancellable);
++  g_clear_object (&self->load_cancellable);
++  self->load_cancellable = g_cancellable_new ();
++
++  g_clear_pointer (&self->contacts_array, g_ptr_array_unref);
++  g_list_store_remove_all (self->eds_view_list);
++  g_list_store_remove_all (self->contacts_list);
++
++  chatty_eds_load_contacts (self);
++
++  return G_SOURCE_REMOVE;
++}
++
++/*
++ * Chatty runs from the start of the session. An online account brings its address books later:
++ * when it is added, or once the network is up. Which contacts belong to a book that went away
++ * is not recorded, so everything is loaded again. A new account brings several books within
++ * moments, which is why it waits until they have stopped coming.
++ */
++static void
++chatty_eds_source_changed_cb (ChattyEds *self,
++                              ESource   *source)
++{
++  g_assert (CHATTY_IS_EDS (self));
++  g_assert (E_IS_SOURCE (source));
++
++  if (!e_source_has_extension (source, E_SOURCE_EXTENSION_ADDRESS_BOOK))
++    return;
++
++  g_clear_handle_id (&self->reload_id, g_source_remove);
++  self->reload_id = g_timeout_add_seconds (2, chatty_eds_reload_cb, self);
++}
++
+ 
+ static void
+ chatty_eds_registry_new_finish_cb (GObject      *object,
+@@ -468,10 +519,28 @@ chatty_eds_registry_new_finish_cb (GObject      *object,
+ 
+   g_debug ("Loading eds, get source registry %s", CHATTY_LOG_SUCESS (!error));
+ 
+-  if (!error)
+-    chatty_eds_load_contacts (self);
+-  else if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+-    g_warning ("Error: %s", error->message);
++  if (error)
++    {
++      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        g_warning ("Error: %s", error->message);
++
++      return;
++    }
++
++  g_signal_connect_object (self->source_registry, "source-added",
++                           G_CALLBACK (chatty_eds_source_changed_cb), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (self->source_registry, "source-removed",
++                           G_CALLBACK (chatty_eds_source_changed_cb), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (self->source_registry, "source-enabled",
++                           G_CALLBACK (chatty_eds_source_changed_cb), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (self->source_registry, "source-disabled",
++                           G_CALLBACK (chatty_eds_source_changed_cb), self,
++                           G_CONNECT_SWAPPED);
++
++  chatty_eds_load_contacts (self);
+ }
+ 
+ 
+@@ -545,6 +614,9 @@ chatty_eds_finalize (GObject *object)
+ {
+   ChattyEds *self = (ChattyEds *)object;
+ 
++  g_clear_handle_id (&self->reload_id, g_source_remove);
++  g_cancellable_cancel (self->load_cancellable);
++  g_clear_object (&self->load_cancellable);
+   g_cancellable_cancel (self->cancellable);
+   g_clear_object (&self->cancellable);
+   g_clear_object (&self->eds_view_list);
+@@ -605,6 +677,7 @@ chatty_eds_init (ChattyEds *self)
+   self->eds_view_list = g_list_store_new (E_TYPE_BOOK_CLIENT_VIEW);
+   self->contacts_list = g_list_store_new (CHATTY_TYPE_CONTACT);
+   self->cancellable = g_cancellable_new ();
++  self->load_cancellable = g_cancellable_new ();
+ }
+ 
+ 
+-- 
+2.56.0
+

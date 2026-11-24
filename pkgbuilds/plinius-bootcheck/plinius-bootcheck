@@ -1,0 +1,247 @@
+#!/bin/bash
+# Detects changes to the boot chain (docs/SICHERHEIT.md, "Manipulation erkennen").
+# The bootloader stays unlocked: whoever holds the phone can swap kernel and initramfs,
+# e.g. to capture the encryption password. That cannot be prevented, but it is noticed
+# after the next boot.
+#
+# Only what starts this installation is judged: the partitions of the active slot (the other
+# slot holds the Volla OS of the delivery) and, on a boot menu card, the entries that start the
+# system on the phone's storage. Entries for systems on card partitions are left alone.
+#
+# Usage: plinius-bootcheck check | accept [--written] [PATH...] | status
+#   check   compare checksums with the reference state (plinius-bootcheck.service at boot).
+#           New list entries are recorded without an alarm, dropped ones removed silently.
+#           Exception: a new own entry on the boot menu card raises the alarm, since it would
+#           start this system with a kernel and ramdisk of its own.
+#   accept  take the current state as reference; without PATH for all entries (as root).
+#           Packages that write boot partitions call this only for their own paths, with
+#           --written: then a path that this start already reported as changed is kept as an
+#           alarm (the changed content has run), the user confirms it.
+#           "abm-entry:NAME" stands for the card entry NAME with the files it names.
+#   status  result of the last check
+# Exit status: 0 unchanged, 1 error, 2 changed
+#
+# What is checked is defined by the lists in /usr/lib/plinius-bootcheck.d/*.list (device
+# package): one path per line (file or block device), shell globs allowed, "#" for comments.
+# "@slot" in a path is the active slot's suffix (_a or _b). A line "abm DEVICE" names the
+# partition of the boot menu (Android Boot Manager); its own entries count as "abm:/PATH".
+set -euo pipefail
+
+LISTS=/usr/lib/plinius-bootcheck.d
+STATE=/var/lib/plinius-bootcheck
+REF=$STATE/reference
+RUN=/run/plinius-bootcheck
+
+die() { echo "plinius-bootcheck: $*" >&2; exit 1; }
+
+# The active slot ("_a" or "_b"). A start from a card entry may come without bootconfig,
+# so the slot of the last normal start is remembered.
+slot() {
+	local s
+	s=$(sed -n 's/^androidboot.slot_suffix = "\(_[ab]\)"$/\1/p' /proc/bootconfig 2>/dev/null || true)
+	if [[ $s == _[ab] ]]; then
+		if [[ $(cat "$STATE/slot" 2>/dev/null) != "$s" && $(id -u) -eq 0 ]]; then
+			install -d -m755 "$STATE"
+			echo "$s" > "$STATE/slot.new" && mv -f "$STATE/slot.new" "$STATE/slot"
+		fi
+	else
+		s=$(cat "$STATE/slot" 2>/dev/null || true)
+	fi
+	[[ $s == _[ab] ]] || return 1
+	echo "$s"
+}
+
+# Fills "files" (paths from the lists; a glob without matches stays as a literal path, then
+# counts as missing) and "card" (boot menu partition, empty without an abm line)
+read_lists() {
+	local list p rest s=
+	files=() card=
+	shopt -s nullglob
+	for list in "$LISTS"/*.list; do
+		while read -r p rest; do
+			[[ -z $p || $p == \#* ]] && continue
+			if [[ $p == abm ]]; then
+				[[ -n $card ]] || card=${rest%%[[:space:]]*}
+				continue
+			fi
+			if [[ $p == *@slot* ]]; then
+				# Without the slot an unchecked entry would vanish from the reference: stop instead
+				[[ -n $s ]] || s=$(slot) || die "active slot unknown (androidboot.slot_suffix in /proc/bootconfig)"
+				p=${p//@slot/$s}
+			fi
+			# Unquoted: globs like lk_? are meant to expand
+			# shellcheck disable=SC2206
+			local m=($p)
+			((${#m[@]})) || m=("$p")
+			files+=("${m[@]}")
+		done < "$list"
+	done
+	shopt -u nullglob
+	((${#files[@]})) || return 0
+	mapfile -t files < <(printf '%s\n' "${files[@]}" | sort -u)
+}
+
+# --- boot menu card, read with debugfs: no mount, read-only, the menu's files stay untouched ---
+card_cat() { debugfs -c -R "cat $1" "$card" 2>/dev/null; }
+card_has() { debugfs -c -R "stat $1" "$card" 2>/dev/null | grep -q '^Inode:'; }
+card_ok() { [[ -n $card && -b $card ]] && card_has /db/entries; }
+
+# The files an entry starts with (linux, initrd, dtb, logo; relative to the card's root)
+entry_files() {
+	awk '$1 == "linux" || $1 == "initrd" || $1 == "dtb" || $1 == "logo" { print "abm:/" $2 }'
+}
+
+# Own entries start the system on the phone's storage: "xpart real" (plinius-kernel's trial and
+# fallback entries) or no xpart at all (real.conf, which starts the active slot). Entries with
+# "xpart N:M" start systems on card partitions and are not judged; db/removed is not read.
+# Prints "abm:/PATH" for each own entry file and the files it names.
+card_paths() {
+	local e conf xpart
+	while read -r e; do
+		[[ $e == *.conf ]] || continue
+		conf=$(card_cat "/db/entries/$e")
+		xpart=$(awk '$1 == "xpart" { print $2; exit }' <<< "$conf")
+		[[ -z $xpart || $xpart == real ]] || continue
+		echo "abm:/db/entries/$e"
+		entry_files <<< "$conf"
+	done < <(debugfs -c -R 'ls -p /db/entries' "$card" 2>/dev/null | cut -d/ -f6)
+}
+
+# All paths to check: the lists (read_lists first, in this shell, so that its errors stop the
+# run), plus the own card entries when the card is there
+all_paths() {
+	{
+		((${#files[@]} == 0)) || printf '%s\n' "${files[@]}"
+		! card_ok || card_paths
+	} | sort -u
+}
+
+# "HASH  PATH" per path; "-" for missing ones
+hashes() {
+	local p
+	for p; do
+		if [[ $p == abm:* ]]; then
+			if card_has "${p#abm:}"; then
+				printf '%s  %s\n' "$(card_cat "${p#abm:}" | sha256sum | cut -d' ' -f1)" "$p"
+			else
+				printf '%s  %s\n' - "$p"
+			fi
+		elif [[ -e $p ]]; then
+			printf '%s  %s\n' "$(sha256sum < "$p" | cut -d' ' -f1)" "$p"
+		else
+			printf '%s  %s\n' - "$p"
+		fi
+	done
+}
+
+# Write the reference from stdin, sorted by path, atomically
+save_ref() {
+	install -d -m755 "$STATE"
+	sort -k2 > "$REF.new"
+	mv -f "$REF.new" "$REF"
+}
+
+cmd=${1:-}
+shift || true
+case $cmd in
+check)
+	(($# == 0)) || die "usage: plinius-bootcheck check"
+	mkdir -p "$RUN"
+	rm -f "$RUN/changed" "$RUN/done"
+	read_lists
+	mapfile -t list < <(all_paths)
+	[[ ${list[*]:-} ]] || { echo "plinius-bootcheck: no lists in $LISTS, nothing to check"; touch "$RUN/done"; exit 0; }
+	now=$(hashes "${list[@]}")
+	if [[ ! -s $REF ]]; then
+		save_ref <<< "$now"
+		echo "plinius-bootcheck: no reference yet, recorded the current state (${#list[@]} entries)"
+		touch "$RUN/done"
+		exit 0
+	fi
+	# Without the card its entries keep their reference (taking the card out is no change)
+	if ! card_ok; then
+		kept=$(awk '$2 ~ /^abm:/' "$REF")
+		[[ -z $kept ]] || now+=$'\n'$kept
+	fi
+	# Only paths in both the reference and the lists can raise an alarm, and new own card
+	# entries once the card is known
+	changed=$(awk 'NR == FNR { ref[$2] = $1; if ($2 ~ /^abm:/) card = 1; next }
+		(($2 in ref) ? ref[$2] != $1 : (card && $2 ~ /^abm:/)) { print $2 }' "$REF" - <<< "$now")
+	added=$(awk 'NR == FNR { ref[$2] = 1; next } !($2 in ref) { print $2 }' "$REF" - <<< "$now")
+	# Reference: changed entries keep the old value and new card entries stay out (the alarm
+	# stays until "accept"), other new ones are added, dropped ones go away
+	alarm=$changed awk 'BEGIN { n = split(ENVIRON["alarm"], a, "\n"); for (i = 1; i <= n; i++) skip[a[i]] = 1 }
+		NR == FNR { ref[$2] = $1; next }
+		($2 in ref) { print ref[$2] "  " $2; next }
+		!($2 in skip) { print $1 "  " $2 }' "$REF" - <<< "$now" | save_ref
+	[[ -z $changed || -z $added ]] || added=$(grep -vxF -f <(printf '%s\n' "$changed") <<< "$added" || true)
+	[[ -z $added ]] || echo "plinius-bootcheck: new entries recorded: $(tr '\n' ' ' <<< "$added")"
+	if [[ -n $changed ]]; then
+		printf '%s\n' "$changed" > "$RUN/changed"
+		touch "$RUN/done"
+		echo "plinius-bootcheck: CHANGED since the last accepted state: $(tr '\n' ' ' <<< "$changed")" >&2
+		exit 2
+	fi
+	touch "$RUN/done"
+	echo "plinius-bootcheck: unchanged (${#list[@]} entries)"
+	;;
+accept)
+	[[ $(id -u) -eq 0 ]] || die "must run as root"
+	written=
+	if [[ ${1:-} == --written ]]; then written=1; shift; fi
+	read_lists
+	mapfile -t list < <(all_paths)
+	if (($#)); then
+		all=$(printf '%s\n' "${list[@]}")
+		want=()
+		for p; do
+			if [[ $p == abm-entry:* ]]; then
+				card_ok || die "no boot menu card for $p"
+				conf=/db/entries/${p#abm-entry:}.conf
+				card_has "$conf" || die "no entry ${p#abm-entry:} on the card"
+				want+=("abm:$conf")
+				mapfile -t -O "${#want[@]}" want < <(card_cat "$conf" | entry_files)
+			else
+				want+=("$p")
+			fi
+		done
+		set --
+		for p in "${want[@]}"; do
+			grep -qxF -- "$p" <<< "$all" || die "not in the lists: $p"
+			if [[ -n $written && -s $RUN/changed ]] && grep -qxF -- "$p" "$RUN/changed"; then
+				echo "plinius-bootcheck: $p was reported as changed at this start, left for the user to confirm" >&2
+				continue
+			fi
+			set -- "$@" "$p"
+		done
+		(($#)) || exit 0
+		new=$(hashes "$@")
+	else
+		new=$(hashes "${list[@]}")
+	fi
+	# Replace the accepted paths, keep the other entries
+	{ [[ ! -s $REF ]] || awk 'NR == FNR { skip[$2] = 1; next } !($2 in skip)' - "$REF" <<< "$new"
+	  printf '%s\n' "$new"; } | save_ref
+	if [[ -s $RUN/changed ]]; then
+		grep -vxF -f <(cut -d' ' -f3- <<< "$new") "$RUN/changed" > "$RUN/changed.new" || true
+		mv -f "$RUN/changed.new" "$RUN/changed"
+		[[ -s $RUN/changed ]] || rm -f "$RUN/changed"
+	fi
+	echo "plinius-bootcheck: accepted $(wc -l <<< "$new") entries"
+	;;
+status)
+	(($# == 0)) || die "usage: plinius-bootcheck status"
+	if [[ ! -e $RUN/done ]]; then
+		echo "not checked yet"
+	elif [[ -s $RUN/changed ]]; then
+		echo "changed since the last accepted state:"
+		sed 's/^/  /' "$RUN/changed"
+		exit 2
+	else
+		echo "unchanged"
+	fi
+	;;
+*)
+	die "usage: plinius-bootcheck check | accept [--written] [PATH...] | status"
+	;;
+esac

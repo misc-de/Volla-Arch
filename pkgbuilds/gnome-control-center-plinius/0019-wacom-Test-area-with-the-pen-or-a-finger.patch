@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 07:54:34 +0100
+Subject: [PATCH] wacom: Test area with the pen or a finger
+
+Plinius: the test area of Graphics Tablets only reacts to a pen, so a phone
+without its pen could not draw there. A Pen/Finger switch on top of it
+makes it draw with a finger (or the mouse) as well, as a plain line
+without pressure. The area is 300 px wide instead of 400, which did not
+fit every phone.
+---
+ panels/wacom/cc-drawing-area.c  | 49 +++++++++++++++++++++++++++++++++
+ panels/wacom/cc-drawing-area.h  |  1 +
+ panels/wacom/cc-wacom-panel.blp |  3 +-
+ panels/wacom/cc-wacom-panel.c   | 29 +++++++++++++++++++
+ 4 files changed, 81 insertions(+), 1 deletion(-)
+
+diff --git a/panels/wacom/cc-drawing-area.c b/panels/wacom/cc-drawing-area.c
+index 3b090c9fc..be993c2e1 100644
+--- a/panels/wacom/cc-drawing-area.c
++++ b/panels/wacom/cc-drawing-area.c
+@@ -26,6 +26,9 @@ typedef struct _CcDrawingArea CcDrawingArea;
+ struct _CcDrawingArea {
+     GtkDrawingArea parent;
+     GtkGesture *stylus_gesture;
++    /* Plinius: drawing with a finger, for a phone without a pen */
++    GtkGesture *finger_gesture;
++    double finger_x, finger_y;
+     cairo_surface_t *surface;
+     cairo_t *cr;
+ };
+@@ -152,6 +155,46 @@ stylus_motion_cb (CcDrawingArea *area, double x, double y, GtkGestureStylus *ges
+     gtk_widget_queue_draw (GTK_WIDGET (area));
+ }
+ 
++/* Plinius: a finger has no pressure, so a plain line */
++static void
++finger_begin_cb (CcDrawingArea *area, double x, double y)
++{
++    area->finger_x = x;
++    area->finger_y = y;
++    cairo_new_path (area->cr);
++    cairo_move_to (area->cr, x, y);
++}
++
++static void
++finger_update_cb (CcDrawingArea *area, double offset_x, double offset_y)
++{
++    double x = area->finger_x + offset_x, y = area->finger_y + offset_y;
++
++    cairo_set_line_width (area->cr, 4);
++    cairo_set_operator (area->cr, CAIRO_OPERATOR_OVER);
++    cairo_set_source_rgba (area->cr, 0, 0, 0, 1);
++    cairo_line_to (area->cr, x, y);
++    cairo_stroke (area->cr);
++    cairo_move_to (area->cr, x, y);
++
++    gtk_widget_queue_draw (GTK_WIDGET (area));
++}
++
++/**
++ * cc_drawing_area_set_finger_mode:
++ * @finger: %TRUE to draw with a finger (or the mouse), %FALSE with the pen only
++ *
++ * Plinius: the test area of a phone without a pen can be tried with a finger.
++ */
++void
++cc_drawing_area_set_finger_mode (CcDrawingArea *area, gboolean finger)
++{
++    gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (area->finger_gesture),
++                                                finger ? GTK_PHASE_BUBBLE : GTK_PHASE_NONE);
++    gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (area->stylus_gesture),
++                                                finger ? GTK_PHASE_NONE : GTK_PHASE_BUBBLE);
++}
++
+ static void
+ cc_drawing_area_class_init (CcDrawingAreaClass *klass)
+ {
+@@ -169,6 +212,12 @@ cc_drawing_area_init (CcDrawingArea *area)
+     g_signal_connect_swapped (area->stylus_gesture, "down", G_CALLBACK (stylus_down_cb), area);
+     g_signal_connect_swapped (area->stylus_gesture, "motion", G_CALLBACK (stylus_motion_cb), area);
+     gtk_widget_add_controller (GTK_WIDGET (area), GTK_EVENT_CONTROLLER (area->stylus_gesture));
++
++    area->finger_gesture = gtk_gesture_drag_new ();
++    g_signal_connect_swapped (area->finger_gesture, "drag-begin", G_CALLBACK (finger_begin_cb), area);
++    g_signal_connect_swapped (area->finger_gesture, "drag-update", G_CALLBACK (finger_update_cb), area);
++    gtk_widget_add_controller (GTK_WIDGET (area), GTK_EVENT_CONTROLLER (area->finger_gesture));
++    cc_drawing_area_set_finger_mode (area, FALSE);
+ }
+ 
+ GtkWidget *
+diff --git a/panels/wacom/cc-drawing-area.h b/panels/wacom/cc-drawing-area.h
+index 4c8606c85..ce46a1290 100644
+--- a/panels/wacom/cc-drawing-area.h
++++ b/panels/wacom/cc-drawing-area.h
+@@ -26,5 +26,6 @@ G_BEGIN_DECLS
+ #define CC_TYPE_DRAWING_AREA (cc_drawing_area_get_type ())
+ G_DECLARE_FINAL_TYPE (CcDrawingArea, cc_drawing_area, CC, DRAWING_AREA, GtkDrawingArea);
+ GtkWidget *cc_drawing_area_new (void);
++void cc_drawing_area_set_finger_mode (CcDrawingArea *area, gboolean finger);
+ 
+ G_END_DECLS
+diff --git a/panels/wacom/cc-wacom-panel.blp b/panels/wacom/cc-wacom-panel.blp
+index 60f2e283b..ae4165375 100644
+--- a/panels/wacom/cc-wacom-panel.blp
++++ b/panels/wacom/cc-wacom-panel.blp
+@@ -68,8 +68,9 @@ Popover test_popover {
+     spacing: 6;
+     orientation: vertical;
+ 
++    // Plinius: 400 px do not fit every phone; a Pen/Finger switch goes on top (cc-wacom-panel.c)
+     $CcDrawingArea test_draw_area {
+-      width-request: 400;
++      width-request: 300;
+       height-request: 300;
+     }
+   }
+diff --git a/panels/wacom/cc-wacom-panel.c b/panels/wacom/cc-wacom-panel.c
+index 9fcec4d70..190cb4bc3 100644
+--- a/panels/wacom/cc-wacom-panel.c
++++ b/panels/wacom/cc-wacom-panel.c
+@@ -22,6 +22,7 @@
+ #include <config.h>
+ 
+ #include <glib/gi18n-lib.h>
++#include <adwaita.h>
+ #include <gtk/gtk.h>
+ #include <string.h>
+ 
+@@ -654,6 +655,33 @@ got_input_mapping_proxy_cb (GObject *source_object, GAsyncResult *res, gpointer
+     }
+ }
+ 
++/* Plinius: the test area draws with the pen or, for a phone without one, with a finger */
++static void
++on_test_mode_changed (CcWacomPanel *self, GParamSpec *pspec, AdwToggleGroup *group)
++{
++    cc_drawing_area_set_finger_mode (CC_DRAWING_AREA (self->test_draw_area),
++                                     g_strcmp0 (adw_toggle_group_get_active_name (group), "finger") == 0);
++}
++
++static void
++add_test_mode_switch (CcWacomPanel *self)
++{
++    GtkWidget *group = adw_toggle_group_new ();
++    AdwToggle *pen = adw_toggle_new (), *finger = adw_toggle_new ();
++
++    adw_toggle_set_name (pen, "pen");
++    adw_toggle_set_label (pen, g_dgettext ("plinius-control-center", "Pen"));
++    adw_toggle_set_name (finger, "finger");
++    adw_toggle_set_label (finger, g_dgettext ("plinius-control-center", "Finger"));
++    adw_toggle_group_add (ADW_TOGGLE_GROUP (group), pen);
++    adw_toggle_group_add (ADW_TOGGLE_GROUP (group), finger);
++    adw_toggle_group_set_active_name (ADW_TOGGLE_GROUP (group), "pen");
++    adw_toggle_group_set_homogeneous (ADW_TOGGLE_GROUP (group), TRUE);
++    g_signal_connect_object (group, "notify::active-name", G_CALLBACK (on_test_mode_changed), self,
++                             G_CONNECT_SWAPPED);
++    gtk_box_prepend (GTK_BOX (gtk_widget_get_parent (self->test_draw_area)), group);
++}
++
+ static void
+ cc_wacom_panel_init (CcWacomPanel *self)
+ {
+@@ -665,6 +693,7 @@ cc_wacom_panel_init (CcWacomPanel *self)
+     g_resources_register (cc_wacom_get_resource ());
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
++    add_test_mode_switch (self);
+ 
+     self->tablet_tool_map = cc_tablet_tool_map_new ();
+ 

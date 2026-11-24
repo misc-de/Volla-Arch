@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 09:50:46 +0100
+Subject: [PATCH] ofono_mms_modemmanager: carry the carrier settings into the
+ oFono MMS context
+
+Chatty sets the MMSC, the MMS APN and the proxy through ChangeSettings.
+They were only written to ~/.mms/modemmanager/mms, while mmsd reads them
+from the oFono MMS context: the next property change of the modem put
+the old values back, and nothing ever reached oFono. They are now set
+on the context, and a refusal from oFono is returned to the caller.
+
+The number Chatty asks for when the SIM does not carry one was not read
+back from that file either and was gone after every restart.
+
+A value of the wrong type is refused instead of being stored.
+---
+ main.py                        |  2 +-
+ mmsd/ofono_mms_modemmanager.py | 85 +++++++++++++++++++++++++++++-----
+ 2 files changed, 75 insertions(+), 12 deletions(-)
+
+diff --git a/main.py b/main.py
+index f57c034..8e066f4 100755
+--- a/main.py
++++ b/main.py
+@@ -317,7 +317,7 @@ class OfonoMMSManagerInterface(ServiceInterface):
+         global has_bus
+ 
+         if "/org/ofono/mms" not in self.ofono_mms_objects:
+-            self.ofono_mms_modemmanager_interface = OfonoMMSModemManagerInterface(self.ofono_interfaces, self.ofono_interface_props, self.mms_dir, path, self.verbose)
++            self.ofono_mms_modemmanager_interface = OfonoMMSModemManagerInterface(self.ofono_interfaces, self.ofono_interface_props, self.mms_dir, path, self.mms_set_properties, self.verbose)
+             self.session_bus.export('/org/ofono/mms', self.ofono_mms_modemmanager_interface)
+             await self.ofono_mms_modemmanager_interface.set_props()
+             self.ofono_mms_interfaces.append(self.ofono_mms_modemmanager_interface)
+diff --git a/mmsd/ofono_mms_modemmanager.py b/mmsd/ofono_mms_modemmanager.py
+index ccb1be3..316a055 100644
+--- a/mmsd/ofono_mms_modemmanager.py
++++ b/mmsd/ofono_mms_modemmanager.py
+@@ -3,21 +3,32 @@
+ 
+ from dbus_fast.service import ServiceInterface, method, dbus_property, signal
+ from dbus_fast.constants import PropertyAccess
+-from dbus_fast import Variant
++from dbus_fast import DBusError, Variant
+ 
+ from mmsd.logging import mmsd_print
+ 
++from configparser import ConfigParser, Error
+ from os.path import join, exists
+ import asyncio
+ 
++# The settings a client such as Chatty changes that live in the oFono MMS
++# context, by the name oFono gives them there. mmsd reads them back from the
++# context, so keeping them here only would lose them at the next change.
++CONTEXT_SETTINGS = {
++    'CarrierMMSC': 'MessageCenter',
++    'MMS_APN': 'AccessPointName',
++    'CarrierMMSProxy': 'MessageProxy',
++}
++
+ class OfonoMMSModemManagerInterface(ServiceInterface):
+-    def __init__(self, ofono_interfaces, ofono_interface_props, mms_dir, path, verbose=False):
++    def __init__(self, ofono_interfaces, ofono_interface_props, mms_dir, path, set_context_properties=None, verbose=False):
+         super().__init__('org.ofono.mms.ModemManager')
+         self.modem_name = path
+         mmsd_print("Initializing MMS modem manager interface", verbose)
+         self.verbose = verbose
+         self.ofono_interfaces = ofono_interfaces
+         self.ofono_interface_props = ofono_interface_props
++        self.set_context_properties = set_context_properties
+         self.mms_dir = mms_dir
+         self.mms_config_file = join(self.mms_dir, 'mms')
+         self.props = {
+@@ -29,6 +40,29 @@ class OfonoMMSModemManagerInterface(ServiceInterface):
+             'AutoProcessOnConnection': Variant('b', True),
+             'AutoProcessSMSWAP': Variant('b', True)
+         }
++        self.load_saved_settings()
++
++    def load_saved_settings(self):
++        """Many SIMs do not carry their own number, so Chatty asks for it and
++        sets ModemNumber; without reading it back it was gone after a restart.
++        The carrier settings come back as well for a modem without an MMS
++        context of its own, the context's values replace them otherwise."""
++        if not exists(self.mms_config_file):
++            return
++
++        config = ConfigParser(interpolation=None)
++        config.optionxform = str
++        try:
++            with open(self.mms_config_file, 'r', encoding='utf-8') as f:
++                config.read_file(f)
++        except (OSError, Error) as e:
++            mmsd_print(f"Failed to read {self.mms_config_file}: {e}", self.verbose)
++            return
++
++        for setting in ('ModemNumber', *CONTEXT_SETTINGS):
++            value = config.get('Modem Manager', setting, fallback='')
++            if value and value != 'NULL':
++                self.props[setting] = Variant('s', value)
+ 
+     async def set_props(self):
+         mmsd_print("Setting properties", self.verbose)
+@@ -105,20 +139,49 @@ class OfonoMMSModemManagerInterface(ServiceInterface):
+         mmsd_print("View settings", self.verbose)
+         return self.props
+ 
++    def checked_value(self, setting, value):
++        expected = self.props[setting].signature
++        if value.signature != expected:
++            raise DBusError('org.ofono.mms.Error.InvalidArguments',
++                            f"{setting} takes '{expected}', not '{value.signature}'")
++
++        # Chatty and mmsd-tng write "NULL" for an empty proxy or number
++        if expected == 's' and value.value == 'NULL' and setting in ('CarrierMMSProxy', 'ModemNumber'):
++            return Variant('s', '')
++        return value
++
++    async def change_settings(self, options):
++        changed = {}
++        for setting, value in options.items():
++            if setting not in self.props:
++                mmsd_print(f"Ignoring unknown setting {setting}", self.verbose)
++                continue
++            changed[setting] = self.checked_value(setting, value)
++
++        context = {CONTEXT_SETTINGS[setting]: value.value
++                   for setting, value in changed.items() if setting in CONTEXT_SETTINGS}
++        if context and self.set_context_properties:
++            try:
++                await self.set_context_properties(context)
++            except Exception as e:
++                mmsd_print(f"Failed to set {context} on the MMS context: {e}", self.verbose)
++                raise DBusError('org.ofono.mms.Error.Failed', f"oFono refused the MMS settings: {e}")
++
++        self.props.update(changed)
++        self.save_settings_to_file()
++        if context:
++            self.SettingsChanged(self.props['MMS_APN'].value, self.props['CarrierMMSC'].value,
++                                 self.props['CarrierMMSProxy'].value)
++
+     @method()
+-    def ChangeSettings(self, setting: 's', value: 'v'):
++    async def ChangeSettings(self, setting: 's', value: 'v'):
+         mmsd_print(f"Changing setting {setting} to {value}", self.verbose)
+-        if setting in self.props:
+-            self.props[setting] = value
+-            self.save_settings_to_file()
++        await self.change_settings({setting: value})
+ 
+     @method()
+-    def ChangeAllSettings(self, options: 'a{sv}'):
++    async def ChangeAllSettings(self, options: 'a{sv}'):
+         mmsd_print(f"Changing settings {options}", self.verbose)
+-        for setting, value in options.items():
+-            if setting in self.props:
+-                self.props[setting] = value
+-        self.save_settings_to_file()
++        await self.change_settings(options)
+ 
+     @method()
+     def ProcessMessageQueue(self):

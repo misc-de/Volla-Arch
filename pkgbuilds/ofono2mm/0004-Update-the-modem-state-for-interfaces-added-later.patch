@@ -1,0 +1,44 @@
+From c01013d560ffb0425a92f48f017e99cbe9f08076 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 15:29:45 +0100
+Subject: [PATCH] Update the modem state for interfaces added later
+
+When oFono adds an interface after the modem was exported (the SIM
+manager of a slot that comes up late at boot), its properties were read
+but the modem's state was not computed again. A modem without a SIM
+then stayed "disabled" instead of "failed: sim-missing", and clients
+such as GNOME Settings offered network settings for it.
+---
+ ofono2mm/mm_modem.py | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index 2e7eb5f..f276779 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -150,6 +150,13 @@ class MMModemInterface(ServiceInterface):
+             for bearer in self.bearers.values():
+                 await self.set_bearer_context(bearer)
+ 
++    async def add_late_ofono_interface(self, iface):
++        # An interface oFono adds after the modem was exported (e.g. SimManager of a SIM slot that
++        # comes up late): its properties arrive only now, so the modem's state must follow them.
++        # Otherwise a modem without a SIM stayed "disabled" instead of "sim-missing".
++        await self.add_ofono_interface(iface)
++        self.set_props()
++
+     async def remove_ofono_interface(self, iface):
+         if iface in self.ofono_interfaces:
+             self.ofono_interfaces.pop(iface)
+@@ -861,7 +868,7 @@ class MMModemInterface(ServiceInterface):
+         if name == "Interfaces":
+             for iface in varval.value:
+                 if not (iface in self.ofono_interfaces):
+-                    self.loop.create_task(self.add_ofono_interface(iface))
++                    self.loop.create_task(self.add_late_ofono_interface(iface))
+             for iface in self.ofono_interfaces:
+                 if not (iface in varval.value):
+                     self.loop.create_task(self.remove_ofono_interface(iface))
+-- 
+2.55.0
+

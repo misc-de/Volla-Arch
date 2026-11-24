@@ -1,0 +1,287 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 23:56:03 +0100
+Subject: [PATCH] osk: Hold the microphone key to dictate
+
+The microphone key only switched dictation on and off with a tap. Now it
+can also be held: the microphone opens at once on the press and goes
+off when the key is let go after 400 ms, 300 ms later so that the last
+syllable is not cut off. The service still recognizes the last words
+and their text goes to the field as before. A short tap works as it
+always did, and so does a tap while listening. Sliding off the key
+ends a hold.
+
+Action keys get to know their press and its cancellation through
+"<action>-press" and "<action>-cancel" in the `win` group, if present.
+
+A Stop() while the first Start() still activates the service found
+nobody (no auto start) and the microphone stayed open until the
+service's silence timeout. It is now sent once Start() is answered.
+---
+ src/pos-input-surface.c | 139 ++++++++++++++++++++++++++++++++++++++++++++----
+ src/pos-osk-widget.c    |  24 +++++++++
+ 2 files changed, 153 insertions(+), 10 deletions(-)
+
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index d6f65a4..adc1cb5 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -211,6 +211,13 @@ struct _PosInputSurface {
+   gboolean                    dictating;         /* microphone on (or being switched on) */
+   gboolean                    dictate_accept;    /* text may still go to the focused field */
+   gboolean                    dictate_vk_typed;  /* text typed via the virtual keyboard since start */
++  /* Holding the microphone key: listen until it is let go */
++  gboolean                    dictate_pressed;   /* the microphone key is down */
++  gboolean                    dictate_held;      /* this press switched the microphone on */
++  gint64                      dictate_press_time;
++  guint                       dictate_tail_id;   /* stop shortly after the key was let go */
++  gboolean                    dictate_start_pending; /* Start() not answered yet */
++  gboolean                    dictate_stop_pending;  /* send Stop() once Start() is answered */
+ };
+ 
+ 
+@@ -1720,22 +1727,38 @@ on_dictate_stop_done (GObject *source, GAsyncResult *res, gpointer data)
+ }
+ 
+ 
++static void
++dictate_send_stop (PosInputSurface *self)
++{
++  /* Text of the last utterance may still follow; it goes to the same field */
++  g_dbus_connection_call (self->session_bus, DICTATE_BUS_NAME, DICTATE_PATH, DICTATE_IFACE,
++                          "Stop", NULL, NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START, -1,
++                          NULL, on_dictate_stop_done, NULL);
++}
++
++
+ static void
+ dictate_stop (PosInputSurface *self)
+ {
++  g_clear_handle_id (&self->dictate_tail_id, g_source_remove);
++  self->dictate_held = FALSE;
++
+   if (!self->dictating)
+     return;
+ 
+   self->dictating = FALSE;
+-  g_cancellable_cancel (self->dictate_cancel);
+-  g_clear_object (&self->dictate_cancel);
+   set_dictation_active (self, FALSE);
+   /* The service follows with recognizing (last words) or idle; until then keep the key */
+   set_dictation_activity (self, self->dictate_activity);
+-  /* Text of the last utterance may still follow; it goes to the same field */
+-  g_dbus_connection_call (self->session_bus, DICTATE_BUS_NAME, DICTATE_PATH, DICTATE_IFACE,
+-                          "Stop", NULL, NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START, -1,
+-                          NULL, on_dictate_stop_done, NULL);
++  /*
++   * While the first Start() still activates the service, a Stop() without auto start
++   * would find nobody and the microphone stayed open: send it once Start() is answered.
++   */
++  if (self->dictate_start_pending) {
++    self->dictate_stop_pending = TRUE;
++    return;
++  }
++  dictate_send_stop (self);
+ }
+ 
+ 
+@@ -1747,12 +1770,22 @@ on_dictate_start_done (GObject *source, GAsyncResult *res, gpointer data)
+   g_autoptr (GError) err = NULL;
+ 
+   ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
+-  if (ret != NULL)
+-    return;
+-  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++  /* Cancelled only when the keyboard goes away */
++  if (ret == NULL && g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+     return;
+ 
+   self = POS_INPUT_SURFACE (data);
++  self->dictate_start_pending = FALSE;
++  if (ret != NULL) {
++    /* Stopped while the service was being started */
++    if (self->dictate_stop_pending) {
++      self->dictate_stop_pending = FALSE;
++      dictate_send_stop (self);
++    }
++    return;
++  }
++
++  self->dictate_stop_pending = FALSE;
+   g_warning ("Starting dictation failed: %s", err->message);
+   self->dictating = FALSE;
+   self->dictate_accept = FALSE;
+@@ -1774,6 +1807,12 @@ dictate_start (PosInputSurface *self)
+   set_dictation_active (self, TRUE);
+   /* Starting the service takes a moment: turn the arc until it tells its activity */
+   set_dictation_activity (self, "loading");
++  /* Switched off and on again before the service answered: the session is still the same */
++  if (self->dictate_start_pending) {
++    self->dictate_stop_pending = FALSE;
++    return;
++  }
++  self->dictate_start_pending = TRUE;
+   g_clear_object (&self->dictate_cancel);
+   self->dictate_cancel = g_cancellable_new ();
+   /* The first start activates the service; it loads the model while the user speaks */
+@@ -1783,18 +1822,95 @@ dictate_start (PosInputSurface *self)
+ }
+ 
+ 
++/*
++ * The microphone key can be tapped or held. A tap switches the microphone on until the
++ * next tap (or until the service stops by itself after a long silence). Holding the key
++ * listens while it is down: it starts at once on the press, and when the key is let go
++ * after DICTATE_HOLD_MS the microphone goes off. The service still recognizes the last
++ * words and their text goes to the field like that of a tap.
++ */
++#define DICTATE_HOLD_MS 400
++/* The last syllable often comes while the finger already leaves the key */
++#define DICTATE_HOLD_TAIL_MS 300
++
++static void
++on_dictate_tail_done (gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  self->dictate_tail_id = 0;
++  dictate_stop (self);
++}
++
++
++/* The microphone key went down (see pos_osk_widget_key_press_action()) */
++static void
++dictate_press_activated (GSimpleAction *action, GVariant *parameter, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  self->dictate_pressed = TRUE;
++  self->dictate_held = FALSE;
++
++  /* Grabbed again right after letting go: go on listening */
++  if (self->dictate_tail_id) {
++    g_clear_handle_id (&self->dictate_tail_id, g_source_remove);
++    self->dictate_held = TRUE;
++    self->dictate_press_time = g_get_monotonic_time ();
++    return;
++  }
++
++  /* A press while listening is a tap that switches off, on the release */
++  if (self->dictating || !self->dictate_shown)
++    return;
++
++  dictate_start (self);
++  self->dictate_held = self->dictating;
++  self->dictate_press_time = g_get_monotonic_time ();
++}
++
++
++/* The microphone key was let go, or activated without a press */
+ static void
+ dictate_activated (GSimpleAction *action, GVariant *parameter, gpointer data)
+ {
+   PosInputSurface *self = POS_INPUT_SURFACE (data);
++  gboolean pressed = self->dictate_pressed;
++
++  self->dictate_pressed = FALSE;
++
++  if (self->dictate_held) {
++    self->dictate_held = FALSE;
++    /* A short tap leaves the microphone on, as it always did */
++    if (self->dictating &&
++        g_get_monotonic_time () - self->dictate_press_time >= DICTATE_HOLD_MS * 1000) {
++      g_clear_handle_id (&self->dictate_tail_id, g_source_remove);
++      self->dictate_tail_id = g_timeout_add_once (DICTATE_HOLD_TAIL_MS, on_dictate_tail_done, self);
++    }
++    return;
++  }
+ 
+   if (self->dictating)
+     dictate_stop (self);
+-  else if (self->dictate_shown)
++  else if (self->dictate_shown && !pressed)
+     dictate_start (self);
+ }
+ 
+ 
++/* The finger slid off the microphone key: a hold ends there, a tap does not count */
++static void
++dictate_cancel_activated (GSimpleAction *action, GVariant *parameter, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++  gboolean held = self->dictate_held;
++
++  self->dictate_pressed = FALSE;
++  self->dictate_held = FALSE;
++  if (held)
++    dictate_stop (self);
++}
++
++
+ /* Different characters in one temporary keymap: it has room for about 200 keycodes */
+ #define DICTATE_VK_CHUNK 64
+ 
+@@ -2181,6 +2297,7 @@ pos_input_surface_finalize (GObject *object)
+   g_clear_object (&self->dictate_cancel);
+   g_clear_object (&self->dictate_settings);
+   g_clear_handle_id (&self->dictate_idle_id, g_source_remove);
++  g_clear_handle_id (&self->dictate_tail_id, g_source_remove);
+   g_clear_pointer (&self->dictate_activity, g_free);
+   g_clear_object (&self->session_bus);
+   g_clear_object (&self->clipboard_manager);
+@@ -2884,6 +3001,8 @@ static GActionEntry entries[] =
+   { .name = "menu", .parameter_type = "(ii)", .activate = menu_activated },
+   { .name = "speech-input", .state = "false", .change_state = speech_input_change_state },
+   { .name = "dictate", .activate = dictate_activated },
++  { .name = "dictate-press", .activate = dictate_press_activated },
++  { .name = "dictate-cancel", .activate = dictate_cancel_activated },
+ };
+ 
+ 
+diff --git a/src/pos-osk-widget.c b/src/pos-osk-widget.c
+index 2ae06db..bc7f951 100644
+--- a/src/pos-osk-widget.c
++++ b/src/pos-osk-widget.c
+@@ -1265,11 +1265,34 @@ pos_osk_widget_show_indicator_popup (PosOskWidget *self, PosOskKey *key)
+ }
+ 
+ 
++/*
++ * Keys of use ACTION may also want to know when they go down and when a press is
++ * cancelled (the finger slid off): then the `win` group has "<action>-press" and
++ * "<action>-cancel". The microphone key listens while held this way.
++ */
++static void
++activate_key_action_phase (PosOskWidget *self, PosOskKey *key, const char *phase)
++{
++  GActionGroup *group;
++  g_autofree char *name = NULL;
++
++  if (key == NULL || pos_osk_key_get_use (key) != POS_OSK_KEY_USE_ACTION ||
++      pos_osk_key_get_action_name (key) == NULL)
++    return;
++
++  group = gtk_widget_get_action_group (GTK_WIDGET (self), "win");
++  name = g_strdup_printf ("%s-%s", pos_osk_key_get_action_name (key), phase);
++  if (group != NULL && g_action_group_has_action (group, name))
++    g_action_group_activate_action (group, name, NULL);
++}
++
++
+ static void
+ pos_osk_widget_key_press_action (PosOskWidget *self, PosOskKey *key)
+ {
+   self->current = key;
+   pos_osk_widget_set_key_pressed (self, key, TRUE);
++  activate_key_action_phase (self, key, "press");
+ 
+   pos_osk_widget_show_indicator_popup (self, key);
+ 
+@@ -1426,6 +1449,7 @@ pos_osk_widget_cancel_press (PosOskWidget *self)
+   key_repeat_cancel (self);
+ 
+   pos_osk_widget_set_key_pressed (self, self->current, FALSE);
++  activate_key_action_phase (self, self->current, "cancel");
+   g_signal_emit (self, signals[OSK_KEY_CANCELLED], 0, pos_osk_key_get_symbol (self->current));
+   self->current = NULL;
+ 

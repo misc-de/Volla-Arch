@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 09:53:26 +0100
+Subject: [PATCH] routectld: host routes only, kept until the last client is
+ done
+
+routectld runs as root and added a route for whatever it was given: a
+prefix such as 0.0.0.0/0 took all traffic off the internet bearer and
+past a VPN onto the MMS one, until the next cleanup. It now takes up to
+16 single remote addresses (no loopback, link-local, multicast or
+unspecified ones).
+
+A fetch and a send can run at the same time, and the first cleanup took
+down the routes of the other; a failed setup removed every route as
+well. Successful setups are now counted, the routes go with the last
+cleanup, a failed setup removes only what it added, and routes a client
+left behind are removed after 20 minutes. The send path cleaned up after
+a setup that had failed; it no longer does.
+---
+ mmsd/ofono_mms_service.py |  7 +++-
+ routectld/routectld.py    | 78 ++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 78 insertions(+), 7 deletions(-)
+
+diff --git a/mmsd/ofono_mms_service.py b/mmsd/ofono_mms_service.py
+index e262345..dd1ee01 100644
+--- a/mmsd/ofono_mms_service.py
++++ b/mmsd/ofono_mms_service.py
+@@ -225,6 +225,9 @@ class OfonoMMSServiceInterface(ServiceInterface):
+ 
+     async def send_message(self, payload, uuid):
+         for _ in range(RESOLVE_ATTEMPTS):
++            # routectld counts its users: a cleanup without a setup would take
++            # down the routes of a fetch running at the same time
++            routes_up = False
+             try:
+                 mmsc = self.ofono_mms_modemmanager_interface.props['CarrierMMSC'].value
+                 proxy = self.ofono_mms_modemmanager_interface.props.get('CarrierMMSProxy', {}).value
+@@ -272,6 +275,7 @@ class OfonoMMSServiceInterface(ServiceInterface):
+                     mmsd_print("Failed to setup MMS routes, retrying...", self.verbose)
+                     await asyncio.sleep(RETRY_DELAY)
+                     continue
++                routes_up = True
+ 
+                 # payload is an array('B', [...]), convert it to bytes
+                 payload = payload if isinstance(payload, bytes) else payload.tobytes()
+@@ -328,7 +332,8 @@ class OfonoMMSServiceInterface(ServiceInterface):
+                     mmsd_print("All MMS addresses failed", self.verbose)
+                     break
+             finally:
+-                await cleanup_mms_routes()
++                if routes_up:
++                    await cleanup_mms_routes()
+ 
+         properties = {
+             'UUID': Variant('s', uuid),
+diff --git a/routectld/routectld.py b/routectld/routectld.py
+index a4fddf8..913cc5c 100755
+--- a/routectld/routectld.py
++++ b/routectld/routectld.py
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
+ 
+ import asyncio
++import ipaddress
+ import json
+ import sys
+ from argparse import ArgumentParser
+@@ -20,6 +21,25 @@ mmsd_dir = "/usr/lib/mmsd"
+ sys.path.insert(0, mmsd_dir)
+ 
+ CLATD_BEARER_MANAGER = "/usr/libexec/clatd-bearer-manager"
++# mmsd asks for the addresses of one MMSC or proxy and of one Content-Location
++MAX_ADDRESSES = 16
++# A client that dies between setup and cleanup must not leave its routes
++# behind. Longer than a fetch or send over three addresses with three tries
++# of 120 s each (1080 s)
++ROUTE_LIFETIME = 1200
++
++def host_address(value):
++    """A single remote host, nothing else: a prefix such as 0.0.0.0/0 would
++    move all traffic onto the MMS bearer, past a VPN."""
++    if not isinstance(value, str):
++        return None
++    try:
++        address = ipaddress.ip_address(value)
++    except ValueError:
++        return None
++    if address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local:
++        return None
++    return str(address)
+ 
+ from mmsd.logging import mmsd_print
+ 
+@@ -30,6 +50,10 @@ class MMSRouteController:
+         self.socket_path = environ.get("MMSD_ROUTECTL_SOCKET", "/run/mmsroutectl.sock")
+         self.ipr = pyroute2.IPRoute()
+         self.active_routes = []
++        # A fetch and a send can overlap; the routes stay until the last
++        # of them has cleaned up
++        self.users = 0
++        self.expiry = None
+ 
+     async def _run_clatd_bearer_manager(self):
+         if not (isfile(CLATD_BEARER_MANAGER) and access(CLATD_BEARER_MANAGER, X_OK)):
+@@ -89,6 +113,7 @@ class MMSRouteController:
+     async def setup_routes(self, interface: str, ips: List[str]) -> bool:
+         await self._run_clatd_bearer_manager()
+         mmsd_print(f"Setting up route for interface: {interface} with ips: {ips}", self.verbose)
++        added = []
+         try:
+             idx = self.ipr.link_lookup(ifname=interface)[0]
+             addrs = self.ipr.get_addr(index=idx)
+@@ -127,6 +152,7 @@ class MMSRouteController:
+                     try:
+                         self.ipr.route('add', **route)
+                         self.active_routes.append(route)
++                        added.append(route)
+                     except pyroute2.NetlinkError as e:
+                         if e.code != EEXIST:
+                             raise
+@@ -141,6 +167,7 @@ class MMSRouteController:
+                     try:
+                         self.ipr.route('add', **route)
+                         self.active_routes.append(route)
++                        added.append(route)
+                     except pyroute2.NetlinkError as e:
+                         if e.code != EEXIST:
+                             raise
+@@ -154,9 +181,40 @@ class MMSRouteController:
+             return ok
+         except Exception as e:
+             mmsd_print(f"Failed to setup routes: {e}", self.verbose)
+-            self.cleanup_routes()
++            # Only what this request added: another client may still use the rest
++            self.remove_routes(added)
+             return False
+ 
++    def remove_routes(self, routes):
++        for route in routes:
++            try:
++                self.ipr.route('del', **route)
++            except Exception as e:
++                mmsd_print(f"Failed to remove route: {e}", self.verbose)
++            if route in self.active_routes:
++                self.active_routes.remove(route)
++
++    def acquire(self):
++        self.users += 1
++        if self.expiry:
++            self.expiry.cancel()
++        self.expiry = asyncio.get_running_loop().call_later(ROUTE_LIFETIME, self.expire)
++
++    def release(self):
++        if self.users > 0:
++            self.users -= 1
++        if self.users == 0:
++            if self.expiry:
++                self.expiry.cancel()
++                self.expiry = None
++            self.cleanup_routes()
++
++    def expire(self):
++        mmsd_print(f"Routes still up after {ROUTE_LIFETIME}s, removing them", True)
++        self.expiry = None
++        self.users = 0
++        self.cleanup_routes()
++
+     def cleanup_routes(self):
+         mmsd_print("Cleaning up routes", self.verbose)
+         for route in self.active_routes:
+@@ -173,14 +231,22 @@ class MMSRouteController:
+             request = json.loads(data.decode())
+ 
+             if request['action'] == 'setup':
+-                ok = await self.setup_routes(
+-                    self._get_mms_interface(),
+-                    request['ips']
+-                )
++                ips = request.get('ips')
++                ok = False
++                if not isinstance(ips, list) or not 0 < len(ips) <= MAX_ADDRESSES:
++                    mmsd_print(f"Refusing a setup with {ips!r}", True)
++                else:
++                    addresses = [address for address in map(host_address, ips) if address]
++                    if len(addresses) != len(ips):
++                        mmsd_print(f"Refusing routes to {[ip for ip in ips if not host_address(ip)]}", True)
++                    if addresses:
++                        ok = await self.setup_routes(self._get_mms_interface(), addresses)
++                if ok:
++                    self.acquire()
+                 writer.write((json.dumps({'ok': ok}) + "\n").encode())
+                 await writer.drain()
+             elif request['action'] == 'cleanup':
+-                self.cleanup_routes()
++                self.release()
+ 
+             writer.close()
+         except Exception as e:

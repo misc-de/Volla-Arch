@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# AppArmor profile of the phone (plinius-apparmor), entered through AppArmorProfile= in the
+# service's systemd drop-in. Starting profile in complain mode: it logs what the service does
+# beyond these rules; the rules are completed from those messages (tools/aa-denials.sh) before
+# the profile goes to enforce. attach_disconnected: the services run in mount namespaces of
+# their own (ProtectSystem=, PrivateTmp=); without it AppArmor refuses their paths outside it,
+# even in complain mode ("Failed name lookup - disconnected path": no D-Bus, no journal).
+abi <abi/4.0>,
+include <tunables/global>
+
+# plinius-dnsfilter: DNS from the phone, its hotspot and USB clients, DoT/DoH upstream, list downloads
+# Enforced since 0.1-4: the rules below hold everything it did in complain mode over three boots
+# (11.–12.11.2026, 1351 messages: the raw sockets iptables talks to the kernel through).
+profile plinius.dnsfilter flags=(attach_disconnected) {
+  include <abstractions/base>
+  include <abstractions/nameservice-strict>
+  include <abstractions/openssl>
+  include <abstractions/ssl_certs>
+  # GnuTLS (glib-networking) finds the system trust through p11-kit's trust module. Missing from
+  # 0.1-4 to 0.1-7: "System trust contains zero trusted certificates", every list download (and
+  # any DoT/DoH upstream) failed on an unacceptable certificate (measured 2026-11-14)
+  include <abstractions/p11-kit>
+  include <abstractions/dbus-strict>
+  capability net_admin,
+  capability net_raw,
+  capability net_bind_service,
+  capability dac_read_search,
+  network inet dgram, network inet stream,
+  network inet6 dgram, network inet6 stream,
+  network netlink raw,
+  # iptables(-restore) reads and writes the tables through a raw socket
+  network inet raw, network inet6 raw,
+  /usr/bin/plinius-dnsfilter mr,
+  # iptables-legacy for its chains
+  /usr/bin/xtables-legacy-multi rix,
+  /usr/bin/ip{,6}tables-legacy{,-restore,-save} rix,
+  /run/xtables.lock rwk,
+  /var/lib/plinius-dnsfilter/{,**} rwk,
+  /run/plinius-dns/{,**} rw,
+  /var/lib/NetworkManager/ r,
+  /var/lib/NetworkManager/*.lease r,
+  # Names of hotspot clients: NetworkManager's dnsmasq leases (dnsmasq-ap0.leases); no client
+  # asked in complain mode, so *.lease above missed them
+  /var/lib/NetworkManager/dnsmasq-*.leases r,
+  /var/lib/misc/dnsmasq*.leases r,
+  # App of each query: sock_diag and cgroups
+  /sys/fs/cgroup/{,**} r,
+  @{PROC}/@{pid}/cgroup r,
+  @{PROC}/sys/net/** r,
+}

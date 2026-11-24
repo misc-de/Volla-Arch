@@ -1,0 +1,13 @@
+# New ramdisk scripts of plinius-crypt (boot-image makes scripts/halium and init-top): halium-rebuild
+# tries them like new programs, through a trial start from the memory card where the phone has one.
+# Only where the Halium ramdisk is in use (plinius-crypt-ramdisk brings the parts).
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/plinius-crypt/boot-image
+
+[Action]
+Description = Setting up the scripts of the password prompt...
+When = PostTransaction
+Exec = /bin/sh -c '[ -f /usr/lib/plinius-crypt/ramdisk/init.lz4 ] || exit 0; exec /usr/lib/plinius-crypt/halium-rebuild --update'

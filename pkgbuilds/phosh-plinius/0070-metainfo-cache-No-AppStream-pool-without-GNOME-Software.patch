@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 19:55:00 +0100
+Subject: [PATCH] metainfo-cache: No AppStream pool without GNOME Software
+
+The cache serves only the uninstall action of the app grid, and that
+action is offered only when gnome-software is installed. Still the pool
+was created at startup with the OS catalog, all Flatpak remotes and
+AS_POOL_FLAG_MONITOR.
+
+Every change of the AppStream data (a Flatpak appstream refresh, a
+package installing desktop or metainfo files) reloads the whole catalog.
+On a phone with Flathub configured each reload left about 60 MB in malloc
+arenas of the shell: after a few updates Phosh held about 1 GB.
+
+Without gnome-software the pool is not created at all and
+phosh_metainfo_get_data_id () returns NULL.
+---
+ src/metainfo-cache.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/metainfo-cache.c b/src/metainfo-cache.c
+index 7c494da5..71791736 100644
+--- a/src/metainfo-cache.c
++++ b/src/metainfo-cache.c
+@@ -88,6 +88,15 @@ phosh_metainfo_cache_constructed (GObject *object)
+ 
+   G_OBJECT_CLASS (phosh_metainfo_cache_parent_class)->constructed (object);
+ 
++  /* Only the uninstall action of the app grid uses the cache and it needs
++   * GNOME Software. Without it the pool would load the whole catalog of
++   * every Flatpak remote and reload it on each change of the AppStream
++   * data, keeping hundreds of MB in the shell for nothing. */
++  if (!phosh_util_have_gnome_software (FALSE)) {
++    g_debug ("No GNOME Software, not loading the metainfo pool");
++    return;
++  }
++
+   self->as_pool = as_pool_new ();
+   /* We only bother about metainfo in a non-system cache */
+   as_pool_set_flags (self->as_pool,
+@@ -189,6 +198,10 @@ phosh_metainfo_get_data_id (PhoshMetainfoCache *self, const char *app_id)
+ {
+   g_autoptr (AsComponentBox) result = NULL;
+ 
++  /* No pool without GNOME Software, see constructed () */
++  if (!self->as_pool)
++    return NULL;
++
+   result = as_pool_get_components_by_launchable (self->as_pool, AS_LAUNCHABLE_KIND_DESKTOP_ID,
+                                                  app_id);
+ 

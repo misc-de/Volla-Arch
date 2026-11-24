@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 08:30:00 +0100
+Subject: [PATCH 2/2] input-surface: Held backspace gets faster
+
+Holding backspace repeated at one speed after 0.7 s: a word every
+150 ms with an input method, a character every 50 ms without one. A
+long text took long to delete, and without an input method there was
+no way to go faster than character by character.
+
+Repeat after 0.5 s, calmly at first and faster over two seconds (eased
+in and out): characters from every 80 ms to every 30 ms, words from
+every 220 ms to every 90 ms. A few characters stay easy to hit, a long
+text goes in a few seconds.
+
+Without an input method only single characters can go. After three
+seconds the repeat moves on to Ctrl+Backspace, which GTK, Qt and
+browsers take as deleting the previous word, again speeding up from
+220 ms to 90 ms.
+---
+ src/pos-input-surface.c | 88 ++++++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 73 insertions(+), 15 deletions(-)
+
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index 34dc4cf..9527a07 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -47,9 +47,21 @@
+ 
+ #define MIN_Y_VELOCITY 1000
+ 
+-#define BS_KEY_REPEAT_DELAY 700
+-#define BS_KEY_REPEAT_INTERVAL_CHAR 50
+-#define BS_KEY_REPEAT_INTERVAL_WORD 150
++/*
++ * Holding backspace: after BS_KEY_REPEAT_DELAY it repeats, calmly at first and faster over
++ * BS_KEY_REPEAT_ACCEL_US, so a few characters stay easy to hit and a long text does not
++ * take ages. Intervals in ms, from the start of the repeat to its end of the acceleration.
++ * With an input method whole words go (BS_KEY_REPEAT_INTERVAL_WORD_*). Without one only
++ * single characters can go, so after BS_KEY_REPEAT_VK_WORDS_US it moves on to words with
++ * Ctrl+Backspace, which GTK, Qt and browsers take as "delete the previous word".
++ */
++#define BS_KEY_REPEAT_DELAY 500
++#define BS_KEY_REPEAT_INTERVAL_CHAR_START 80
++#define BS_KEY_REPEAT_INTERVAL_CHAR_END 30
++#define BS_KEY_REPEAT_INTERVAL_WORD_START 220
++#define BS_KEY_REPEAT_INTERVAL_WORD_END 90
++#define BS_KEY_REPEAT_ACCEL_US (2 * G_USEC_PER_SEC)
++#define BS_KEY_REPEAT_VK_WORDS_US (3 * G_USEC_PER_SEC)
+ 
+ /**
+  * POS_INPUT_SURFACE_IS_LANG_LAYOUT:
+@@ -170,6 +182,7 @@ struct _PosInputSurface {
+ 
+   /* Backspace handling */
+   guint                       bs_repeat_id;
++  gint64                      bs_repeat_start;   /* monotonic time the repeat started */
+   PosBackspaceMode            bs_mode;
+   char                       *surround_before;
+   /* layout-override */
+@@ -275,15 +288,66 @@ pos_input_surface_delete_last_word (PosInputSurface *self)
+ }
+ 
+ 
++/* Without an input method, held long enough: whole words via Ctrl+Backspace */
+ static gboolean
++bs_repeat_vk_words (PosInputSurface *self, gint64 held)
++{
++  return !pos_input_method_get_active (self->input_method) && held >= BS_KEY_REPEAT_VK_WORDS_US;
++}
++
++
++/* From start to end over BS_KEY_REPEAT_ACCEL_US after since, eased in and out */
++static guint
++bs_repeat_interval (gint64 held, gint64 since, guint start, guint end)
++{
++  double p = CLAMP ((held - since) / (double) BS_KEY_REPEAT_ACCEL_US, 0.0, 1.0);
++
++  p = p * p * (3.0 - 2.0 * p);
++  return (guint) (start + (end - (double) start) * p);
++}
++
++
++static void on_bs_key_repeat (gpointer data);
++
++static void
++schedule_bs_repeat (PosInputSurface *self)
++{
++  gint64 held = g_get_monotonic_time () - self->bs_repeat_start;
++  guint interval;
++
++  if (bs_repeat_vk_words (self, held)) {
++    interval = bs_repeat_interval (held, BS_KEY_REPEAT_VK_WORDS_US,
++                                   BS_KEY_REPEAT_INTERVAL_WORD_START,
++                                   BS_KEY_REPEAT_INTERVAL_WORD_END);
++  } else if (self->bs_mode == POS_BACKSPACE_MODE_WORD) {
++    interval = bs_repeat_interval (held, 0, BS_KEY_REPEAT_INTERVAL_WORD_START,
++                                   BS_KEY_REPEAT_INTERVAL_WORD_END);
++  } else {
++    interval = bs_repeat_interval (held, 0, BS_KEY_REPEAT_INTERVAL_CHAR_START,
++                                   BS_KEY_REPEAT_INTERVAL_CHAR_END);
++  }
++
++  self->bs_repeat_id = g_timeout_add_once (interval, on_bs_key_repeat, self);
++  g_source_set_name_by_id (self->bs_repeat_id, "[pos-bs-key-repeat]");
++}
++
++
++static void
+ on_bs_key_repeat (gpointer data)
+ {
+   PosInputSurface *self = data;
++  gint64 held = g_get_monotonic_time () - self->bs_repeat_start;
+ 
++  /* Schedule first: submitting backspace with no repeat pending would start a new one */
++  schedule_bs_repeat (self);
+   pos_input_surface_trigger_feedback (self, KEY_PRESS_EVENT);
+-  pos_input_surface_submit_symbol (self, "KEY_BACKSPACE");
+ 
+-  return G_SOURCE_CONTINUE;
++  if (bs_repeat_vk_words (self, held)) {
++    pos_vk_driver_key_down (self->keyboard_driver, "KEY_BACKSPACE", POS_KEYCODE_MODIFIER_CTRL);
++    pos_vk_driver_key_up (self->keyboard_driver, "KEY_BACKSPACE");
++    return;
++  }
++  pos_input_surface_submit_symbol (self, "KEY_BACKSPACE");
+ }
+ 
+ 
+@@ -291,19 +355,13 @@ static void
+ on_bs_long_press_timeout (gpointer data)
+ {
+   PosInputSurface *self = data;
+-  guint interval;
+ 
+-  if (pos_input_method_get_active (self->input_method)) {
+-    interval = BS_KEY_REPEAT_INTERVAL_WORD;
++  /* With an input method whole words go; without one single characters, faster */
++  if (pos_input_method_get_active (self->input_method))
+     pos_input_surface_set_backspace_mode (self, POS_BACKSPACE_MODE_WORD);
+-  } else {
+-    /* When no input method is active we delete individual chars which should
+-     * happen faster than deleting whole words */
+-    interval = BS_KEY_REPEAT_INTERVAL_CHAR;
+-  }
+ 
+-  self->bs_repeat_id = g_timeout_add (interval, on_bs_key_repeat, self);
+-  g_source_set_name_by_id (self->bs_repeat_id, "[pos-bs-key-repeat]");
++  self->bs_repeat_start = g_get_monotonic_time ();
++  schedule_bs_repeat (self);
+ }
+ 
+ 

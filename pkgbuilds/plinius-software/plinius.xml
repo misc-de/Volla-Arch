@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Apps from the [plinius] repository. Arch's catalog (archlinux-appstream-data) does not know
+     them; plinius-software shows an entry only while the repository has its package.
+     plinius-games and plinius-dos-installer come only through plinius-retro-games. -->
+<components version="1.0" origin="plinius">
+  <component type="desktop-application">
+    <id>org.plinius.RetroGames</id>
+    <pkgname>plinius-retro-games</pkgname>
+    <name>Retro Games</name>
+    <name xml:lang="de">Retro-Spiele</name>
+    <summary>Classic console and MS-DOS games with touch controls or a controller</summary>
+    <summary xml:lang="de">Klassische Konsolen- und MS-DOS-Spiele mit Touch-Steuerung oder Controller</summary>
+    <description>
+      <p>RetroArch, set up for the phone: a touch menu, an on-screen gamepad that hides when a controller is connected, and emulators for NES, SNES, Mega Drive, Game Boy, Game Boy Advance, PlayStation, Nintendo 64, Nintendo DS and Dreamcast. PPSSPP for the PSP comes along.</p>
+      <p>The DOS Installer comes with it: pick the game's floppy disk images, a CD image, a ZIP archive, a GOG installer or a folder, and it runs the game's installer in DOSBox, changes the disks by itself and puts the game into the app grid with its own icon. Adventures that ScummVM knows, such as Day of the Tentacle or Monkey Island, run in ScummVM with touch controls.</p>
+      <p>No games are included. Put your own game files in the Games folder in your home folder, and BIOS files in Games/bios.</p>
+    </description>
+    <description xml:lang="de">
+      <p>RetroArch, eingerichtet für das Telefon: ein Menü für Touch, ein Bildschirm-Gamepad, das sich bei verbundenem Controller ausblendet, und Emulatoren für NES, SNES, Mega Drive, Game Boy, Game Boy Advance, PlayStation, Nintendo 64, Nintendo DS und Dreamcast. PPSSPP für die PSP kommt mit.</p>
+      <p>Der DOS Installer ist dabei: Wähle die Diskettenabbilder des Spiels, ein CD-Abbild, ein ZIP-Archiv, einen GOG-Installer oder einen Ordner, dann startet er den Installer des Spiels in DOSBox, wechselt die Disketten von selbst und legt das Spiel mit seinem eigenen Icon in die App-Übersicht. Adventures, die ScummVM kennt, etwa Day of the Tentacle oder Monkey Island, laufen in ScummVM mit Touch-Bedienung.</p>
+      <p>Spiele sind nicht enthalten. Eigene Spieldateien gehören in den Ordner Games im persönlichen Ordner, BIOS-Dateien in Games/bios.</p>
+    </description>
+    <icon type="stock">applications-games-symbolic</icon>
+    <categories>
+      <category>Game</category>
+      <category>Emulator</category>
+    </categories>
+    <launchable type="desktop-id">org.plinius.Games.desktop</launchable>
+    <project_license>MIT</project_license>
+    <url type="homepage">https://plinius.cais.de</url>
+    <developer id="de.cais.plinius">
+      <name>misc-de</name>
+    </developer>
+    <content_rating type="oars-1.1"/>
+  </component>
+</components>

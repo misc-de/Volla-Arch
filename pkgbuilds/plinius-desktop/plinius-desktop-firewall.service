@@ -1,0 +1,13 @@
+# Applies the networks of the desktop over VNC (/etc/plinius-desktop.conf) at boot, before any
+# network is up. Started through the package's own link in multi-user.target.wants.
+[Unit]
+Description=Networks the desktop over VNC answers on
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/plinius-desktop/plinius-desktop-set apply

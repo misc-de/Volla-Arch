@@ -1,0 +1,38 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] region: Formats in one column
+
+Plinius: the dialog relies on a breakpoint for its narrow layout. Dialogs open as pages here
+(cc-plinius-dialog-pages.c), so the content leaves the dialog that holds the breakpoint, and on a
+phone the list stayed next to the preview with its names cut off. Always use the narrow layout:
+one column, and the preview button in each row opens the preview over it.
+---
+ panels/system/region/cc-format-chooser.blp | 11 ++---------
+ 1 file changed, 2 insertions(+), 9 deletions(-)
+
+diff --git a/panels/system/region/cc-format-chooser.blp b/panels/system/region/cc-format-chooser.blp
+--- a/panels/system/region/cc-format-chooser.blp
++++ b/panels/system/region/cc-format-chooser.blp
+@@ -9,14 +9,6 @@ template $CcFormatChooser: Adw.Dialog {
+   height-request: 200;
+   focus-widget: region_filter_entry;
+ 
+-  Adw.Breakpoint {
+-    condition ("max-width: 550sp")
+-
+-    setters {
+-      split_view.collapsed: true;
+-    }
+-  }
+-
+   child: Adw.ToolbarView {
+     top-bar-style: raised;
+ 
+@@ -48,6 +40,8 @@ template $CcFormatChooser: Adw.Dialog {
+ 
+     content: Adw.OverlaySplitView split_view {
+       sidebar-position: end;
++      collapsed: true;
++      show-sidebar: false;
+       notify::collapsed => $collapsed_cb(template);
+ 
+       content: Adw.ToolbarView {

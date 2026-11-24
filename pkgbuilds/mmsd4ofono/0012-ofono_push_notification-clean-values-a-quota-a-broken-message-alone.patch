@@ -1,0 +1,344 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 14:05:00 +0100
+Subject: [PATCH] ofono_push_notification: clean values, a quota, a broken
+ message alone
+
+A notification is an SMS anyone can send, and what the fetched message
+says ends up in files mmsd reads again at its next start:
+
+- The Transaction-Id or Message-ID of the fetched message went into the
+  .status file as it was, line breaks included: 'T1\nstate=sent' added a
+  line of its own, and the message came back as a sent one. Every value
+  of the .status and .headers files is now one line without control
+  characters.
+- A SMIL part with invalid UTF-8 raised after the files were written and
+  the MMSC was told the message arrived, so it was lost; at each start
+  the export of the old messages broke off at it, and none after it were
+  shown. The text is decoded with replacement now, and each old message
+  is exported on its own.
+- Each notification with a new Content-Location could bring up to 5 MiB:
+  no new fetch once the stored messages take 50 MiB, and at most 8
+  fetches open at once.
+
+- A fetched message that cannot be stored or decoded is marked
+  download_failed instead of staying announced as downloading.
+---
+ mmsd/ofono_push_notification.py | 206 ++++++++++++++++++++------------
+ 1 file changed, 130 insertions(+), 76 deletions(-)
+
+diff --git a/mmsd/ofono_push_notification.py b/mmsd/ofono_push_notification.py
+index c4ca80a..e7ca40c 100644
+--- a/mmsd/ofono_push_notification.py
++++ b/mmsd/ofono_push_notification.py
+@@ -6,7 +6,7 @@ from aiohttp import ClientSession, ClientTimeout
+ from array import array
+ from uuid import uuid4
+ from re import sub, compile
+-from os import environ, listdir
++from os import environ, listdir, stat
+ from typing import Optional
+ from urllib.parse import urlparse
+ import asyncio
+@@ -36,6 +36,10 @@ FETCH_RETRY_DELAYS = (30, 60, 120, 300, 600, 1800)
+ # Carriers cap MMS at about 300 kB to 1 MB; anything far beyond that is not a
+ # message and would only be held in memory.
+ MAX_MESSAGE_SIZE = 5 * 1024 * 1024
++# Each notification with a new Content-Location brings up to MAX_MESSAGE_SIZE: no new fetch once
++# the stored messages take this much, and at most this many fetches at once (with their retries)
++MAX_STORE_BYTES = 50 * 1024 * 1024
++MAX_PENDING = 8
+ # A notification is an SMS anyone can send, and its Content-Location is
+ # fetched over a route set up for it. Only the carrier's own MMSC is fetched
+ # from (see carrier_host), and only at an address on the internet: addresses
+@@ -84,6 +88,19 @@ def carrier_host(host, mmsc):
+         return 'domain'
+     return None
+ 
++def status_value(value):
++    """A value for one line of a .status or .headers file: without line breaks or other control
++    characters, which would add lines of their own (a Transaction-Id 'T1\\nstate=sent' turned the
++    message into a sent one at the next start)."""
++    return sub(r'[\x00-\x1f\x7f]+', '', str(value))
++
++
++def smil_text(data):
++    """The SMIL part as text: invalid UTF-8 is replaced instead of failing after the files were
++    written and the MMSC was told the message arrived (and again at each start, in the export)."""
++    return data.decode('utf-8', 'replace').replace("\n", "").replace("\r", "")
++
++
+ def notify_response(transaction_id):
+     """m-notifyresp.ind with X-Mms-Status Retrieved (OMA-MMS-ENC 1.2, 6.2).
+     Without it the MMSC takes the message as not delivered: it sends the
+@@ -144,7 +161,7 @@ class OfonoPushNotification(ServiceInterface):
+ 
+         if response_content:
+             self.pending.discard(content_location)
+-            self.process_mms_content(response_content, transaction_id, sender, info, uuid, content_location)
++            self.store_fetched(response_content, transaction_id, sender, info, uuid, content_location)
+         else:
+             self.schedule_retry(transaction_id, content_location, sender, info, uuid, attempt + 1)
+ 
+@@ -155,7 +172,7 @@ class OfonoPushNotification(ServiceInterface):
+         status_path = join(self.mms_dir, f"{uuid}.status")
+         try:
+             with open(status_path, 'w', encoding='utf-8') as status_file:
+-                status_file.write(f"[info]\nread=false\nstate=downloading\nid=\ndate={sent_time}\n")
++                status_file.write(f"[info]\nread=false\nstate=downloading\nid=\ndate={status_value(sent_time)}\n")
+         except OSError as e:
+             mmsd_print(f"Could not write the status file for {uuid}: {e}", self.verbose)
+             return
+@@ -198,6 +215,15 @@ class OfonoPushNotification(ServiceInterface):
+ 
+         self.update_mms_message(uuid, {'Status': Variant('s', state)})
+ 
++    def stored_bytes(self):
++        total = 0
++        for filename in listdir(self.mms_dir):
++            try:
++                total += stat(join(self.mms_dir, filename)).st_size
++            except OSError:
++                pass
++        return total
++
+     def already_fetched(self, content_location):
+         for filename in listdir(self.mms_dir):
+             if not filename.endswith('.status'):
+@@ -231,12 +257,12 @@ class OfonoPushNotification(ServiceInterface):
+ 
+             key = line.split('=', 1)[0]
+             if key in updates:
+-                lines[index] = f"{key}={updates[key]}\n"
++                lines[index] = f"{key}={status_value(updates[key])}\n"
+                 updated_keys.add(key)
+ 
+         for key, value in updates.items():
+             if key not in updated_keys:
+-                lines.append(f"{key}={value}\n")
++                lines.append(f"{key}={status_value(value)}\n")
+ 
+         with open(status_path, 'w', encoding='utf-8') as status_file:
+             status_file.writelines(lines)
+@@ -402,6 +428,14 @@ class OfonoPushNotification(ServiceInterface):
+             mmsd_print(f"{content_location} is already fetched or being fetched, skipping", self.verbose)
+             return
+ 
++        if len(self.pending) >= MAX_PENDING:
++            mmsd_print(f"Not fetching {content_location}: {len(self.pending)} fetches are open", self.verbose)
++            return
++        stored = self.stored_bytes()
++        if stored >= MAX_STORE_BYTES:
++            mmsd_print(f"Not fetching {content_location}: the stored messages take {stored} bytes", self.verbose)
++            return
++
+         size = mms.headers.get('Message-Size')
+         if isinstance(size, int) and size > MAX_MESSAGE_SIZE:
+             mmsd_print(f"Not fetching {content_location}: {size} bytes is more than {MAX_MESSAGE_SIZE}", self.verbose)
+@@ -439,7 +473,7 @@ class OfonoPushNotification(ServiceInterface):
+ 
+         if response_content:
+             self.pending.discard(content_location)
+-            self.process_mms_content(response_content, transaction_id, sender, info, uuid, content_location)
++            self.store_fetched(response_content, transaction_id, sender, info, uuid, content_location)
+         else:
+             mmsd_print("Failed to get response content, trying again later", self.verbose)
+             self.schedule_retry(transaction_id, content_location, sender, info, uuid)
+@@ -455,74 +489,85 @@ class OfonoPushNotification(ServiceInterface):
+ 
+         for filename in listdir(self.mms_dir):
+             if filename.endswith('.status'):
+-                basename = filename.rsplit('.status', 1)[0]
+-                attachment_count = 0
+-                headers_file = basename + '.headers'
+-
+-                if exists(join(self.mms_dir, headers_file)):
+-                    for attachment_file in listdir(self.mms_dir):
+-                        if attachment_file.startswith(basename + '.attachment.'):
+-                            attachment_count += 1
+-
+-                    if attachment_count >= 2:
+-                        status_path = join(self.mms_dir, filename)
+-
+-                        if exists(status_path):
+-                            status_data = {
+-                                'state': None,
+-                                'date': None,
+-                                'sender': None,
+-                                'delivery_report': None,
+-                                'smil_data': None,
+-                                'attachments': []
+-                            }
+-
+-                            with open(status_path, 'r', encoding='utf-8') as file:
+-                                for line in file:
+-                                    if line.startswith('state='):
+-                                        status_data['state'] = line.split('=')[1].strip()
+-                                    elif line.startswith('date='):
+-                                        status_data['date'] = line.split('=')[1].strip()
+-
+-                            smil_file = join(self.mms_dir, basename)
+-                            if exists(smil_file):
+-                                with open(smil_file, 'rb') as smil_data_file:
+-                                    mms_smil = MMSMessage.from_data(smil_data_file.read())
+-
+-                                    if "Delivery-Report" in mms_smil.headers and mms_smil.headers['Delivery-Report']:
+-                                        status_data['delivery_report'] = mms_smil.headers['Delivery-Report']
+-                                    else:
+-                                        status_data['delivery_report'] = False
+-
+-                                    if mms_smil.headers['From']:
+-                                        status_data['sender'] = mms_smil.headers['From'].split('/')[0]
+-                                    else:
+-                                        status_data['sender'] = ''
+-
+-                                    smil_src = None
+-                                    smil_data = None
+-
+-                                    for index, part in enumerate(mms_smil.data_parts):
+-                                        attachment_path = join(self.mms_dir, f"{basename}.attachment.{index}")
+-
+-                                        if 'application/smil' in part.content_type:
+-                                            # smil should be added to smil prop only, not to attachments
+-                                            smil_data = part.data.decode('utf-8').replace("\n", "").replace("\r", "")
+-                                            status_data['smil_data'] = smil_data
+-                                            smil_src = self.extract_smil_src(smil_data)
+-                                        else:
+-                                            if smil_src and isinstance(smil_src, list) and len(smil_src) > index - 1 and index > 0:
+-                                                attachment_info = [f'<{smil_src[index-1]}>', part.content_type, attachment_path, 0, len(part.data)]
+-                                                status_data['attachments'].append(attachment_info)
+-                                            else:
+-                                                attachment_info = ['<1>', part.content_type, attachment_path, 0, len(part.data)] # content types like vcard
+-                                                status_data['attachments'].append(attachment_info)
+-
+-                            export_entries[basename] = status_data
++                try:
++                    self.collect_old_message(filename, export_entries)
++                except Exception as e:
++                    # One broken message must not keep all the others from being shown
++                    mmsd_print(f"Not re-exporting {filename}: {e}", self.verbose)
+ 
+         for basename, entry in export_entries.items():
+             mmsd_print(f"re-exporting old message {basename}", self.verbose)
+-            self.export_mms_message(basename, entry['state'], entry['date'], entry['sender'], entry['delivery_report'], [], entry['smil_data'], entry['attachments'])
++            try:
++                self.export_mms_message(basename, entry['state'], entry['date'], entry['sender'], entry['delivery_report'], [], entry['smil_data'], entry['attachments'])
++            except Exception as e:
++                mmsd_print(f"Failed to re-export {basename}: {e}", self.verbose)
++
++    def collect_old_message(self, filename, export_entries):
++        """The parts of one stored message for export_old_messages, into export_entries."""
++        basename = filename.rsplit('.status', 1)[0]
++        attachment_count = 0
++        headers_file = basename + '.headers'
++
++        if exists(join(self.mms_dir, headers_file)):
++            for attachment_file in listdir(self.mms_dir):
++                if attachment_file.startswith(basename + '.attachment.'):
++                    attachment_count += 1
++
++            if attachment_count >= 2:
++                status_path = join(self.mms_dir, filename)
++
++                if exists(status_path):
++                    status_data = {
++                        'state': None,
++                        'date': None,
++                        'sender': None,
++                        'delivery_report': None,
++                        'smil_data': None,
++                        'attachments': []
++                    }
++
++                    with open(status_path, 'r', encoding='utf-8') as file:
++                        for line in file:
++                            if line.startswith('state='):
++                                status_data['state'] = line.split('=')[1].strip()
++                            elif line.startswith('date='):
++                                status_data['date'] = line.split('=')[1].strip()
++
++                    smil_file = join(self.mms_dir, basename)
++                    if exists(smil_file):
++                        with open(smil_file, 'rb') as smil_data_file:
++                            mms_smil = MMSMessage.from_data(smil_data_file.read())
++
++                            if "Delivery-Report" in mms_smil.headers and mms_smil.headers['Delivery-Report']:
++                                status_data['delivery_report'] = mms_smil.headers['Delivery-Report']
++                            else:
++                                status_data['delivery_report'] = False
++
++                            if mms_smil.headers['From']:
++                                status_data['sender'] = mms_smil.headers['From'].split('/')[0]
++                            else:
++                                status_data['sender'] = ''
++
++                            smil_src = None
++                            smil_data = None
++
++                            for index, part in enumerate(mms_smil.data_parts):
++                                attachment_path = join(self.mms_dir, f"{basename}.attachment.{index}")
++
++                                if 'application/smil' in part.content_type:
++                                    # smil should be added to smil prop only, not to attachments
++                                    smil_data = smil_text(part.data)
++                                    status_data['smil_data'] = smil_data
++                                    smil_src = self.extract_smil_src(smil_data)
++                                else:
++                                    if smil_src and isinstance(smil_src, list) and len(smil_src) > index - 1 and index > 0:
++                                        attachment_info = [f'<{smil_src[index-1]}>', part.content_type, attachment_path, 0, len(part.data)]
++                                        status_data['attachments'].append(attachment_info)
++                                    else:
++                                        attachment_info = ['<1>', part.content_type, attachment_path, 0, len(part.data)] # content types like vcard
++                                        status_data['attachments'].append(attachment_info)
++
++                    export_entries[basename] = status_data
+ 
+     async def read_limited(self, response):
+         if response.content_length and response.content_length > MAX_MESSAGE_SIZE:
+@@ -719,6 +764,15 @@ class OfonoPushNotification(ServiceInterface):
+             await cleanup_mms_routes()
+             await self.mms_context.release()
+ 
++    def store_fetched(self, content, transaction_id, sender, info, uuid, content_location):
++        """A message that cannot be stored or read is marked download_failed: it was
++        announced as downloading and would otherwise stay so until mmsd restarts."""
++        try:
++            self.process_mms_content(content, transaction_id, sender, info, uuid, content_location)
++        except Exception as e:
++            mmsd_print(f"Could not store message {uuid}: {e}", self.verbose)
++            self.settle_incoming(uuid, 'download_failed')
++
+     def process_mms_content(self, content, transaction_id, sender, info, uuid=None, content_location=''):
+         uuid = uuid or str(uuid4()).replace('-', '1')
+         smil_path = join(self.mms_dir, uuid)
+@@ -733,7 +787,7 @@ class OfonoPushNotification(ServiceInterface):
+ 
+         with open(headers_path, 'w', encoding='utf-8') as headers_file:
+             for header_key, header_value in mms_smil.headers.items():
+-                headers_file.write(f"{header_key}={header_value}\n")
++                headers_file.write(f"{status_value(header_key)}={status_value(header_value)}\n")
+             mmsd_print(f"Headers successfully saved to {headers_path}", self.verbose)
+ 
+         sent_time = info['SentTime'].value if 'SentTime' in info else ''
+@@ -742,9 +796,9 @@ class OfonoPushNotification(ServiceInterface):
+         meta_info = f"""[info]
+ read=false
+ state=received
+-id={message_id}
+-location={content_location}
+-date={sent_time}"""
++id={status_value(message_id)}
++location={status_value(content_location)}
++date={status_value(sent_time)}"""
+ 
+         with open(status_path, 'w', encoding='utf-8') as status_file:
+             status_file.write(meta_info)
+@@ -761,7 +815,7 @@ date={sent_time}"""
+                 file.write(part.data)
+ 
+             if 'application/smil' in part.content_type:
+-                smil_data = part.data.decode('utf-8').replace("\n", "").replace("\r", "")
++                smil_data = smil_text(part.data)
+                 smil_src = self.extract_smil_src(smil_data)
+             else:
+                 if smil_src and isinstance(smil_src, list) and len(smil_src) > index - 1 and index > 0:

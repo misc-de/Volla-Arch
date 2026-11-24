@@ -1,0 +1,29 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+# GBM backend for Mesa's libgbm with buffers from Android's gralloc (libhybris), so that wlroots can
+# render on the GPU through libhybris' EGL and show the buffers through real KMS (docs/GRAFIK.md).
+# Based on FuriLabs' libgbm-hybris; see hybris_gbm.c for what differs. The device package links
+# it under its DRM driver's name (e.g. mediatek_gbm.so), which libgbm looks for first.
+pkgname=hybris-gbm
+pkgver=0.1
+pkgrel=1
+pkgdesc="GBM backend for libgbm on Halium devices: linear gralloc buffers through libhybris"
+arch=(aarch64)
+license=(BSD-2-Clause)
+depends=(libhybris)
+makedepends=(mesa)
+source=(hybris_gbm.c
+	LICENSE)
+sha256sums=('192d3484ddeef170d46ddb548ce1dc1fae72fcd17c2350f21466108083c97a00'
+	'e436f511d1be285cb5af13e45a648a85a23603f7bd2b7c31936e7d6c39bf3aa4')
+
+build() {
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fPIC -shared \
+		-fvisibility=hidden -o hybris_gbm.so hybris_gbm.c \
+		$LDFLAGS -lhybris-eglplatformcommon -lgralloc -lpthread
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 hybris_gbm.so -t "$pkgdir/usr/lib/gbm"
+}

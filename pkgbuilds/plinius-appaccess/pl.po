@@ -1,0 +1,52 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-appaccess\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-15 07:00+0100\n"
+"PO-Revision-Date: 2026-11-15 07:00+0100\n"
+"Last-Translator: plinius-appaccess\n"
+"Language-Team: none\n"
+"Language: pl\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#. TRANSLATORS: %s is the name of an app
+#: plinius-appaccess-agent.c:58
+#, c-format
+msgid "%s wants to use a camera"
+msgstr "%s chce użyć kamery"
+
+#. TRANSLATORS: %s is the name of an app
+#: plinius-appaccess-agent.c:61
+#, c-format
+msgid "%s wants to use a security key"
+msgstr "%s chce użyć klucza bezpieczeństwa"
+
+#. TRANSLATORS: %s is the name of an app
+#, c-format
+msgid "%s wants to use the microphone"
+msgstr "%s chce użyć mikrofonu"
+
+#. TRANSLATORS: %s is the name of an app
+#: plinius-appaccess-agent.c:63
+#, c-format
+msgid "%s wants to use the network"
+msgstr "%s chce użyć sieci"
+
+#: plinius-appaccess-agent.c:77
+msgid "Allow Once"
+msgstr "Zezwól raz"
+
+#: plinius-appaccess-agent.c:77
+msgid "Always Allow"
+msgstr "Zawsze zezwalaj"
+
+#: plinius-appaccess-agent.c:77
+msgid "Don't Allow"
+msgstr "Nie zezwalaj"
+
+#: plinius-appaccess-agent.c:107
+msgid "Access was blocked. If you allow it, try again in the app."
+msgstr "Dostęp został zablokowany. Jeśli na niego zezwolisz, spróbuj ponownie w aplikacji."

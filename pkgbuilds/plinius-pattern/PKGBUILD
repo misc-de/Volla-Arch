@@ -1,0 +1,34 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-pattern
+pkgver=0.5
+pkgrel=1
+pkgdesc="Unlock pattern for the lock screen: PAM module and setup tool"
+arch=(aarch64 x86_64)
+license=(MIT)
+depends=(pam libxcrypt)
+# The client header: wrong patterns count with plinius-pinguard like wrong PINs. At run time the
+# daemon is optional, without it patterns are checked uncounted as before.
+makedepends=("plinius-pinguard>=0.6")
+optdepends=("plinius-pinguard>=0.6: wait after wrong patterns, on the count of wrong PINs")
+# The lock screen (phosh-plinius) draws the pattern and lists the module in /etc/pam.d/phosh;
+# GNOME Settings (gnome-control-center-plinius) sets it through plinius-pattern.
+source=(plinius-pattern.h
+	pam_plinius_pattern.c
+	plinius-pattern.c
+	LICENSE)
+sha256sums=('acf058545fa1aa02dcb82863885ddf7383ad9b4531c3cd0951dc2a155b9ecb24'
+	'0ad3e4fe4618ba5bcd8f3f5a7eb427450ca5e84e47c21011b99a66f6833a711e'
+	'221dcbb6a483f7b5c78b2fed0d59d40e076f7ff83d2ff72a7afcf003769f328c'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	cc $CPPFLAGS $CFLAGS -fPIC -shared -o pam_plinius_pattern.so pam_plinius_pattern.c $LDFLAGS -lpam -lcrypt
+	cc $CPPFLAGS $CFLAGS -o plinius-pattern plinius-pattern.c $LDFLAGS -lcrypt
+}
+
+package() {
+	install -Dm755 pam_plinius_pattern.so -t "$pkgdir/usr/lib/security"
+	install -Dm755 plinius-pattern -t "$pkgdir/usr/bin"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

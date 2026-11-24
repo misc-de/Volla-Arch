@@ -1,0 +1,61 @@
+From e3359bc9a901eac6e1cdae9f3fc8665f86d7e37b Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:56:34 +0100
+Subject: [PATCH 1/3] screencast: Fall back to shm buffers without a render
+ node
+
+A display device without a render node (MediaTek KMS with the GPU driven
+through libhybris) leaves the screencast without a gbm device. Creating one
+from a NULL device crashed, and dmabuf formats were offered that could not
+be allocated. Offer shm formats only in that case.
+---
+ src/screencast/pipewire_screencast.c | 8 ++++++--
+ src/screencast/screencast_common.c   | 6 ++++++
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/src/screencast/pipewire_screencast.c b/src/screencast/pipewire_screencast.c
+index 253473f..5405b2a 100644
+--- a/src/screencast/pipewire_screencast.c
++++ b/src/screencast/pipewire_screencast.c
+@@ -157,7 +157,9 @@ static void add_pod(struct wl_array *params, const struct spa_pod *pod) {
+ 
+ static void build_formats(struct spa_pod_builder *builder, struct xdpw_screencast_instance *cast,
+ 		struct wl_array *params) {
+-	if (!cast->avoid_dmabufs) {
++	// dmabufs need a gbm device to allocate them; a display device without a
++	// render node (e.g. a GPU driven through libhybris) has none
++	if (!cast->avoid_dmabufs && cast->ctx->gbm) {
+ 		uint32_t last_format = DRM_FORMAT_INVALID;
+ 		struct xdpw_format_modifier_pair *fm_pair;
+ 		wl_array_for_each(fm_pair, &cast->current_constraints.dmabuf_format_modifier_pairs) {
+@@ -197,7 +199,9 @@ static bool has_drm_fourcc(struct xdpw_screencast_instance *cast, uint32_t forma
+ 	if (format == DRM_FORMAT_INVALID) {
+ 		return false;
+ 	}
+-	if (!cast->avoid_dmabufs) {
++	// dmabufs need a gbm device to allocate them; a display device without a
++	// render node (e.g. a GPU driven through libhybris) has none
++	if (!cast->avoid_dmabufs && cast->ctx->gbm) {
+ 		struct xdpw_format_modifier_pair *fm_pair;
+ 		wl_array_for_each(fm_pair, &cast->current_constraints.dmabuf_format_modifier_pairs) {
+ 			if (fm_pair->fourcc == format) {
+diff --git a/src/screencast/screencast_common.c b/src/screencast/screencast_common.c
+index 721da03..1d86e61 100644
+--- a/src/screencast/screencast_common.c
++++ b/src/screencast/screencast_common.c
+@@ -23,6 +23,12 @@ void randname(char *buf) {
+ }
+ 
+ struct gbm_device *xdpw_gbm_device_create(drmDevice *device) {
++	// Without a main device from linux-dmabuf there is nothing to open: the
++	// screencast then runs on shm buffers instead of crashing here.
++	if (!device) {
++		logprint(WARN, "xdpw: No DRM device, using shm buffers");
++		return NULL;
++	}
+ 	if (!(device->available_nodes & (1 << DRM_NODE_RENDER))) {
+ 		logprint(ERROR, "xdpw: DRM device has no render node");
+ 		return NULL;
+-- 
+2.56.0
+

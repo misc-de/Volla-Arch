@@ -1,0 +1,18 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] Apps: Web Apps as a tab of its own
+
+cc-plinius-webapps.c (a separate file of the package) is built with the
+Apps panel; cc-plinius-software.c puts its tab "Web Apps" between
+Installed and Settings: websites as apps of their own, each with its own
+Firefox profile, an icon among the apps while switched on.
+---
+--- a/panels/applications/meson.build
++++ b/panels/applications/meson.build
+@@ -43,6 +43,7 @@
+   'cc-default-apps-page.c',
+   'cc-default-apps-row.c',
+   'cc-plinius-software.c',
++  'cc-plinius-webapps.c',
+   'cc-removable-media-settings.c',
+   'globs.c',
+   'search.c',

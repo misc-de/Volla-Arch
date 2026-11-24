@@ -1,0 +1,5 @@
+# Volla Phone Plinius: the hardware H.264/HEVC encoder (MediaTek vcodec) for the session, for
+# GStreamer's v4l2h264enc (Schwupp mirroring the screen to a TV, about 85 fps at 1080p
+# measured 2026-10-31). 70-plinius-android.rules gives every video* node to Android's camera
+# and system IDs; the container's codec HAL (media.c2) that used it serves no Linux app.
+ACTION=="add|change", SUBSYSTEM=="video4linux", ATTR{name}=="mtk-vcodec-enc", GROUP="video"

@@ -1,0 +1,87 @@
+From 89232422f9cab80c463181430f07168b27813695 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 08:23:24 +0100
+Subject: [PATCH] spinner: The logo in the accent color
+
+Plinius: the device's logo (mark and wordmark) takes the accent color
+from GNOME Settings. Every pixel is read as white mixed with the logo's
+own blue (#00b5ff) and mixed again with the accent color, so white
+parts and the light glow stay as they are.
+---
+ src/spinner.c | 47 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 47 insertions(+)
+
+diff --git a/src/spinner.c b/src/spinner.c
+index abed0d2..9bb76d9 100644
+--- a/src/spinner.c
++++ b/src/spinner.c
+@@ -15,6 +15,7 @@
+ #include "cairo-texture.h"
+ #include "server.h"
+ #include "spinner.h"
++#include "style-manager.h"
+ #include "timed-animation.h"
+ 
+ #include "render-private.h"
+@@ -226,6 +227,46 @@ load_png (const char *path)
+ }
+ 
+ 
++/* Plinius: the logo in the user's accent color. Every pixel of the PNG is read as white mixed
++ * with the logo's own blue (#00b5ff), by its red channel; the same mix is then made with the
++ * accent color. White parts and the light glow stay white, the blue ones take the accent. */
++static void
++tint_logo (cairo_surface_t *surface, const PhocColor *accent)
++{
++  int width = cairo_image_surface_get_width (surface);
++  int height = cairo_image_surface_get_height (surface);
++  int stride = cairo_image_surface_get_stride (surface);
++  unsigned char *data;
++
++  if (cairo_image_surface_get_format (surface) != CAIRO_FORMAT_ARGB32)
++    return;
++
++  cairo_surface_flush (surface);
++  data = cairo_image_surface_get_data (surface);
++
++  for (int y = 0; y < height; y++) {
++    uint32_t *row = (uint32_t *)(data + y * stride);
++
++    for (int x = 0; x < width; x++) {
++      uint32_t alpha = row[x] >> 24;
++      double blue_part;
++
++      if (alpha == 0)
++        continue;
++
++      /* Cairo keeps the color premultiplied with alpha */
++      blue_part = 1.0 - MIN (((row[x] >> 16) & 0xff) / (double) alpha, 1.0);
++      row[x] = alpha << 24 |
++        (uint32_t) (alpha * (1.0 - blue_part * (1.0 - accent->red)) + 0.5) << 16 |
++        (uint32_t) (alpha * (1.0 - blue_part * (1.0 - accent->green)) + 0.5) << 8 |
++        (uint32_t) (alpha * (1.0 - blue_part * (1.0 - accent->blue)) + 0.5);
++    }
++  }
++
++  cairo_surface_mark_dirty (surface);
++}
++
++
+ static void
+ draw_logo (cairo_t *cr, double angle, double size, cairo_surface_t *mark, cairo_surface_t *wordmark)
+ {
+@@ -337,8 +378,14 @@ bling_map (PhocBling *bling)
+   cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
+ 
+   if (phoc_spinner_has_logo () && !self->mark) {
++    PhocColor accent = phoc_style_manager_get_accent_color (phoc_style_manager_get_default ());
++
+     self->mark = load_png (LOGO_MARK);
+     self->wordmark = load_png (LOGO_WORDMARK);
++    if (self->mark)
++      tint_logo (self->mark, &accent);
++    if (self->wordmark)
++      tint_logo (self->wordmark, &accent);
+   }
+ 
+   phoc_bling_damage_box (PHOC_BLING (self));

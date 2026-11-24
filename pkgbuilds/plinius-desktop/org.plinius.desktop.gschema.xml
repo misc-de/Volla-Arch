@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Plinius: settings of the desktop over VNC (plinius-desktop) that GNOME Settings shows on the
+     Remote Access page; the session and the bar's menus follow them at once -->
+<schemalist>
+  <enum id="org.plinius.desktop.BarPosition">
+    <value nick="top" value="0"/>
+    <value nick="bottom" value="1"/>
+  </enum>
+  <schema id="org.plinius.desktop" path="/org/plinius/desktop/">
+    <key name="bar-position" enum="org.plinius.desktop.BarPosition">
+      <default>'top'</default>
+      <summary>Edge of the desktop's bar</summary>
+      <description>
+        Where the bar with the apps button and the open windows sits on the desktop over VNC:
+        along the top edge or along the bottom edge. The menus of the bar open at the same edge.
+      </description>
+    </key>
+  </schema>
+</schemalist>

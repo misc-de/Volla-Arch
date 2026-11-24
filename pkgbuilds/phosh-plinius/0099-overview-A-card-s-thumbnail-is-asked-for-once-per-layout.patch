@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu Nov 19 06:10:00 2026 +0100
+Subject: [PATCH] overview: A card's thumbnail is asked for once per layout
+
+Plinius: with the band of 0094 a card gets its size twice in one layout
+of the overview, from the box and again from plinius_move_band_to_grid (),
+and each size asked phoc for a new thumbnail. Any layout of the home
+window (the grid's scrollbar, a slider) did so: uprobes on the phone
+with five running apps counted 10 resizes and 10 thumbnail requests a
+second without a touch, 30 a second while the grid scrolled. phoc
+rendered the app into a new gralloc buffer and copied it back (memcpy
+43 % of phoc's main thread while scrolling), Phosh drew the card again
+with its icon's blurred shadow (11 % of Phosh's main thread).
+
+The thumbnail is now asked for in an idle after the layout, and only
+for a size not asked for yet.
+---
+diff --git a/src/overview.c b/src/overview.c
+index 00825d6d..4e05541c 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -720,6 +720,14 @@ on_thumbnail_ready_changed (PhoshThumbnail *thumbnail, GParamSpec *pspec, PhoshA
+ }
+ 
+ 
++/* Plinius: a thumbnail's size as one value, never 0 (no size asked for yet) */
++static int
++plinius_thumbnail_size (int width, int height)
++{
++  return ((CLAMP (width, 0, 0x7ffe) + 1) << 15) | CLAMP (height, 0, 0x7fff);
++}
++
++
+ static void
+ request_thumbnail (PhoshActivity *activity, PhoshToplevel *toplevel)
+ {
+@@ -730,6 +738,10 @@ request_thumbnail (PhoshActivity *activity, PhoshToplevel *toplevel)
+   g_return_if_fail (PHOSH_IS_TOPLEVEL (toplevel));
+   scale = gtk_widget_get_scale_factor (GTK_WIDGET (activity));
+   phosh_activity_get_thumbnail_allocation (activity, &allocation);
++  /* Plinius: the size asked for, see on_activity_resized () */
++  g_object_set_data (G_OBJECT (activity), "plinius-thumbnail-size",
++                     GINT_TO_POINTER (plinius_thumbnail_size (allocation.width * scale,
++                                                              allocation.height * scale)));
+   thumbnail = phosh_toplevel_thumbnail_new_from_toplevel (toplevel, allocation.width * scale,
+                                                           allocation.height * scale);
+   g_signal_connect_object (thumbnail,
+@@ -740,16 +752,52 @@ request_thumbnail (PhoshActivity *activity, PhoshToplevel *toplevel)
+ }
+ 
+ 
++/*
++ * Plinius: a card gets its size twice in one layout, from the box and again from
++ * plinius_move_band_to_grid (), and each layout of the overview (a scrollbar, a slider) did so.
++ * Each size asked phoc for a new thumbnail: phoc renders the app into a new buffer and copies it
++ * back, and the card is drawn again, its icon's shadow blurred anew. That cost every frame while
++ * the app grid scrolled or a folder opened, and about once a second without a touch. The
++ * thumbnail is asked for once the layout is done, and only for a size not asked for yet.
++ */
++static gboolean
++plinius_request_resized_thumbnail (gpointer data)
++{
++  PhoshActivity *activity = PHOSH_ACTIVITY (data);
++  PhoshToplevel *toplevel;
++  GtkAllocation allocation;
++  int scale, size;
++
++  g_object_set_data (G_OBJECT (activity), "plinius-thumbnail-idle", NULL);
++
++  /* Closed meanwhile */
++  toplevel = g_object_get_data (G_OBJECT (activity), "toplevel");
++  if (!PHOSH_IS_TOPLEVEL (toplevel) || !gtk_widget_get_parent (GTK_WIDGET (activity)))
++    return G_SOURCE_REMOVE;
++
++  scale = gtk_widget_get_scale_factor (GTK_WIDGET (activity));
++  phosh_activity_get_thumbnail_allocation (activity, &allocation);
++  size = plinius_thumbnail_size (allocation.width * scale, allocation.height * scale);
++  if (GPOINTER_TO_INT (g_object_get_data (G_OBJECT (activity), "plinius-thumbnail-size")) != size)
++    request_thumbnail (activity, toplevel);
++
++  return G_SOURCE_REMOVE;
++}
++
++
+ static void
+ on_activity_resized (PhoshOverview *self, GtkAllocation *alloc, PhoshActivity *activity)
+ {
+-  PhoshToplevel *toplevel;
++  guint id;
+ 
+   g_return_if_fail (PHOSH_IS_ACTIVITY (activity));
+-  toplevel = g_object_get_data (G_OBJECT (activity), "toplevel");
+-  g_return_if_fail (PHOSH_IS_TOPLEVEL (toplevel));
++  if (g_object_get_data (G_OBJECT (activity), "plinius-thumbnail-idle"))
++    return;
+ 
+-  request_thumbnail (activity, toplevel);
++  id = g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, plinius_request_resized_thumbnail,
++                        g_object_ref (activity), g_object_unref);
++  g_source_set_name_by_id (id, "[phosh] plinius_request_resized_thumbnail");
++  g_object_set_data (G_OBJECT (activity), "plinius-thumbnail-idle", GUINT_TO_POINTER (id));
+ }
+ 
+ 

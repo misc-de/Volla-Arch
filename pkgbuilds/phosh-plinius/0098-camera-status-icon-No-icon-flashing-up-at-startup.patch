@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 20:45:00 +0100
+Subject: [PATCH] camera-status-icon: No icon flashing up at startup
+
+Plinius: the status icons box adds every plugin icon shown, and the
+camera icon binds its revealer to the camera manager only when it gets
+realized, once the top panel is mapped. The revealer then hides with
+its transition, so the orange camera icon showed for a moment at every
+start of Phosh although no camera ran: measured on the phone, no
+camera node went to RUNNING from before Phosh started on, the camera
+nodes only appeared a second before "Phosh ready".
+
+The first state is now taken without a transition; later changes
+still fade.
+---
+ plugins/camera-status-icon/camera-status-icon.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/plugins/camera-status-icon/camera-status-icon.c b/plugins/camera-status-icon/camera-status-icon.c
+index 646a554..d197f99 100644
+--- a/plugins/camera-status-icon/camera-status-icon.c
++++ b/plugins/camera-status-icon/camera-status-icon.c
+@@ -25,6 +25,7 @@ phosh_camera_status_icon_realize (GtkWidget *widget)
+ {
+   PhoshCameraManager *manager = phosh_shell_get_camera_manager (phosh_shell_get_default ());
+   GtkWidget *gtkrevealer, *phoshrevealer;
++  guint duration;
+ 
+   GTK_WIDGET_CLASS (phosh_camera_status_icon_parent_class)->realize (widget);
+ 
+@@ -32,7 +33,12 @@ phosh_camera_status_icon_realize (GtkWidget *widget)
+   gtkrevealer = gtk_widget_get_parent (widget);
+   phoshrevealer = gtk_widget_get_parent (gtkrevealer);
+ 
++  /* The status icons box adds us shown and we're realized only once the panel is mapped:
++   * take the manager's state without a transition, else the icon fades out at startup */
++  g_object_get (phoshrevealer, "transition-duration", &duration, NULL);
++  g_object_set (phoshrevealer, "transition-duration", 0, NULL);
+   g_object_bind_property (manager, "in-use", phoshrevealer, "show-child", G_BINDING_SYNC_CREATE);
++  g_object_set (phoshrevealer, "transition-duration", duration, NULL);
+ }
+ 
+ 
+-- 
+2.56.0
+

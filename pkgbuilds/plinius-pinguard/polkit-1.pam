@@ -1,0 +1,9 @@
+#%PAM-1.0
+
+# polkit's own file (/usr/lib/pam.d/polkit-1) with the PIN wait of plinius-pinguard first.
+# Without the module or the daemon the password goes on to system-auth as before.
+auth       [success=done ignore=ignore authinfo_unavail=ignore module_unknown=ignore open_err=ignore symbol_err=ignore default=die] pam_plinius_pinguard.so
+auth       include      system-auth
+account    include      system-auth
+password   include      system-auth
+session    include      system-auth

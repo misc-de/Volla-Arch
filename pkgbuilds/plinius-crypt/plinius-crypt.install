@@ -1,0 +1,29 @@
+# pacman install script of plinius-crypt: lists pam_plinius_crypt.so in the password stack of
+# /etc/pam.d/passwd (a file of the shadow package, kept on its updates as a backup file), so a
+# new login password (the PIN) cannot be the encryption password. Removed with the package.
+
+_pam_line='password	requisite	pam_plinius_crypt.so'
+
+_add_pam_line() {
+	local f=/etc/pam.d/passwd
+	[[ -f $f ]] || return 0
+	grep -q 'pam_plinius_crypt\.so' "$f" && return 0
+	# Before the first password line, so it reads the new password for the modules after it
+	if grep -q '^password' "$f"; then
+		sed -i "0,/^password/s//${_pam_line}\n&/" "$f"
+	else
+		printf '%s\n' "$_pam_line" >> "$f"
+	fi
+}
+
+post_install() {
+	_add_pam_line
+}
+
+post_upgrade() {
+	_add_pam_line
+}
+
+pre_remove() {
+	sed -i '/pam_plinius_crypt\.so/d' /etc/pam.d/passwd 2>/dev/null || true
+}

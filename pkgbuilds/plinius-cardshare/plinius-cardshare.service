@@ -1,0 +1,13 @@
+[Unit]
+Description=Contact card over NFC, QR code and Bluetooth
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# Started on demand over D-Bus by the quick setting, exits after two idle minutes
+Type=dbus
+BusName=org.plinius.CardShare
+ExecStart=/usr/bin/plinius-cardshare
+Restart=no
+NoNewPrivileges=yes
+LockPersonality=yes

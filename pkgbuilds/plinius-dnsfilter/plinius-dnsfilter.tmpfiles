@@ -1,0 +1,6 @@
+# plinius-dnsfilter: /etc/resolv.conf points here. Until the filter runs, this link points to
+# NetworkManager's file, so DNS works with the filter off, not installed or not started yet.
+d /run/plinius-dns 0755 root root -
+L /run/plinius-dns/resolv.conf - - - - /run/NetworkManager/resolv.conf
+# iptables-legacy's lock: the sandboxed service may only use it if it exists
+f /run/xtables.lock 0600 root root -

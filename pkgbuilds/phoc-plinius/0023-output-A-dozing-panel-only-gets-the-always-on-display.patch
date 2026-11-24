@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 08:00:00 +0100
+Subject: [PATCH] output: A dozing panel only gets the always-on display
+
+The always-on display flickered once, a few seconds after it came up: the
+phone locks at that moment, the lock screen maps above the always-on display
+and Phosh makes that anew on top of it. For one frame the panel got the lock
+screen (the only frame besides the ones for the clock, measured on the Plinius).
+
+Hold frames back while the always-on display isn't on top. A dozing panel keeps
+its picture by itself. Until the always-on display has been shown once frames
+go out, the panel needs one to enter doze at all. Waking up isn't affected: the
+output counts as awake as soon as the request comes in.
+---
+ src/output.c | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/src/output.c b/src/output.c
+index 8f9ed91..6e524e6 100644
+--- a/src/output.c
++++ b/src/output.c
+@@ -82,6 +82,8 @@ typedef struct _PhocOutputPrivate {
+   GSList  *debug_damage;    /* (element-type: PhocDebugDamageRegion) */
+ 
+   struct wlr_damage_ring damage_ring;
++  /* Plinius: this doze has shown the always-on display, see doze_holds_frame() */
++  gboolean doze_showed_aod;
+ } PhocOutputPrivate;
+ 
+ static void phoc_output_initable_iface_init (GInitableIface *iface);
+@@ -597,6 +599,38 @@ render_cutouts (PhocOutput *self, PhocRenderContext *ctx)
+ }
+ 
+ 
++/* Plinius: a panel in doze keeps its picture by itself, so while the always-on display isn't on
++ * top nothing goes out and the picture just stays. The phone locking while it dozes maps the lock
++ * screen above the always-on display, which Phosh then makes anew on top: without this the lock
++ * screen flashes up in between. Until the always-on display has been shown once the frame goes
++ * out, that is how the panel gets into doze. */
++static gboolean
++doze_holds_frame (PhocOutput *self)
++{
++  PhocOutputPrivate *priv = phoc_output_get_instance_private (self);
++  GQueue *overlay;
++
++  if (phoc_output_is_awake (self))
++    return FALSE;
++
++  overlay = phoc_output_get_layer_surfaces_for_layer (self, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
++  for (GList *l = overlay->tail; l; l = l->prev) {
++    PhocLayerSurface *layer_surface = PHOC_LAYER_SURFACE (l->data);
++
++    if (!layer_surface->mapped)
++      continue;
++
++    if (surface_draws_while_dozing (layer_surface->layer_surface->surface)) {
++      priv->doze_showed_aod = TRUE;
++      return FALSE;
++    }
++    break;
++  }
++
++  return priv->doze_showed_aod;
++}
++
++
+ PHOC_TRACE_NO_INLINE static void
+ phoc_output_draw (PhocOutput *self)
+ {
+@@ -614,6 +648,9 @@ phoc_output_draw (PhocOutput *self)
+   if (!wlr_output->enabled)
+     return;
+ 
++  if (doze_holds_frame (self))
++    return;
++
+   needs_frame = wlr_output->needs_frame;
+   needs_frame |= pixman_region32_not_empty (&priv->damage_ring.current);
+   needs_frame |= priv->gamma_lut_changed;
+@@ -2184,6 +2221,8 @@ phoc_output_handle_output_power_manager_set_mode (struct wl_listener *listener,
+   if (wlr_output_is_drm (self->wlr_output) &&
+       wlr_drm_connector_get_doze (self->wlr_output) != doze) {
+     wlr_drm_connector_set_doze (self->wlr_output, doze);
++    /* Plinius: each doze starts anew, see doze_holds_frame() */
++    ((PhocOutputPrivate *) phoc_output_get_instance_private (self))->doze_showed_aod = FALSE;
+     /* An output that stays on takes the change with its next frame */
+     if (self->wlr_output->enabled && enable)
+       phoc_output_damage_whole (self);

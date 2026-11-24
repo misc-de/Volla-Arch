@@ -1,0 +1,77 @@
+From 0bfad0f288b9095d9015608fb5ca53aacc53c3bb Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 21:22:40 +0100
+Subject: [PATCH] window: Never start larger than the largest screen
+
+Plinius: on the phone the first frame was drawn at the default size
+(the template's 980x640 or a size kept from a desktop) before phoc sized
+the window, so the sidebar layout showed for a moment. The window now
+starts at most as large as the largest screen; a size only fitted that
+way does not replace the one kept in the settings.
+---
+ shell/cc-window.c | 38 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/shell/cc-window.c b/shell/cc-window.c
+index 662db7767..152d62205 100644
+--- a/shell/cc-window.c
++++ b/shell/cc-window.c
+@@ -51,6 +51,10 @@ struct _CcWindow {
+ 
+     AdwBreakpoint *break_point;
+ 
++    /* Plinius: the size kept in the settings when the start fitted it to the screen */
++    int fitted_width, fitted_height;
++    int kept_width, kept_height;
++
+     AdwNavigationView *navigation;
+     AdwNavigationSplitView *split_view;
+     CcPanelList *panel_list;
+@@ -98,6 +102,35 @@ load_window_state (CcWindow *self)
+         gtk_window_set_default_size (GTK_WINDOW (self), current_width, current_height);
+     if (maximized)
+         gtk_window_maximize (GTK_WINDOW (self));
++
++    /* Plinius: never start larger than the largest screen. A phone's compositor may size the
++     * window only after its first frame, which is drawn at the default size: a size from a
++     * desktop (or the template's 980×640) showed the sidebar layout for a moment. */
++    {
++        GListModel *monitors = gdk_display_get_monitors (gtk_widget_get_display (GTK_WIDGET (self)));
++        int screen_width = 0, screen_height = 0;
++        int width, height;
++
++        for (guint i = 0; i < g_list_model_get_n_items (monitors); i++) {
++            g_autoptr(GdkMonitor) monitor = g_list_model_get_item (monitors, i);
++            GdkRectangle geometry;
++
++            gdk_monitor_get_geometry (monitor, &geometry);
++            if (geometry.width * geometry.height > screen_width * screen_height) {
++                screen_width = geometry.width;
++                screen_height = geometry.height;
++            }
++        }
++
++        gtk_window_get_default_size (GTK_WINDOW (self), &width, &height);
++        if (screen_width > 0 && screen_height > 0 && (width > screen_width || height > screen_height)) {
++            self->kept_width = width;
++            self->kept_height = height;
++            self->fitted_width = width > 0 ? MIN (width, screen_width) : width;
++            self->fitted_height = height > 0 ? MIN (height, screen_height) : height;
++            gtk_window_set_default_size (GTK_WINDOW (self), self->fitted_width, self->fitted_height);
++        }
++    }
+ }
+ 
+ static void
+@@ -576,6 +609,11 @@ cc_window_unmap (GtkWidget *widget)
+ 
+     maximized = gtk_window_is_maximized (GTK_WINDOW (self));
+     gtk_window_get_default_size (GTK_WINDOW (self), &width, &height);
++    /* Plinius: a size only fitted to the phone's screen does not replace the one kept */
++    if (self->kept_width && width == self->fitted_width && height == self->fitted_height) {
++        width = self->kept_width;
++        height = self->kept_height;
++    }
+ 
+     g_settings_set (self->settings, "window-state", "(iib)", width, height, maximized);
+ 

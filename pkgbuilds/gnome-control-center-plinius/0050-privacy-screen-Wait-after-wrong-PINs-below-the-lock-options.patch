@@ -1,0 +1,80 @@
+From 035ca3b875bb7154bac23465a8051db1648acbe4 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 07:04:27 +0100
+Subject: [PATCH] privacy/screen: Wait after wrong PINs below the lock options
+
+Plinius: plinius-pinguard checks the PIN for the lock screen, sudo and
+polkit and can make every wrong PIN after the first five wait longer. The
+Screen Lock page gets a switch for it right below GNOME's lock options
+(cc-plinius-pinguard.c, a file of its own); turning it on needs no
+password, turning it off asks for the PIN. Nothing shows without
+plinius-pinguard.
+---
+ panels/privacy/meson.build               | 1 +
+ panels/privacy/screen/cc-screen-page.blp | 2 +-
+ panels/privacy/screen/cc-screen-page.c   | 6 ++++++
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/panels/privacy/meson.build b/panels/privacy/meson.build
+index 2f62b8a3f..ac6febf37 100644
+--- a/panels/privacy/meson.build
++++ b/panels/privacy/meson.build
+@@ -49,6 +49,7 @@ sources = files(
+   'cc-plinius-crypt.c',
+   'cc-plinius-security.c',
+   'cc-privacy-panel.c',
++  'screen/cc-plinius-pinguard.c',
+   'screen/cc-screen-page.c',
+   'usage/cc-usage-page.c',
+ )
+diff --git a/panels/privacy/screen/cc-screen-page.blp b/panels/privacy/screen/cc-screen-page.blp
+index 609f76c73..58146dc55 100644
+--- a/panels/privacy/screen/cc-screen-page.blp
++++ b/panels/privacy/screen/cc-screen-page.blp
+@@ -9,7 +9,7 @@ template $CcScreenPage: Adw.NavigationPage {
+     [top]
+     Adw.HeaderBar {}
+ 
+-    content: Adw.PreferencesPage {
++    content: Adw.PreferencesPage preferences_page {
+       description: _("Automatically locking the screen prevents others from accessing the device while you're away");
+ 
+       Adw.PreferencesGroup {
+diff --git a/panels/privacy/screen/cc-screen-page.c b/panels/privacy/screen/cc-screen-page.c
+index 341a8971a..755196aab 100644
+--- a/panels/privacy/screen/cc-screen-page.c
++++ b/panels/privacy/screen/cc-screen-page.c
+@@ -22,6 +22,7 @@
+ 
+ #include "cc-screen-page.h"
+ #include "cc-number-row.h"
++#include "cc-plinius-pinguard.h"
+ 
+ #include "panels/display/cc-display-config-manager.h"
+ 
+@@ -42,6 +43,7 @@ struct _CcScreenPage {
+     CcNumberRow *blank_screen_row;
+     CcNumberRow *lock_after_row;
+     AdwPreferencesGroup *screen_privacy_group;
++    AdwPreferencesPage *preferences_page;
+     GDBusProxy *usb_proxy;
+     AdwSwitchRow *automatic_screen_lock_row;
+     AdwSwitchRow *privacy_screen_row;
+@@ -125,6 +127,7 @@ cc_screen_page_class_init (CcScreenPageClass *klass)
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, automatic_screen_lock_row);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, blank_screen_row);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, lock_after_row);
++    gtk_widget_class_bind_template_child (widget_class, CcScreenPage, preferences_page);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, privacy_screen_row);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, screen_privacy_group);
+     gtk_widget_class_bind_template_child (widget_class, CcScreenPage, show_notifications_row);
+@@ -184,6 +187,9 @@ cc_screen_page_init (CcScreenPage *self)
+     g_settings_bind (self->privacy_settings, "usb-protection", self->usb_protection_row, "active",
+                      G_SETTINGS_BIND_DEFAULT);
+ 
++    /* Plinius: the wait after wrong PINs (plinius-pinguard), below the lock options */
++    cc_plinius_pinguard_setup (self->preferences_page);
++
+     self->display_config_manager = cc_display_config_manager_new ();
+     g_signal_connect_object (self->display_config_manager, "changed", G_CALLBACK (update_display_config), self,
+                              G_CONNECT_SWAPPED);

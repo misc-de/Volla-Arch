@@ -1,0 +1,65 @@
+From e4dc73a724af9393bfb535ce7e7107c43d4519a8 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 14:40:00 +0100
+Subject: [PATCH] themes: wider keys in plinius-glass
+
+- bbx_theme_keyboard gets optional pad_hor and gap_hor: the padding left
+  and right of the keys and the space between the keys of a row; 0 keeps
+  pad and gap, so the other themes stay unchanged
+- plinius-glass: 8 instead of 20 beside and 4 instead of 10 between the
+  keys, the keys of a row become about 10 % wider; rows keep their height
+---
+ shared/theme.c  | 7 +++++++
+ shared/theme.h  | 4 ++++
+ shared/themes.c | 2 ++
+ 3 files changed, 13 insertions(+)
+
+diff --git a/shared/theme.c b/shared/theme.c
+index 9760ce5..97fef5a 100644
+--- a/shared/theme.c
++++ b/shared/theme.c
+@@ -118,6 +118,13 @@ static void init_styles(const bbx_theme *theme) {
+     lv_style_set_border_opa(&(styles.keyboard), border_opa);
+     lv_style_set_pad_all(&(styles.keyboard), lv_dpx(theme->keyboard.pad));
+     lv_style_set_pad_gap(&(styles.keyboard), lv_dpx(theme->keyboard.gap));
++    /* Less space beside the keys than between the rows makes them wider */
++    if (theme->keyboard.pad_hor > 0) {
++        lv_style_set_pad_hor(&(styles.keyboard), lv_dpx(theme->keyboard.pad_hor));
++    }
++    if (theme->keyboard.gap_hor > 0) {
++        lv_style_set_pad_column(&(styles.keyboard), lv_dpx(theme->keyboard.gap_hor));
++    }
+ 
+     reset_style(&(styles.key));
+     lv_style_set_bg_opa(&(styles.key), surface_opa);
+diff --git a/shared/theme.h b/shared/theme.h
+index 3feebc6..ee0ba5e 100644
+--- a/shared/theme.h
++++ b/shared/theme.h
+@@ -62,6 +62,10 @@ typedef struct {
+     uint32_t border_color;
+     int32_t pad;
+     int32_t gap;
++    /* Left and right padding; 0 = same as pad */
++    int32_t pad_hor;
++    /* Space between the keys of a row; 0 = same as gap */
++    int32_t gap_hor;
+     bbx_theme_keys keys;
+ } bbx_theme_keyboard;
+ 
+diff --git a/shared/themes.c b/shared/themes.c
+index e38d306..7574751 100644
+--- a/shared/themes.c
++++ b/shared/themes.c
+@@ -1131,6 +1131,8 @@ static const bbx_theme plinius_glass = {
+         .border_color = 0xFFFFFF,
+         .pad = 20,
+         .gap = 10,
++        .pad_hor = 8,
++        .gap_hor = 4,
+         .keys = {
+             .border_width = 1,
+             .corner_radius = 10,
+-- 
+2.55.0
+

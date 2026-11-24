@@ -1,0 +1,9 @@
+# xdg-desktop-portal-wlr on the Plinius (xdg-desktop-portal-wlr-plinius)
+[screencast]
+# Phosh's cast quick setting needs no extra output selection, everything else asks in a window
+# of its own (see /usr/lib/xdg-desktop-portal-wlr-plinius/chooser). dmenu: xdpw hands the
+# chooser the list of screens and windows on stdin.
+chooser_type=dmenu
+chooser_cmd=/usr/lib/xdg-desktop-portal-wlr-plinius/chooser
+# A TV takes 30 frames per second; more would only cost battery for copying
+max_fps=30

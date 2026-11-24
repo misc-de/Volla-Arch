@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 12:00:00 +0100
+Subject: [PATCH] wwan: A label of one's own for each SIM card
+
+The Network page of a SIM card gets a field Label on top. The SIM page shows
+the label instead of the name of the network, in the Network row and in the
+choice of the slot. Labels are kept by ICCID in the key labels of
+org.plinius.sim (cc_sim_label_*() in cc-esim-dialog.c), the same as the label
+of an eSIM profile on the eSIM page, which also goes to the eUICC as the
+profile's nickname. The list of networks and the modem details keep the names
+the networks send.
+
+The field is only there with the schema installed and a card with an ICCID.
+---
+ wwan/cc-wwan-device-page.c    | 23 ++++++++++++++--
+ wwan/cc-wwan-network-dialog.c | 41 ++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+), 3 deletions(-)
+
+diff --git a/panels/wwan/cc-wwan-device-page.c b/panels/wwan/cc-wwan-device-page.c
+index 4e5a924ab..df4d83ed1 100644
+--- a/panels/wwan/cc-wwan-device-page.c
++++ b/panels/wwan/cc-wwan-device-page.c
+@@ -476,7 +476,9 @@ cc_wwan_update_sim_slots_row (CcWwanDevicePage *self)
+         if (sim == NULL)
+             slot_state = g_strdup_printf ("[%s]", _("Empty"));
+         else {
+-            const gchar *operator_name = mm_sim_get_operator_name (sim);
++            /* Plinius: the card's label of its own instead of the operator */
++            g_autofree gchar *label = cc_sim_label_dup (mm_sim_get_identifier (sim));
++            const gchar *operator_name = label ? label : mm_sim_get_operator_name (sim);
+             if (operator_name)
+                 slot_state = g_strdup_printf ("[%s]", operator_name);
+             else
+@@ -575,6 +577,17 @@ wwan_mms_setup (CcWwanDevicePage *self)
+     g_signal_connect_swapped (self->mms_row, "notify::active", G_CALLBACK (wwan_mms_toggled_cb), self);
+ }
+ 
++/* Plinius: the label of the SIM card (set on its Network page, or for an eSIM profile on the eSIM
++ * page) instead of the name of the network it is registered to */
++static void
++wwan_network_name_update (CcWwanDevicePage *self)
++{
++    g_autofree gchar *label = cc_sim_label_dup (cc_wwan_device_get_sim_identifier (self->device));
++
++    cc_list_row_set_secondary_label (self->network_name_row,
++                                     label ? label : cc_wwan_device_get_operator_name (self->device));
++}
++
+ static void
+ cc_wwan_device_page_constructed (GObject *object)
+ {
+@@ -584,8 +597,12 @@ cc_wwan_device_page_constructed (GObject *object)
+ 
+     cc_wwan_device_page_update_data (self);
+ 
+-    g_object_bind_property (self->device, "operator-name", self->network_name_row, "secondary-label",
+-                            G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
++    wwan_network_name_update (self);
++    g_signal_connect_object (self->device, "notify::operator-name", G_CALLBACK (wwan_network_name_update), self,
++                             G_CONNECT_SWAPPED);
++    if (cc_sim_label_settings ())
++        g_signal_connect_object (cc_sim_label_settings (), "changed::labels", G_CALLBACK (wwan_network_name_update),
++                                 self, G_CONNECT_SWAPPED);
+ 
+     g_object_bind_property (self->device, "network-mode", self->network_mode_row, "secondary-label",
+                             G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
+diff --git a/panels/wwan/cc-wwan-network-dialog.c b/panels/wwan/cc-wwan-network-dialog.c
+index 9dbb19a67..37476be1a 100644
+--- a/panels/wwan/cc-wwan-network-dialog.c
++++ b/panels/wwan/cc-wwan-network-dialog.c
+@@ -29,10 +29,13 @@
+ #include <glib/gi18n.h>
+ #include <libmm-glib.h>
+ 
++#include "cc-esim-dialog.h"
+ #include "cc-wwan-errors-private.h"
+ #include "cc-wwan-network-dialog.h"
+ #include "cc-wwan-resources.h"
+ 
++#define PLINIUS_DOMAIN "plinius-control-center"
++
+ /**
+  * @short_description: WWAN network operator selection dialog
+  */
+@@ -50,6 +53,7 @@ struct _CcWwanNetworkDialog {
+     GtkBox *network_search_title;
+     GtkListBox *operator_list_box;
+     GtkButton *refresh_button;
++    AdwEntryRow *label_row;
+ 
+     CcWwanDevice *device;
+     GList *operator_list;
+@@ -404,6 +408,42 @@ cc_wwan_auto_network_changed_cb (CcWwanNetworkDialog *self, GParamSpec *pspec, A
+     }
+ }
+ 
++/* Plinius: a label of one's own for the SIM card, which the SIM page shows instead of the name of
++ * the network; the same as the label of an eSIM profile on the eSIM page */
++static void
++cc_wwan_network_label_apply_cb (CcWwanNetworkDialog *self)
++{
++    cc_sim_label_set (cc_wwan_device_get_sim_identifier (self->device),
++                      gtk_editable_get_text (GTK_EDITABLE (self->label_row)));
++}
++
++static void
++cc_wwan_network_label_setup (CcWwanNetworkDialog *self)
++{
++    const gchar *iccid = cc_wwan_device_get_sim_identifier (self->device);
++    g_autofree gchar *label = NULL;
++    GtkWidget *group;
++
++    /* Only with a card that has an ICCID */
++    if (!cc_sim_label_settings () || !iccid || !*iccid)
++        return;
++
++    group = adw_preferences_group_new ();
++    adw_preferences_group_set_description (ADW_PREFERENCES_GROUP (group),
++                                           g_dgettext (PLINIUS_DOMAIN, "Shown instead of the network's name."));
++    gtk_widget_set_margin_bottom (group, 18);
++
++    self->label_row = ADW_ENTRY_ROW (adw_entry_row_new ());
++    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (self->label_row), g_dgettext (PLINIUS_DOMAIN, "Label"));
++    adw_entry_row_set_show_apply_button (self->label_row, TRUE);
++    label = cc_sim_label_dup (iccid);
++    gtk_editable_set_text (GTK_EDITABLE (self->label_row), label ? label : "");
++    g_signal_connect_swapped (self->label_row, "apply", G_CALLBACK (cc_wwan_network_label_apply_cb), self);
++    adw_preferences_group_add (ADW_PREFERENCES_GROUP (group), GTK_WIDGET (self->label_row));
++
++    gtk_box_prepend (GTK_BOX (adw_toast_overlay_get_child (self->toast_overlay)), group);
++}
++
+ /* Plinius: a new dialog for every opening (it is a page now), set up once constructed instead of
+  * in show() */
+ static void
+@@ -420,6 +460,7 @@ cc_wwan_network_dialog_constructed (GObject *object)
+     g_object_set (self->automatic_row, "active", is_auto, NULL);
+ 
+     cc_wwan_network_dialog_update_current_network (self);
++    cc_wwan_network_label_setup (self);
+ }
+ 
+ static void

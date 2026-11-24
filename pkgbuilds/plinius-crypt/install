@@ -1,0 +1,49 @@
+#!/bin/bash
+# mkinitcpio install hook for plinius-crypt: adds cryptsetup, unl0kr, plinius-progress and
+# their runtime data to the initramfs. The runtime part is in hooks/plinius-crypt.
+
+build() {
+    # Like Arch's encrypt hook: dm-crypt with the crypto modules, the dm udev rules (without
+    # them cryptsetup waits for udev forever) and libgcc_s (cryptsetup dlopens it for threads).
+    # The Plinius kernel has most of this built in; in the preview VM these are modules.
+    map add_module 'dm-crypt?' 'dm-integrity?' 'virtio-gpu?' 'virtio-input?' 'evdev?' 'hid-generic?'
+    add_all_modules '/crypto/'
+    map add_udev_rule '10-dm.rules' '13-dm-disk.rules' '95-dm-notify.rules'
+    add_binary /usr/lib/libgcc_s.so.1
+
+    # blkdiscard: the fast way for a freshly installed device (hook: encrypt_device)
+    map add_binary cryptsetup unl0kr plinius-progress e2fsck resize2fs readlink blkdiscard
+    # Rating of the first password for GNOME Settings (plinius-security, optional); without
+    # cracklib in the initramfs it rates without the dictionary check
+    if [[ -x /usr/lib/plinius-security/plinius-pwrate ]]; then
+        add_binary /usr/lib/plinius-security/plinius-pwrate
+    fi
+
+    # libinput needs the input properties from udev, otherwise it ignores keyboard and touch
+    map add_udev_rule '60-input-id.rules' '60-evdev.rules'
+    add_full_dir /usr/share/libinput
+    add_full_dir /usr/share/X11/xkb
+    add_file /etc/unl0kr.conf
+    add_full_dir /etc/unl0kr.conf.d
+    # Background of the glass theme (50-plinius.conf): the blurred Phosh wallpaper of the
+    # package. look-files replaces it by the user's wallpaper (background-install) and adds the
+    # look of the session's keyboard, the keyboard layout and the language; the Halium ramdisk of
+    # the phone takes the same files (halium-rebuild). plinius-crypt-locale.path and the helpers
+    # rebuild the initramfs when they change.
+    add_file /usr/share/plinius-crypt/glass-background.bin
+    /usr/lib/plinius-crypt/look-files "$BUILDROOT" || error "plinius-crypt: look-files failed"
+
+    add_runscript
+}
+
+help() {
+    cat <<HELPEOF
+Full-disk encryption of the root filesystem with a password prompt via unl0kr,
+progress and messages via plinius-progress.
+Opens a LUKS2 root, or encrypts it offline at the next boot on request
+(plinius-encrypt). Sets root= to /dev/mapper/plinius-root.
+Requires the udev and block hooks before it.
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:

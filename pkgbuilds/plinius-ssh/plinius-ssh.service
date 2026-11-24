@@ -1,0 +1,15 @@
+# Applies the networks SSH answers on (/etc/plinius-ssh.conf) at boot: firewall rules before any
+# network is up, the sshd file before sshd starts. Started through the package's own link in
+# multi-user.target.wants (no [Install]: nothing to enable or disable by hand).
+[Unit]
+Description=Networks the SSH server answers on
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target sshd.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/plinius-ssh/plinius-ssh-set apply
+

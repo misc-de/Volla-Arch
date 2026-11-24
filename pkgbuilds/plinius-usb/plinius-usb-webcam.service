@@ -1,0 +1,12 @@
+[Unit]
+Description=Phone camera as the USB webcam of a computer
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service
+
+[Service]
+ExecStart=/usr/bin/plinius-usb-webcam
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

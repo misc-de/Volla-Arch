@@ -1,0 +1,470 @@
+#!/bin/bash
+# Package operations for plinius-software (runs as root, via pkexec).
+# No operation refreshes only the sync databases (no -Sy without -u): the databases stay at
+# the installed state, so installing is never a partial upgrade
+# (docs/PAKETIERUNG.md, "Oberfläche auf dem Gerät").
+# Flatpak apps come system-wide from Flathub and, on request, FuriHub (apps of the FuriLabs
+# user community), independent of the pacman state. FuriHub has no runtimes of its own, its apps
+# take them from Flathub: turning FuriHub on turns Flathub on too, Flathub stays on while
+# FuriHub is.
+#
+# Usage:  plinius-pkg install PACKAGE... | remove PACKAGE... | upgrade
+#         plinius-pkg flathub-enable | flathub-disable | furihub-enable | furihub-disable
+#         plinius-pkg flatpak-install REF | flatpak-remove APP-ID
+#         plinius-pkg channel-beta | channel-stable
+# Exit:   0 ok (upgrade: system packages changed; /run/plinius-pkg/restart.json says which
+#         restart brings them into use, see plinius-restart), 1 error,
+#         3 database newer than the system (upgrade first),
+#         4 package file no longer on the server (upgrade first),
+#         5 cannot disable Flathub or FuriHub, apps from it are still installed,
+#         6 upgrade: nothing to do, 7 upgrade: only Flatpak apps changed,
+#         8 waiting for approval (a package hits the limits set by plinius-freigabe; not for
+#         upgrade, which then leaves the system packages alone and only updates Flatpak apps),
+#         9 another package operation is running, 10 upgrade: battery too low, no charger,
+#         11 cannot disable Flathub, FuriHub is on and needs its runtimes,
+#         12 upgrade: the database of [plinius] does not match the signed stamp of its server
+#         (plinius-repo-stamp); the sync databases are put back, nothing is installed
+#
+# Every operation runs as its own system unit (plinius-pkg.service). Otherwise, if Software
+# crashed or the session ended, pacman would get SIGPIPE or SIGTERM mid-transaction.
+# This invocation starts the unit, relays its output and exits with its exit code.
+#
+# pacman runs with LC_ALL=C: plinius-software derives its progress display from the output.
+# Sections of our own are announced by a line "::plinius:: NAME".
+set -euo pipefail
+
+FLATHUB=https://dl.flathub.org/repo/flathub.flatpakrepo
+# Signed (GPGKey in the file); its apps are listed at https://furihub.github.io/repo/
+FURIHUB=https://furihub.github.io/repo/index.flatpakrepo
+UNIT=plinius-pkg.service
+RUN=/run/plinius-pkg
+# Which running programs still use replaced files (see there)
+RESTART=/usr/lib/plinius-software/plinius-restart
+# Checks the freshness stamp of [plinius] against the database pacman fetched (see there)
+STAMP=/usr/lib/plinius-software/plinius-repo-stamp
+# Below this charge level (in %) and without a charger, no system update: a battery dying
+# mid-transaction leaves a half-updated system
+MIN_BATTERY=10
+
+die() { echo "plinius-pkg: $*" >&2; exit 1; }
+usage() { die "usage: plinius-pkg install PACKAGE... | remove PACKAGE... | upgrade | flathub-enable | flathub-disable | furihub-enable | furihub-disable | flatpak-install REF | flatpak-remove APP-ID | channel-beta | channel-stable"; }
+
+[[ $(id -u) -eq 0 ]] || die "must run as root"
+# pkexec passes the caller's umask on; with umask 0 $RUN would become world-writable and its
+# files could be replaced by symlinks that root then writes through
+umask 022
+# pkexec resets the environment; load the system locale so flatpak still reports in the
+# system language.
+# Our own messages are English like the pacman output (LC_ALL=C); the app only shows them
+# under "Details".
+[[ -r /etc/locale.conf ]] && { . /etc/locale.conf; export LANG; }
+
+cmd=${1:-}
+shift || true
+
+# --- Outer invocation: start the unit and follow it ---------------------------------------
+if [[ -z ${PLINIUS_PKG_UNIT:-} ]]; then
+	case $cmd in
+		install|remove|upgrade|flathub-enable|flathub-disable|furihub-enable|furihub-disable|flatpak-install|flatpak-remove|channel-beta|channel-stable) ;;
+		*) usage ;;
+	esac
+	# Held until this invocation ends: two starts at the same moment cannot both pass the
+	# is-active check (the second one would empty the log of the first)
+	exec 8> /run/plinius-pkg.lock
+	flock -n 8 || { echo "plinius-pkg: another software operation is still running" >&2; exit 9; }
+	if systemctl is-active -q "$UNIT"; then
+		echo "plinius-pkg: another software operation is still running" >&2
+		exit 9
+	fi
+	systemctl reset-failed "$UNIT" 2>/dev/null || true
+	# Always fresh and owned by root with 0755, whatever an earlier run left behind
+	rm -rf -- "$RUN"
+	install -d -m 0755 -o root -g root "$RUN"
+	: > "$RUN/log"
+	rm -f "$RUN/rc"
+	# Exit code via a file: systemd garbage-collects successful units right away (--collect)
+	systemd-run --unit="$UNIT" --quiet --collect --service-type=exec \
+		--description="Software: $cmd" \
+		--property=StandardOutput="append:$RUN/log" --property=StandardError="append:$RUN/log" \
+		--setenv=PLINIUS_PKG_UNIT=1 --setenv=LANG="${LANG:-C}" --property=UMask=0022 \
+		/bin/bash -c '"$@"; echo $? > '"$RUN/rc" plinius-pkg "$0" "$cmd" "$@"
+	pid=$(systemctl show -P MainPID "$UNIT" 2>/dev/null || echo 0)
+	if [[ $pid != 0 ]]; then
+		# If the app exits, only this tail ends; the unit keeps running
+		tail -n +1 -f --pid="$pid" "$RUN/log"
+	else
+		cat "$RUN/log"
+	fi
+	# Wait up to 5 s for the exit code file
+	for _ in $(seq 50); do
+		[[ -s $RUN/rc ]] && exit "$(cat "$RUN/rc")"
+		sleep 0.1
+	done
+	die "the operation ended without a result"
+fi
+
+# --- Inside the unit --------------------------------------------------------------------------
+
+# Reject anything that is not a valid pacman package name (e.g. options starting with "-")
+check_pkgnames() {
+	for p; do
+		[[ $p =~ ^[a-z0-9@_+][a-z0-9@._+-]*$ ]] || die "invalid package name: $p"
+	done
+}
+
+# Block suspend and shutdown while pacman or flatpak is writing
+inhibit() {
+	systemd-inhibit --what=sleep:shutdown --who=Software --why="Changing installed software" "$@"
+}
+# The Halium kernel has no Landlock; pacman's download sandbox then fails ("switching to
+# sandbox user 'alpm' failed") and nothing gets downloaded. Drop only the filesystem part:
+# the switch to the alpm user and the syscall filter stay.
+SANDBOX=()
+grep -qw landlock /sys/kernel/security/lsm 2>/dev/null || SANDBOX=(--disable-sandbox-filesystem)
+# Output goes to the app and is copied for evaluation (classify)
+OUT=$RUN/pacman.out
+run() { inhibit env LC_ALL=C pacman --noconfirm --noprogressbar "${SANDBOX[@]}" "$@" 2>&1 | tee "$OUT"; }
+# --system and --noninteractive are per-subcommand options, so they go after the subcommand
+flatpak_run() { inhibit flatpak "$1" --system --noninteractive "${@:2}"; }
+
+# Did pacman refuse because a package hits the limits of plinius-freigabe? pacman names the
+# packages with their versions: ":: plinius-freigabe-1-1 and glibc-2.44-1 are in conflict"
+held() {
+	grep -qE '(plinius-freigabe-[^ ]+ and .* are in conflict| and plinius-freigabe-[^ ]+ are in conflict)' "$OUT"
+}
+
+# Did pacman refuse only because of files that no package owns, each brought by a package of
+# our repo [plinius]? Then prints one --overwrite option per file (pacman matches them without
+# the leading /). Such a file is left over from an earlier version of ours (or a test); a user
+# could not remove it, and the update would stay stuck. Prints nothing and fails as soon as one
+# conflict is anything else: a file another package owns ("(owned by …)"), a file an Arch
+# package brings, or a path pacman would read as a pattern.
+# pacman: "muga: /usr/lib/python3.14/site-packages/muga/panorama.py exists in filesystem"
+stray_overwrites() {
+	local line pkg path ours opts=()
+	grep -q ' exists in filesystem' "$OUT" || return 1
+	ours=$(pacman -Slq plinius 2>/dev/null) || return 1
+	while IFS= read -r line; do
+		[[ $line =~ ^([^:\ ]+):\ (/.+)\ exists\ in\ filesystem$ ]] || return 1
+		pkg=${BASH_REMATCH[1]} path=${BASH_REMATCH[2]}
+		grep -qxF -- "$pkg" <<< "$ours" || return 1
+		! pacman -Qqo "$path" >/dev/null 2>&1 || return 1
+		[[ $path != *[][*?,!\\]* ]] || return 1
+		opts+=("--overwrite=${path#/}")
+	done < <(grep ' exists in filesystem' "$OUT")
+	printf '%s\n' "${opts[@]}"
+}
+
+# Keep a copy of the files an --overwrite replaces (stray_overwrites), for looking at later
+OVERWRITTEN=/var/lib/plinius-pkg/overwritten
+save_overwritten() {
+	local dir opt
+	dir=$OVERWRITTEN/$(date +%Y%m%d-%H%M%S)
+	mkdir -p "$dir"
+	for opt; do
+		cp -a --parents "/${opt#--overwrite=}" "$dir/" 2>/dev/null || true
+	done
+}
+
+# Put the sync databases back to their state before this upgrade (sync.before), also removing
+# what the sync added
+restore_sync() {
+	local f
+	for f in "$sync"/*; do
+		[[ -e $RUN/sync.before/${f##*/} ]] || rm -f -- "$f"
+	done
+	cp -a --remove-destination "$RUN/sync.before/." "$sync/"
+}
+
+# The freshness stamp of [plinius] against the database pacman just fetched (plinius-repo-stamp,
+# as root it also keeps the system-wide state of the stamps seen). Exit 0 there is ok, 2 is a
+# genuine but old stamp: the database is the signed one, installing from it does no harm. 3 can be
+# an upload switching database and stamp over: both are fetched once more. 4 means no stamp
+# could be had (no answer, an HTTP error, none on the server): for now only a warning (in the log
+# and in Software), the upgrade goes on, so a server problem never holds back security updates.
+# Anything else (a foreign or replayed stamp, another channel, a database other than the stamped
+# one) stops the upgrade: returns 1. Returns 2 when fetching once more failed (pacman's output in
+# $OUT): then nothing could be checked, which is no mismatch.
+verify_repo() {
+	local rc=0
+	"$STAMP" check --db "$sync/plinius.db" --text || rc=$?
+	if ((rc == 3)); then
+		sleep 15
+		run -Sy || return 2
+		rc=0
+		"$STAMP" check --db "$sync/plinius.db" --text || rc=$?
+	fi
+	if ((rc == 4)); then
+		echo "plinius-pkg: warning: the stamp of [plinius] could not be checked, updating anyway"
+		rc=0
+	fi
+	((rc == 0 || rc == 2))
+}
+
+# Map the output of a failed pacman run to an exit code
+classify() {
+	if held; then
+		echo "plinius-pkg: held back by plinius-freigabe until the update is approved" >&2
+		exit 8
+	fi
+	# Package file gone from the mirror: the installed database state is outdated
+	grep -q 'The requested URL returned error: 404' "$OUT" && exit 4
+	exit 1
+}
+
+# Channel of our repo [plinius] (docs/PAKETIERUNG.md, hosting): stable at <repo>/<arch>, beta
+# at <repo>/beta/<arch>, both under the same repo name. Switching rewrites only the Server lines
+# of the [plinius] section; nothing is synced or installed here. The next update brings the
+# channel's versions; going back to stable keeps newer beta versions until stable catches up
+# (pacman does not downgrade on -Syu).
+set_channel() {
+	local conf=/etc/pacman.conf tmp
+	grep -qx '\[plinius\]' "$conf" || die "no repo [plinius] in $conf"
+	tmp=$(mktemp /etc/.pacman.conf.XXXXXX)
+	if ! awk -v want="$1" '
+		/^\[/ { section = $0 }
+		section == "[plinius]" && /^[ \t]*Server[ \t]*=/ {
+			url = $0
+			sub(/^[ \t]*Server[ \t]*=[ \t]*/, "", url)
+			sub(/[ \t]+$/, "", url)
+			if (want == "beta" && url !~ /\/beta\/[^\/]+$/)
+				sub(/\/[^\/]+$/, "/beta&", url)
+			else if (want == "stable" && match(url, /\/beta\/[^\/]+$/))
+				url = substr(url, 1, RSTART - 1) substr(url, RSTART + 5)
+			print "Server = " url
+			found = 1
+			next
+		}
+		{ print }
+		END { exit !found }' "$conf" > "$tmp"; then
+		rm -f "$tmp"
+		die "no Server line in the [plinius] section of $conf"
+	fi
+	chmod --reference="$conf" "$tmp"
+	chown --reference="$conf" "$tmp"
+	sync "$tmp"
+	mv -f "$tmp" "$conf"
+	grep -A3 -x '\[plinius\]' "$conf" | grep '^Server' || true
+}
+
+remote_enabled() {
+	command -v flatpak >/dev/null && flatpak remotes --system --columns=name | grep -x "$1" >/dev/null
+}
+flathub_enabled() { remote_enabled flathub; }
+furihub_enabled() { remote_enabled furihub; }
+
+# Add a remote and fetch its app catalog (AppStream, /var/lib/flatpak/appstream/NAME)
+remote_enable() {
+	echo "::plinius:: $1"
+	flatpak remote-add --system --if-not-exists "$1" "$2"
+	flatpak_run update --appstream "$1"
+}
+
+# Remove a remote, unless apps from it are still installed (exit 5)
+remote_disable() {
+	command -v flatpak >/dev/null || exit 0
+	if flatpak list --system --app --columns=origin | grep -x "$1" >/dev/null; then
+		echo "plinius-pkg: apps from $1 are still installed" >&2
+		exit 5
+	fi
+	flatpak_run uninstall --unused -y
+	if remote_enabled "$1"; then
+		flatpak remote-delete --system "$1"
+	fi
+}
+
+# Another pacman (e.g. in a terminal), or a lock left over by an interrupted operation
+check_lock() {
+	if pgrep -x pacman >/dev/null; then
+		echo "plinius-pkg: pacman is already running" >&2
+		exit 9
+	fi
+	if [[ -e /var/lib/pacman/db.lck ]]; then
+		# No pacman is running: the lock is from an interrupted operation (power loss).
+		# The next -Syu repairs half-updated packages.
+		echo "plinius-pkg: removing the lock of an interrupted operation" >&2
+		rm -f /var/lib/pacman/db.lck
+	fi
+}
+
+# True if a charger is connected, a battery is charging, or every battery is at
+# MIN_BATTERY or above
+battery_ok() {
+	local b capacity
+	for b in /sys/class/power_supply/*; do
+		[[ $(cat "$b/type" 2>/dev/null) == Mains || $(cat "$b/type" 2>/dev/null) == USB ]] &&
+			[[ $(cat "$b/online" 2>/dev/null) == 1 ]] && return 0
+	done
+	for b in /sys/class/power_supply/*; do
+		[[ $(cat "$b/type" 2>/dev/null) == Battery ]] || continue
+		capacity=$(cat "$b/capacity" 2>/dev/null) || continue
+		[[ $(cat "$b/status" 2>/dev/null) == Charging ]] && return 0
+		((capacity >= MIN_BATTERY)) || return 1
+	done
+	return 0
+}
+
+# Install packages from the installed state of the sync database
+pacman_install() {
+	# If the database already offers newer versions than installed, someone ran -Sy without
+	# -u. Installing a package from it would be a partial upgrade.
+	if [[ -n $(pacman -Qqu 2>/dev/null) ]]; then
+		echo "plinius-pkg: the system is older than the package database, update it first" >&2
+		exit 3
+	fi
+	# Download first: if a file is missing on the server (state too old), the system stays untouched
+	run -Sw --needed "$@" || classify
+	run -S --needed "$@" || classify
+}
+
+case $cmd in
+install)
+	(($#)) || usage
+	check_pkgnames "$@"
+	check_lock
+	pacman_install "$@"
+	;;
+remove)
+	(($#)) || usage
+	check_pkgnames "$@"
+	check_lock
+	# pacman -R refuses anything another package needs (e.g. plinius-apps, the fixed app
+	# selection); plinius-software does not offer it in the first place.
+	for p; do
+		pacman -Qq "$p" >/dev/null 2>&1 || die "$p is not installed"
+	done
+	run -Rs "$@" || classify
+	;;
+upgrade)
+	(($# == 0)) || usage
+	if ! battery_ok; then
+		echo "plinius-pkg: battery below $MIN_BATTERY % and no charger connected" >&2
+		exit 10
+	fi
+	check_lock
+	pacman -Q > "$RUN/packages.before"
+	# Unit files before the update: a changed one only applies at the unit's next start
+	"$RESTART" snapshot > "$RUN/units.before" || true
+	# While a package waits for approval, pacman refuses the whole -Su but has already
+	# refreshed the sync databases; installing would then be refused (pacman_install, exit 3).
+	# The databases are put back in that case, the Flatpak apps are still updated, and the
+	# result is "nothing to do" for the system: Software names such updates as held back.
+	# Sync and upgrade are two runs: between them the stamp of [plinius] is checked against the
+	# database just fetched (verify_repo); if it does not match, the databases are put back too
+	# and nothing is installed (exit 12).
+	sync="$(pacman-conf DBPath)sync"
+	rm -rf "$RUN/sync.before"
+	cp -a "$sync" "$RUN/sync.before"
+	if ! run -Sy; then
+		restore_sync
+		classify
+	fi
+	verified=0
+	verify_repo || verified=$?
+	if ((verified)); then
+		restore_sync
+		rm -rf "$RUN/sync.before"
+		if ((verified == 2)); then
+			# The network or the server, as with the first -Sy: classify tells which
+			echo "plinius-pkg: fetching the package lists once more (after a stamp that did not match yet) failed; nothing was installed" >&2
+			classify
+		fi
+		echo "plinius-pkg: the package list of [plinius] does not match the signed stamp of its server; nothing was installed" >&2
+		exit 12
+	fi
+	if ! run -Su; then
+		if held; then
+			restore_sync
+			echo "plinius-pkg: system packages wait for approval (plinius-freigabe); only Flatpak apps are updated" >&2
+		elif mapfile -t overwrite < <(stray_overwrites) && ((${#overwrite[@]})); then
+			# Files nobody owns stand in the way of our packages: replace them (a copy is kept)
+			echo "plinius-pkg: replacing files no package owns: ${overwrite[*]#--overwrite=}" >&2
+			save_overwritten "${overwrite[@]}"
+			run -Su "${overwrite[@]}" || classify
+		else
+			classify
+		fi
+	fi
+	rm -rf "$RUN/sync.before"
+	pacman -Q > "$RUN/packages.after"
+	changed=$(cmp -s "$RUN/packages.before" "$RUN/packages.after" || echo 1)
+	# Names of the new and updated packages
+	comm -13 <(sort "$RUN/packages.before") <(sort "$RUN/packages.after") | cut -d' ' -f1 > "$RUN/packages.changed"
+	code=0
+	if flathub_enabled; then
+		echo "::plinius:: flatpak"
+		apps=$(flatpak list --system --columns=ref,active | md5sum)
+		# The system update is already done: a failure here (network) does not change that
+		flatpak_run update -y || echo "plinius-pkg: updating the Flatpak apps failed" >&2
+		[[ -n $changed || $(flatpak list --system --columns=ref,active | md5sum) == "$apps" ]] || code=7
+	fi
+	[[ -n $changed || $code == 7 ]] || exit 6
+	# What the update needs to take effect: nothing, apps, the user interface or a reboot.
+	# Without an answer the app offers a reboot.
+	if "$RESTART" check --packages "$RUN/packages.changed" --units-before "$RUN/units.before" \
+		> "$RUN/restart.json.new"; then
+		mv -f "$RUN/restart.json.new" "$RUN/restart.json"
+	else
+		rm -f "$RUN/restart.json.new"
+		echo "plinius-pkg: could not tell which programs need a restart" >&2
+	fi
+	exit "$code"
+	;;
+flathub-enable)
+	(($# == 0)) || usage
+	pacman -Qq flatpak >/dev/null 2>&1 || { check_lock; pacman_install flatpak; }
+	remote_enable flathub "$FLATHUB"
+	;;
+flathub-disable)
+	(($# == 0)) || usage
+	if furihub_enabled; then
+		echo "plinius-pkg: FuriHub is on and takes its runtimes from Flathub" >&2
+		exit 11
+	fi
+	remote_disable flathub
+	;;
+furihub-enable)
+	(($# == 0)) || usage
+	pacman -Qq flatpak >/dev/null 2>&1 || { check_lock; pacman_install flatpak; }
+	# The runtimes of FuriHub's apps (org.gnome.Platform) are on Flathub
+	flathub_enabled || remote_enable flathub "$FLATHUB"
+	remote_enable furihub "$FURIHUB"
+	;;
+furihub-disable)
+	(($# == 0)) || usage
+	remote_disable furihub
+	;;
+flatpak-install)
+	(($# == 1)) || usage
+	[[ $1 =~ ^app/[A-Za-z0-9._-]+/[A-Za-z0-9_]+/[A-Za-z0-9._-]+$ ]] || die "invalid Flatpak ref: $1"
+	flathub_enabled || die "Flathub is not enabled"
+	# From FuriHub if it has the app (its builds are made for phones), otherwise from Flathub;
+	# Settings marks the app the same way. --cached: the summary from the catalog update.
+	remote=flathub
+	if furihub_enabled && flatpak remote-info --system --cached furihub "$1" >/dev/null 2>&1; then
+		remote=furihub
+	fi
+	flatpak_run install -y "$remote" "$1"
+	;;
+flatpak-remove)
+	(($# == 1)) || usage
+	# App IDs are reverse domain names; no leading "-" (it would be taken as e.g. --all)
+	[[ $1 =~ ^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+$ ]] || die "invalid app ID: $1"
+	flatpak_run uninstall -y -- "$1"
+	# Runtimes no app needs any more
+	flatpak_run uninstall --unused -y
+	;;
+channel-beta)
+	(($# == 0)) || usage
+	check_lock
+	set_channel beta
+	;;
+channel-stable)
+	(($# == 0)) || usage
+	check_lock
+	set_channel stable
+	;;
+*)
+	usage
+	;;
+esac

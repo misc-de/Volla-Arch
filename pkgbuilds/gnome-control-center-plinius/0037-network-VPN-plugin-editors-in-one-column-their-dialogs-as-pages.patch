@@ -1,0 +1,363 @@
+From 1e046e101c8647f34a0215c1820b9315efde1ff8 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 17:09:25 +0100
+Subject: [PATCH] network: VPN plugin editors in one column, their dialogs as
+ pages
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Plinius: the editors of the VPN plugins (OpenVPN, OpenConnect) are laid
+out for a desktop window, the labels in a column left of the fields.
+On the phone the fields ran off the screen, OpenVPN's form had a gap
+in the middle (its gateway grid asks for all height there is) and its
+"Advanced…" dialog was wider than the screen, with the first tab and
+the buttons out of reach.
+
+The plugin's widgets now go through vpn_single_column(): every grid
+becomes one column with its cells in reading order, a check button
+with fields after it gets them below, rows and boxes lose equal
+heights, entries start narrow, lists cut long entries with "…", tab
+rows scroll, labels wrap where they have the column's width. Margins
+of the page 12 instead of 50.
+
+A plugin's own GtkDialog (shown with gtk_widget_show(), transient for
+Settings, while a VPN editor is up) opens as a page of the window's
+navigation, as the form dialogs of Settings do: Settings defines
+gtk_widget_show() for the whole program, the dialog stays unshown
+and its content moves into the page. Back answers the dialog with OK,
+as leaving the editor's other pages keeps what was entered there; it
+is saved only with Add/Apply. File choosers stay dialogs.
+---
+ .../network/connection-editor/ce-page-vpn.c   | 276 ++++++++++++++++++
+ panels/network/connection-editor/vpn-page.blp |   4 +-
+ 2 files changed, 278 insertions(+), 2 deletions(-)
+
+diff --git a/panels/network/connection-editor/ce-page-vpn.c b/panels/network/connection-editor/ce-page-vpn.c
+index dac2c1f..b354915 100644
+--- a/panels/network/connection-editor/ce-page-vpn.c
++++ b/panels/network/connection-editor/ce-page-vpn.c
+@@ -21,8 +21,11 @@
+ 
+ #include "config.h"
+ 
++#include <dlfcn.h>
++
+ #include <glib/gi18n.h>
+ 
++#include <adwaita.h>
+ #include <NetworkManager.h>
+ 
+ #include "ce-page-vpn.h"
+@@ -88,6 +91,273 @@ vpn_gnome3ify_editor (GtkWidget *widget)
+     }
+ }
+ 
++/* Plinius: the plugins lay their forms out for a desktop window, the labels in a column left
++ * of the fields, which pushes the fields off a phone's screen. Every grid becomes one column,
++ * its cells in reading order: the label of a row above its field. A row of a check button with fields after it ("Use custom gateway port" and a number)
++ * stacks the fields below the check button, translations make such rows even longer. Entries start narrow and take the width
++ * there is, lists cut their entries short with "…", tab rows scroll. Labels wrap where they
++ * have the width of the column (in grids, vertical boxes and check buttons there), not in a row
++ * of other widgets, which would hand them their minimum width, a word per line. */
++/* Grid cells in reading order: by row, then by column */
++static int
++compare_grid_cells (gconstpointer a, gconstpointer b, gpointer layout)
++{
++    GtkGridLayoutChild *la = GTK_GRID_LAYOUT_CHILD (gtk_layout_manager_get_layout_child (layout, (GtkWidget *) a));
++    GtkGridLayoutChild *lb = GTK_GRID_LAYOUT_CHILD (gtk_layout_manager_get_layout_child (layout, (GtkWidget *) b));
++    int ra = gtk_grid_layout_child_get_row (la), rb = gtk_grid_layout_child_get_row (lb);
++
++    if (ra != rb)
++        return ra - rb;
++    return gtk_grid_layout_child_get_column (la) - gtk_grid_layout_child_get_column (lb);
++}
++
++static void
++vpn_single_column (GtkWidget *widget)
++{
++    GtkWidget *child;
++
++    /* Boxes before their children: a label wraps or not by the orientation of its box.
++     * Children of equal height, as in the grids, would make every row as tall as a stacked one */
++    if (GTK_IS_BOX (widget) &&
++        gtk_orientable_get_orientation (GTK_ORIENTABLE (widget)) == GTK_ORIENTATION_VERTICAL)
++        gtk_box_set_homogeneous (GTK_BOX (widget), FALSE);
++
++    if (GTK_IS_BOX (widget) &&
++        gtk_orientable_get_orientation (GTK_ORIENTABLE (widget)) == GTK_ORIENTATION_HORIZONTAL &&
++        GTK_IS_CHECK_BUTTON (gtk_widget_get_first_child (widget)) &&
++        gtk_widget_get_next_sibling (gtk_widget_get_first_child (widget))) {
++        gtk_orientable_set_orientation (GTK_ORIENTABLE (widget), GTK_ORIENTATION_VERTICAL);
++        /* The fields line up with the check button's text */
++        for (child = gtk_widget_get_next_sibling (gtk_widget_get_first_child (widget)); child;
++             child = gtk_widget_get_next_sibling (child)) {
++            gtk_widget_set_margin_start (child, 28);
++            gtk_widget_set_halign (child, GTK_ALIGN_START);
++        }
++    }
++
++    for (child = gtk_widget_get_first_child (widget); child; child = gtk_widget_get_next_sibling (child))
++        vpn_single_column (child);
++
++    if (GTK_IS_GRID (widget)) {
++        GtkLayoutManager *layout = gtk_widget_get_layout_manager (widget);
++        g_autoptr(GPtrArray) cells = g_ptr_array_new ();
++
++        /* Rows of equal height would give every row the height of the tallest */
++        gtk_grid_set_row_homogeneous (GTK_GRID (widget), FALSE);
++
++        for (child = gtk_widget_get_first_child (widget); child; child = gtk_widget_get_next_sibling (child))
++            g_ptr_array_add (cells, child);
++        g_ptr_array_sort_values_with_data (cells, compare_grid_cells, layout);
++
++        for (guint i = 0; i < cells->len; i++) {
++            GtkGridLayoutChild *lc;
++
++            child = g_ptr_array_index (cells, i);
++            lc = GTK_GRID_LAYOUT_CHILD (gtk_layout_manager_get_layout_child (layout, child));
++            if (GTK_IS_LABEL (child) && gtk_grid_layout_child_get_column (lc) == 0) {
++                const char *text = gtk_label_get_text (GTK_LABEL (child));
++                gsize len = strlen (text);
++
++                /* "User Agent:" as the other labels, without the colon */
++                if (len > 1 && text[len - 1] == ':') {
++                    g_autofree char *trimmed = g_strndup (text, len - 1);
++
++                    gtk_label_set_text (GTK_LABEL (child), trimmed);
++                }
++                gtk_label_set_xalign (GTK_LABEL (child), 0.0);
++                gtk_widget_set_halign (child, GTK_ALIGN_FILL);
++                /* Some room above a label, so it reads as the head of the field below */
++                if (i > 0)
++                    gtk_widget_set_margin_top (child, 6);
++            }
++            gtk_grid_layout_child_set_row (lc, i);
++            gtk_grid_layout_child_set_row_span (lc, 1);
++            gtk_grid_layout_child_set_column (lc, 0);
++            gtk_grid_layout_child_set_column_span (lc, 1);
++        }
++    }
++
++    if (GTK_IS_ENTRY (widget) || GTK_IS_PASSWORD_ENTRY (widget)) {
++        gtk_editable_set_width_chars (GTK_EDITABLE (widget), 8);
++        gtk_widget_set_hexpand (widget, TRUE);
++    } else if (GTK_IS_LABEL (widget)) {
++        GtkWidget *parent = gtk_widget_get_parent (widget);
++
++        if (GTK_IS_CHECK_BUTTON (parent))
++            parent = gtk_widget_get_parent (parent);
++        if (GTK_IS_GRID (parent) ||
++            (GTK_IS_BOX (parent) &&
++             gtk_orientable_get_orientation (GTK_ORIENTABLE (parent)) == GTK_ORIENTATION_VERTICAL)) {
++            gtk_label_set_wrap (GTK_LABEL (widget), TRUE);
++            gtk_label_set_wrap_mode (GTK_LABEL (widget), PANGO_WRAP_WORD_CHAR);
++        }
++    } else if (GTK_IS_COMBO_BOX (widget)) {
++        g_autoptr(GList) cells = NULL;
++
++        G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++        cells = gtk_cell_layout_get_cells (GTK_CELL_LAYOUT (widget));
++        G_GNUC_END_IGNORE_DEPRECATIONS
++        for (GList *l = cells; l; l = l->next) {
++            if (GTK_IS_CELL_RENDERER_TEXT (l->data))
++                g_object_set (l->data, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
++        }
++    } else if (GTK_IS_NOTEBOOK (widget)) {
++        gtk_notebook_set_scrollable (GTK_NOTEBOOK (widget), TRUE);
++    }
++}
++
++/* Plinius: a plugin's own dialogs (OpenVPN's "Advanced…") open as pages of the window's
++ * navigation, like the other dialogs of Settings (shell/cc-plinius-dialog-pages.c). The plugins
++ * create a GtkDialog transient for the window and show it with gtk_widget_show(); Settings
++ * defines that function for the whole program, so the plugins' calls end up here.
++ *
++ * The dialog itself stays unshown while the widgets of its content area move into the page.
++ * Back (button or swipe) answers the dialog with OK, as leaving any other page of the editor
++ * keeps what was entered there (saved only with the editor's Add/Apply); the plugin then reads
++ * the widgets and destroys the dialog. File choosers and other GtkDialog subclasses stay
++ * dialogs. PLINIUS_DIALOG_PAGES=0 in the environment turns this off. */
++static GSList *vpn_pages;  /* CEPageVpn showing a plugin editor */
++
++typedef struct {
++    GtkDialog *dialog;              /* weak */
++    AdwNavigationView *navigation;  /* weak */
++    AdwNavigationPage *page;        /* weak */
++    gulong popped_id;
++    gulong destroy_id;
++} PluginDialogPage;
++
++static void
++plugin_dialog_page_free (PluginDialogPage *pd)
++{
++    if (pd->navigation)
++        g_clear_signal_handler (&pd->popped_id, pd->navigation);
++    if (pd->dialog)
++        g_clear_signal_handler (&pd->destroy_id, pd->dialog);
++    g_clear_weak_pointer (&pd->dialog);
++    g_clear_weak_pointer (&pd->navigation);
++    g_clear_weak_pointer (&pd->page);
++    g_free (pd);
++}
++
++static void
++plugin_dialog_popped_cb (AdwNavigationView *navigation, AdwNavigationPage *page, PluginDialogPage *pd)
++{
++    g_autoptr(GtkDialog) dialog = NULL;
++    int response;
++
++    if (page != pd->page)
++        return;
++
++    /* Answered while the page's widgets are still alive: the plugin reads them now */
++    dialog = pd->dialog ? g_object_ref (pd->dialog) : NULL;
++    plugin_dialog_page_free (pd);
++    if (!dialog)
++        return;
++
++    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++    response = gtk_dialog_get_widget_for_response (dialog, GTK_RESPONSE_OK) ?
++               GTK_RESPONSE_OK : GTK_RESPONSE_CLOSE;
++    gtk_dialog_response (dialog, response);
++    G_GNUC_END_IGNORE_DEPRECATIONS
++}
++
++/* The plugin destroyed the dialog on its own: its page goes too */
++static void
++plugin_dialog_destroy_cb (GtkWidget *dialog, PluginDialogPage *pd)
++{
++    AdwNavigationPage *previous;
++
++    g_signal_handler_disconnect (dialog, pd->destroy_id);
++    pd->destroy_id = 0;
++    g_clear_weak_pointer (&pd->dialog);
++    if (!pd->page || !pd->navigation)
++        return;
++
++    previous = adw_navigation_view_get_previous_page (pd->navigation, pd->page);
++    if (previous)
++        adw_navigation_view_pop_to_page (pd->navigation, previous);
++}
++
++static gboolean
++plugin_dialog_as_page (GtkDialog *dialog)
++{
++    GtkWindow *parent = gtk_window_get_transient_for (GTK_WINDOW (dialog));
++    AdwNavigationView *navigation = NULL;
++    GtkWidget *content, *child, *box, *scrolled, *toolbar;
++    AdwNavigationPage *page;
++    PluginDialogPage *pd;
++    const char *title;
++
++    if (!parent || g_strcmp0 (g_getenv ("PLINIUS_DIALOG_PAGES"), "0") == 0)
++        return FALSE;
++
++    for (GSList *l = vpn_pages; l; l = l->next) {
++        GtkWidget *vpn_page = l->data;
++
++        if (gtk_widget_get_mapped (vpn_page) && gtk_widget_get_root (vpn_page) == GTK_ROOT (parent)) {
++            navigation = ADW_NAVIGATION_VIEW (gtk_widget_get_ancestor (vpn_page, ADW_TYPE_NAVIGATION_VIEW));
++            break;
++        }
++    }
++    if (!navigation)
++        return FALSE;
++
++    box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
++    gtk_widget_set_margin_start (box, 12);
++    gtk_widget_set_margin_end (box, 12);
++    gtk_widget_set_margin_top (box, 12);
++    gtk_widget_set_margin_bottom (box, 12);
++
++    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++    content = gtk_dialog_get_content_area (dialog);
++    G_GNUC_END_IGNORE_DEPRECATIONS
++    while ((child = gtk_widget_get_first_child (content))) {
++        g_object_ref (child);
++        gtk_box_remove (GTK_BOX (content), child);
++        gtk_box_append (GTK_BOX (box), child);
++        g_object_unref (child);
++    }
++    vpn_single_column (box);
++
++    scrolled = gtk_scrolled_window_new ();
++    gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
++    gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolled), box);
++    toolbar = adw_toolbar_view_new ();
++    adw_toolbar_view_add_top_bar (ADW_TOOLBAR_VIEW (toolbar), adw_header_bar_new ());
++    adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (toolbar), scrolled);
++
++    title = gtk_window_get_title (GTK_WINDOW (dialog));
++    page = adw_navigation_page_new (toolbar, title ? title : "");
++
++    pd = g_new0 (PluginDialogPage, 1);
++    g_set_weak_pointer (&pd->dialog, dialog);
++    g_set_weak_pointer (&pd->navigation, navigation);
++    g_set_weak_pointer (&pd->page, page);
++    pd->popped_id = g_signal_connect (navigation, "popped", G_CALLBACK (plugin_dialog_popped_cb), pd);
++    pd->destroy_id = g_signal_connect (dialog, "destroy", G_CALLBACK (plugin_dialog_destroy_cb), pd);
++
++    g_debug ("%s as a page", title);
++    adw_navigation_view_push (navigation, page);
++    return TRUE;
++}
++
++void
++gtk_widget_show (GtkWidget *widget)
++{
++    static void (*real_show) (GtkWidget *widget);
++
++    if (!real_show)
++        real_show = dlsym (RTLD_NEXT, "gtk_widget_show");
++
++    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++    if (widget && G_TYPE_FROM_INSTANCE (widget) == GTK_TYPE_DIALOG &&
++        plugin_dialog_as_page (GTK_DIALOG (widget)))
++        return;
++    G_GNUC_END_IGNORE_DEPRECATIONS
++
++    real_show (widget);
++}
++
+ static void
+ load_vpn_plugin (CEPageVpn *self)
+ {
+@@ -104,6 +374,11 @@ load_vpn_plugin (CEPageVpn *self)
+         return;
+     }
+     vpn_gnome3ify_editor (ui_widget);
++    vpn_single_column (ui_widget);
++    /* A grid of the plugin asks for the height there is (OpenVPN's gateway); on a tall screen
++     * that opened a gap in the middle of the form */
++    gtk_widget_set_vexpand (ui_widget, FALSE);
++    vpn_pages = g_slist_prepend (vpn_pages, self);
+ 
+     gtk_box_remove (self->box, GTK_WIDGET (self->failure_label));
+     gtk_box_append (self->box, ui_widget);
+@@ -126,6 +401,7 @@ ce_page_vpn_dispose (GObject *object)
+ {
+     CEPageVpn *self = CE_PAGE_VPN (object);
+ 
++    vpn_pages = g_slist_remove (vpn_pages, self);
+     g_clear_object (&self->connection);
+     g_clear_object (&self->editor);
+ 
+diff --git a/panels/network/connection-editor/vpn-page.blp b/panels/network/connection-editor/vpn-page.blp
+index f46465d..224a655 100644
+--- a/panels/network/connection-editor/vpn-page.blp
++++ b/panels/network/connection-editor/vpn-page.blp
+@@ -6,8 +6,8 @@ template $CEPageVpn: Box {
+     propagate-natural-width: true;
+ 
+     Box box {
+-      margin-start: 50;
+-      margin-end: 50;
++      margin-start: 12;
++      margin-end: 12;
+       margin-top: 12;
+       margin-bottom: 12;
+       orientation: vertical;
+-- 
+2.55.0
+

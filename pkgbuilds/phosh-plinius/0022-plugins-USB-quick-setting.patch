@@ -1,0 +1,632 @@
+From 2c5ec20c69cadcce7d86f5e8e8a62189c83a7a21 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 17:53:30 +0100
+Subject: [PATCH] plugins: USB quick setting
+
+Plinius: what an attached computer gets over USB, through plinius-usb
+(org.plinius.Usb on the system bus): File Sharing (MTP), USB Network
+(NCM) and Internet for the Computer (NAT through the phone). The tile
+only shows while a computer is attached; nothing is on unless chosen,
+which is charging only. The status page has a switch per function, a tap
+on the active tile goes back to charging only.
+
+Functions only go on while the phone is unlocked (the service checks it
+as well), switching off always works.
+---
+ plugins/meson.build                                |   1 +
+ .../icons/usb-quick-setting-symbolic.svg           |  11 +
+ plugins/usb-quick-setting/icons/usb-symbolic.svg   |  11 +
+ plugins/usb-quick-setting/meson.build              |  48 ++++
+ .../phosh-plugin-usb-quick-setting.c               |  39 +++
+ .../phosh-plugin-usb-quick-setting.gresources.xml  |   7 +
+ plugins/usb-quick-setting/qs.ui                    | 103 +++++++
+ plugins/usb-quick-setting/usb-quick-setting.c      | 295 +++++++++++++++++++++
+ .../usb-quick-setting.desktop.in.in                |   8 +
+ plugins/usb-quick-setting/usb-quick-setting.h      |  17 ++
+ 10 files changed, 540 insertions(+)
+
+diff --git a/plugins/meson.build b/plugins/meson.build
+index a56b967d..6b294af6 100644
+--- a/plugins/meson.build
++++ b/plugins/meson.build
+@@ -81,6 +81,7 @@ quick_setting_plugins = [
+   'simple-custom-quick-setting',
+   'ssh-quick-setting',
+   'syncthing-quick-setting',
++  'usb-quick-setting',
+   'wifi-hotspot-quick-setting',
+ ]
+ 
+diff --git a/plugins/usb-quick-setting/icons/usb-quick-setting-symbolic.svg b/plugins/usb-quick-setting/icons/usb-quick-setting-symbolic.svg
+new file mode 100644
+index 00000000..82516bfa
+--- /dev/null
++++ b/plugins/usb-quick-setting/icons/usb-quick-setting-symbolic.svg
+@@ -0,0 +1,11 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <g fill="#222">
++    <path d="M8 .5 10.5 4h-5z"/>
++    <rect x="7.25" y="3.5" width="1.5" height="8.5"/>
++    <circle cx="8" cy="13.25" r="2.25"/>
++    <path d="M3.25 7.5v1.9l4 2.5v-1.75l-2.5-1.55V7.5z"/>
++    <circle cx="4" cy="6" r="1.75"/>
++    <path d="M12.75 6v1.9l-4 2.5V8.65l2.5-1.55V6z"/>
++    <rect x="10.5" y="3.25" width="3" height="3"/>
++  </g>
++</svg>
+diff --git a/plugins/usb-quick-setting/icons/usb-symbolic.svg b/plugins/usb-quick-setting/icons/usb-symbolic.svg
+new file mode 100644
+index 00000000..82516bfa
+--- /dev/null
++++ b/plugins/usb-quick-setting/icons/usb-symbolic.svg
+@@ -0,0 +1,11 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <g fill="#222">
++    <path d="M8 .5 10.5 4h-5z"/>
++    <rect x="7.25" y="3.5" width="1.5" height="8.5"/>
++    <circle cx="8" cy="13.25" r="2.25"/>
++    <path d="M3.25 7.5v1.9l4 2.5v-1.75l-2.5-1.55V7.5z"/>
++    <circle cx="4" cy="6" r="1.75"/>
++    <path d="M12.75 6v1.9l-4 2.5V8.65l2.5-1.55V6z"/>
++    <rect x="10.5" y="3.25" width="3" height="3"/>
++  </g>
++</svg>
+diff --git a/plugins/usb-quick-setting/meson.build b/plugins/usb-quick-setting/meson.build
+new file mode 100644
+index 00000000..9017f251
+--- /dev/null
++++ b/plugins/usb-quick-setting/meson.build
+@@ -0,0 +1,48 @@
++# Plinius: what a computer gets over USB, through plinius-usb (org.plinius.Usb)
++name = 'usb-quick-setting'
++
++usb_quick_setting_resources = gnome.compile_resources(
++  'phosh-plugin-usb-quick-setting-resources',
++  'phosh-plugin-usb-quick-setting.gresources.xml',
++  c_name: 'phosh_plugin_usb_quick_setting',
++)
++
++usb_quick_setting_plugin_sources = files(
++  'usb-quick-setting.c',
++  'phosh-plugin-usb-quick-setting.c',
++)
++
++phosh_usb_quick_setting_plugin = shared_module(
++  'phosh-plugin-usb-quick-setting',
++  usb_quick_setting_plugin_sources,
++  usb_quick_setting_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: plugin_dep,
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: meson.project_source_root() / 'po',
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/usb-quick-setting-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+diff --git a/plugins/usb-quick-setting/phosh-plugin-usb-quick-setting.c b/plugins/usb-quick-setting/phosh-plugin-usb-quick-setting.c
+new file mode 100644
+index 00000000..4c97c014
+--- /dev/null
++++ b/plugins/usb-quick-setting/phosh-plugin-usb-quick-setting.c
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Based on the location quick setting plugin
++ */
++
++#include "usb-quick-setting.h"
++#include "phosh-plugin.h"
++
++#include <gio/gio.h>
++#include <gtk/gtk.h>
++
++char **g_io_phosh_plugin_usb_quick_setting_query (void);
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET,
++                                  PHOSH_TYPE_USB_QUICK_SETTING,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++char **
++g_io_phosh_plugin_usb_quick_setting_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_QUICK_SETTING_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+diff --git a/plugins/usb-quick-setting/phosh-plugin-usb-quick-setting.gresources.xml b/plugins/usb-quick-setting/phosh-plugin-usb-quick-setting.gresources.xml
+new file mode 100644
+index 00000000..1cda86e0
+--- /dev/null
++++ b/plugins/usb-quick-setting/phosh-plugin-usb-quick-setting.gresources.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/usb-quick-setting/">
++    <file preprocess="xml-stripblanks">qs.ui</file>
++    <file compressed="true">icons/usb-symbolic.svg</file>
++  </gresource>
++</gresources>
+diff --git a/plugins/usb-quick-setting/qs.ui b/plugins/usb-quick-setting/qs.ui
+new file mode 100644
+index 00000000..b4794390
+--- /dev/null
++++ b/plugins/usb-quick-setting/qs.ui
+@@ -0,0 +1,103 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <requires lib="gtk+" version="3.24"/>
++  <template class="PhoshUsbQuickSetting" parent="PhoshQuickSetting">
++    <property name="status-icon">info</property>
++    <property name="status-page">status_page</property>
++    <signal name="clicked" handler="on_clicked" object="PhoshUsbQuickSetting" swapped="yes"/>
++  </template>
++  <object class="PhoshStatusIcon" id="info">
++    <property name="visible">1</property>
++    <property name="pixel-size">16</property>
++    <property name="icon-name">usb-symbolic</property>
++    <property name="info" translatable="yes">USB</property>
++  </object>
++  <object class="PhoshStatusPage" id="status_page">
++    <property name="visible">1</property>
++    <property name="title" translatable="yes">USB</property>
++    <property name="content">content</property>
++  </object>
++  <object class="GtkBox" id="content">
++    <property name="visible">1</property>
++    <property name="orientation">vertical</property>
++    <property name="spacing">12</property>
++    <child>
++      <object class="GtkListBox" id="list_box">
++        <property name="visible">1</property>
++        <property name="selection-mode">none</property>
++        <property name="hexpand">1</property>
++        <style>
++          <class name="content"/>
++        </style>
++        <child>
++          <object class="HdyActionRow" id="mtp_row">
++            <property name="visible">1</property>
++            <property name="title" translatable="yes">File Sharing</property>
++            <property name="subtitle" translatable="yes">Your files for the computer</property>
++            <property name="activatable-widget">mtp_switch</property>
++            <child>
++              <object class="GtkSwitch" id="mtp_switch">
++                <property name="visible">1</property>
++                <property name="valign">center</property>
++                <signal name="notify::active" handler="on_switch_toggled" object="PhoshUsbQuickSetting" swapped="yes"/>
++              </object>
++            </child>
++          </object>
++        </child>
++        <child>
++          <object class="HdyActionRow" id="ncm_row">
++            <property name="visible">1</property>
++            <property name="title" translatable="yes">USB Network</property>
++            <property name="subtitle" translatable="yes">Network between the phone and the computer</property>
++            <property name="activatable-widget">ncm_switch</property>
++            <child>
++              <object class="GtkSwitch" id="ncm_switch">
++                <property name="visible">1</property>
++                <property name="valign">center</property>
++                <signal name="notify::active" handler="on_switch_toggled" object="PhoshUsbQuickSetting" swapped="yes"/>
++              </object>
++            </child>
++          </object>
++        </child>
++        <child>
++          <object class="HdyActionRow" id="gateway_row">
++            <property name="visible">1</property>
++            <property name="title" translatable="yes">Internet for the Computer</property>
++            <property name="subtitle" translatable="yes">Shares the phone's connection</property>
++            <property name="activatable-widget">gateway_switch</property>
++            <child>
++              <object class="GtkSwitch" id="gateway_switch">
++                <property name="visible">1</property>
++                <property name="valign">center</property>
++                <signal name="notify::active" handler="on_switch_toggled" object="PhoshUsbQuickSetting" swapped="yes"/>
++              </object>
++            </child>
++          </object>
++        </child>
++      </object>
++    </child>
++    <!-- Functions only go on while the phone is unlocked (plinius-usb checks it too) -->
++    <child>
++      <object class="GtkLabel" id="locked_label">
++        <property name="visible">0</property>
++        <property name="wrap">1</property>
++        <property name="xalign">0</property>
++        <property name="label" translatable="yes">Unlock the phone to switch functions on</property>
++        <style>
++          <class name="dim-label"/>
++        </style>
++      </object>
++    </child>
++    <child>
++      <object class="GtkLabel" id="error_label">
++        <property name="visible">0</property>
++        <property name="wrap">1</property>
++        <property name="xalign">0</property>
++        <property name="selectable">1</property>
++        <style>
++          <class name="dim-label"/>
++        </style>
++      </object>
++    </child>
++  </object>
++</interface>
+diff --git a/plugins/usb-quick-setting/usb-quick-setting.c b/plugins/usb-quick-setting/usb-quick-setting.c
+new file mode 100644
+index 00000000..bc8a7c37
+--- /dev/null
++++ b/plugins/usb-quick-setting/usb-quick-setting.c
+@@ -0,0 +1,295 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "usb-quick-setting.h"
++#include "plugin-shell.h"
++#include "quick-setting.h"
++#include "status-icon.h"
++#include "status-page.h"
++
++#include <handy.h>
++#include <glib/gi18n.h>
++
++#define USB_BUS_NAME "org.plinius.Usb"
++#define USB_OBJECT_PATH "/org/plinius/Usb"
++#define USB_INTERFACE "org.plinius.Usb"
++
++/**
++ * PhoshUsbQuickSetting:
++ *
++ * What an attached computer gets over USB, through plinius-usb (org.plinius.Usb):
++ * file sharing, a USB network and internet through the phone. The tile only shows
++ * while a computer is attached; nothing is on unless chosen (charging only).
++ * Functions only go on while the phone is unlocked, switching off always works.
++ */
++struct _PhoshUsbQuickSetting {
++  PhoshQuickSetting  parent;
++
++  PhoshStatusIcon   *info;
++  PhoshStatusPage   *status_page;
++  GtkWidget         *mtp_row;
++  GtkSwitch         *mtp_switch;
++  GtkSwitch         *ncm_switch;
++  GtkSwitch         *gateway_switch;
++  GtkLabel          *locked_label;
++  GtkLabel          *error_label;
++
++  GDBusProxy        *proxy;
++  GCancellable      *cancel;
++  /* Switches set from the service's state, not by the user */
++  gboolean           updating;
++};
++G_DEFINE_TYPE (PhoshUsbQuickSetting, phosh_usb_quick_setting, PHOSH_TYPE_QUICK_SETTING);
++
++
++static gboolean
++get_bool (PhoshUsbQuickSetting *self, const char *name)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, name);
++  return value && g_variant_is_of_type (value, G_VARIANT_TYPE_BOOLEAN) &&
++    g_variant_get_boolean (value);
++}
++
++
++static GStrv
++get_strv (PhoshUsbQuickSetting *self, const char *name)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, name);
++  if (!value || !g_variant_is_of_type (value, G_VARIANT_TYPE_STRING_ARRAY))
++    return g_new0 (char *, 1);
++  return g_variant_dup_strv (value, NULL);
++}
++
++
++static gboolean
++is_locked (void)
++{
++  return phosh_shell_get_locked (phosh_shell_get_default ());
++}
++
++
++static void
++update (PhoshUsbQuickSetting *self)
++{
++  g_autofree char *owner = NULL;
++  g_auto (GStrv) functions = get_strv (self, "Functions");
++  g_auto (GStrv) available = get_strv (self, "AvailableFunctions");
++  g_autoptr (GVariant) error = NULL;
++  gboolean mtp = g_strv_contains ((const char * const *) functions, "mtp");
++  gboolean ncm = g_strv_contains ((const char * const *) functions, "ncm");
++  gboolean gateway = g_strv_contains ((const char * const *) functions, "gateway");
++  gboolean locked = is_locked ();
++  const char *text;
++
++  if (self->proxy) {
++    owner = g_dbus_proxy_get_name_owner (self->proxy);
++    error = g_dbus_proxy_get_cached_property (self->proxy, "Error");
++  }
++
++  /* Only while a computer is attached */
++  gtk_widget_set_visible (GTK_WIDGET (self), owner && get_bool (self, "Connected"));
++
++  /* Tile: what the computer gets; the gateway includes the network */
++  phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), mtp || ncm);
++  if (mtp && gateway)
++    text = _("Files + Internet");
++  else if (mtp && ncm)
++    text = _("Files + Network");
++  else if (mtp)
++    text = _("File Sharing");
++  else if (gateway)
++    text = _("Internet Sharing");
++  else if (ncm)
++    text = _("USB Network");
++  else
++    text = _("Charging Only");
++  phosh_status_icon_set_info (self->info, text);
++
++  /* Status page: switches show the state; while locked only what is on can be switched */
++  self->updating = TRUE;
++  gtk_switch_set_active (self->mtp_switch, mtp);
++  gtk_switch_set_active (self->ncm_switch, ncm);
++  gtk_switch_set_active (self->gateway_switch, gateway);
++  self->updating = FALSE;
++  gtk_widget_set_sensitive (GTK_WIDGET (self->mtp_switch), mtp || !locked);
++  gtk_widget_set_sensitive (GTK_WIDGET (self->ncm_switch), ncm || !locked);
++  gtk_widget_set_sensitive (GTK_WIDGET (self->gateway_switch), gateway || !locked);
++  gtk_widget_set_visible (self->mtp_row,
++                          g_strv_contains ((const char * const *) available, "mtp"));
++  gtk_widget_set_visible (GTK_WIDGET (self->locked_label), locked);
++
++  if (error && g_variant_is_of_type (error, G_VARIANT_TYPE_STRING) &&
++      *g_variant_get_string (error, NULL)) {
++    gtk_label_set_text (self->error_label, g_variant_get_string (error, NULL));
++    gtk_widget_set_visible (GTK_WIDGET (self->error_label), TRUE);
++  } else {
++    gtk_widget_set_visible (GTK_WIDGET (self->error_label), FALSE);
++  }
++}
++
++
++static void
++on_set_done (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), res, &err);
++  PhoshUsbQuickSetting *self;
++
++  if (reply || g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  self = PHOSH_USB_QUICK_SETTING (user_data);
++  g_warning ("Failed to set the USB functions: %s", err->message);
++  /* Back to what the service has, and say why (e.g. locked meanwhile) */
++  update (self);
++  g_dbus_error_strip_remote_error (err);
++  gtk_label_set_text (self->error_label, err->message);
++  gtk_widget_set_visible (GTK_WIDGET (self->error_label), TRUE);
++}
++
++
++static void
++set_functions (PhoshUsbQuickSetting *self, gboolean mtp, gboolean ncm, gboolean gateway)
++{
++  GVariantBuilder builder;
++
++  if (!self->proxy)
++    return;
++
++  g_variant_builder_init (&builder, G_VARIANT_TYPE ("as"));
++  if (mtp)
++    g_variant_builder_add (&builder, "s", "mtp");
++  if (ncm)
++    g_variant_builder_add (&builder, "s", "ncm");
++  if (gateway)
++    g_variant_builder_add (&builder, "s", "gateway");
++
++  gtk_widget_set_visible (GTK_WIDGET (self->error_label), FALSE);
++  /* Rebuilding the gadget takes a moment (File Sharing starts its responder) */
++  g_dbus_proxy_call (self->proxy, "SetFunctions", g_variant_new ("(as)", &builder),
++                     G_DBUS_CALL_FLAGS_NONE, 10000, self->cancel, on_set_done, self);
++}
++
++
++static void
++on_switch_toggled (PhoshUsbQuickSetting *self, GParamSpec *pspec, GtkSwitch *toggled)
++{
++  gboolean mtp, ncm, gateway;
++
++  if (self->updating)
++    return;
++
++  mtp = gtk_switch_get_active (self->mtp_switch);
++  ncm = gtk_switch_get_active (self->ncm_switch);
++  gateway = gtk_switch_get_active (self->gateway_switch);
++
++  /* Internet for the computer runs over the USB network */
++  if (toggled == self->gateway_switch && gateway)
++    ncm = TRUE;
++  else if (toggled == self->ncm_switch && !ncm)
++    gateway = FALSE;
++
++  set_functions (self, mtp, ncm, gateway);
++}
++
++
++static void
++on_clicked (PhoshUsbQuickSetting *self)
++{
++  /* Off is always allowed: back to charging only */
++  if (phosh_quick_setting_get_active (PHOSH_QUICK_SETTING (self))) {
++    set_functions (self, FALSE, FALSE, FALSE);
++    return;
++  }
++  /* Nothing to switch back on in one go: show the choice */
++  g_signal_emit_by_name (self, "show-status");
++}
++
++
++static void
++on_proxy_ready (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  PhoshUsbQuickSetting *self;
++  g_autoptr (GError) err = NULL;
++  GDBusProxy *proxy = g_dbus_proxy_new_for_bus_finish (res, &err);
++
++  if (!proxy) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("Failed to create the plinius-usb proxy: %s", err->message);
++    return;
++  }
++
++  self = PHOSH_USB_QUICK_SETTING (user_data);
++  self->proxy = proxy;
++  g_signal_connect_object (proxy, "g-properties-changed", G_CALLBACK (update), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (proxy, "notify::g-name-owner", G_CALLBACK (update), self,
++                           G_CONNECT_SWAPPED);
++  update (self);
++}
++
++
++static void
++phosh_usb_quick_setting_dispose (GObject *object)
++{
++  PhoshUsbQuickSetting *self = PHOSH_USB_QUICK_SETTING (object);
++
++  g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++  g_clear_object (&self->proxy);
++
++  G_OBJECT_CLASS (phosh_usb_quick_setting_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_usb_quick_setting_class_init (PhoshUsbQuickSettingClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_usb_quick_setting_dispose;
++
++  gtk_widget_class_set_template_from_resource (widget_class,
++                                               "/mobi/phosh/plugins/usb-quick-setting/qs.ui");
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, info);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, status_page);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, mtp_row);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, mtp_switch);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, ncm_switch);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, gateway_switch);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, locked_label);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, error_label);
++  gtk_widget_class_bind_template_callback (widget_class, on_clicked);
++  gtk_widget_class_bind_template_callback (widget_class, on_switch_toggled);
++}
++
++
++static void
++phosh_usb_quick_setting_init (PhoshUsbQuickSetting *self)
++{
++  gtk_widget_init_template (GTK_WIDGET (self));
++  gtk_icon_theme_add_resource_path (gtk_icon_theme_get_default (),
++                                    "/mobi/phosh/plugins/usb-quick-setting/icons");
++  /* Visibility follows the cable, a show_all of the quick settings must not override it */
++  gtk_widget_set_no_show_all (GTK_WIDGET (self), TRUE);
++
++  g_signal_connect_object (phosh_shell_get_default (), "notify::locked", G_CALLBACK (update),
++                           self, G_CONNECT_SWAPPED);
++
++  self->cancel = g_cancellable_new ();
++  update (self);
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM,
++                            G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
++                            NULL, USB_BUS_NAME, USB_OBJECT_PATH, USB_INTERFACE,
++                            self->cancel, on_proxy_ready, self);
++}
+diff --git a/plugins/usb-quick-setting/usb-quick-setting.desktop.in.in b/plugins/usb-quick-setting/usb-quick-setting.desktop.in.in
+new file mode 100644
+index 00000000..229784ab
+--- /dev/null
++++ b/plugins/usb-quick-setting/usb-quick-setting.desktop.in.in
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=USB Quick Setting
++Types=quick-setting;
++Comment=File sharing, network and internet for an attached computer (plinius-usb)
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=usb-quick-setting
+diff --git a/plugins/usb-quick-setting/usb-quick-setting.h b/plugins/usb-quick-setting/usb-quick-setting.h
+new file mode 100644
+index 00000000..17cf6936
+--- /dev/null
++++ b/plugins/usb-quick-setting/usb-quick-setting.h
+@@ -0,0 +1,17 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "quick-setting.h"
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_USB_QUICK_SETTING phosh_usb_quick_setting_get_type ()
++G_DECLARE_FINAL_TYPE (PhoshUsbQuickSetting, phosh_usb_quick_setting,
++                      PHOSH, USB_QUICK_SETTING, PhoshQuickSetting)
++
++G_END_DECLS

@@ -1,0 +1,5 @@
+# Device units for the GPU and the APU, so plinius-faced.service can wait for them: systemd turns
+# DeviceAllow=/dev/mali0 into a device number when the unit starts and drops the rule if the node
+# does not exist yet, which left the service without the GPU for good (09.11.2026: it started
+# 0.3–0.5 s before the Mali driver created mali0, on every boot).
+SUBSYSTEM=="misc", KERNEL=="mali0|apusys", TAG+="systemd"

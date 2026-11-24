@@ -1,0 +1,56 @@
+From: misc-de <misc-de@users.noreply.github.com>
+Subject: [PATCH] lockscreen: The emergency button below the unlock button
+
+Plinius: below it and with an empty line in between, instead of next to it, so that it is not
+pressed for the other one.
+---
+ src/ui/lockscreen.ui | 23 ++++++++++++-----------
+ 1 file changed, 12 insertions(+), 11 deletions(-)
+
+diff --git a/src/ui/lockscreen.ui b/src/ui/lockscreen.ui
+index abab877d..b8142301 100644
+--- a/src/ui/lockscreen.ui
++++ b/src/ui/lockscreen.ui
+@@ -321,30 +321,31 @@
+             <child>
+               <object class="GtkBox">
+                 <property name="visible">1</property>
++                <property name="orientation">vertical</property>
+                 <property name="margin-start">16</property>
+                 <property name="margin-end">16</property>
+                 <property name="halign">center</property>
+-                <property name="spacing">12</property>
+                 <child>
+-                  <object class="GtkButton" id="btn_emergency">
++                  <object class="GtkButton" id="btn_submit">
+                     <property name="visible">1</property>
+-                    <property name="label" translatable="yes">Emergency</property>
+-                    <signal name="clicked" handler="emergency_clicked_cb" swapped="yes"/>
++                    <property name="sensitive">0</property>
++                    <property name="label" translatable="yes">Unlock</property>
++                    <signal name="clicked" handler="submit_cb" swapped="yes"/>
+                     <style>
+-                      <class name="emergency-button"/>
+-                      <class name="pin-emergency"/>
++                      <class name="pin-submit"/>
+                       <class name="circular"/>
+                     </style>
+                   </object>
+                 </child>
+                 <child>
+-                  <object class="GtkButton" id="btn_submit">
++                  <object class="GtkButton" id="btn_emergency">
+                     <property name="visible">1</property>
+-                    <property name="sensitive">0</property>
+-                    <property name="label" translatable="yes">Unlock</property>
+-                    <signal name="clicked" handler="submit_cb" swapped="yes"/>
++                    <property name="margin-top">24</property>
++                    <property name="label" translatable="yes">Emergency</property>
++                    <signal name="clicked" handler="emergency_clicked_cb" swapped="yes"/>
+                     <style>
+-                      <class name="pin-submit"/>
++                      <class name="emergency-button"/>
++                      <class name="pin-emergency"/>
+                       <class name="circular"/>
+                     </style>
+                   </object>

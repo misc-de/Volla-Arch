@@ -1,0 +1,320 @@
+From fd3d424c521e54d6c76ab859341becbd3b6f0b67 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:21:35 +0100
+Subject: [PATCH] plugins: USB: Webcam and powering the connected device
+
+Plinius: the USB quick setting's list gets the two choices GNOME
+Settings already has: "Webcam" (plinius-usb's webcam function, shown
+when the service offers it) and "Power the Device", a power role swap
+of USB-C through plinius-usb's SetPowerRole (0.4 on). The partner has
+to speak USB Power Delivery and agree; when it refuses, the reason
+shows below the list. Powering counts as switching something on, so
+it needs the unlocked phone, taking power again always works. Tapping
+the active tile is still "charging only": all functions off and the
+phone takes power again.
+
+Until now, toggling a function in the tile also switched the webcam
+off, even when it had been switched on in GNOME Settings; the webcam
+now stays as it is.
+---
+ plugins/usb-quick-setting/qs.ui               |  30 ++++++
+ plugins/usb-quick-setting/usb-quick-setting.c | 137 ++++++++++++++++++++++++--
+ 2 files changed, 157 insertions(+), 10 deletions(-)
+
+diff --git a/plugins/usb-quick-setting/qs.ui b/plugins/usb-quick-setting/qs.ui
+index e019aa10..650ca574 100644
+--- a/plugins/usb-quick-setting/qs.ui
++++ b/plugins/usb-quick-setting/qs.ui
+@@ -78,6 +78,36 @@
+             </child>
+           </object>
+         </child>
++        <child>
++          <object class="HdyActionRow" id="webcam_row">
++            <property name="visible">0</property>
++            <property name="title" translatable="yes">Webcam</property>
++            <property name="subtitle" translatable="yes">The phone's camera for the computer</property>
++            <property name="activatable-widget">webcam_switch</property>
++            <child>
++              <object class="GtkSwitch" id="webcam_switch">
++                <property name="visible">1</property>
++                <property name="valign">center</property>
++                <signal name="notify::active" handler="on_switch_toggled" object="PhoshUsbQuickSetting" swapped="yes"/>
++              </object>
++            </child>
++          </object>
++        </child>
++        <!-- Which way the power goes: a power role swap, the partner has to agree -->
++        <child>
++          <object class="HdyActionRow" id="power_row">
++            <property name="visible">0</property>
++            <property name="title" translatable="yes">Power the Device</property>
++            <property name="activatable-widget">power_switch</property>
++            <child>
++              <object class="GtkSwitch" id="power_switch">
++                <property name="visible">1</property>
++                <property name="valign">center</property>
++                <signal name="notify::active" handler="on_power_toggled" object="PhoshUsbQuickSetting" swapped="yes"/>
++              </object>
++            </child>
++          </object>
++        </child>
+       </object>
+     </child>
+     <!-- Functions only go on while the phone is unlocked (plinius-usb checks it too) -->
+diff --git a/plugins/usb-quick-setting/usb-quick-setting.c b/plugins/usb-quick-setting/usb-quick-setting.c
+index bc8a7c37..fc8146c8 100644
+--- a/plugins/usb-quick-setting/usb-quick-setting.c
++++ b/plugins/usb-quick-setting/usb-quick-setting.c
+@@ -21,9 +21,15 @@
+  * PhoshUsbQuickSetting:
+  *
+  * What an attached computer gets over USB, through plinius-usb (org.plinius.Usb):
+- * file sharing, a USB network and internet through the phone. The tile only shows
+- * while a computer is attached; nothing is on unless chosen (charging only).
+- * Functions only go on while the phone is unlocked, switching off always works.
++ * file sharing, a USB network, internet through the phone and the phone's camera as a
++ * webcam. The tile only shows while a computer is attached; nothing is on unless chosen
++ * (charging only). Functions only go on while the phone is unlocked, switching off always
++ * works.
++ *
++ * Power: with a partner that speaks USB Power Delivery (PowerRoleSwappable) the phone can
++ * power it instead of charging (SetPowerRole "source", the partner has to agree; plinius-usb
++ * 0.4 on). Powering counts as switching something on. Whether the phone charges by default
++ * is the choice under USB > When Plugging In in GNOME Settings.
+  */
+ struct _PhoshUsbQuickSetting {
+   PhoshQuickSetting  parent;
+@@ -34,6 +40,10 @@ struct _PhoshUsbQuickSetting {
+   GtkSwitch         *mtp_switch;
+   GtkSwitch         *ncm_switch;
+   GtkSwitch         *gateway_switch;
++  GtkWidget         *webcam_row;
++  GtkSwitch         *webcam_switch;
++  HdyActionRow      *power_row;
++  GtkSwitch         *power_switch;
+   GtkLabel          *locked_label;
+   GtkLabel          *error_label;
+ 
+@@ -41,6 +51,8 @@ struct _PhoshUsbQuickSetting {
+   GCancellable      *cancel;
+   /* Switches set from the service's state, not by the user */
+   gboolean           updating;
++  /* SetPowerRole is waiting for the partner */
++  gboolean           power_busy;
+ };
+ G_DEFINE_TYPE (PhoshUsbQuickSetting, phosh_usb_quick_setting, PHOSH_TYPE_QUICK_SETTING);
+ 
+@@ -70,6 +82,19 @@ get_strv (PhoshUsbQuickSetting *self, const char *name)
+ }
+ 
+ 
++static char *
++get_string (PhoshUsbQuickSetting *self, const char *name)
++{
++  g_autoptr (GVariant) value = NULL;
++
++  if (self->proxy)
++    value = g_dbus_proxy_get_cached_property (self->proxy, name);
++  if (!value || !g_variant_is_of_type (value, G_VARIANT_TYPE_STRING))
++    return g_strdup ("");
++  return g_variant_dup_string (value, NULL);
++}
++
++
+ static gboolean
+ is_locked (void)
+ {
+@@ -87,6 +112,10 @@ update (PhoshUsbQuickSetting *self)
+   gboolean mtp = g_strv_contains ((const char * const *) functions, "mtp");
+   gboolean ncm = g_strv_contains ((const char * const *) functions, "ncm");
+   gboolean gateway = g_strv_contains ((const char * const *) functions, "gateway");
++  gboolean webcam = g_strv_contains ((const char * const *) functions, "webcam");
++  g_autofree char *power_role = get_string (self, "PowerRole");
++  gboolean source = g_str_equal (power_role, "source");
++  gboolean swappable = get_bool (self, "PowerRoleSwappable");
+   gboolean locked = is_locked ();
+   const char *text;
+ 
+@@ -99,8 +128,12 @@ update (PhoshUsbQuickSetting *self)
+   gtk_widget_set_visible (GTK_WIDGET (self), owner && get_bool (self, "Connected"));
+ 
+   /* Tile: what the computer gets; the gateway includes the network */
+-  phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), mtp || ncm);
+-  if (mtp && gateway)
++  phosh_quick_setting_set_active (PHOSH_QUICK_SETTING (self), mtp || ncm || webcam || (source && swappable));
++  if (webcam && (mtp || ncm))
++    text = _("Webcam + More");
++  else if (webcam)
++    text = _("Webcam");
++  else if (mtp && gateway)
+     text = _("Files + Internet");
+   else if (mtp && ncm)
+     text = _("Files + Network");
+@@ -110,6 +143,8 @@ update (PhoshUsbQuickSetting *self)
+     text = _("Internet Sharing");
+   else if (ncm)
+     text = _("USB Network");
++  else if (source)
++    text = _("Powering Device");
+   else
+     text = _("Charging Only");
+   phosh_status_icon_set_info (self->info, text);
+@@ -119,12 +154,30 @@ update (PhoshUsbQuickSetting *self)
+   gtk_switch_set_active (self->mtp_switch, mtp);
+   gtk_switch_set_active (self->ncm_switch, ncm);
+   gtk_switch_set_active (self->gateway_switch, gateway);
++  gtk_switch_set_active (self->webcam_switch, webcam);
++  gtk_switch_set_active (self->power_switch, source);
+   self->updating = FALSE;
+   gtk_widget_set_sensitive (GTK_WIDGET (self->mtp_switch), mtp || !locked);
+   gtk_widget_set_sensitive (GTK_WIDGET (self->ncm_switch), ncm || !locked);
+   gtk_widget_set_sensitive (GTK_WIDGET (self->gateway_switch), gateway || !locked);
++  gtk_widget_set_sensitive (GTK_WIDGET (self->webcam_switch), webcam || !locked);
+   gtk_widget_set_visible (self->mtp_row,
+                           g_strv_contains ((const char * const *) available, "mtp"));
++  gtk_widget_set_visible (self->webcam_row,
++                          g_strv_contains ((const char * const *) available, "webcam"));
++
++  /* Power: only with a partner that can be asked; taking power again always works */
++  gtk_widget_set_visible (GTK_WIDGET (self->power_row), *power_role != '\0');
++  gtk_widget_set_sensitive (GTK_WIDGET (self->power_switch),
++                            swappable && !self->power_busy && (source || !locked));
++  if (!swappable)
++    hdy_action_row_set_subtitle (self->power_row, source ?
++                                 _("The device takes its power from the phone") :
++                                 _("Needs a device with USB Power Delivery"));
++  else
++    hdy_action_row_set_subtitle (self->power_row, source ?
++                                 _("The phone supplies the power") :
++                                 _("This phone charges from the cable"));
+   gtk_widget_set_visible (GTK_WIDGET (self->locked_label), locked);
+ 
+   if (error && g_variant_is_of_type (error, G_VARIANT_TYPE_STRING) &&
+@@ -158,7 +211,57 @@ on_set_done (GObject *source, GAsyncResult *res, gpointer user_data)
+ 
+ 
+ static void
+-set_functions (PhoshUsbQuickSetting *self, gboolean mtp, gboolean ncm, gboolean gateway)
++on_power_done (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), res, &err);
++  PhoshUsbQuickSetting *self;
++
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  self = PHOSH_USB_QUICK_SETTING (user_data);
++  self->power_busy = FALSE;
++  /* The real direction, PowerRole has it */
++  update (self);
++  if (reply)
++    return;
++  g_warning ("Failed to switch the USB power: %s", err->message);
++  /* Say why, e.g. the device refused to take power */
++  g_dbus_error_strip_remote_error (err);
++  gtk_label_set_text (self->error_label, err->message);
++  gtk_widget_set_visible (GTK_WIDGET (self->error_label), TRUE);
++}
++
++
++static void
++set_power_role (PhoshUsbQuickSetting *self, gboolean source)
++{
++  if (!self->proxy)
++    return;
++
++  gtk_widget_set_visible (GTK_WIDGET (self->error_label), FALSE);
++  /* The partner answers the swap, that takes a moment */
++  self->power_busy = TRUE;
++  gtk_widget_set_sensitive (GTK_WIDGET (self->power_switch), FALSE);
++  g_dbus_proxy_call (self->proxy, "SetPowerRole",
++                     g_variant_new ("(s)", source ? "source" : "sink"),
++                     G_DBUS_CALL_FLAGS_NONE, 15000, self->cancel, on_power_done, self);
++}
++
++
++static void
++on_power_toggled (PhoshUsbQuickSetting *self)
++{
++  if (self->updating)
++    return;
++  set_power_role (self, gtk_switch_get_active (self->power_switch));
++}
++
++
++static void
++set_functions (PhoshUsbQuickSetting *self, gboolean mtp, gboolean ncm, gboolean gateway,
++               gboolean webcam)
+ {
+   GVariantBuilder builder;
+ 
+@@ -172,6 +275,8 @@ set_functions (PhoshUsbQuickSetting *self, gboolean mtp, gboolean ncm, gboolean
+     g_variant_builder_add (&builder, "s", "ncm");
+   if (gateway)
+     g_variant_builder_add (&builder, "s", "gateway");
++  if (webcam)
++    g_variant_builder_add (&builder, "s", "webcam");
+ 
+   gtk_widget_set_visible (GTK_WIDGET (self->error_label), FALSE);
+   /* Rebuilding the gadget takes a moment (File Sharing starts its responder) */
+@@ -183,7 +288,7 @@ set_functions (PhoshUsbQuickSetting *self, gboolean mtp, gboolean ncm, gboolean
+ static void
+ on_switch_toggled (PhoshUsbQuickSetting *self, GParamSpec *pspec, GtkSwitch *toggled)
+ {
+-  gboolean mtp, ncm, gateway;
++  gboolean mtp, ncm, gateway, webcam;
+ 
+   if (self->updating)
+     return;
+@@ -191,6 +296,8 @@ on_switch_toggled (PhoshUsbQuickSetting *self, GParamSpec *pspec, GtkSwitch *tog
+   mtp = gtk_switch_get_active (self->mtp_switch);
+   ncm = gtk_switch_get_active (self->ncm_switch);
+   gateway = gtk_switch_get_active (self->gateway_switch);
++  /* Also when its row is hidden: a webcam switched on in GNOME Settings stays on */
++  webcam = gtk_switch_get_active (self->webcam_switch);
+ 
+   /* Internet for the computer runs over the USB network */
+   if (toggled == self->gateway_switch && gateway)
+@@ -198,16 +305,21 @@ on_switch_toggled (PhoshUsbQuickSetting *self, GParamSpec *pspec, GtkSwitch *tog
+   else if (toggled == self->ncm_switch && !ncm)
+     gateway = FALSE;
+ 
+-  set_functions (self, mtp, ncm, gateway);
++  set_functions (self, mtp, ncm, gateway, webcam);
+ }
+ 
+ 
+ static void
+ on_clicked (PhoshUsbQuickSetting *self)
+ {
+-  /* Off is always allowed: back to charging only */
++  /* Off is always allowed: back to charging only, the phone takes power again */
+   if (phosh_quick_setting_get_active (PHOSH_QUICK_SETTING (self))) {
+-    set_functions (self, FALSE, FALSE, FALSE);
++    g_autofree char *power_role = get_string (self, "PowerRole");
++
++    set_functions (self, FALSE, FALSE, FALSE, FALSE);
++    if (g_str_equal (power_role, "source") && get_bool (self, "PowerRoleSwappable") &&
++        !self->power_busy)
++      set_power_role (self, FALSE);
+     return;
+   }
+   /* Nothing to switch back on in one go: show the choice */
+@@ -267,10 +379,15 @@ phosh_usb_quick_setting_class_init (PhoshUsbQuickSettingClass *klass)
+   gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, mtp_switch);
+   gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, ncm_switch);
+   gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, gateway_switch);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, webcam_row);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, webcam_switch);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, power_row);
++  gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, power_switch);
+   gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, locked_label);
+   gtk_widget_class_bind_template_child (widget_class, PhoshUsbQuickSetting, error_label);
+   gtk_widget_class_bind_template_callback (widget_class, on_clicked);
+   gtk_widget_class_bind_template_callback (widget_class, on_switch_toggled);
++  gtk_widget_class_bind_template_callback (widget_class, on_power_toggled);
+ }
+ 
+ 

@@ -1,0 +1,660 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 13:05:00 +0100
+Subject: [PATCH] po: The cast quick setting
+
+Translations of the cast quick setting (0019) and its desktop button
+(0113, the buttons per TV) for de, es, fr, it, nl, pl, pt, pt_BR (as pt) and ru: the tile
+was shown in English in every language so far. Kept apart so that the
+plugin patches stay free of po hunks.
+---
+ po/de.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/es.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/fr.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/it.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/nl.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/pl.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/pt.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/pt_BR.po | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ po/ru.po    | 63 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 9 files changed, 567 insertions(+)
+
+diff --git a/po/de.po b/po/de.po
+index eb5b4fc4..9118a59d 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1676,3 +1676,66 @@ msgstr "Immer erlauben"
+ 
+ msgid "Don't Allow"
+ msgstr "Nicht erlauben"
++
++msgid "Cast Quick Setting"
++msgstr "Schnelleinstellung Streaming"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Den Bildschirm auf einen Fernseher spiegeln oder den Ton an einen Lautsprecher senden (Schwupp)"
++
++msgid "Cast"
++msgstr "Streaming"
++
++msgid "Casting"
++msgstr "Streamt"
++
++msgid "Connecting…"
++msgstr "Verbinden…"
++
++msgid "Code needed"
++msgstr "Code nötig"
++
++msgid "Code shown on the TV"
++msgstr "Code vom Fernseher"
++
++msgid "Enter the code shown on the TV"
++msgstr "Den Code vom Fernseher eingeben"
++
++msgid "Searching for TVs and speakers…"
++msgstr "Suche nach Fernsehern und Lautsprechern…"
++
++msgid "No TVs or speakers found"
++msgstr "Keine Fernseher oder Lautsprecher gefunden"
++
++msgid "Mirroring – tap to stop"
++msgstr "Spiegelt – tippen zum Beenden"
++
++msgid "Playing the sound – tap to stop"
++msgstr "Ton läuft – tippen zum Beenden"
++
++msgid "Desktop – tap to stop"
++msgstr "Desktop – tippen zum Beenden"
++
++msgid "Show the desktop on this TV"
++msgstr "Desktop auf diesem Fernseher zeigen"
++
++msgid "Cast Settings"
++msgstr "Streaming-Einstellungen"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Den Telefonbildschirm auf diesem Fernseher spiegeln"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Einen YouTube-Link auf diesem Fernseher abspielen"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Ein Video vom Telefon auf diesem Fernseher abspielen"
++
++msgid "Playing a video – tap to stop"
++msgstr "Video läuft – tippen zum Beenden"
++
++msgid "Playing a link – tap to stop"
++msgstr "Link läuft – tippen zum Beenden"
++
++msgid "Stop casting to this TV"
++msgstr "Streaming auf diesen Fernseher beenden"
+diff --git a/po/es.po b/po/es.po
+index 5d14ce20..4c93cc20 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -986,3 +986,66 @@ msgstr "Permitir siempre"
+ 
+ msgid "Don't Allow"
+ msgstr "No permitir"
++
++msgid "Cast Quick Setting"
++msgstr "Ajuste rápido de transmisión"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Duplicar la pantalla en un televisor o enviar el sonido a un altavoz (Schwupp)"
++
++msgid "Cast"
++msgstr "Transmitir"
++
++msgid "Casting"
++msgstr "Transmitiendo"
++
++msgid "Connecting…"
++msgstr "Conectando…"
++
++msgid "Code needed"
++msgstr "Se necesita un código"
++
++msgid "Code shown on the TV"
++msgstr "Código del televisor"
++
++msgid "Enter the code shown on the TV"
++msgstr "Introduce el código que muestra el televisor"
++
++msgid "Searching for TVs and speakers…"
++msgstr "Buscando televisores y altavoces…"
++
++msgid "No TVs or speakers found"
++msgstr "No se encontraron televisores ni altavoces"
++
++msgid "Mirroring – tap to stop"
++msgstr "Duplicando la pantalla: toca para detener"
++
++msgid "Playing the sound – tap to stop"
++msgstr "Reproduciendo el sonido: toca para detener"
++
++msgid "Desktop – tap to stop"
++msgstr "Escritorio: toca para detener"
++
++msgid "Show the desktop on this TV"
++msgstr "Mostrar el escritorio en este televisor"
++
++msgid "Cast Settings"
++msgstr "Ajustes de transmisión"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Duplicar la pantalla del teléfono en este televisor"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Reproducir un enlace de YouTube en este televisor"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Reproducir un vídeo del teléfono en este televisor"
++
++msgid "Playing a video – tap to stop"
++msgstr "Reproduciendo un vídeo: toca para detener"
++
++msgid "Playing a link – tap to stop"
++msgstr "Reproduciendo un enlace: toca para detener"
++
++msgid "Stop casting to this TV"
++msgstr "Dejar de transmitir a este televisor"
+diff --git a/po/fr.po b/po/fr.po
+index 3b435bac..b4981aef 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1334,3 +1334,66 @@ msgstr "Toujours autoriser"
+ 
+ msgid "Don't Allow"
+ msgstr "Ne pas autoriser"
++
++msgid "Cast Quick Setting"
++msgstr "Réglage rapide Diffusion"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Recopier l’écran sur un téléviseur ou envoyer le son vers une enceinte (Schwupp)"
++
++msgid "Cast"
++msgstr "Diffuser"
++
++msgid "Casting"
++msgstr "Diffusion en cours"
++
++msgid "Connecting…"
++msgstr "Connexion…"
++
++msgid "Code needed"
++msgstr "Code requis"
++
++msgid "Code shown on the TV"
++msgstr "Code affiché sur le téléviseur"
++
++msgid "Enter the code shown on the TV"
++msgstr "Saisissez le code affiché sur le téléviseur"
++
++msgid "Searching for TVs and speakers…"
++msgstr "Recherche de téléviseurs et d’enceintes…"
++
++msgid "No TVs or speakers found"
++msgstr "Aucun téléviseur ni enceinte trouvé"
++
++msgid "Mirroring – tap to stop"
++msgstr "Recopie de l’écran – touchez pour arrêter"
++
++msgid "Playing the sound – tap to stop"
++msgstr "Son diffusé – touchez pour arrêter"
++
++msgid "Desktop – tap to stop"
++msgstr "Bureau – touchez pour arrêter"
++
++msgid "Show the desktop on this TV"
++msgstr "Afficher le bureau sur ce téléviseur"
++
++msgid "Cast Settings"
++msgstr "Paramètres de diffusion"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Recopier l’écran du téléphone sur ce téléviseur"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Lire un lien YouTube sur ce téléviseur"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Lire une vidéo du téléphone sur ce téléviseur"
++
++msgid "Playing a video – tap to stop"
++msgstr "Vidéo en lecture – touchez pour arrêter"
++
++msgid "Playing a link – tap to stop"
++msgstr "Lien en lecture – touchez pour arrêter"
++
++msgid "Stop casting to this TV"
++msgstr "Arrêter la diffusion sur ce téléviseur"
+diff --git a/po/it.po b/po/it.po
+index 025ba85f..f361f129 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -1068,3 +1068,66 @@ msgstr "Consenti sempre"
+ 
+ msgid "Don't Allow"
+ msgstr "Non consentire"
++
++msgid "Cast Quick Setting"
++msgstr "Impostazione rapida Trasmissione"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Duplica lo schermo su un televisore o invia l’audio a un altoparlante (Schwupp)"
++
++msgid "Cast"
++msgstr "Trasmetti"
++
++msgid "Casting"
++msgstr "In trasmissione"
++
++msgid "Connecting…"
++msgstr "Connessione…"
++
++msgid "Code needed"
++msgstr "Codice richiesto"
++
++msgid "Code shown on the TV"
++msgstr "Codice mostrato sul televisore"
++
++msgid "Enter the code shown on the TV"
++msgstr "Inserisci il codice mostrato sul televisore"
++
++msgid "Searching for TVs and speakers…"
++msgstr "Ricerca di televisori e altoparlanti…"
++
++msgid "No TVs or speakers found"
++msgstr "Nessun televisore o altoparlante trovato"
++
++msgid "Mirroring – tap to stop"
++msgstr "Duplicazione schermo – tocca per fermare"
++
++msgid "Playing the sound – tap to stop"
++msgstr "Audio in riproduzione – tocca per fermare"
++
++msgid "Desktop – tap to stop"
++msgstr "Desktop – tocca per fermare"
++
++msgid "Show the desktop on this TV"
++msgstr "Mostra il desktop su questo televisore"
++
++msgid "Cast Settings"
++msgstr "Impostazioni di trasmissione"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Duplica lo schermo del telefono su questo televisore"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Riproduci un link di YouTube su questo televisore"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Riproduci un video del telefono su questo televisore"
++
++msgid "Playing a video – tap to stop"
++msgstr "Video in riproduzione – tocca per fermare"
++
++msgid "Playing a link – tap to stop"
++msgstr "Link in riproduzione – tocca per fermare"
++
++msgid "Stop casting to this TV"
++msgstr "Interrompi la trasmissione su questo televisore"
+diff --git a/po/nl.po b/po/nl.po
+index 94d2f4dd..1ee27be1 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1679,3 +1679,66 @@ msgstr "Altijd toestaan"
+ 
+ msgid "Don't Allow"
+ msgstr "Niet toestaan"
++
++msgid "Cast Quick Setting"
++msgstr "Snelle instelling Casten"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Het scherm naar een tv spiegelen of het geluid naar een speaker sturen (Schwupp)"
++
++msgid "Cast"
++msgstr "Casten"
++
++msgid "Casting"
++msgstr "Bezig met casten"
++
++msgid "Connecting…"
++msgstr "Verbinden…"
++
++msgid "Code needed"
++msgstr "Code nodig"
++
++msgid "Code shown on the TV"
++msgstr "Code op de tv"
++
++msgid "Enter the code shown on the TV"
++msgstr "Voer de code in die op de tv staat"
++
++msgid "Searching for TVs and speakers…"
++msgstr "Zoeken naar tv's en speakers…"
++
++msgid "No TVs or speakers found"
++msgstr "Geen tv's of speakers gevonden"
++
++msgid "Mirroring – tap to stop"
++msgstr "Scherm wordt gespiegeld – tik om te stoppen"
++
++msgid "Playing the sound – tap to stop"
++msgstr "Geluid wordt afgespeeld – tik om te stoppen"
++
++msgid "Desktop – tap to stop"
++msgstr "Bureaublad – tik om te stoppen"
++
++msgid "Show the desktop on this TV"
++msgstr "Bureaublad op deze tv tonen"
++
++msgid "Cast Settings"
++msgstr "Cast-instellingen"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Het scherm van de telefoon op deze tv spiegelen"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Een YouTube-link op deze tv afspelen"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Een video van de telefoon op deze tv afspelen"
++
++msgid "Playing a video – tap to stop"
++msgstr "Video wordt afgespeeld – tik om te stoppen"
++
++msgid "Playing a link – tap to stop"
++msgstr "Link wordt afgespeeld – tik om te stoppen"
++
++msgid "Stop casting to this TV"
++msgstr "Streamen naar deze tv stoppen"
+diff --git a/po/pl.po b/po/pl.po
+index a502fa5e..27ad5644 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1644,3 +1644,66 @@ msgstr "Zawsze zezwalaj"
+ 
+ msgid "Don't Allow"
+ msgstr "Nie zezwalaj"
++
++msgid "Cast Quick Setting"
++msgstr "Szybkie ustawienie przesyłania"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Dubluj ekran na telewizorze lub wysyłaj dźwięk do głośnika (Schwupp)"
++
++msgid "Cast"
++msgstr "Przesyłaj"
++
++msgid "Casting"
++msgstr "Przesyłanie"
++
++msgid "Connecting…"
++msgstr "Łączenie…"
++
++msgid "Code needed"
++msgstr "Wymagany kod"
++
++msgid "Code shown on the TV"
++msgstr "Kod z telewizora"
++
++msgid "Enter the code shown on the TV"
++msgstr "Wpisz kod wyświetlany na telewizorze"
++
++msgid "Searching for TVs and speakers…"
++msgstr "Wyszukiwanie telewizorów i głośników…"
++
++msgid "No TVs or speakers found"
++msgstr "Nie znaleziono telewizorów ani głośników"
++
++msgid "Mirroring – tap to stop"
++msgstr "Dublowanie ekranu – dotknij, aby zatrzymać"
++
++msgid "Playing the sound – tap to stop"
++msgstr "Odtwarzanie dźwięku – dotknij, aby zatrzymać"
++
++msgid "Desktop – tap to stop"
++msgstr "Pulpit – dotknij, aby zatrzymać"
++
++msgid "Show the desktop on this TV"
++msgstr "Pokaż pulpit na tym telewizorze"
++
++msgid "Cast Settings"
++msgstr "Ustawienia przesyłania"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Dubluj ekran telefonu na tym telewizorze"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Odtwórz link YouTube na tym telewizorze"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Odtwórz film z telefonu na tym telewizorze"
++
++msgid "Playing a video – tap to stop"
++msgstr "Odtwarzanie filmu – dotknij, aby zatrzymać"
++
++msgid "Playing a link – tap to stop"
++msgstr "Odtwarzanie linku – dotknij, aby zatrzymać"
++
++msgid "Stop casting to this TV"
++msgstr "Zatrzymaj przesyłanie na ten telewizor"
+diff --git a/po/pt.po b/po/pt.po
+index 69b43eb5..3a145f57 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1629,3 +1629,66 @@ msgstr "Permitir sempre"
+ 
+ msgid "Don't Allow"
+ msgstr "Não permitir"
++
++msgid "Cast Quick Setting"
++msgstr "Definição rápida de transmissão"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Espelhar o ecrã num televisor ou enviar o som para um altifalante (Schwupp)"
++
++msgid "Cast"
++msgstr "Transmitir"
++
++msgid "Casting"
++msgstr "A transmitir"
++
++msgid "Connecting…"
++msgstr "A ligar…"
++
++msgid "Code needed"
++msgstr "Código necessário"
++
++msgid "Code shown on the TV"
++msgstr "Código mostrado no televisor"
++
++msgid "Enter the code shown on the TV"
++msgstr "Introduza o código mostrado no televisor"
++
++msgid "Searching for TVs and speakers…"
++msgstr "A procurar televisores e altifalantes…"
++
++msgid "No TVs or speakers found"
++msgstr "Nenhum televisor ou altifalante encontrado"
++
++msgid "Mirroring – tap to stop"
++msgstr "A espelhar – toque para parar"
++
++msgid "Playing the sound – tap to stop"
++msgstr "A reproduzir o som – toque para parar"
++
++msgid "Desktop – tap to stop"
++msgstr "Ambiente de trabalho – toque para parar"
++
++msgid "Show the desktop on this TV"
++msgstr "Mostrar o ambiente de trabalho neste televisor"
++
++msgid "Cast Settings"
++msgstr "Definições de transmissão"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Espelhar o ecrã do telefone neste televisor"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Reproduzir uma ligação do YouTube neste televisor"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Reproduzir um vídeo do telefone neste televisor"
++
++msgid "Playing a video – tap to stop"
++msgstr "A reproduzir um vídeo – toque para parar"
++
++msgid "Playing a link – tap to stop"
++msgstr "A reproduzir uma ligação – toque para parar"
++
++msgid "Stop casting to this TV"
++msgstr "Parar a transmissão para este televisor"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 6485ac21..06b98a5e 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1721,3 +1721,66 @@ msgstr "Permitir sempre"
+ 
+ msgid "Don't Allow"
+ msgstr "Não permitir"
++
++msgid "Cast Quick Setting"
++msgstr "Definição rápida de transmissão"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Espelhar o ecrã num televisor ou enviar o som para um altifalante (Schwupp)"
++
++msgid "Cast"
++msgstr "Transmitir"
++
++msgid "Casting"
++msgstr "A transmitir"
++
++msgid "Connecting…"
++msgstr "A ligar…"
++
++msgid "Code needed"
++msgstr "Código necessário"
++
++msgid "Code shown on the TV"
++msgstr "Código mostrado no televisor"
++
++msgid "Enter the code shown on the TV"
++msgstr "Introduza o código mostrado no televisor"
++
++msgid "Searching for TVs and speakers…"
++msgstr "A procurar televisores e altifalantes…"
++
++msgid "No TVs or speakers found"
++msgstr "Nenhum televisor ou altifalante encontrado"
++
++msgid "Mirroring – tap to stop"
++msgstr "A espelhar – toque para parar"
++
++msgid "Playing the sound – tap to stop"
++msgstr "A reproduzir o som – toque para parar"
++
++msgid "Desktop – tap to stop"
++msgstr "Ambiente de trabalho – toque para parar"
++
++msgid "Show the desktop on this TV"
++msgstr "Mostrar o ambiente de trabalho neste televisor"
++
++msgid "Cast Settings"
++msgstr "Definições de transmissão"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Espelhar o ecrã do telefone neste televisor"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Reproduzir uma ligação do YouTube neste televisor"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Reproduzir um vídeo do telefone neste televisor"
++
++msgid "Playing a video – tap to stop"
++msgstr "A reproduzir um vídeo – toque para parar"
++
++msgid "Playing a link – tap to stop"
++msgstr "A reproduzir uma ligação – toque para parar"
++
++msgid "Stop casting to this TV"
++msgstr "Parar a transmissão para este televisor"
+diff --git a/po/ru.po b/po/ru.po
+index 6479b94c..11fc978a 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1741,3 +1741,66 @@ msgstr "Всегда разрешать"
+ 
+ msgid "Don't Allow"
+ msgstr "Не разрешать"
++
++msgid "Cast Quick Setting"
++msgstr "Быстрая настройка трансляции"
++
++msgid "Mirror the screen to a TV or send the sound to a speaker (Schwupp)"
++msgstr "Транслировать экран на телевизор или передавать звук на колонку (Schwupp)"
++
++msgid "Cast"
++msgstr "Трансляция"
++
++msgid "Casting"
++msgstr "Идёт трансляция"
++
++msgid "Connecting…"
++msgstr "Подключение…"
++
++msgid "Code needed"
++msgstr "Нужен код"
++
++msgid "Code shown on the TV"
++msgstr "Код с телевизора"
++
++msgid "Enter the code shown on the TV"
++msgstr "Введите код, показанный на телевизоре"
++
++msgid "Searching for TVs and speakers…"
++msgstr "Поиск телевизоров и колонок…"
++
++msgid "No TVs or speakers found"
++msgstr "Телевизоры и колонки не найдены"
++
++msgid "Mirroring – tap to stop"
++msgstr "Трансляция экрана — нажмите, чтобы остановить"
++
++msgid "Playing the sound – tap to stop"
++msgstr "Звук воспроизводится — нажмите, чтобы остановить"
++
++msgid "Desktop – tap to stop"
++msgstr "Рабочий стол — нажмите, чтобы остановить"
++
++msgid "Show the desktop on this TV"
++msgstr "Показать рабочий стол на этом телевизоре"
++
++msgid "Cast Settings"
++msgstr "Настройки трансляции"
++
++msgid "Mirror the phone's screen on this TV"
++msgstr "Транслировать экран телефона на этот телевизор"
++
++msgid "Play a YouTube link on this TV"
++msgstr "Воспроизвести ссылку YouTube на этом телевизоре"
++
++msgid "Play a video from the phone on this TV"
++msgstr "Воспроизвести видео с телефона на этом телевизоре"
++
++msgid "Playing a video – tap to stop"
++msgstr "Видео воспроизводится — нажмите, чтобы остановить"
++
++msgid "Playing a link – tap to stop"
++msgstr "Ссылка воспроизводится — нажмите, чтобы остановить"
++
++msgid "Stop casting to this TV"
++msgstr "Остановить трансляцию на этот телевизор"

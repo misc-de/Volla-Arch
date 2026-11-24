@@ -1,0 +1,13 @@
+# Set up the PDF printer right after installing and keep watching the printers. Started at once
+# only on a running system, not in the chroot of an image build.
+post_install() {
+	systemctl enable plinius-pdf-printer.service plinius-pdf-printer.path
+	if [ -d /run/systemd/system ]; then
+		systemctl start plinius-pdf-printer.path
+		systemctl start plinius-pdf-printer.service
+	fi
+}
+
+pre_remove() {
+	systemctl disable --now plinius-pdf-printer.path plinius-pdf-printer.service
+}

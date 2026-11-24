@@ -1,0 +1,20 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=android-headers
+pkgver=14.0.20260606
+pkgrel=1
+pkgdesc="Android headers for building libhybris (Halium 14, matching the Plinius vendor)"
+arch=(any)
+url="https://github.com/Halium/android-headers"
+license=(Apache-2.0)
+makedepends=(git)
+# Branch halium-14.0, no tag: commit pin; pkgver = Halium version + commit date
+_commit=217a38e92cc64a96b4d1ac7469f30827d84485d3
+source=("git+$url.git#commit=$_commit")
+sha256sums=('SKIP')
+
+package() {
+	cd android-headers
+	make PREFIX=/usr DESTDIR="$pkgdir" install
+	rm -f "$pkgdir/usr/include/android/git-revisions.txt" "$pkgdir/usr/include/android/manifest.xml"
+}

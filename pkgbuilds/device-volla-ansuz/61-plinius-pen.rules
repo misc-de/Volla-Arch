@@ -1,0 +1,5 @@
+# Volla Phone Plinius: the touch driver always registers a pen input (fts_ts,pen), but no pen
+# tried so far reports anything on it (2026-10-31). As a tablet it only put an empty Graphics
+# Tablets page into GNOME Settings and made phoc read the whole libwacom database at start.
+# So it is no tablet (GNOME Settings) and libinput leaves it out (phoc). Runs after 60-input-id.
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="fts_ts,pen", ENV{ID_INPUT_TABLET}="", ENV{LIBINPUT_IGNORE_DEVICE}="1"

@@ -1,0 +1,52 @@
+From 2ba7eb56aa06981c6d704c18e926a26b2eb3c630 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 09:23:07 +0100
+Subject: [PATCH] mixer-control: No crash when a stream's active port is not
+ among its ports
+
+gvc_mixer_stream_get_port() returns NULL when the stream's active port
+is not in its port list. This happens while a Bluetooth device changes
+its profile, e.g. a car kit that offers hands-free only.
+gvc_mixer_control_lookup_device_from_stream() and the change of the
+output or input used the result without a check; Phosh crashed when a
+car kit connected.
+---
+ gvc-mixer-control.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/gvc-mixer-control.c b/gvc-mixer-control.c
+index 8459ebf..d3bc975 100644
+--- a/gvc-mixer-control.c
++++ b/gvc-mixer-control.c
+@@ -273,6 +273,10 @@ gvc_mixer_control_lookup_device_from_stream (GvcMixerControl *control,
+                 }
+ 
+                 port = gvc_mixer_stream_get_port (stream);
++                /* The active port is not among the stream's ports while a Bluetooth device
++                 * changes its profile (a car kit with hands-free only): no match, no crash */
++                if (port == NULL)
++                        continue;
+                 if (g_strcmp0 (gvc_mixer_ui_device_get_port (device), port->port) == 0) {
+                         g_debug ("lookup-device-from-stream found device: device description '%s', device port = '%s', device stream id %i AND stream port = '%s' stream id '%u' and stream description '%s'",
+                                  gvc_mixer_ui_device_get_description (device),
+@@ -617,7 +621,7 @@ gvc_mixer_control_change_output (GvcMixerControl *control,
+         active_port = gvc_mixer_stream_get_port (stream);
+         output_port = gvc_mixer_ui_device_get_port (output);
+         /* First ensure the correct port is active on the sink */
+-        if (g_strcmp0 (active_port->port, output_port) != 0) {
++        if (active_port == NULL || g_strcmp0 (active_port->port, output_port) != 0) {
+                 g_debug ("Port change, switch to = %s", output_port);
+                 if (gvc_mixer_stream_change_port (stream, output_port) == FALSE) {
+                         g_warning ("Could not change port !");
+@@ -687,7 +691,7 @@ gvc_mixer_control_change_input (GvcMixerControl *control,
+         active_port = gvc_mixer_stream_get_port (stream);
+         input_port = gvc_mixer_ui_device_get_port (input);
+         /* First ensure the correct port is active on the sink */
+-        if (g_strcmp0 (active_port->port, input_port) != 0) {
++        if (active_port == NULL || g_strcmp0 (active_port->port, input_port) != 0) {
+                 g_debug ("Port change, switch to = %s", input_port);
+                 if (gvc_mixer_stream_change_port (stream, input_port) == FALSE) {
+                         g_warning ("Could not change port!");
+-- 
+2.56.0
+

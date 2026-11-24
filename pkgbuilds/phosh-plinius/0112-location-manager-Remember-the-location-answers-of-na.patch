@@ -1,0 +1,646 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 12:00:00 +0100
+Subject: [PATCH] location-manager: Remember the location answers of native
+ apps
+
+Plinius: a native app asking geoclue for the location (AuthorizeApp)
+was asked "Yes" or "No" on every start, nothing was remembered (two
+TODOs). It now gets the same three buttons as every other access
+question, and the answer is kept in the permission store the way
+xdg-desktop-portal 1.22 (location.c) keeps it for Flatpak apps: table
+"location", id "location", the app's entry [accuracy, last use], the
+accuracy one of NONE, COUNTRY, CITY, NEIGHBORHOOD, STREET, EXACT and the
+last use g_get_monotonic_time() as there. The key is the desktop id
+geoclue names, the same key GNOME Settings' Location page lists and
+switches between EXACT and NONE.
+
+- entry NONE (or an unknown accuracy, as in xdg-desktop-portal): denied
+  without asking
+- entry at the level asked for or a finer one: allowed without asking
+- otherwise (no entry, a coarser one, a malformed one) asked; "Always
+  Allow" stores the level asked for, "Don't Allow" NONE, "Allow Once"
+  and a dialog swiped away store nothing
+- no permission store (or no answer within 2 s): asked as before, and
+  nothing stored
+
+The maximum level and the global switch come first, as before.
+location-permission.c holds the lookup, the decision and the write.
+---
+ src/location-manager.c    | 160 +++++++++++++++-----
+ src/location-permission.c | 298 ++++++++++++++++++++++++++++++++++++++
+ src/location-permission.h |  43 ++++++
+ src/meson.build           |   2 +
+ 4 files changed, 465 insertions(+), 38 deletions(-)
+ create mode 100644 src/location-permission.c
+ create mode 100644 src/location-permission.h
+
+diff --git a/src/location-manager.c b/src/location-manager.c
+index 6ef129b9..d05140a1 100644
+--- a/src/location-manager.c
++++ b/src/location-manager.c
+@@ -13,6 +13,7 @@
+ #include "app-auth-prompt.h"
+ #include "geoclue-manager-dbus.h"
+ #include "location-manager.h"
++#include "location-permission.h"
+ #include "shell-priv.h"
+ #include "util.h"
+ 
+@@ -27,6 +28,10 @@
+  * The #PhoshLocationManager provides the agent interface and authorizes
+  * clients based on the org.gnome.system.location 'enabled' gsetting. Note
+  * the phosh needs to be enabled as agent in geoclue's config.
++ *
++ * Plinius: an app is asked with "Allow Once", "Always Allow" and "Don't Allow"; "Always Allow"
++ * and "Don't Allow" are remembered in the permission store as xdg-desktop-portal remembers the
++ * answers of Flatpak apps, so GNOME Settings lists and switches them (location-permission.c).
+  */
+ #define LOCATION_AGENT_DBUS_NAME  "org.freedesktop.GeoClue2.Agent"
+ #define LOCATION_AGENT_DBUS_PATH  "/org/freedesktop/GeoClue2/Agent"
+@@ -77,6 +82,8 @@ typedef struct _PhoshLocationManager {
+   GtkWidget                     *prompt;
+   GDBusMethodInvocation         *invocation;
+   AccuracyLevel                  req_level;
++  char                          *desktop_id;
++  gboolean                       can_store;
+ 
+   GCancellable                  *cancel;
+ } PhoshLocationManager;
+@@ -182,12 +189,14 @@ phosh_location_manager_set_property (GObject      *object,
+ static void
+ on_app_auth_prompt_closed (PhoshLocationManager *self, PhoshAppAuthPrompt *prompt)
+ {
++  PhoshAccessChoice choice;
+   gboolean grant_access;
+ 
+   g_return_if_fail (PHOSH_IS_LOCATION_MANAGER (self));
+   g_return_if_fail (PHOSH_IS_APP_AUTH_PROMPT (prompt));
+ 
+-  grant_access = phosh_app_auth_prompt_get_grant_access (GTK_WIDGET (prompt));
++  choice = phosh_app_auth_prompt_get_choice (GTK_WIDGET (prompt));
++  grant_access = phosh_access_choice_to_response (choice) == 0;
+ 
+   g_debug ("Granting access for %p at level %d: %s",
+            self->invocation,
+@@ -199,8 +208,11 @@ on_app_auth_prompt_closed (PhoshLocationManager *self, PhoshAppAuthPrompt *promp
+                                                      grant_access,
+                                                      self->req_level);
+ 
+-  /* TODO: save in permission store */
++  /* Plinius: Always Allow and Don't Allow are remembered, Allow Once is not */
++  if (self->can_store)
++    phosh_location_permission_store (self->desktop_id, self->req_level, choice);
+ 
++  g_clear_pointer (&self->desktop_id, g_free);
+   self->req_level = LEVEL_NONE;
+   self->invocation = NULL;
+   self->prompt = NULL;
+@@ -209,6 +221,103 @@ on_app_auth_prompt_closed (PhoshLocationManager *self, PhoshAppAuthPrompt *promp
+ }
+ 
+ 
++typedef struct {
++  PhoshLocationManager *self;
++  GDBusMethodInvocation *invocation;
++  char                 *desktop_id;
++  guint                 level;
++  GDesktopAppInfo      *app_info;
++} AuthorizeRequest;
++
++
++static void
++authorize_request_free (AuthorizeRequest *request)
++{
++  g_free (request->desktop_id);
++  g_clear_object (&request->app_info);
++  g_free (request);
++}
++G_DEFINE_AUTOPTR_CLEANUP_FUNC (AuthorizeRequest, authorize_request_free)
++
++
++static void
++show_prompt (PhoshLocationManager *self, AuthorizeRequest *request, gboolean can_store)
++{
++  PhoshDBusGeoClue2Agent *object = PHOSH_DBUS_GEO_CLUE2_AGENT (self);
++  GAppInfo *app_info = G_APP_INFO (request->app_info);
++  g_autofree char *body = NULL;
++  g_autofree char *subtitle = NULL;
++
++  /* Cancel any ongoing prompt */
++  if (self->prompt)
++    gtk_widget_destroy (GTK_WIDGET (self->prompt));
++
++  if (self->invocation) {
++    phosh_dbus_geo_clue2_agent_complete_authorize_app (
++      object,
++      self->invocation,
++      FALSE,
++      request->level);
++  }
++
++  self->req_level = request->level;
++  self->invocation = request->invocation;
++  g_free (self->desktop_id);
++  self->desktop_id = g_strdup (request->desktop_id);
++  self->can_store = can_store;
++  subtitle = g_strdup_printf (_("Allow '%s' to access your location information?"),
++                              g_app_info_get_display_name (app_info));
++
++  body = g_desktop_app_info_get_string (request->app_info, "X-Geoclue-Reason");
++  /* Plinius: Allow Once, Always Allow and Don't Allow instead of Yes and No */
++  self->prompt = phosh_app_auth_prompt_new_with_buttons (g_app_info_get_icon (app_info),
++                                                         _("Geolocation"),
++                                                         subtitle, body,
++                                                         PHOSH_ACCESS_CHOICE_ALL, NULL);
++  g_signal_connect_object (self->prompt,
++                           "closed",
++                           G_CALLBACK (on_app_auth_prompt_closed),
++                           self,
++                           G_CONNECT_SWAPPED);
++
++  /* Show widget when not locked and keep that in sync */
++  g_object_bind_property (phosh_shell_get_default (), "locked",
++                          self->prompt, "visible",
++                          G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
++}
++
++
++static void
++on_permission_looked_up (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (AuthorizeRequest) request = user_data;
++  g_autoptr (GError) err = NULL;
++  PhoshLocationPermission permission;
++  gboolean can_store;
++
++  permission = phosh_location_permission_lookup_finish (res, &can_store, &err);
++  if (err) {
++    /* Cancelled: the manager is going away, self is not to be touched */
++    g_dbus_method_invocation_return_value (request->invocation,
++                                           g_variant_new ("(bu)", FALSE, request->level));
++    return;
++  }
++
++  if (permission != PHOSH_LOCATION_PERMISSION_ASK) {
++    gboolean allowed = permission == PHOSH_LOCATION_PERMISSION_ALLOW;
++
++    g_debug ("Remembered for %s: %s", request->desktop_id, allowed ? "allowed" : "denied");
++    phosh_dbus_geo_clue2_agent_complete_authorize_app (PHOSH_DBUS_GEO_CLUE2_AGENT (request->self),
++                                                       request->invocation,
++                                                       allowed,
++                                                       request->level);
++    return;
++  }
++
++  show_prompt (request->self, request, can_store);
++}
++
++
+ static gboolean
+ handle_authorize_app (PhoshDBusGeoClue2Agent *object,
+                       GDBusMethodInvocation  *invocation,
+@@ -217,8 +326,7 @@ handle_authorize_app (PhoshDBusGeoClue2Agent *object,
+ {
+   PhoshLocationManager *self = PHOSH_LOCATION_MANAGER (object);
+   g_autofree char *desktop_file = NULL;
+-  g_autofree char *body = NULL;
+-  g_autofree char *subtitle = NULL;
++  AuthorizeRequest *request;
+ 
+   g_autoptr (GDesktopAppInfo) app_info = NULL;
+   gint level;
+@@ -247,40 +355,15 @@ handle_authorize_app (PhoshDBusGeoClue2Agent *object,
+     return TRUE;
+   }
+ 
+-  /* TODO: look at location permission store */
+-
+-  /* Cancel any ongoing prompt */
+-  if (self->prompt)
+-    gtk_widget_destroy (GTK_WIDGET (self->prompt));
+-
+-  if (self->invocation) {
+-    phosh_dbus_geo_clue2_agent_complete_authorize_app (
+-      object,
+-      self->invocation,
+-      FALSE,
+-      arg_req_accuracy_level);
+-  }
+-
+-  self->req_level = arg_req_accuracy_level;
+-  self->invocation = invocation;
+-  subtitle = g_strdup_printf (_("Allow '%s' to access your location information?"),
+-                              g_app_info_get_display_name (G_APP_INFO (app_info)));
+-
+-  body = g_desktop_app_info_get_string (app_info, "X-Geoclue-Reason");
+-  self->prompt = phosh_app_auth_prompt_new (g_app_info_get_icon (G_APP_INFO (app_info)),
+-                                            _("Geolocation"),
+-                                            subtitle, body, _("Yes"), _("No"), FALSE, NULL);
+-  g_signal_connect_object (self->prompt,
+-                           "closed",
+-                           G_CALLBACK (on_app_auth_prompt_closed),
+-                           self,
+-                           G_CONNECT_SWAPPED);
+-
+-  /* Show widget when not locked and keep that in sync */
+-  g_object_bind_property (phosh_shell_get_default (), "locked",
+-                          self->prompt, "visible",
+-                          G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
+-
++  /* Plinius: an answer remembered in the permission store comes first */
++  request = g_new0 (AuthorizeRequest, 1);
++  request->self = self;
++  request->invocation = invocation;
++  request->desktop_id = g_strdup (arg_desktop_id);
++  request->level = arg_req_accuracy_level;
++  request->app_info = g_steal_pointer (&app_info);
++  phosh_location_permission_lookup (arg_desktop_id, arg_req_accuracy_level, self->cancel,
++                                    on_permission_looked_up, request);
+ 
+   return TRUE;
+ }
+@@ -430,6 +513,7 @@ phosh_location_manager_dispose (GObject *object)
+ 
+   /* Close dialog and cancel pending request if ongoing */
+   g_clear_pointer (&self->prompt, phosh_cp_widget_destroy);
++  g_clear_pointer (&self->desktop_id, g_free);
+ 
+   if (self->invocation) {
+     phosh_dbus_geo_clue2_agent_complete_authorize_app (PHOSH_DBUS_GEO_CLUE2_AGENT (self),
+diff --git a/src/location-permission.c b/src/location-permission.c
+new file mode 100644
+index 00000000..9b6e2378
+--- /dev/null
++++ b/src/location-permission.c
+@@ -0,0 +1,298 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-location-permission"
++
++#include "location-permission.h"
++
++/**
++ * SECTION:location-permission
++ *
++ * Plinius: the location answers of native apps (geoclue's AuthorizeApp), remembered in the
++ * permission store as xdg-desktop-portal (1.22, location.c) remembers those of Flatpak apps:
++ * table "location", id "location", the app's entry [accuracy, last use]. The accuracy is one of
++ * NONE, COUNTRY, CITY, NEIGHBORHOOD, STREET and EXACT (an unknown one counts as NONE, as there),
++ * the last use is g_get_monotonic_time() in microseconds as xdg-desktop-portal writes it. GNOME
++ * Settings lists these entries on its Location page by the desktop id (without ".desktop") and
++ * switches them between EXACT and NONE; the key of a native app is its desktop id, as geoclue
++ * names it.
++ *
++ * - entry NONE: denied without asking
++ * - entry at the level asked for or a finer one: allowed without asking
++ * - no entry, an entry of a coarser level, or one with fewer than two fields (ignored as by
++ *   xdg-desktop-portal): asked
++ *
++ * After the question "Always Allow" stores the level asked for, "Don't Allow" stores NONE;
++ * "Allow Once" and a dialog swiped away store nothing.
++ */
++
++#define PERMISSION_STORE_NAME      "org.freedesktop.impl.portal.PermissionStore"
++#define PERMISSION_STORE_PATH      "/org/freedesktop/impl/portal/PermissionStore"
++#define PERMISSION_STORE_INTERFACE "org.freedesktop.impl.portal.PermissionStore"
++#define PERMISSION_STORE_NOT_FOUND "org.freedesktop.portal.Error.NotFound"
++#define PERMISSION_TABLE           "location"
++#define PERMISSION_ID              "location"
++
++#define LOOKUP_TIMEOUT_MS 2000
++
++/* geoclue's GClueAccuracyLevel, by xdg-desktop-portal's names */
++static const struct {
++  const char *name;
++  guint       level;
++} levels[] = {
++  { "NONE", 0 },
++  { "COUNTRY", 1 },
++  { "CITY", 4 },
++  { "NEIGHBORHOOD", 5 },
++  { "STREET", 6 },
++  { "EXACT", 8 },
++};
++
++/* The lookup's result as an int of the task: the decision, and whether to store */
++#define CAN_STORE 0x10
++
++
++guint
++phosh_location_level_from_string (const char *name)
++{
++  for (guint i = 0; i < G_N_ELEMENTS (levels); i++) {
++    if (g_strcmp0 (name, levels[i].name) == 0)
++      return levels[i].level;
++  }
++  g_debug ("Unknown accuracy '%s', taken as NONE", name ? name : "");
++  return 0;
++}
++
++
++/* The name of the level, or of the next coarser one geoclue knows */
++const char *
++phosh_location_level_to_string (guint level)
++{
++  const char *name = levels[0].name;
++
++  for (guint i = 0; i < G_N_ELEMENTS (levels); i++) {
++    if (levels[i].level <= level)
++      name = levels[i].name;
++  }
++  return name;
++}
++
++
++/**
++ * phosh_location_permission_decide:
++ * @permissions: (nullable): the table's entries (a{sas})
++ * @app_id: the app's desktop id
++ * @level: the accuracy it asks for
++ *
++ * Returns: what the app's entry says
++ */
++PhoshLocationPermission
++phosh_location_permission_decide (GVariant *permissions, const char *app_id, guint level)
++{
++  g_autofree const char **perms = NULL;
++  guint stored;
++
++  if (permissions == NULL || !g_variant_lookup (permissions, app_id, "^a&s", &perms))
++    return PHOSH_LOCATION_PERMISSION_ASK;
++  if (g_strv_length ((char **) perms) < 2)
++    return PHOSH_LOCATION_PERMISSION_ASK;
++
++  stored = phosh_location_level_from_string (perms[0]);
++  if (stored == 0)
++    return PHOSH_LOCATION_PERMISSION_DENY;
++  return stored >= level ? PHOSH_LOCATION_PERMISSION_ALLOW : PHOSH_LOCATION_PERMISSION_ASK;
++}
++
++
++typedef struct {
++  char  *app_id;
++  guint  level;
++} LookupData;
++
++
++static void
++lookup_data_free (gpointer data)
++{
++  LookupData *lookup = data;
++
++  g_free (lookup->app_id);
++  g_free (lookup);
++}
++
++
++static void
++on_looked_up (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GTask) task = user_data;
++  LookupData *lookup = g_task_get_task_data (task);
++  g_autoptr (GVariant) reply = NULL;
++  g_autoptr (GError) err = NULL;
++  g_autofree char *remote = NULL;
++
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (reply) {
++    g_autoptr (GVariant) permissions = g_variant_get_child_value (reply, 0);
++
++    g_task_return_int (task, CAN_STORE | phosh_location_permission_decide (permissions,
++                                                                           lookup->app_id,
++                                                                           lookup->level));
++    return;
++  }
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
++    g_task_return_error (task, g_steal_pointer (&err));
++    return;
++  }
++
++  remote = g_dbus_error_get_remote_error (err);
++  if (g_strcmp0 (remote, PERMISSION_STORE_NOT_FOUND) == 0) {
++    /* No app has an entry yet */
++    g_task_return_int (task, CAN_STORE | PHOSH_LOCATION_PERMISSION_ASK);
++    return;
++  }
++
++  g_debug ("No permission store, asking without remembering: %s", err->message);
++  g_task_return_int (task, PHOSH_LOCATION_PERMISSION_ASK);
++}
++
++
++/**
++ * phosh_location_permission_lookup:
++ * @app_id: the app's desktop id
++ * @level: the accuracy it asks for
++ * @cancellable: (nullable): to cancel the lookup
++ * @callback: called with the result
++ * @user_data: for @callback
++ *
++ * Looks the app's entry up in the permission store (on the session bus).
++ */
++void
++phosh_location_permission_lookup (const char          *app_id,
++                                  guint                level,
++                                  GCancellable        *cancellable,
++                                  GAsyncReadyCallback  callback,
++                                  gpointer             user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GDBusConnection) bus = NULL;
++  GTask *task = g_task_new (NULL, cancellable, callback, user_data);
++  LookupData *lookup = g_new0 (LookupData, 1);
++
++  lookup->app_id = g_strdup (app_id);
++  lookup->level = level;
++  g_task_set_task_data (task, lookup, lookup_data_free);
++
++  bus = g_bus_get_sync (G_BUS_TYPE_SESSION, cancellable, &err);
++  if (bus == NULL) {
++    g_debug ("No session bus, asking without remembering: %s", err->message);
++    g_task_return_int (task, PHOSH_LOCATION_PERMISSION_ASK);
++    g_object_unref (task);
++    return;
++  }
++
++  g_dbus_connection_call (bus,
++                          PERMISSION_STORE_NAME,
++                          PERMISSION_STORE_PATH,
++                          PERMISSION_STORE_INTERFACE,
++                          "Lookup",
++                          g_variant_new ("(ss)", PERMISSION_TABLE, PERMISSION_ID),
++                          G_VARIANT_TYPE ("(a{sas}v)"),
++                          G_DBUS_CALL_FLAGS_NONE,
++                          LOOKUP_TIMEOUT_MS,
++                          cancellable,
++                          on_looked_up,
++                          task);
++}
++
++
++/**
++ * phosh_location_permission_lookup_finish:
++ * @res: the result
++ * @can_store: (out): whether the permission store answered, so an answer can be stored
++ * @error: set when cancelled
++ *
++ * Returns: what the entry says; %PHOSH_LOCATION_PERMISSION_ASK without one
++ */
++PhoshLocationPermission
++phosh_location_permission_lookup_finish (GAsyncResult *res, gboolean *can_store, GError **error)
++{
++  gssize result = g_task_propagate_int (G_TASK (res), error);
++
++  if (result < 0) {
++    *can_store = FALSE;
++    return PHOSH_LOCATION_PERMISSION_ASK;
++  }
++  *can_store = !!(result & CAN_STORE);
++  return result & ~CAN_STORE;
++}
++
++
++static void
++on_stored (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autofree char *what = user_data;
++  g_autoptr (GVariant) reply = NULL;
++  g_autoptr (GError) err = NULL;
++
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (reply)
++    g_debug ("Remembered %s", what);
++  else
++    g_warning ("Could not remember %s: %s", what, err->message);
++}
++
++
++/**
++ * phosh_location_permission_store:
++ * @app_id: the app's desktop id
++ * @level: the accuracy it asked for
++ * @choice: the button pressed
++ *
++ * Remembers the answer: "Always Allow" as @level (at least COUNTRY), "Don't Allow" as NONE,
++ * with the time of now as the last use.
++ *
++ * Returns: whether an entry is written (not for "Allow Once" or a cancelled dialog)
++ */
++gboolean
++phosh_location_permission_store (const char *app_id, guint level, PhoshAccessChoice choice)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GDBusConnection) bus = NULL;
++  g_autofree char *last_use = NULL;
++  const char *accuracy;
++  const char *perms[3];
++
++  if (choice == PHOSH_ACCESS_CHOICE_ALWAYS)
++    accuracy = phosh_location_level_to_string (MAX (level, levels[1].level));
++  else if (choice == PHOSH_ACCESS_CHOICE_NEVER)
++    accuracy = levels[0].name;
++  else
++    return FALSE;
++
++  bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &err);
++  if (bus == NULL) {
++    g_warning ("Could not remember %s for %s: %s", accuracy, app_id, err->message);
++    return FALSE;
++  }
++
++  last_use = g_strdup_printf ("%" G_GINT64_FORMAT, g_get_monotonic_time ());
++  perms[0] = accuracy;
++  perms[1] = last_use;
++  perms[2] = NULL;
++  g_dbus_connection_call (bus,
++                          PERMISSION_STORE_NAME,
++                          PERMISSION_STORE_PATH,
++                          PERMISSION_STORE_INTERFACE,
++                          "SetPermission",
++                          g_variant_new ("(sbss^as)", PERMISSION_TABLE, TRUE, PERMISSION_ID,
++                                         app_id, perms),
++                          NULL,
++                          G_DBUS_CALL_FLAGS_NONE,
++                          -1,
++                          NULL,
++                          on_stored,
++                          g_strdup_printf ("%s for %s", accuracy, app_id));
++  return TRUE;
++}
+diff --git a/src/location-permission.h b/src/location-permission.h
+new file mode 100644
+index 00000000..038241c6
+--- /dev/null
++++ b/src/location-permission.h
+@@ -0,0 +1,43 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include <gio/gio.h>
++#include "access-once.h"
++
++G_BEGIN_DECLS
++
++/**
++ * PhoshLocationPermission:
++ * @PHOSH_LOCATION_PERMISSION_ASK: nothing remembered that answers: ask the user
++ * @PHOSH_LOCATION_PERMISSION_ALLOW: remembered as allowed at the level asked for, or a finer one
++ * @PHOSH_LOCATION_PERMISSION_DENY: remembered as denied
++ */
++typedef enum {
++  PHOSH_LOCATION_PERMISSION_ASK,
++  PHOSH_LOCATION_PERMISSION_ALLOW,
++  PHOSH_LOCATION_PERMISSION_DENY,
++} PhoshLocationPermission;
++
++guint                   phosh_location_level_from_string (const char *name);
++const char             *phosh_location_level_to_string (guint level);
++PhoshLocationPermission phosh_location_permission_decide (GVariant   *permissions,
++                                                          const char *app_id,
++                                                          guint       level);
++void                    phosh_location_permission_lookup (const char          *app_id,
++                                                          guint                level,
++                                                          GCancellable        *cancellable,
++                                                          GAsyncReadyCallback  callback,
++                                                          gpointer             user_data);
++PhoshLocationPermission phosh_location_permission_lookup_finish (GAsyncResult  *res,
++                                                                 gboolean      *can_store,
++                                                                 GError       **error);
++gboolean                phosh_location_permission_store (const char        *app_id,
++                                                         guint              level,
++                                                         PhoshAccessChoice  choice);
++
++G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index 5e1903a5..bb5ca5a8 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -356,6 +356,7 @@ phosh_headers = files(
+   'layout-manager.h',
+   'location-info.h',
+   'location-manager.h',
++  'location-permission.h',
+   'lockscreen-bg.h',
+   'metainfo-cache.h',
+   'monitor-manager.h',
+@@ -427,6 +428,7 @@ phosh_sources = files(
+   'layout-manager.c',
+   'location-info.c',
+   'location-manager.c',
++  'location-permission.c',
+   'lockscreen-bg.c',
+   'lockscreen-manager.c',
+   'lockscreen.c',
+-- 
+2.56.0
+
