@@ -64,7 +64,10 @@ tools/run-tests.sh --coverage # line coverage of Python and C in build/coverage/
 ```
 
 The phone is reachable over USB networking at `10.15.19.82` (the PC side is `10.15.19.100`), SSH
-with keys only.
+with keys only. `tools/phone-check.py` checks its everyday functions live over that link (SIM,
+network, calls, SMS, mobile data, Wi-Fi, Bluetooth, GPS, sensors, cameras, audio and more, about
+25 s): it only reads and scans, and calls, sends, pairs, plays and lights nothing. Run it after
+installing packages on the phone; `--host` takes another address, `--list` shows the checks.
 
 ## Conventions
 

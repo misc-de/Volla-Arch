@@ -12,7 +12,7 @@ import pytest
 
 from conftest import compile_c
 from dhw_harness import FAKES, PKG, kv, run
-from hybris_vulkan_harness import CORE, WSI, build, generate_protocol, needs_vulkan
+from hybris_vulkan_harness import CORE, VULKAN_FLAGS, WSI, build, generate_protocol, needs_vulkan
 
 pytestmark = needs_vulkan
 
@@ -662,8 +662,8 @@ def test_library_exports_only_the_icd_entry_points(tmp_path):
     protocol = generate_protocol(tmp_path)
     shutil.copy(PKG / "hybris-vulkan" / "hybris_vulkan.h", tmp_path)
     lib = compile_c(tmp_path / "libvulkan_hybris.so", [CORE, WSI, protocol],
-                    flags=[f"-I{FAKES}", f"-I{tmp_path}", "-fPIC", "-shared", "-fvisibility=hidden", "-pthread",
-                           "-Wl,-z,nodelete"],
+                    flags=[f"-I{FAKES}", f"-I{tmp_path}", *(VULKAN_FLAGS or []), "-fPIC", "-shared",
+                           "-fvisibility=hidden", "-pthread", "-Wl,-z,nodelete"],
                     pkgs=("wayland-client",), counted=False)
     out = subprocess.run(["nm", "-D", "--defined-only", str(lib)], capture_output=True, text=True,
                          check=True).stdout

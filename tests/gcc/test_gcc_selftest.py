@@ -476,3 +476,88 @@ def test_leaving_while_the_summary_runs(program, gcc_world, system):
     g = last_update(r.dump("after"))
     assert g["subtitle"].endswith("Asks for your PIN.")
     assert not r.warnings()
+
+
+# ----- What cannot run, and closing while something runs -----
+
+NO_INTERPRETER = "#!/nonexistent/interpreter\n"
+
+
+def unrunnable_pkexec(gcc_world):
+    """A pkexec in PATH that cannot be started (its interpreter is missing)"""
+    f = gcc_world.fake_bin.path / "pkexec"
+    f.write_text(NO_INTERPRETER)
+    f.chmod(0o755)
+
+
+def test_check_again_when_pkexec_cannot_start(program, gcc_world, system):
+    system.health(NETLOG_FAILED)
+    unrunnable_pkexec(gcc_world)
+    r = gcc_world.run(program, [*open_page(), click(type="AdwButtonRow", text="Check Again"), settle(300),
+                                dump("after")])
+    s = r.dump("after")
+    assert s.has(type="GtkLabel", text="The self-test could not run")
+    # Not stuck in "Checking…": it can be pressed again
+    assert page_of(s).one(type="AdwButtonRow", text="Check Again").get("sensitive", True)
+    (w,) = r.warnings(ignore=[TEMPLATE_WARNING])
+    assert w["message"].startswith(f"Could not run pkexec {program.root}{HEALTH} check: ")
+
+
+def test_check_again_ended_by_a_signal(program, gcc_world, system):
+    system.health(NETLOG_FAILED)
+    gcc_world.fake_bin.stub("pkexec", "kill -KILL $$")
+    r = gcc_world.run(program, [*open_page(), click(type="AdwButtonRow", text="Check Again"), settle(400),
+                                dump("after")])
+    assert r.dump("after").has(type="GtkLabel", text="The self-test could not run")
+
+
+def test_closing_while_the_check_runs(program, gcc_world, system):
+    # Settings is closed while pkexec still runs: the wait is cancelled with the page, nothing
+    # touches the freed page afterwards (the window is destroyed at the end of the run)
+    system.health(NETLOG_FAILED)
+    gcc_world.fake_bin.stub("pkexec", "sleep 1")
+    r = gcc_world.run(program, [*open_page(), click(type="AdwButtonRow", text="Check Again"), settle(100),
+                                dump("running")])
+    assert page_of(r.dump("running")).one(type="AdwButtonRow", text="Checking…").get("sensitive") is False
+    assert not r.warnings(ignore=[TEMPLATE_WARNING])
+
+
+def test_take_back_when_pkexec_cannot_start(program, gcc_world, system):
+    system.health(NETLOG_FAILED)
+    system.rollback()
+    unrunnable_pkexec(gcc_world)
+    r = gcc_world.run(program, take_back([click(type="GtkButton", text="Take Back"), settle(300), dump("after")]))
+    g = last_update(r.dump("after"))
+    assert g["subtitle"].startswith("Not taken back: ")
+    assert not take_back_shown(g)
+    (w,) = r.warnings(ignore=[TEMPLATE_WARNING])
+    assert w["message"].startswith(f"Could not run pkexec {program.root}{ROLLBACK} run: ")
+
+
+def test_closing_while_the_rollback_runs(program, gcc_world, system):
+    system.health(NETLOG_FAILED)
+    system.rollback()
+    gcc_world.fake_bin.stub("pkexec", "sleep 1")
+    r = gcc_world.run(program, take_back([click(type="GtkButton", text="Take Back"), settle(100),
+                                          dump("running")]))
+    assert last_update(r.dump("running"))["subtitle"] == "Taking back the update… Do not switch off the phone."
+    assert not r.warnings(ignore=[TEMPLATE_WARNING])
+
+
+def test_closing_while_the_summary_runs(program, gcc_world, system):
+    system.health(NETLOG_FAILED)
+    system.write(ROLLBACK, f'#!/bin/sh\nsleep 1\nprintf "%s" "{SUMMARY}"\n', 0o755)
+    r = gcc_world.run(program, [*open_page(), dump("page")])
+    assert last_update(r.dump("page"))["subtitle"] == "Looking for the last update…"
+    assert not r.warnings(ignore=[TEMPLATE_WARNING])
+
+
+def test_a_rollback_tool_that_cannot_start(program, gcc_world, system):
+    system.health(NETLOG_FAILED)
+    system.write(ROLLBACK, NO_INTERPRETER, 0o755)
+    r = gcc_world.run(program, [*open_page(), dump("page")])
+    g = last_update(r.dump("page"))
+    assert g["subtitle"] == "The last update could not be read."
+    assert not take_back_shown(g)
+    (w,) = r.warnings(ignore=[TEMPLATE_WARNING])
+    assert w["message"].startswith(f"Could not run {program.root}{ROLLBACK} summary: ")
