@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=ofono-binder-plugin
-pkgver=1.1.41
+pkgver=1.1.42
 pkgrel=1
 pkgdesc="ofono plugin for the Android radio HAL over binder (HIDL and AIDL), with libofonobinderpluginext"
 arch=(aarch64 x86_64)
@@ -15,7 +15,7 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz"
 	0004-ofono-binder-Send-the-IMS-data-profile-with-IWLAN-allowed.patch
 	0005-ofono-binder-Set-up-emergency-numbers-with-emergencyDial.patch
 	0006-ofono-binder-Keep-the-IRadio-version-of-calls-that-the-ext-also-reports.patch)
-sha256sums=('2cf449eff9b504327a0366dd22453bc9d7aed544ce5cb4ab5dd0808a4db9e91e'
+sha256sums=('474bae214f92e3aa684e5970fccc793da2b04a525fe8eda95b6ef3c161cec6be'
 	'c515fe870b6a4756adc719f5798fe61d658103374ce162bf71fa3a1d236c2180'
 	'789273c44a85e89b3ebf98e4d54e71a87c84877639cfad7d179da5e4910806ea'
 	'692c5ea427eea91a42ced87e5325c23b42431d88b1485c40b5fd83a5e6ba755b'
