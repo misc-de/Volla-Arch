@@ -1,0 +1,100 @@
+From 8360dac08d10fc0c7ec3d96acbacbea0875285cc Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 19:17:50 +0100
+Subject: [PATCH] Count a card without an ICCID as no SIM
+
+Since ofono-binder-plugin 1.1.42 ("Handle SIMs with no apps") a card
+without applications, like an eSIM chip without an enabled profile,
+counts as present in oFono, with no card identifier and no IMSI. Its
+modem was exported as one with a SIM: enabled, a SIM object with an empty
+SIM identifier. NetworkManager then took it for the mobile data
+connection (an empty SIM identifier does not contradict the connection's
+SIM) and timed out on it every 400 seconds, while the modem with the real
+SIM stayed disconnected.
+
+A SIM is one with an ICCID, which oFono reads before any PIN, so a locked
+SIM is still reported as locked. Without one the modem reports a missing
+SIM, as before 1.1.42; lpac reaches the chip through oFono directly.
+---
+ ofono2mm/mm_modem.py |  6 +++---
+ ofono2mm/mm_sim.py   | 26 ++++++++++++++------------
+ 2 files changed, 17 insertions(+), 15 deletions(-)
+
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index e876195..745d4c6 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -16,7 +16,7 @@ from ofono2mm.mm_modem_sar import MMModemSarInterface
+ from ofono2mm.mm_modem_oma import MMModemOmaInterface
+ from ofono2mm.mm_modem_signal import MMModemSignalInterface
+ from ofono2mm.mm_modem_location import MMModemLocationInterface
+-from ofono2mm.mm_sim import MMSimInterface
++from ofono2mm.mm_sim import MMSimInterface, sim_usable
+ from ofono2mm.mm_bearer import MMBearerInterface
+ from ofono2mm.mm_modem_voice import MMModemVoiceInterface
+ from ofono2mm.mm_types import ModemManagerState,\
+@@ -401,8 +401,8 @@ class MMModemInterface(ServiceInterface):
+         #############
+         self.props['PowerState'] = Variant('i', 3) # power is on MM_MODEM_POWER_STATE_ON
+ 
+-        if 'Present' not in self.ofono_interface_props['org.ofono.SimManager'] or \
+-                not self.ofono_interface_props['org.ofono.SimManager']['Present'].value:
++        # A card without an ICCID (the eSIM chip without a profile) is no SIM here, see sim_usable()
++        if not sim_usable(self.ofono_interface_props['org.ofono.SimManager']):
+             self.props['Sim'] = Variant('o', '/')
+             self.props['State'] = Variant('i', ModemManagerState.FAILED)
+             self.props['StateFailedReason'] = Variant('i', ModemManagerStateFailedReason.SIM_MISSING)
+diff --git a/ofono2mm/mm_sim.py b/ofono2mm/mm_sim.py
+index d1763b8..83158da 100644
+--- a/ofono2mm/mm_sim.py
++++ b/ofono2mm/mm_sim.py
+@@ -3,6 +3,18 @@ from dbus_next.service import (ServiceInterface,
+ from dbus_next.constants import PropertyAccess
+ from dbus_next import Variant, DBusError
+ 
++def sim_usable(sim_manager):
++    # A SIM is one the modem can use: present and with a card identifier (ICCID), which oFono reads
++    # before any PIN. Since ofono-binder-plugin 1.1.42 a card without applications, like the eSIM
++    # chip without an enabled profile, counts as present too, but has no ICCID. Reported as a SIM,
++    # NetworkManager took that modem for the mobile data connection (its SIM identifier was empty,
++    # so the connection's SIM matched) and timed out on it again and again, while the modem with
++    # the real SIM stayed unused. lpac reaches the chip through oFono, not through this.
++    present = sim_manager.get('Present')
++    iccid = sim_manager.get('CardIdentifier')
++    return bool(present is not None and present.value and iccid is not None and iccid.value)
++
++
+ class MMSimInterface(ServiceInterface):
+     def __init__(self, index, bus, ofono_client, modem_name, ofono_modem, ofono_props, ofono_interfaces, ofono_interface_props):
+         super().__init__('org.freedesktop.ModemManager1.Sim')
+@@ -35,13 +47,7 @@ class MMSimInterface(ServiceInterface):
+         old_props = self.props
+ 
+         if 'org.ofono.SimManager' in self.ofono_interface_props:
+-            if 'Present' in self.ofono_interface_props['org.ofono.SimManager']:
+-                if self.ofono_interface_props['org.ofono.SimManager']['Present']:
+-                    self.props['Active'] = Variant('b', True)
+-                else:
+-                    self.props['Active'] = Variant('b', False)
+-            else:
+-                self.props['Active'] = Variant('b', False)
++            self.props['Active'] = Variant('b', sim_usable(self.ofono_interface_props['org.ofono.SimManager']))
+             if 'CardIdentifier' in self.ofono_interface_props['org.ofono.SimManager']:
+                 self.props['SimIdentifier'] = Variant('s', self.ofono_interface_props['org.ofono.SimManager']['CardIdentifier'].value)
+             else:
+@@ -166,11 +172,7 @@ class MMSimInterface(ServiceInterface):
+         if not self.available:
+             return False
+ 
+-        sim_manager = self.ofono_interface_props['org.ofono.SimManager']
+-        if 'Present' not in sim_manager:
+-            return False
+-
+-        return self.ofono_interface_props['org.ofono.SimManager']['Present'].value
++        return sim_usable(self.ofono_interface_props['org.ofono.SimManager'])
+ 
+     @property
+     def locked(self):
+-- 
+2.56.0
+

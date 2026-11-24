@@ -2,7 +2,7 @@
 
 pkgname=ofono2mm
 pkgver=1.0.1.20260109
-pkgrel=27
+pkgrel=28
 pkgdesc="ModemManager D-Bus API on top of ofono, so gnome-calls, chatty and NetworkManager work unchanged"
 arch=(any)
 url="https://github.com/droidian/oFono2MM"
@@ -40,7 +40,8 @@ source=("git+$url.git#commit=$_commit"
 	0020-Answer-every-queued-call-when-one-of-them-fails.patch
 	0021-Emergency-calls-only-for-the-session-root-and-the-group-radio.patch
 	0022-Keep-the-caller-s-number-and-the-location-to-those-allowed.patch
-	0023-Answer-GetManagedObjects-without-waiting-for-oFono.patch)
+	0023-Answer-GetManagedObjects-without-waiting-for-oFono.patch
+	0024-Count-a-card-without-an-ICCID-as-no-SIM.patch)
 sha256sums=('SKIP'
 	'757f256909d7c4fe63e818fe6052532a03f230ee30d48a6faacd2001ec857c5e'
 	'bc37f95e58fdc85adf395331db238487bb788a5f09343c38b2a5d9d2ca292f3c'
@@ -68,7 +69,8 @@ sha256sums=('SKIP'
 	'c63d3a9f6642f819b60369edae04ef7dee6e8b24dc8ac7d90b7824288260e0e7'
 	'ec0b965cd9f884b90da596e405ca355fc3437c87fc4d247372e1c36e0f7c7c8c'
 	'd8083b475433a4f83c375f2f6028cfc39b2945bbeffbc95a2a7453741cd8474f'
-	'9f99978d944cb73f41acfc2d11467666c4a12333158ed94191fd8dc0c537b18b')
+	'9f99978d944cb73f41acfc2d11467666c4a12333158ed94191fd8dc0c537b18b'
+	'c4d1f52540eff9ddd4234bceeb4a4383a2c0650dd6b9fffacc27344c82350cb0')
 
 prepare() {
 	# Without it Phosh shows no modem at random: a SIM came first in GetManagedObjects
@@ -139,6 +141,9 @@ prepare() {
 	# After boot Phosh showed "no SIM" while the SIM had mobile data: GetManagedObjects waited for
 	# an async USSD getter, a PropertiesChanged meanwhile went out first and GLib dropped it
 	patch -d oFono2MM -Np1 -i "$srcdir/0023-Answer-GetManagedObjects-without-waiting-for-oFono.patch"
+	# Since ofono-binder-plugin 1.1.42 the eSIM chip without a profile counts as a SIM: mobile
+	# data went to its modem and timed out every 400 s, the modem with the real SIM stayed unused
+	patch -d oFono2MM -Np1 -i "$srcdir/0024-Count-a-card-without-an-ICCID-as-no-SIM.patch"
 }
 
 package() {
