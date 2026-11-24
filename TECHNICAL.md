@@ -217,7 +217,7 @@ the vendor images and room for them, the first-start PIN). Plinius Boot finds th
 
 ```
 tools/downloads.sh image build/plinius-arch-<date>.img   # check, pack, latest.json → build/downloads/images
-tools/downloads.sh app org.plinius.Boot-x86_64.flatpak    # Plinius Boot → build/downloads/downloads
+tools/downloads.sh app org.plinius.Boot-x86_64.flatpak plinius-boot.tar.gz   # Plinius Boot → build/downloads/downloads
 DOWNLOAD_TARGET=user@host:/path tools/downloads.sh upload # images, then latest.json, then the app
 ```
 

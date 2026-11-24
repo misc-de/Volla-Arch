@@ -334,7 +334,8 @@ def test_an_image_that_fails_the_check_is_not_offered(tmp_path, volla, fake_bin)
     (["image", "plinius.img", "1 0"], {}, "invalid version"),
     (["image", "plinius.img"], {"DOWNLOAD_URL": "http://plinius.example.org"}, "DOWNLOAD_URL must be https"),
     (["image", "plinius.img"], {"ZSTD_LEVEL": "22"}, "ZSTD_LEVEL must be 1 to 19"),
-    (["app", "plinius-boot.zip"], {}, "is not a Flatpak of Plinius Boot"),
+    (["app", "plinius-boot.zip"], {}, "is neither the Flatpak nor the archive of Plinius Boot"),
+    (["app"], {}, "usage: tools/downloads.sh app FILE..."),
     (["app", "org.plinius.Boot.flatpak", "x"], {}, None),
     (["upload"], {}, "DOWNLOAD_TARGET"),
     (["upload"], {"DOWNLOAD_TARGET": "u@h:/srv/www"}, "nothing in"),
@@ -384,6 +385,31 @@ def test_the_app_under_the_linked_name_is_not_doubled(tmp_path, volla, fake_bin)
     assert run(volla, fake_bin, "downloads.sh", "app", app).returncode == 0
     assert sorted(f.name for f in (downloads(volla) / "downloads").iterdir()) == [
         "org.plinius.Boot-x86_64.flatpak", "org.plinius.Boot-x86_64.flatpak.sha256"]
+
+
+def test_the_archive_goes_beside_the_flatpak_under_the_name_the_homepage_links(tmp_path, volla, fake_bin):
+    flatpak = tmp_path / "org.plinius.Boot-x86_64.flatpak"
+    flatpak.write_bytes(b"bundle")
+    archive = tmp_path / "plinius-boot-0.17.tar.gz"
+    archive.write_bytes(b"archive")
+    assert run(volla, fake_bin, "downloads.sh", "app", flatpak, archive).returncode == 0
+    d = downloads(volla) / "downloads"
+    assert sorted(f.name for f in d.iterdir()) == [
+        "org.plinius.Boot-x86_64.flatpak", "org.plinius.Boot-x86_64.flatpak.sha256",
+        "plinius-boot-0.17.tar.gz", "plinius-boot.tar.gz", "plinius-boot.tar.gz.sha256"]
+    assert (d / "plinius-boot.tar.gz").read_bytes() == b"archive"
+    digest = hashlib.sha256(b"archive").hexdigest()
+    assert (d / "plinius-boot.tar.gz.sha256").read_text() == f"{digest}  plinius-boot.tar.gz\n"
+
+
+def test_one_wrong_file_puts_none_of_them_there(tmp_path, volla, fake_bin):
+    archive = tmp_path / "plinius-boot.tar.gz"
+    archive.write_bytes(b"archive")
+    other = tmp_path / "plinius-boot.zip"
+    other.write_bytes(b"zip")
+    r = run(volla, fake_bin, "downloads.sh", "app", archive, other)
+    assert r.returncode == 1 and "plinius-boot.zip is neither" in r.stderr
+    assert not (downloads(volla) / "downloads").exists()
 
 
 # --- downloads.sh upload ------------------------------------------------------------------------

@@ -8,9 +8,11 @@
 #       {"version", "url", "size", "sha256"} as Plinius Boot reads it (latest_image), and
 #       IMAGE.img.zst.sha256 for a check by hand. VERSION defaults to the date. The image
 #       latest.json named before stays as the previous one, older ones leave.
-#   tools/downloads.sh app FILE.flatpak
-#       Puts Plinius Boot's Flatpak (tools/flatpak.sh of plinius-boot) under downloads/, under
-#       its own name and as org.plinius.Boot-x86_64.flatpak, the name the homepage links.
+#   tools/downloads.sh app FILE...
+#       Puts Plinius Boot under downloads/, from its release (tools/flatpak.sh --release of
+#       plinius-boot): the Flatpak as org.plinius.Boot-x86_64.flatpak and the archive as
+#       plinius-boot.tar.gz, the names the homepage links, each also under its own name and with
+#       a .sha256. The homepage offers the archive and names the Flatpak below it.
 #   DOWNLOAD_TARGET=user@host:/var/www/plinius [DOWNLOAD_SSH_PORT=22] tools/downloads.sh upload
 #       Images first, latest.json after them (a phone's PC never finds a latest.json whose image
 #       is not there yet), then the images latest.json no longer names leave; the screenshots
@@ -72,17 +74,36 @@ print()' "$version" "$base/images/$name" "$size" "$sha" > "$dir/latest.json.part
 	msg "$name ($size bytes) in $dir, latest.json names version $version"
 }
 
+# The name the homepage links for a file of Plinius Boot; fails for any other file
+linked_name() {
+	if [[ $1 =~ ^org\.plinius\.Boot[A-Za-z0-9._-]*\.flatpak$ ]]; then
+		echo org.plinius.Boot-x86_64.flatpak
+	elif [[ $1 =~ ^plinius-boot[A-Za-z0-9._-]*\.tar\.gz$ ]]; then
+		echo plinius-boot.tar.gz
+	else
+		return 1
+	fi
+}
+
 do_app() {
-	local app=${1:?usage: tools/downloads.sh app FILE.flatpak} dir=$out/downloads name
-	[[ -f $app ]] || die "$app missing"
-	name=$(basename "$app")
-	[[ $name =~ ^org\.plinius\.Boot[A-Za-z0-9._-]*\.flatpak$ ]] || die "$name is not a Flatpak of Plinius Boot"
+	(($#)) || die "usage: tools/downloads.sh app FILE..."
+	local dir=$out/downloads app name linked
+	# All of them checked first, so that a wrong one changes nothing
+	for app in "$@"; do
+		[[ -f $app ]] || die "$app missing"
+		linked_name "$(basename "$app")" >/dev/null ||
+			die "$(basename "$app") is neither the Flatpak nor the archive of Plinius Boot"
+	done
 	mkdir -p "$dir"
-	install -m644 "$app" "$dir/$name"
-	[[ $name == org.plinius.Boot-x86_64.flatpak ]] || install -m644 "$app" "$dir/org.plinius.Boot-x86_64.flatpak"
-	(cd "$dir" && sha256sum org.plinius.Boot-x86_64.flatpak > org.plinius.Boot-x86_64.flatpak.sha256)
-	chmod 644 "$dir/org.plinius.Boot-x86_64.flatpak.sha256"
-	msg "$name in $dir"
+	for app in "$@"; do
+		name=$(basename "$app")
+		linked=$(linked_name "$name")
+		install -m644 "$app" "$dir/$name"
+		[[ $name == "$linked" ]] || install -m644 "$app" "$dir/$linked"
+		(cd "$dir" && sha256sum "$linked" > "$linked.sha256")
+		chmod 644 "$dir/$linked.sha256"
+		msg "$name in $dir"
+	done
 }
 
 do_upload() {
@@ -114,5 +135,5 @@ case ${1:-} in
 	image) shift; do_image "$@" ;;
 	app) shift; do_app "$@" ;;
 	upload) shift; do_upload ;;
-	*) die "usage: tools/downloads.sh image IMAGE.img [VERSION] | app FILE.flatpak | upload" ;;
+	*) die "usage: tools/downloads.sh image IMAGE.img [VERSION] | app FILE... | upload" ;;
 esac
