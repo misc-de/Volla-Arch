@@ -182,9 +182,11 @@ check_host
 # plinius-charge: stop charging at 80 % and fast charging (Settings > Power), enables itself.
 # plinius-energy: estimated battery use per app (Settings > Battery > Battery Usage), enables itself.
 # plinius-dnsfilter: DNS filter for the phone, its hotspot and USB clients (Settings > Network >
-#   DNS Filter); off by default, /etc/resolv.conf links to NetworkManager's file through it.
+#   DNS Filter); on from the start (its install script), /etc/resolv.conf links to
+#   NetworkManager's file through it.
 # ofono-binder-plugin-ext-mtk: MediaTek's IMS/VoLTE extension for the binder plugin.
-# plinius-pinguard: growing wait after wrong PINs for the lock screen, sudo and polkit (socket enables itself).
+# plinius-pinguard: growing wait after wrong PINs for the lock screen, sudo and polkit, on from
+#   the start (its install script; socket enables itself).
 # plinius-software: installing apps and whole-system updates, shown in Settings (Apps, Updates);
 #   brings plinius-freigabe.
 # schwupp: casting to TVs, behind Phosh's cast quick setting; the screen comes from

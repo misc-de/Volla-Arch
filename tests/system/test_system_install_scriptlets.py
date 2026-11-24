@@ -61,7 +61,8 @@ def pam_scripts(tmp_path, pam):
     guard = scriptlet("plinius-pinguard", tmp_path, {
         "/etc/pam.d/sudo": pam / "sudo",
         "/etc/pam.d/su-l": pam / "su-l",  # before su: it is a prefix
-        "/etc/pam.d/su": pam / "su"})
+        "/etc/pam.d/su": pam / "su",
+        "/etc/plinius-pinguard/enabled": tmp_path / "pinguard" / "enabled"})
     return crypt, sec, guard
 
 
@@ -128,6 +129,23 @@ def test_pam_su_remove_keeps_a_wheel_line_of_the_admin(tmp_path, fake_bin, pam):
     call(guard, "post_install", fake_bin)
     call(guard, "pre_remove", fake_bin)
     assert (pam / "su").read_text() == own
+
+
+def test_pinguard_wait_is_on_after_a_fresh_install(tmp_path, fake_bin, pam):
+    *_, guard = pam_scripts(tmp_path, pam)
+    marker = tmp_path / "pinguard" / "enabled"
+    call(guard, "post_install", fake_bin)
+    assert marker.is_file()
+    # A second install (pacman -S again) leaves the marker as it is
+    call(guard, "post_install", fake_bin)
+    assert marker.is_file()
+
+
+def test_pinguard_update_never_switches_the_wait_on(tmp_path, fake_bin, pam):
+    # Switched off on the phone (plinius-pinguard-set off removed the marker): an update keeps it off
+    *_, guard = pam_scripts(tmp_path, pam)
+    call(guard, "post_upgrade", fake_bin)
+    assert not (tmp_path / "pinguard" / "enabled").exists()
 
 
 def test_pam_without_files(tmp_path, fake_bin, pam):
@@ -319,6 +337,44 @@ def test_dnsfilter_restarts_a_running_filter(tmp_path, fake_bin):
     assert fake_bin.calls("systemctl")[-2:] == [["daemon-reload"],
                                                 ["try-restart", "plinius-dnsfilter.service"]]
 
+
+
+def dnsfilter_settings(state):
+    return (state / "settings").read_text()
+
+
+def test_dnsfilter_is_on_after_a_fresh_install(tmp_path, fake_bin):
+    script, _, state = dnsfilter(tmp_path, fake_bin)
+    call(script, "post_install", fake_bin)
+    text = dnsfilter_settings(state)
+    assert "[filter]\nenabled=true\n" in text
+    # Private like everything the filter writes there
+    assert stat.S_IMODE((state / "settings").stat().st_mode) == 0o600
+    assert stat.S_IMODE(state.stat().st_mode) == 0o700
+
+
+def test_dnsfilter_install_keeps_existing_settings(tmp_path, fake_bin):
+    # Reinstalled over settings of its own (switched off before): never switched back on
+    script, _, state = dnsfilter(tmp_path, fake_bin)
+    (state / "settings").write_text("[filter]\nenabled=false\n")
+    call(script, "post_install", fake_bin)
+    assert dnsfilter_settings(state) == "[filter]\nenabled=false\n"
+
+
+def test_dnsfilter_update_never_switches_it_on(tmp_path, fake_bin):
+    # A phone that had the package before keeps the filter as it was, also without settings
+    script, _, state = dnsfilter(tmp_path, fake_bin)
+    call(script, "post_upgrade", fake_bin)
+    assert not (state / "settings").exists()
+
+
+def test_dnsfilter_creates_a_missing_state_directory(tmp_path, fake_bin):
+    script, _, state = dnsfilter(tmp_path, fake_bin)
+    (state / "log").unlink()
+    state.rmdir()
+    call(script, "post_install", fake_bin)
+    assert "enabled=true" in dnsfilter_settings(state)
+    assert stat.S_IMODE(state.stat().st_mode) == 0o700
 
 # --- plinius-desktop: firewall chain on removal ---
 

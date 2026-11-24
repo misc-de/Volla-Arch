@@ -2,6 +2,20 @@
 # /run/plinius-dns/resolv.conf, which leads to NetworkManager's file while the filter is off.
 # NetworkManager (rc-manager=symlink) leaves a link it did not make alone. On removal the
 # phone gets NetworkManager's own link back.
+#
+# The filter is on from the start: a fresh install (also every new image) writes settings with
+# the filter on, unless there are some already. An update never switches it, so a phone where it
+# was switched off keeps it off. The service reads them at its next start.
+
+_settings=/var/lib/plinius-dnsfilter/settings
+
+_switch_on() {
+	[[ -e $_settings ]] && return 0
+	mkdir -p "${_settings%/*}"
+	chmod 700 "${_settings%/*}"
+	(umask 077 && printf '%s\n' '# plinius-dnsfilter: on from the start (plinius-dnsfilter.install)' \
+		'[filter]' 'enabled=true' >"$_settings")
+}
 
 _link() {
 	systemd-tmpfiles --create plinius-dnsfilter.conf 2>/dev/null || true
@@ -12,6 +26,7 @@ _link() {
 
 post_install() {
 	_link
+	_switch_on
 }
 
 post_upgrade() {

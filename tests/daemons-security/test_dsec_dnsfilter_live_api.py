@@ -3,10 +3,12 @@
 # the statistics, the query log, the live log for watchers), its state files, start and exit.
 
 import os
+import subprocess
 import time
 
 import pytest
 
+from conftest import PKG
 from dnsf_live_helpers import (FakeHttps, Msg, dns, file_mode, live, log_entries,  # noqa: F401
                                nm_conf, nm_link, query, tls_files, unpack, write_lists,
                                write_settings, zone)
@@ -78,6 +80,18 @@ def test_broken_settings_give_the_defaults(live, content):
     r = live.run("get :1.5 BlockMode", "get :1.5 LogSize")
     assert [unpack(x) for x in r] == ["null-ip", 5000]
 
+
+def test_settings_of_a_fresh_install_switch_the_filter_on(live):
+    # What plinius-dnsfilter.install writes on a fresh install (also every new image), read by the
+    # daemon itself. Only _switch_on runs, on a copy whose state path is in tmp
+    script = (PKG / "plinius-dnsfilter" / "plinius-dnsfilter.install").read_text()
+    body = script.split("_switch_on() {", 1)[1].split("\n}\n", 1)[0]
+    assert "/etc/" not in body and "/run/" not in body
+    copy = live.root / "dnsfilter.install"
+    copy.write_text(script.replace("/var/lib/plinius-dnsfilter", str(live.state)))
+    subprocess.run(["bash", "-c", f'. "{copy}"; _switch_on'], check=True, timeout=10)
+    r = live.run("get :1.5 Enabled", "get :1.5 BlockMode")
+    assert [unpack(x) for x in r] == [True, "null-ip"]
 
 def test_options(live):
     r = live.run("show bus", args=live.args(extra=["--session"]))

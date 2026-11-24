@@ -17,11 +17,16 @@
 #   pam_unix stays below as the fallback when the daemon is missing (authinfo_unavail=ignore).
 #   A file without a pam_rootok line is left alone: putting anything before it could ask root for
 #   a password.
+#
+# The wait after wrong PINs is on from the start: a fresh install (also every new image) writes
+# the marker that plinius-pinguard-set off removes. An update never switches it, so a phone where
+# it was switched off keeps it off.
 
 _pam_line='auth		[success=done ignore=ignore authinfo_unavail=ignore module_unknown=ignore open_err=ignore symbol_err=ignore default=die]	pam_plinius_pinguard.so'
 _su_note='# plinius-pinguard: only members of wheel may use su, and the PIN is counted (removed with the package)'
 _wheel_line='auth		requisite	pam_wheel.so use_uid'
 _rootok='^auth[[:space:]]+sufficient[[:space:]]+pam_rootok\.so([[:space:]].*)?$'
+_marker=/etc/plinius-pinguard/enabled
 
 _add_sudo() {
 	local f=/etc/pam.d/sudo
@@ -51,8 +56,15 @@ _add_pam_lines() {
 	_add_su /etc/pam.d/su-l
 }
 
+_switch_on() {
+	[[ -e $_marker ]] && return 0
+	mkdir -p "${_marker%/*}"
+	: >"$_marker"
+}
+
 post_install() {
 	_add_pam_lines
+	_switch_on
 }
 
 post_upgrade() {

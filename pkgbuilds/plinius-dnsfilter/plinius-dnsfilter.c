@@ -28,7 +28,8 @@
 // phone, and the log and statistics hold the names every account looked up (attack review
 // 2026-11-18, L15).
 //
-// The filter is off by default. While it is off, the service only runs when Settings asks
+// Without a settings file the filter is off; a fresh install of the package writes one with the
+// filter on (plinius-dnsfilter.install). While it is off, the service only runs when Settings asks
 // (D-Bus activation) and leaves after a while.
 /* struct in6_pktinfo */
 #define _GNU_SOURCE
@@ -570,7 +571,7 @@ static void load_settings(void)
 	g_autoptr(GError) error = NULL;
 	Settings *s = &self.s;
 
-	/* Defaults: off; when on, everything of the phone goes through it */
+	/* Defaults without a settings file: off; when on, everything of the phone goes through it */
 	s->enabled = FALSE;
 	s->block_mode = g_strdup("null-ip");
 	s->custom = FALSE;
