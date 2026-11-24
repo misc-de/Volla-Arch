@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=schwupp
-pkgver=0.6.3
+pkgver=0.6.4
 pkgrel=1
 pkgdesc="Cast the screen, YouTube and media to TVs, and all sound to Cast, Sonos, DLNA and AirPlay speakers"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
@@ -34,7 +34,7 @@ optdepends=(
 	'gst-plugins-ugly: x264enc where no hardware H.264 encoder exists'
 )
 # Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
-_commit=e93e6aab588880575ba1f21445dd0aa934145e87
+_commit=2b1a980615354d918845e4e811f4fad9a3f2be99
 source=(
 	"git+$url.git#commit=$_commit"
 	schwupp.sh
