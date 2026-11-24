@@ -2,7 +2,7 @@
 
 pkgname=plinius-remote
 pkgver=0.7
-pkgrel=1
+pkgrel=2
 pkgdesc="Use the phone as Bluetooth touchpad and keyboard for a computer, tablet or TV (HID over GATT), or for its own desktop on a TV"
 arch=(any)
 license=(MIT)
@@ -13,7 +13,7 @@ source=(plinius-remote.py
 	org.plinius.Remote-symbolic.svg
 	LICENSE
 	70-plinius-remote-uinput.rules)
-sha256sums=('e70710d494d7e2b750936081672a7d820f61e99efac9c60e4b736edb1d00d433'
+sha256sums=('a4a1ca9063e6f1c2e9bc6476fdff04e2f37e19f554819561dd4a2ff839e076eb'
 	'e3d4354bfb1a8994406eb82f3ecf70b6c6fb6468054106a4444f3dc5a824d2c7'
 	'1d2404cb0bac5da02b1e6c51577d78a7c543f162e6939ce824d2ccb15cacd320'
 	'dad335939cf64898e4c8fa3035445862363ff53194c06780c5a2188f0033d2c2'

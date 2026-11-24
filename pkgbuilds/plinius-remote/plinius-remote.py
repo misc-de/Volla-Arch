@@ -447,14 +447,14 @@ class LocalInput:
 
 # ----- Touchpad feel -----
 
-TAP_MS = 220             # a touch shorter than this ...
+TAP_MS = 300             # a touch shorter than this ...
 TAP_SLOP = 12.0          # ... that moved less than this many pixels is a click
 LONG_PRESS_MS = 450      # holding still this long grabs the left button for dragging
 ACCEL_THRESHOLD = 0.25   # px/ms; slower movement is passed on 1:1 times the speed setting
 ACCEL_GAIN = 1.6         # how much faster movement is amplified above the threshold
 ACCEL_CAP = 2.5          # px/ms above the threshold where amplification stops growing
 SCROLL_STEP = 22.0       # pixels of two-finger movement per wheel detent
-DOUBLE_TAP_MS = 280      # touching again this soon after a tap holds the button (tap and drag)
+DOUBLE_TAP_MS = 400      # touching again this soon after a tap holds the button (tap and drag)
 SWIPE_STEP = 90.0        # pixels of three-finger movement per window switch
 ZOOM_STEP = 0.12         # change of the pinch's spread per zoom step (Ctrl + wheel)
 REPORT_INTERVAL_MS = 15  # at most one report per typical BLE connection interval
@@ -2229,7 +2229,9 @@ class RemoteApp(Adw.Application):
         self.pad.append(self.pad_label)
 
         # One finger: GestureDrag. Two fingers: GestureZoom, which tracks the centre of both.
-        # They are grouped so claiming a touch for the pad claims it for both.
+        # Neither grouped nor claimed: GestureDrag handles one touch only and ended at the
+        # second one, taking a grouped GestureZoom with it, and a touch it claimed was denied
+        # to GestureZoom - two fingers made a right click instead of scrolling.
         drag = Gtk.GestureDrag()
         drag.connect("drag-begin", self.on_drag_begin)
         drag.connect("drag-update", self.on_drag_update)
@@ -2240,7 +2242,6 @@ class RemoteApp(Adw.Application):
         zoom.connect("update", self.on_two_update)
         zoom.connect("end", self.on_two_end)
         zoom.connect("cancel", lambda *_: setattr(self, "zoom_center", None))
-        zoom.group(drag)
         # All touches, for three-finger taps and swipes; added first so the count is up to
         # date when the gestures above see the same events
         legacy = Gtk.EventControllerLegacy()
@@ -2533,8 +2534,7 @@ class RemoteApp(Adw.Application):
 
     # ----- Touchpad gestures -----
 
-    def on_drag_begin(self, gesture, _x, _y):
-        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+    def on_drag_begin(self, _gesture, _x, _y):
         now = GLib.get_monotonic_time()
         self.drag_last = (0.0, 0.0)
         self.drag_time = self.touch_start = now
@@ -2562,10 +2562,13 @@ class RemoteApp(Adw.Application):
         self.moved += abs(dx) + abs(dy)
         if self.moved > TAP_SLOP:
             self.cancel_long_press()
-        # Pointer acceleration: slow movement stays precise, a quick swipe goes far
-        speed = math.hypot(dx, dy) / dt
-        gain = self.speed * (1.0 + ACCEL_GAIN * min(max(speed - ACCEL_THRESHOLD, 0.0),
-                                                     ACCEL_CAP))
+        # Pointer acceleration: slow movement stays precise, a quick swipe goes far. Not on
+        # this phone's own desktop: phoc accelerates the virtual mouse itself, twice felt
+        # sluggish when moving slowly
+        gain = self.speed
+        if self.local is None:
+            speed = math.hypot(dx, dy) / dt
+            gain *= 1.0 + ACCEL_GAIN * min(max(speed - ACCEL_THRESHOLD, 0.0), ACCEL_CAP)
         self.reports.move(dx * gain, dy * gain)
 
     def on_drag_end(self, _gesture, _ox, _oy):

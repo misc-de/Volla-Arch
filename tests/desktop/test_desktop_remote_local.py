@@ -418,3 +418,19 @@ def test_desktop_instance_is_its_own_app(mod, monkeypatch):  # noqa: F811
     monkeypatch.setattr(mod, "default_layout", lambda: "us")
     a = mod.RemoteApp(desktop=True)
     assert a.app_props["application_id"] == "org.plinius.Remote.Desktop" and a.desktop_mode
+
+
+def test_no_own_acceleration_on_the_phones_desktop(mod, desktop):  # noqa: F811
+    """phoc accelerates the virtual mouse itself; twice felt sluggish when moving slowly."""
+    moves = []
+    desktop.reports.move = lambda dx, dy: moves.append((dx, dy))
+    desktop.speed = 1.5
+    desktop.on_drag_begin(None, 0.0, 0.0)
+    desktop.glib.advance_ms(10)
+    desktop.on_drag_update(None, 40.0, 0.0)             # a quick swipe
+    desktop.local = object()
+    desktop.glib.advance_ms(10)
+    desktop.on_drag_update(None, 80.0, 0.0)             # the same, on the desktop
+    bluetooth, local = moves
+    assert bluetooth[0] > 40.0 * 1.5                    # accelerated for a Bluetooth host
+    assert local == (40.0 * 1.5, 0.0)                   # speed only on the phone's desktop

@@ -972,10 +972,13 @@ def test_touchpad_controllers(mod, app):
     legacy, drag, zoom = pad.controllers
     assert [type(c).__name__ for c in pad.controllers] == ["EventControllerLegacy",
                                                          "GestureDrag", "GestureZoom"]
-    assert ("group", (drag,)) in zoom.calls
+    # Neither grouped nor claimed: GestureDrag ended at a second finger and took a grouped
+    # GestureZoom with it, and a claimed touch was denied to GestureZoom (two fingers made a
+    # right click instead of scrolling)
+    assert not any(name == "group" for name, _args in zoom.calls + drag.calls)
     # One finger tapped: a click
     drag.emit("drag-begin", 10.0, 10.0)
-    assert "touched" in pad.css and drag.props_["state"] is mod.Gtk.EventSequenceState.CLAIMED
+    assert "touched" in pad.css and "state" not in drag.props_
     app.glib.advance_ms(50)
     drag.emit("drag-end", 0.0, 0.0)
     assert "touched" not in pad.css
