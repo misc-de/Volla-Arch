@@ -2,7 +2,7 @@
 
 pkgname=plinius-security
 pkgver=0.1
-pkgrel=18
+pkgrel=19
 pkgdesc="Data for the Device Security page: password ratings, known vulnerabilities of the installed packages and the kernel"
 arch=(aarch64 x86_64)
 license=(MIT)
@@ -28,13 +28,13 @@ source=(pwrate.h
 sha256sums=('00900985a8ed31beefe348a09dd5114a4e59a343f9e5f05ed532500321a76d1a'
 	'899daeb730c4e1743e01b5f7f232838037873c8c41801a30929a4885fe27a47d'
 	'f8cf7b5319e425b1c1eda93452aa40e80af046582024f489876e2eb7228801c3'
-	'a946c7cb4d9961296cca7f7905ab118d8784eda85ce8f11ebf7a6fd77241262e'
+	'e8c299d8fbb181c159e3a3dad5d41db3284a3d4c40b3ce138e88541dd4189c4b'
 	'05d07034eacbf3a87993d0ad34610f69183920dc401f75417b4cb8ec645de2a6'
-	'49847fefb2cf2ccc3b8c4c6028fb994efee412c1f74501888d8a39a06154dc57'
-	'd78552c998e891ed10dcd6659982f732f1ed557de8213d71a7e96014149d4d08'
+	'8c6e0ea542407cbd9e3ab69d16d7cf74eb5789e9045b206bdf2a6f6454e987c6'
+	'724d713dcbb66fc0f40b65bb70968d10bd573d7784e79ca36138e1262b51c473'
 	'356b96dab912feb6dc27f1fe40771774c9c2455b8b7df26174171b2265c09fd6'
 	'b7fc619d41302b39eac6e90821766f3a59291b6bda514bca1061cc76bc8864a6'
-	'36a090cf1a009b39d837c346b1c9944ff169a5f06cc28c228346da28cee2d516'
+	'7a403cb45ad64c85904bbdff3da886f6d22741e7380bfa1ead0f9034b60eef3a'
 	'ed59809ff3f5cd902f21394a95cd3b750c25b530c33061dbb49eb78f406b7cbd'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
@@ -55,7 +55,7 @@ check() {
 }
 
 package() {
-	# Due at the first connection, not only by the daily timer
+	# Due at the first connection, not only by the timer
 	install -Dm755 90-plinius-cve -t "$pkgdir/usr/lib/NetworkManager/dispatcher.d"
 	install -Dm755 plinius-pwrate plinius-cve-update -t "$pkgdir/usr/lib/plinius-security"
 	install -Dm755 pam_plinius_secstate.so -t "$pkgdir/usr/lib/security"

@@ -841,6 +841,15 @@
         "https://git.kernel.org/stable/c/059b7dbd20a6f0c539a45ddff1573cb8946685b5",
         "https://www.cve.org/CVERecord?id=CVE-2026-53132"
       ]
+    },
+    "CVE-2024-27005": {
+      "status": "fixed",
+      "note": "The interconnect core could walk a node's request list while another path changed it. The bug came with the 6.1.y backport of \"interconnect: Fix locking for runpm vs reclaim\"; linux-6.1.193 fixes it by reverting that backport. plinius-kernel already has the upstream fix instead (path_init() changes the list under icc_bw_lock, from android14-6.1), and the vendor kernel 6.1.145 never had the backport. The revert is not taken: it would remove a lock this kernel still uses.",
+      "date": "2026-11-24",
+      "sources": [
+        "https://git.kernel.org/stable/c/c09cb28772494bba45a0c9066aeb5e5df47d17f8",
+        "https://www.cve.org/CVERecord?id=CVE-2024-27005"
+      ]
     }
   },
   "extra": [

@@ -1,9 +1,11 @@
-# The kernel CNA publishes new records every day; the phones fetch their list once a day.
+# The kernel CNA publishes new records every day; the phones fetch their list four times a day,
+# an hour after each run (pkgbuilds/plinius-security/plinius-cve-update.timer). Both in UTC: the
+# server and the phones may have different time zones, and neither shifts with daylight saving.
 [Unit]
-Description=Build the kernel vulnerability lists for the phones every day
+Description=Build the kernel vulnerability lists for the phones four times a day
 
 [Timer]
-OnCalendar=*-*-* 03:30
+OnCalendar=*-*-* 03,09,15,21:30 UTC
 RandomizedDelaySec=30min
 Persistent=true
 

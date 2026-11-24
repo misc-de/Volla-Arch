@@ -1,6 +1,6 @@
 #!/bin/sh
 # NetworkManager dispatcher: the list of known vulnerabilities is due as soon as the phone reaches the
-# internet, not only at the next run of the daily timer. A new phone would otherwise show an empty
+# internet, not only at the next run of the timer. A new phone would otherwise show an empty
 # list for hours. "up" also covers systems whose connectivity check is switched off.
 case "$2:${CONNECTIVITY_STATE:-}" in
 connectivity-change:FULL | up:*) ;;
@@ -8,7 +8,7 @@ connectivity-change:FULL | up:*) ;;
 esac
 
 # The kernel list belongs to one kernel release; after a kernel update or a start of the fallback
-# kernel it is due at once, not with the next daily run. A kernel the server has no list for is
+# kernel it is due at once, not with the next timer run. A kernel the server has no list for is
 # asked once per start: plinius-cve-update notes the server's answer with the boot. A download
 # that did not reach the server (no DNS yet right after "up") leaves no mark, so the next
 # connection tries again.
@@ -20,7 +20,8 @@ if ! grep -qF "\"release\":\"$release\"" "$kernel_list" 2>/dev/null &&
 	exec systemctl start --no-block plinius-cve-update.service
 fi
 
-# Written by a successful download only, so that a failed one is tried again at the next connection
+# Written by a successful download only, so that a failed one is tried again at the next connection;
+# older than the timer's six hours, the phone missed a run while offline
 list=/var/lib/plinius-cve/arch-issues.json
-[ -z "$(find "$list" -mmin -1440 2>/dev/null)" ] || exit 0
+[ -z "$(find "$list" -mmin -360 2>/dev/null)" ] || exit 0
 systemctl start --no-block plinius-cve-update.service

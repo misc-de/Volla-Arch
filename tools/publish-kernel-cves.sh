@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sets up and feeds the daily kernel vulnerability lists on the project server
+# Sets up and feeds the kernel vulnerability lists on the project server (rebuilt four times a day)
 # (tools/kernel-cves). The phones fetch their list from
 # https://plinius.cais.de/security/kernel/<kernel release>.json (plinius-cve-update).
 #

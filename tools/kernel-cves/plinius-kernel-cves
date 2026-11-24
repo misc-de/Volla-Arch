@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Lists the published vulnerabilities of the Linux kernel CNA that affect a phone's kernel.
 
-Runs on the project server once a day (plinius-kernel-cves.timer). The data is the CNA's own
+Runs on the project server four times a day (plinius-kernel-cves.timer). The data is the CNA's own
 repository (https://git.kernel.org/pub/scm/linux/security/vulns.git), one record per CVE:
   CVE-*.dyad  pairs "vulnerable version:git id:fixed version:git id" per stable branch
               (0 for "since the start" or "not fixed"),
