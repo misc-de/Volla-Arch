@@ -26,9 +26,9 @@
 # it to the boot partition once it came up, keeping the previous kernel as a menu entry
 # (plinius-kernel-install, like grub's previous entries); without the card it writes it at once.
 pkgname=plinius-kernel
-_kcommit=55c4a05f6635bccc6c57181446ab945d7a8b86e1
+_kcommit=0c5d499b458a8175da0c63b89da022ca7229818f
 pkgver=6.1.192
-pkgrel=22
+pkgrel=23
 _krelease=$pkgver-plinius$pkgrel
 pkgdesc="Kernel for Volla Phone Plinius: Halium kernel on android14-6.1 with the prebuilt MediaTek modules' interface"
 arch=(aarch64)
@@ -54,7 +54,7 @@ source=("plinius-kernel-$_kcommit.tar.gz::$url/archive/$_kcommit.tar.gz"
         plinius-backlight.c
         plinius-novt.c
         plinius-btsuspend.c)
-sha256sums=('c543c6732df1afc4706f9aefc0903672cf1ad5c7c3302e9cd23ffdd505c39114'
+sha256sums=('2469508ca9e992d0c686040411602cc88db3d60a7da2f53302c18d3a4d374fd0'
             '00d3c30120119f4440872f67bbc4a0bf3b09183836808c1550dfad6dedda19b2'
             'df1e4652b80fd5c4704a64eea6294c7530d8e21ab99426740095d5c7fed028b4'
             '94dade8930576dbf267b40fa355fcf7068853f51ccc4f88b491a867cd98c07e3'
