@@ -14,7 +14,10 @@
 #       plinius-boot.tar.gz, the names the homepage links, each also under its own name and with
 #       a .sha256. The homepage offers the archive and names the Flatpak below it. For the
 #       archive app.json says {"version", "url", "size", "sha256"} as latest.json does for the
-#       image; the version is the newest release in the archive's metainfo.
+#       image; the version is the newest release in the archive's metainfo. Its url is the
+#       archive under the name with that version, plinius-boot-VERSION.tar.gz, which no later
+#       release overwrites: whoever read app.json before an upload still gets the archive its
+#       size and SHA-256 belong to, while plinius-boot.tar.gz already is the next one.
 #   DOWNLOAD_TARGET=user@host:/var/www/plinius [DOWNLOAD_SSH_PORT=22] tools/downloads.sh upload
 #       Images first, latest.json after them (a phone's PC never finds a latest.json whose image
 #       is not there yet), then the images latest.json no longer names leave; the screenshots
@@ -102,7 +105,7 @@ linked_name() {
 
 do_app() {
 	(($#)) || die "usage: tools/downloads.sh app FILE..."
-	local dir=$out/downloads app name linked version= size sha
+	local dir=$out/downloads app name linked version= archive= versioned size sha
 	# All of them checked first, so that a wrong one changes nothing
 	for app in "$@"; do
 		[[ -f $app ]] || die "$app missing"
@@ -110,6 +113,7 @@ do_app() {
 			die "$(basename "$app") is neither the Flatpak nor the archive of Plinius Boot"
 		if [[ $linked == plinius-boot.tar.gz ]]; then
 			version=$(archive_version "$app") || die "$(basename "$app") names no version of Plinius Boot"
+			archive=$app
 		fi
 	done
 	mkdir -p "$dir"
@@ -123,13 +127,18 @@ do_app() {
 		msg "$name in $dir"
 	done
 	[[ -n $version ]] || return 0
-	size=$(stat -c %s "$dir/plinius-boot.tar.gz")
-	sha=$(sha256sum < "$dir/plinius-boot.tar.gz")
+	# The archive under its version, for app.json: never overwritten by a later release
+	versioned=plinius-boot-$version.tar.gz
+	install -m644 "$archive" "$dir/$versioned"
+	(cd "$dir" && sha256sum "$versioned" > "$versioned.sha256")
+	chmod 644 "$dir/$versioned.sha256"
+	size=$(stat -c %s "$dir/$versioned")
+	sha=$(sha256sum < "$dir/$versioned")
 	sha=${sha%% *}
 	python3 -I -c 'import json, sys
 version, url, size, sha = sys.argv[1:5]
 json.dump({"version": version, "url": url, "size": int(size), "sha256": sha}, sys.stdout, indent=2)
-print()' "$version" "$base/downloads/plinius-boot.tar.gz" "$size" "$sha" > "$dir/app.json"
+print()' "$version" "$base/downloads/$versioned" "$size" "$sha" > "$dir/app.json"
 	chmod 644 "$dir/app.json"
 	msg "app.json names Plinius Boot $version"
 }
@@ -152,7 +161,8 @@ do_upload() {
 	fi
 	if [[ -d $out/downloads ]]; then
 		msg "Plinius Boot to $target/downloads"
-		# All files appear together, app.json never names an archive not there yet
+		# All files appear together, app.json never names an archive not there yet. No --delete:
+		# the archives of earlier versions stay for those who read an earlier app.json
 		rsync "${options[@]}" --delay-updates "$out/downloads/" "$target/downloads/"
 	fi
 	msg "Done"

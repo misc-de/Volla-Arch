@@ -421,7 +421,8 @@ def test_the_archive_goes_beside_the_flatpak_under_the_name_the_homepage_links(t
     d = downloads(volla) / "downloads"
     assert sorted(f.name for f in d.iterdir()) == [
         "app.json", "org.plinius.Boot-x86_64.flatpak", "org.plinius.Boot-x86_64.flatpak.sha256",
-        "plinius-boot-0.17.tar.gz", "plinius-boot.tar.gz", "plinius-boot.tar.gz.sha256"]
+        "plinius-boot-0.17.tar.gz", "plinius-boot-0.17.tar.gz.sha256", "plinius-boot.tar.gz",
+        "plinius-boot.tar.gz.sha256"]
     assert (d / "plinius-boot.tar.gz").read_bytes() == archive.read_bytes()
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     assert (d / "plinius-boot.tar.gz.sha256").read_text() == f"{digest}  plinius-boot.tar.gz\n"
@@ -434,9 +435,30 @@ def test_app_json_names_the_archive_as_latest_json_names_the_image(tmp_path, vol
     d = downloads(volla) / "downloads"
     data = archive.read_bytes()
     assert json.loads((d / "app.json").read_text()) == {
-        "version": "0.18", "url": "https://plinius.cais.de/downloads/plinius-boot.tar.gz",
+        "version": "0.18", "url": "https://plinius.cais.de/downloads/plinius-boot-0.18.tar.gz",
         "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
     assert (d / "app.json").stat().st_mode & 0o777 == 0o644
+    digest = hashlib.sha256(data).hexdigest()
+    assert (d / "plinius-boot-0.18.tar.gz.sha256").read_text() == f"{digest}  plinius-boot-0.18.tar.gz\n"
+
+
+def test_app_json_of_a_release_stays_true_after_the_next_one(tmp_path, volla, fake_bin):
+    # Someone reads app.json, the next release is uploaded, then the archive is fetched: the url
+    # of the app.json read before must still give the archive its size and SHA-256 belong to
+    d = downloads(volla) / "downloads"
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    old = make_archive(tmp_path / "a" / "plinius-boot.tar.gz", version="0.17")
+    assert run(volla, fake_bin, "downloads.sh", "app", old).returncode == 0
+    read_before = json.loads((d / "app.json").read_text())
+    new = make_archive(tmp_path / "b" / "plinius-boot.tar.gz", version="0.18")
+    assert run(volla, fake_bin, "downloads.sh", "app", new).returncode == 0
+    fetched_after = (d / read_before["url"].rsplit("/", 1)[1]).read_bytes()
+    assert hashlib.sha256(fetched_after).hexdigest() == read_before["sha256"]
+    assert len(fetched_after) == read_before["size"]
+    # while the name the homepage links is the new release, and app.json names that one
+    assert (d / "plinius-boot.tar.gz").read_bytes() == new.read_bytes() != old.read_bytes()
+    assert json.loads((d / "app.json").read_text())["url"].endswith("/plinius-boot-0.18.tar.gz")
 
 
 def test_the_flatpak_alone_writes_no_app_json(tmp_path, volla, fake_bin):
