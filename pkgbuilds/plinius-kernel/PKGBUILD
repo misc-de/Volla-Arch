@@ -29,7 +29,7 @@ pkgname=plinius-kernel
 _kcommit=68ec656752b738e6c420def339c66b98e8c36792
 pkgver=6.1.193
 # 100: the check build of 6.1.193 ran as pkgrel 99 on a phone, which takes 99 for newer than 1
-pkgrel=100
+pkgrel=101
 _krelease=$pkgver-plinius$pkgrel
 pkgdesc="Kernel for Volla Phone Plinius: Halium kernel on android14-6.1 with the prebuilt MediaTek modules' interface"
 arch=(aarch64)
@@ -59,7 +59,7 @@ sha256sums=('9b196515e5ed38ddd6632d229c7483643ebc74ac4dd49e6d5aa099962be2ba5d'
             '00d3c30120119f4440872f67bbc4a0bf3b09183836808c1550dfad6dedda19b2'
             'df1e4652b80fd5c4704a64eea6294c7530d8e21ab99426740095d5c7fed028b4'
             '94dade8930576dbf267b40fa355fcf7068853f51ccc4f88b491a867cd98c07e3'
-            '460d5fc6fb341be6c72acf8b2d445e5c2650f5d7a1f9e8a393f83c7fd4a167b7'
+            'aa644341a1004b6558059faf2674a70fe8ade8b49f5d5c5074f8ff3de79cd54f'
             'dcfda63c2ab29633c9aa6aaf1a7165d538f1ddca1611ee47e18116e6c4581df6'
             '36ec058b4f86ed0cf29be04e19b33a38a541c2ac7af108bf6d392960c72f9330'
             '265b4a8ff700dc57095c1ab0d27df2209bda064b5df05b14cea1a68b7acfd3f8'
@@ -111,6 +111,15 @@ prepare() {
 	# FUNCTION_TRACER stays off for the KMI), so it only added an empty call to every LSM hook.
 	# Per-app rules use cgroup BPF instead (plinius-appaccess, CGROUP_BPF). The source keeps
 	# CGROUP_LSM_NUM at 0 since plinius18, which is the value without BPF_LSM anyway.
+	# Landlock: pacman's download sandbox restricts itself with it (without it pacman needs
+	# DisableSandboxFilesystem), other programs sandbox themselves the same way. CONFIG_LSM
+	# already names it first; no header depends on the option, its state lives in the LSM blobs
+	# that security/ sizes at boot, no KMI type changes.
+	"$s" --file "$c" -e SECURITY_LANDLOCK
+	# USB serial adapters besides FTDI (Arduino clones, microcontroller boards) and USB tethering
+	# from phones that offer RNDIS. Modules only, loaded through system_dlkm-modules.load: the
+	# Arch side has no /lib/modules to load them from when a device appears.
+	"$s" --file "$c" -m USB_SERIAL_CH341 -m USB_SERIAL_CP210X -m USB_SERIAL_PL2303 -m USB_NET_RNDIS_HOST
 	cp Kbuild plinius-backlight.c plinius-novt.c plinius-btsuspend.c mod/
 	cp "plinius-kernel-$_kcommit/drivers/leds/uleds.c" "plinius-kernel-$_kcommit/net/ipv4/netfilter/ipt_ah.c" \
 		"plinius-kernel-$_kcommit/net/ipv6/netfilter/ip6t_ah.c" mod/
@@ -151,7 +160,8 @@ package() {
 	: > "$stage/etc/fs_config_dirs"
 	: > "$stage/etc/fs_config_files"
 	find "$inst/lib/modules/$_krelease" -name '*.ko' -exec install -m644 -t "$stage/lib/modules" {} +
-	# The original list, without modules this kernel has built in (Bluetooth, rfkill)
+	# The original list, without modules this kernel has built in (Bluetooth, rfkill), with the
+	# USB serial and RNDIS modules of prepare() added
 	local m
 	while read -r m; do
 		if [[ -e $stage/lib/modules/$m ]]; then echo "$m"; fi

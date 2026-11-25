@@ -249,6 +249,11 @@ check_host
 # plinius-appaccess: which app may use the cameras, security keys and network (Settings > Privacy);
 #   only an optional dependency of Settings, so it is named here.
 # python-evdev: touch gestures in phonebridge (installed by the user, needs the module).
+# noto-fonts-cjk: Chinese, Japanese and Korean characters (web pages, messages, contact names)
+#   instead of empty boxes; about 310 MB installed.
+# gvfs-mtp, gvfs-smb: cameras and phones on USB, Windows and NAS shares in Files (Nautilus).
+# exfatprogs, dosfstools: checking and formatting SD cards and USB sticks (the kernel reads both).
+# less: the pager of journalctl, git and man; without it they print everything at once.
 # All of them enable their services themselves.
 packages=(base openssh sudo device-volla-ansuz hybris-tls-relocate
 	phosh-plinius phoc-plinius stevia-plinius greetd which gnome-backgrounds gnome-console noto-fonts noto-fonts-emoji adwaita-fonts
@@ -265,7 +270,8 @@ packages=(base openssh sudo device-volla-ansuz hybris-tls-relocate
 	pipewire-audio-plinius plinius-ssh plinius-desktop plinius-cardshare plinius-swap plinius-login-keyring vim gnome-calls-plinius plinius-home flatpak
 	plinius-crypt plinius-crypt-ramdisk plinius-vdec plinius-energy plinius-dnsfilter plinius-apparmor
 	plinius-dictate-models plinius-kernel furios-audio-bt-reconnect biomd-pam libgbinder-tools
-	android-headers mce-dev python-evdev plinius-greeter plinius-appaccess plinius-epo)
+	android-headers mce-dev python-evdev plinius-greeter plinius-appaccess plinius-epo
+	noto-fonts-cjk gvfs-mtp gvfs-smb exfatprogs dosfstools less)
 # App selection as in the preview (image/mkpreview.sh): plinius-apps (calls, SMS, contacts; fixed)
 # and recommended.list (removable in Software). snapshot and gnome-usage come as snapshot-plinius
 # and gnome-usage-plinius above, which conflict with them; names already listed are skipped.

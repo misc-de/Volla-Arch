@@ -23,11 +23,15 @@ cdc_ether.ko
 cdc_eem.ko
 usbnet.ko
 cdc_ncm.ko
+rndis_host.ko
 aqc111.ko
 r8153_ecm.ko
 cdc-acm.ko
 usbserial.ko
 ftdi_sio.ko
+ch341.ko
+cp210x.ko
+pl2303.ko
 hci_uart.ko
 btsdio.ko
 btbcm.ko
