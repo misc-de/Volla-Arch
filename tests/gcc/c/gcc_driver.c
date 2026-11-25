@@ -216,6 +216,21 @@ gcc_test_add (GccTest *t, GtkWidget *widget)
 
 static JsonBuilder *message_log;
 
+/* Since GTK 4.20, widgets that show the same symbolic icon share its render node, and GSK's
+ * broadway renderer then names that node several times in one frame; gtk4-broadwayd (4.24) aborts
+ * on it ("append_node_ops: assertion failed: (!reused_node->consumed)") when the tree around it
+ * changes, and every later test of the session finds no display. A filter on each surface's root
+ * makes the renderer send the surface as one picture. The tests read widgets, not pixels. */
+static void
+broadway_flat_surfaces (void)
+{
+    g_autoptr(GtkCssProvider) css = gtk_css_provider_new ();
+
+    gtk_css_provider_load_from_string (css, "window, popover, tooltip { filter: blur(0.5px); }");
+    gtk_style_context_add_provider_for_display (gdk_display_get_default (), GTK_STYLE_PROVIDER (css),
+                                                GTK_STYLE_PROVIDER_PRIORITY_USER + 1);
+}
+
 static GLogWriterOutput
 log_writer (GLogLevelFlags level, const GLogField *fields, gsize n_fields, gpointer user_data)
 {
@@ -1516,6 +1531,7 @@ main (int argc, char **argv)
 
     adw_init ();
     g_object_set (gtk_settings_get_default (), "gtk-enable-animations", FALSE, NULL);
+    broadway_flat_surfaces ();
     g_timeout_add_seconds (json_object_has_member (script, "timeout")
                                ? json_object_get_int_member (script, "timeout") : 60,
                            on_timeout, NULL);

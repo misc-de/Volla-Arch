@@ -530,8 +530,11 @@ class World:
     """Everything one test's program meets: home and data directories in tmp_path, programs from
     fake_bin, two private buses with the fake services, the session's display."""
 
-    # The host has no icon theme in the test's XDG_DATA_DIRS: GTK says so, nothing else changes
-    IGNORED = (r"^Could not load a pixbuf", r"icon theme", r"^Unable to acquire session bus")
+    # The host has no icon theme in the test's XDG_DATA_DIRS: GTK says so, nothing else changes.
+    # GDK 4.24's broadway backend submits a frame's timings twice and warns about it; that is the
+    # test display's frame clock (broadway.js answers roundtrips the same way), not the panel.
+    IGNORED = (r"^Could not load a pixbuf", r"icon theme", r"^Unable to acquire session bus",
+               r"^Duplicate call to gdk_frame_timings_submitted\(\) with different values\.$")
 
     def __init__(self, session, tmp_path):
         self.session = session
