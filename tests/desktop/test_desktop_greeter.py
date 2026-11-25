@@ -6,11 +6,15 @@
 # writes greetd's configuration with that account as initial_session. Both sides are tested here
 # with every path in tmp_path: the accounts rule (login.defs, shells, passwd), the TOML writer, the
 # request checks, and the window's logic with GTK faked (tiles, auto-login of a single account,
-# failed starts, the dark screen, the power key and dialog, the backlight through logind).
+# failed starts, the dark screen, the power key and its menu, the backlight through logind).
 
 import json
+import math
 import os
+import random
+import shutil
 import stat
+import subprocess
 import sys
 import tomllib
 import types
@@ -19,13 +23,15 @@ import gi
 import pytest
 
 gi.require_version("Pango", "1.0")  # the greeter imports it without a version
-from gi.repository import Gio, GLib  # noqa: E402
+gi.require_version("Graphene", "1.0")
+from gi.repository import Gio, GLib, Graphene  # noqa: E402
 
 import desktop_fakes as fakes  # noqa: E402
 from conftest import PKG, load_script  # noqa: E402
 
 GREETER = PKG / "plinius-greeter"
 POWER_KEY = 0x1008FF2A
+ESCAPE_KEY = 0xFF1B
 
 
 @pytest.fixture(scope="module")
@@ -872,6 +878,7 @@ class Widget:
         self.visible = kw.get("visible", True)
         self.can_target = kw.get("can_target", True)
         self.label = kw.get("label")
+        self.sensitive = kw.get("sensitive", True)
         self.opacity = 1
         self.handlers = {}
         self.controllers = []
@@ -896,6 +903,9 @@ class Widget:
     def set_visible(self, value):
         self.visible = value
 
+    def get_visible(self):
+        return self.visible
+
     def set_can_target(self, value):
         self.can_target = value
 
@@ -904,6 +914,9 @@ class Widget:
 
     def set_opacity(self, value):
         self.opacity = value
+
+    def set_sensitive(self, value):
+        self.sensitive = value
 
     def set_custom_image(self, texture):
         self.image = texture
@@ -950,20 +963,51 @@ class Entry(Widget):
         self.sensitive = value
 
 
-class Dialog(Widget):
-    presented = []
+class FakeLfb:
+    """libfeedback: init, and the events triggered (each finished at once)."""
 
-    def __init__(self, **kw):
-        super().__init__(**kw)
-        self.responses = []
-        self.appearance = {}
-        Dialog.presented.append(self)
+    def __init__(self, inited=True, fail=None):
+        self.inited, self.fail, self.events, self.init_ids = inited, fail, [], []
+        lfb = self
 
-    def add_response(self, rid, label):
-        self.responses.append(rid)
+        class Event:
+            def __init__(self, name):
+                self.name = name
 
-    def set_response_appearance(self, rid, appearance):
-        self.appearance[rid] = appearance
+            @classmethod
+            def new(cls, name):
+                return cls(name)
+
+            def trigger_feedback_async(self, cancellable, callback):
+                lfb.events.append(self.name)
+                callback(self, "result")
+
+            def trigger_feedback_finish(self, result):
+                if lfb.fail:
+                    raise GLib.Error(lfb.fail)
+                return True
+        self.Event = Event
+
+    def init(self, app_id):
+        self.init_ids.append(app_id)
+        if self.fail:
+            raise GLib.Error(self.fail)
+        self.inited = True
+
+    def is_initted(self):
+        return self.inited
+
+
+class Dust(Widget):
+    """DustArea: whether its effect runs."""
+
+    def __init__(self, density="medium"):
+        super().__init__()
+        self.density = density
+        self.running = False
+
+    def set_running(self, running):
+        self.running = running
 
 
 class Texture:
@@ -997,16 +1041,20 @@ def ui(mod, tmp_path, monkeypatch):
     glib = fakes.FakeGLib()
     monkeypatch.setattr(mod, "GLib", glib)
     for name in ("Overlay", "Label", "ScrolledWindow", "Button", "GestureClick", "Grid",
-                 "EventControllerLegacy", "EventControllerKey"):
+                 "EventControllerLegacy", "EventControllerKey", "Picture", "DrawingArea", "GestureLongPress"):
         monkeypatch.setattr(mod.Gtk, name, Widget)
+    monkeypatch.setattr(mod, "DustArea", Dust)
+    lfb = FakeLfb()
+    monkeypatch.setattr(mod, "Lfb", lfb)
+    look = mod.Look()
+    monkeypatch.setattr(mod, "installation_look", lambda: look)
     for name in ("Box", "PasswordEntry", "ToggleButton"):
         monkeypatch.setattr(mod.Gtk, name, Entry)
     monkeypatch.setattr(mod.Adw, "Spinner", Widget)
     monkeypatch.setattr(mod.Adw, "Avatar", Widget)
-    monkeypatch.setattr(mod.Adw, "AlertDialog", Dialog)
     monkeypatch.setattr(mod.Gdk, "Texture", Texture)
     monkeypatch.setattr(mod.Gdk, "KEY_PowerOff", POWER_KEY)
-    monkeypatch.setattr(Dialog, "presented", [])
+    monkeypatch.setattr(mod.Gdk, "KEY_Escape", ESCAPE_KEY)
     monkeypatch.setattr(Widget, "made", [])
     monkeypatch.setattr(Texture, "loaded", [])
     monkeypatch.setattr(mod, "TEST", False)
@@ -1039,7 +1087,7 @@ def ui(mod, tmp_path, monkeypatch):
             (login / "first-start").write_text(first + "\n")
         return mod.Greeter(None)
 
-    return types.SimpleNamespace(make=make, glib=glib, run=run, bus=bus, light=light,
+    return types.SimpleNamespace(make=make, glib=glib, run=run, bus=bus, light=light, look=look, lfb=lfb,
                                  request=run / "request", tmp=tmp_path, login=login,
                                  password=run / "password", result=login / "password-result")
 
@@ -1178,6 +1226,184 @@ def test_first_start_asks_instead_of_logging_in(mod, ui):
     assert not ui.make("alice", "bob").first_box.visible
 
 
+def test_first_start_in_the_installations_look(mod, ui):
+    # No clock: the installation's background and dust, as the phone will look after it
+    g = ui.make("alice", first="alice")
+    assert not g.clock.visible and not g.date.visible
+    assert g.installation_bg.visible and g.installation_bg.children == []
+    assert g.dust.visible and g.dust.running and g.dust.density == "medium"
+    assert not g.installation_bg.can_target
+    # The account picker keeps its clock and its own background, the dust stands still
+    (ui.login / "first-start").unlink()
+    g = ui.make("alice", "bob")
+    assert g.clock.visible and g.date.visible
+    assert not g.installation_bg.visible and not g.dust.visible and not g.dust.running
+
+
+def test_first_start_as_phoshs_unlock_page(mod, ui):
+    # Keyboard bottom left, delete bottom right, Continue below the keypad, off until a digit
+    g = ui.make("alice", first="alice")
+    assert set(g.keys) == set("0123456789") | {"password", "back", "next"}
+    assert g.keys["password"].props["icon_name"] == "input-keyboard-symbolic"
+    assert g.keys["back"].props["icon_name"] == "edit-clear-symbolic"
+    assert g.keys["next"] is g.pin_next and not g.pin_next.sensitive
+    keys(g, "25")
+    assert g.pin_next.sensitive and g.dots.label == "●●"
+    keys(g, "<")
+    assert g.dots.label == "●"
+    # A long press on delete clears the PIN
+    (hold,) = g.keys["back"].controllers
+    keys(g, "80")
+    hold.emit("pressed", 1.0, 1.0)
+    assert g.digits == "" and g.dots.label == "" and not g.pin_next.sensitive
+
+
+def test_taps_vibrate(mod, ui):
+    # Each key of the keypad, Continue, back to the PIN, the password's Continue
+    g = ui.make("alice", first="alice")
+    keys(g, "12<")
+    (hold,) = g.keys["back"].controllers
+    hold.emit("pressed", 1.0, 1.0)
+    assert ui.lfb.events == ["button-pressed"] * 4
+    keys(g, ">")
+    g.keys["password"].emit("clicked")
+    g.pin_mode.emit("clicked")
+    g.set_kind("password")
+    g.password_next.emit("clicked")
+    assert len(ui.lfb.events) == 8 and set(ui.lfb.events) == {"button-pressed"}
+    # Not while root sets the password
+    g.password_timeout = 7
+    keys(g, "5")
+    g.submit_password()
+    assert len(ui.lfb.events) == 8
+
+
+def test_taps_vibrate_on_tiles_and_in_the_power_menu(mod, ui):
+    g = ui.make("alice", "bob")
+    open_power_menu(mod, ui, g)
+    assert ui.lfb.events == ["button-pressed"]
+    (close,) = [w for w in Widget.made if "power-close" in w.css]
+    close.emit("clicked")
+    open_power_menu(mod, ui, g)
+    g.power_entries["Reboot"].emit("clicked")
+    g.tiles["alice"].emit("clicked")
+    assert ui.lfb.events == ["button-pressed"] * 5
+
+
+def test_no_vibration_without_feedbackd(mod, ui, monkeypatch, capsys):
+    g = ui.make("alice", first="alice")
+    ui.lfb.inited = False
+    keys(g, "1")
+    assert ui.lfb.events == []
+    monkeypatch.setattr(mod, "Lfb", None)
+    keys(g, "2")
+    mod.setup_feedback()
+    assert g.digits == "12"
+    # feedbackd answering with an error: the tap goes on, the error is logged
+    lfb = FakeLfb(fail="no vibra")
+    monkeypatch.setattr(mod, "Lfb", lfb)
+    mod.setup_feedback()
+    assert lfb.init_ids == ["org.plinius.Greeter"] and "no vibra" in capsys.readouterr().err
+    lfb.inited = True
+    keys(g, "3")
+    assert g.digits == "123" and lfb.events == ["button-pressed"]
+    assert "feedback: no vibra" in capsys.readouterr().err
+
+
+def test_setup_feedback(mod, monkeypatch):
+    lfb = FakeLfb(inited=False)
+    monkeypatch.setattr(mod, "Lfb", lfb)
+    mod.setup_feedback()
+    assert lfb.init_ids == ["org.plinius.Greeter"] and lfb.is_initted()
+
+
+def test_keys_take_no_focus_and_stay_round(mod, ui):
+    # No key stays marked after a tap or at the start, and each keeps its own square in the grid
+    g = ui.make("alice", first="alice")
+    for key in g.keys.values():
+        if key is g.pin_next:
+            continue
+        assert key.props["focusable"] is False and key.props["focus_on_click"] is False
+        assert key.props["halign"] == key.props["valign"] == mod.Gtk.Align.CENTER
+    css = mod.make_css(mod.Look())
+    assert "button.key:hover" not in css and "button.key:focus" not in css and "button.key:active {" in css
+
+
+def test_less_room_above_on_the_first_start(mod, ui, monkeypatch):
+    margins = {}
+    monkeypatch.setattr(Widget, "set_margin_top", lambda self, v: margins.__setitem__((id(self), "top"), v),
+                        raising=False)
+    monkeypatch.setattr(Widget, "set_margin_bottom", lambda self, v: margins.__setitem__((id(self), "bottom"), v),
+                        raising=False)
+    g = ui.make("alice", first="alice")
+    assert margins[id(g.column), "top"] == mod.COLUMN_TOP_FIRST and margins[id(g.subtitle), "bottom"] == 12
+    (ui.login / "first-start").unlink()
+    g = ui.make("alice", "bob")
+    assert margins[id(g.column), "top"] == mod.COLUMN_TOP and margins[id(g.subtitle), "bottom"] == 24
+
+
+def test_keypad_as_big_as_on_the_lock_screen(mod):
+    # The phone: 476 x 1058 logical pixels; small and big screens stop at 80 and 120
+    assert mod.keypad_button_size(476, 1058) == 103
+    assert mod.keypad_button_size(360, 640) == 80
+    assert mod.keypad_button_size(1200, 2000) == 120
+    assert mod.keypad_css(103) == ("button.key { min-width: 103px; min-height: 103px; }\n"
+                                   "button.key label { font-size: 41px; }\n")
+
+
+def test_keypad_follows_the_screen(mod, ui, monkeypatch):
+    loaded = []
+    added = []
+
+    class Provider:
+        def load_from_string(self, css):
+            loaded.append(css)
+    monkeypatch.setattr(mod.Gtk, "CssProvider", Provider)
+    monkeypatch.setattr(mod.Gtk, "StyleContext", types.SimpleNamespace(
+        add_provider_for_display=lambda display, provider, priority: added.append((provider, priority))))
+    monkeypatch.setattr(mod.Gtk, "STYLE_PROVIDER_PRIORITY_APPLICATION", 600)
+    g = ui.make("alice", first="alice")
+    (sizer,) = [w for w in Widget.made if "resize" in w.handlers]
+    sizer.emit("resize", 0, 0)  # not laid out yet
+    assert loaded == [] and g.keypad_css is None
+    sizer.emit("resize", 476, 1058)
+    sizer.emit("resize", 360, 640)
+    assert loaded == [mod.keypad_css(103), mod.keypad_css(80)] and added == [(g.keypad_css, 601)]
+
+
+def test_first_start_with_a_picture_and_without_dust(mod, ui, tmp_path):
+    picture = tmp_path / "bg.png"
+    picture.write_bytes(b"png")
+    ui.look.picture, ui.look.effect, ui.look.density = str(picture), "snow", "low"
+    g = ui.make("alice", first="alice")
+    (shown,) = g.installation_bg.children
+    assert shown.props["file"].get_path() == str(picture)
+    # Only the dust is drawn here; another effect leaves the background alone
+    assert g.dust is None
+    g.blank_screen()
+    g.wake()
+    g.fail()
+
+
+def test_dust_rests_while_the_screen_is_dark(mod, ui):
+    g = ui.make("alice", first="alice")
+    g.blank_screen()
+    assert not g.dust.running
+    g.wake()
+    assert g.dust.running
+
+
+def test_dust_stops_when_the_first_start_is_over(mod, ui):
+    # The password is set but the account did not start: the tiles come back without the dust
+    g = ui.make("alice", "bob", first="alice")
+    (ui.login / "first-start").unlink()
+    g.fail()
+    assert not g.dust.running and not g.dust.visible and g.clock.visible and not g.first_box.visible
+    g.blank_screen()
+    g.wake()
+    assert not g.dust.running
+
+
 def test_first_pin_typed_twice_goes_to_root(mod, ui):
     g = ui.make("alice", first="alice")
     keys(g, "25809<")
@@ -1249,8 +1475,8 @@ def test_first_password_with_the_keyboard(mod, ui, monkeypatch):
     monkeypatch.setattr(mod.subprocess, "Popen", lambda argv, **kw: started.append((argv, kw)) or "proc")
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(ui.tmp))
     g = ui.make("alice", first="alice")
-    g.password_button.active = True
-    g.password_button.emit("toggled")
+    # The keyboard bottom left of the keypad, as on the lock screen
+    g.keys["password"].emit("clicked")
     assert g.kind == "password" and g.password_box.visible and not g.pin_box.visible and g.secret.focused
     ((argv, kw),) = started
     assert argv == [mod.KEYBOARD] and kw["env"]["GSETTINGS_BACKEND"] == "keyfile"
@@ -1271,10 +1497,9 @@ def test_first_password_with_the_keyboard(mod, ui, monkeypatch):
     g.secret.emit("activate")
     answer(ui, "same")
     assert g.secret.text == "" and g.again.text == ""
-    # Back to the PIN
-    g.pin_button.active = True
-    g.pin_button.emit("toggled")
-    assert g.kind == "pin" and g.pin_box.visible
+    # Back to the PIN with the keypad button beside Continue
+    g.pin_mode.emit("clicked")
+    assert g.kind == "pin" and g.pin_box.visible and not g.password_box.visible
 
 
 def test_first_keyboard_missing_or_failing(mod, ui, monkeypatch, capsys):
@@ -1428,27 +1653,64 @@ def test_accounts_service_not_asked_in_test_mode(mod, ui, monkeypatch):
 
 # Power
 
-def test_power_dialog(mod, ui):
-    g = ui.make("alice", "bob")
-    power = [w for w in Widget.made if "power" in w.css]
-    assert len(power) == 1
-    power[0].emit("clicked")
-    (dialog,) = Dialog.presented
-    assert dialog.responses == ["cancel", "restart", "off"]
-    assert dialog.appearance == {"off": mod.Adw.ResponseAppearance.DESTRUCTIVE}
-    dialog.emit("response", "cancel")
-    dialog.emit("response", "close")
-    assert ui.bus.calls == []
-    dialog.emit("response", "restart")
-    dialog.emit("response", "off")
+def open_power_menu(mod, ui, g):
+    g.on_key_pressed(None, POWER_KEY, 0, 0)
+    ui.glib.fire(sources(ui.glib, "timeout", mod.POWER_KEY_LONG_MS)[0])
+    g.on_key_released(None, POWER_KEY, 0, 0)
+    assert g.power_menu.visible
+
+
+@pytest.mark.parametrize("first", [None, "alice"])
+def test_power_menu_instead_of_a_button(mod, ui, first):
+    # No power button on the screen: the power key held down opens Phosh's menu, Power Off and
+    # Restart one below the other, and only those
+    g = ui.make("alice", "bob", first=first)
+    assert [w for w in Widget.made if "power" in w.css] == []
+    assert not g.power_menu.visible
+    assert list(g.power_entries) == ["PowerOff", "Reboot"]
+    open_power_menu(mod, ui, g)
+    g.power_entries["Reboot"].emit("clicked")
+    assert not g.power_menu.visible
+    open_power_menu(mod, ui, g)
+    g.power_entries["PowerOff"].emit("clicked")
     target = ("org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager")
     assert ui.bus.calls == [target + ("Reboot", (False,)), target + ("PowerOff", (False,))]
+
+
+def test_power_menu_closes(mod, ui):
+    g = ui.make("alice", "bob")
+    # The close button
+    open_power_menu(mod, ui, g)
+    (close,) = [w for w in Widget.made if "power-close" in w.css]
+    close.emit("clicked")
+    assert not g.power_menu.visible
+    # Escape, which passes on with the menu closed
+    open_power_menu(mod, ui, g)
+    assert g.on_key_pressed(None, ESCAPE_KEY, 0, 0) is True and not g.power_menu.visible
+    assert g.on_key_pressed(None, ESCAPE_KEY, 0, 0) is False
+    # A tap beside the card, not one on it
+    card = Graphene.Rect().init(24, 400, 428, 200)
+    g.power_card.compute_bounds = lambda _target: (True, card)
+    open_power_menu(mod, ui, g)
+    (tap,) = g.power_menu.controllers
+    tap.emit("released", 1, 100.0, 500.0)
+    assert g.power_menu.visible
+    tap.emit("released", 1, 100.0, 200.0)
+    assert not g.power_menu.visible
+    g.power_card.compute_bounds = lambda _target: (False, None)
+    open_power_menu(mod, ui, g)
+    tap.emit("released", 1, 100.0, 500.0)
+    assert not g.power_menu.visible
+    # The screen going dark
+    open_power_menu(mod, ui, g)
+    g.blank_screen()
+    assert not g.power_menu.visible and ui.bus.calls == []
 
 
 def test_power_in_test_mode_prints(mod, ui, monkeypatch, capsys):
     monkeypatch.setattr(mod, "TEST", True)
     g = ui.make("alice", "bob")
-    g.on_power_response(None, "off")
+    g.power("PowerOff")
     assert "plinius-greeter: PowerOff" in capsys.readouterr().out
     assert ui.bus.calls == []
 
@@ -1534,7 +1796,7 @@ def test_power_key_short_press_toggles_the_screen(mod, ui):
     g.on_key_pressed(None, POWER_KEY, 0, 0)
     g.on_key_released(None, POWER_KEY, 0, 0)
     assert not g.blanked and ui.light == [0, 120]
-    assert Dialog.presented == []
+    assert not g.power_menu.visible
 
 
 def test_power_key_long_press_asks(mod, ui):
@@ -1542,7 +1804,7 @@ def test_power_key_long_press_asks(mod, ui):
     g.blank_screen()
     g.on_key_pressed(None, POWER_KEY, 0, 0)
     ui.glib.fire(sources(ui.glib, "timeout", mod.POWER_KEY_LONG_MS)[0])
-    assert not g.blanked and len(Dialog.presented) == 1
+    assert not g.blanked and g.power_menu.visible
     # Letting go after the long press leaves the screen on
     g.on_key_released(None, POWER_KEY, 0, 0)
     assert not g.blanked
@@ -1568,6 +1830,242 @@ def test_clock(mod, ui, monkeypatch):
     assert g.clock.label in (now.format("%H:%M"), now.add_minutes(1).format("%H:%M"))
     assert g.date.label  # "%A, %B %-d"
     assert "%" not in g.date.label
+
+
+# ----- the installation's look -----
+
+BACKGROUND_SCHEMA = """<schemalist>
+  <schema id="org.gnome.desktop.background" path="/org/gnome/desktop/background/">
+    <key name="picture-uri" type="s"><default>'file:///usr/share/backgrounds/gnome/blobs-l.svg'</default></key>
+    <key name="picture-uri-dark" type="s"><default>'file:///usr/share/backgrounds/gnome/blobs-d.svg'</default></key>
+    <key name="picture-options" type="s"><default>'zoom'</default></key>
+    <key name="primary-color" type="s"><default>'#023c88'</default></key>
+  </schema>
+</schemalist>
+"""
+
+
+@pytest.fixture
+def schemas(tmp_path, monkeypatch):
+    """The schemas the greeter reads with the installation's override (device-volla-ansuz), compiled
+    in tmp_path; schemas(extra) adds an override of its own after it."""
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "Phosh:GNOME")
+    d = tmp_path / "schemas"
+    d.mkdir()
+    shutil.copy(PKG / "plinius-ambient/org.plinius.ambient.gschema.xml", d)
+    shutil.copy(PKG / "phosh-plinius/org.plinius.appearance.gschema.xml", d)
+    shutil.copy(PKG / "device-volla-ansuz/90-plinius.gschema.override", d)
+    (d / "org.gnome.desktop.background.gschema.xml").write_text(BACKGROUND_SCHEMA)
+
+    def compile_(extra=None, without=()):
+        if extra:
+            (d / "95-test.gschema.override").write_text(extra)
+        for name in without:
+            (d / name).unlink()
+        subprocess.run(["glib-compile-schemas", str(d)], check=True, capture_output=True)
+        return Gio.SettingsSchemaSource.new_from_directory(str(d), None, False)
+    return compile_
+
+
+def test_installation_look_of_the_phone(mod, schemas):
+    # What device-volla-ansuz sets: black, no picture, Arch blue, dust
+    assert mod.installation_look(schemas()) == mod.Look("#000000", None, "#1793d1", "dust", "medium")
+
+
+def test_installation_look_with_a_picture(mod, schemas, tmp_path):
+    light, dark = tmp_path / "light.png", tmp_path / "dark.png"
+    light.write_bytes(b"png")
+    extra = (f"[org.gnome.desktop.background:Phosh]\npicture-options='zoom'\npicture-uri='{light.as_uri()}'\n"
+             f"picture-uri-dark='{dark.as_uri()}'\nprimary-color='#123'\n"
+             "[org.plinius.ambient]\neffect='none'\ndensity='high'\n")
+    look = mod.installation_look(schemas(extra))
+    # The dark picture is missing: the light one
+    assert look == mod.Look("#123", str(light), "#1793d1", "none", "high")
+    dark.write_bytes(b"png")
+    assert mod.installation_look(schemas(extra)).picture == str(dark)
+
+
+def test_installation_look_keeps_what_cannot_be_used(mod, schemas):
+    extra = ("[org.gnome.desktop.background:Phosh]\npicture-options='zoom'\npicture-uri=''\n"
+             "picture-uri-dark='file:///nonexistent/picture.png'\nprimary-color='red; } * { color: red'\n"
+             "[org.plinius.appearance]\naccent-color='#12345'\n")
+    assert mod.installation_look(schemas(extra)) == mod.Look("#000000", None, "#1793d1", "dust", "medium")
+
+
+def test_installation_look_without_the_schemas(mod, schemas):
+    # Only Phosh's schema of the accent is there (no plinius-ambient, no GNOME background)
+    source = schemas(without=["org.plinius.ambient.gschema.xml", "org.gnome.desktop.background.gschema.xml"])
+    assert mod.installation_look(source) == mod.Look(effect="none")
+
+
+def test_installation_look_from_the_systems_schemas(mod, monkeypatch, schemas):
+    source = schemas()
+    monkeypatch.setattr(mod, "Gio", fakes.Proxy(Gio, SettingsSchemaSource=types.SimpleNamespace(
+        get_default=lambda: source)))
+    assert mod.installation_look().effect == "dust"
+    monkeypatch.setattr(mod, "Gio", fakes.Proxy(Gio, SettingsSchemaSource=types.SimpleNamespace(
+        get_default=lambda: None)))
+    assert mod.installation_look() == mod.Look(effect="none")
+
+
+def test_css_takes_the_look(mod):
+    css = mod.make_css(mod.Look(background="#101010", accent="#abcdef"))
+    assert "--accent-bg-color: #abcdef;" in css and "mix(#abcdef, white, 0.35)" in css
+    assert ".installation-bg {\n  background-color: #101010;" in css
+    # The account picker: plain black, no gradient
+    assert "gradient" not in css
+    # Every screen has its styles: the dark screen, the unlock page, its keypad, the power menu
+    for selector in (".blank {", ".unlock-status {", ".pin-dots {", "button.key {", "button.pin-submit {",
+                     "button.pin-mode {", ".power-menu {", ".power-card {", ".power-card button.entry {",
+                     "button.power-close {", "button.user-tile {", ".clock {"):
+        assert "\n" + selector in css, selector
+    assert "{accent}" not in css and "{{" not in css
+
+
+# ----- the dust -----
+
+def test_dust_field_as_plinius_ambient(mod):
+    # As many motes as plinius-ambient for the area (140 on 360x800 at medium), in the screen
+    field = mod.DustField(360, 800, "medium", random.Random(1))
+    assert len(field.motes) == 140
+    assert len(mod.DustField(476, 1058, "high", random.Random(1)).motes) == int(240 * 476 * 1058 / (360 * 800))
+    assert len(mod.DustField(10, 10, "low", random.Random(1)).motes) == 17  # a quarter at least
+    fronts = [m for m in field.motes if m["z"] > 1]
+    assert 0 < len(fronts) < 30 and all(m["z"] <= field.FOREGROUND_MAX for m in field.motes)
+    for _ in range(200):
+        field.step(1 / 30)
+    assert field.time == pytest.approx(200 / 30)
+    assert all(0 <= m["x"] <= 360 and 0 <= m["y"] <= 800 for m in field.motes)
+    kinds = {k for k, *_ in field.sprites()}
+    assert "bokeh" in kinds and kinds - {"bokeh"} <= set(range(field.SHARPNESS_LEVELS))
+    for kind, x, y, half, opacity in field.sprites():
+        assert 0 <= opacity <= 1 and half > 0
+    # Turning the screen keeps the motes where they were, relative to it
+    x, y = field.motes[0]["x"], field.motes[0]["y"]
+    field.resize(720, 400)
+    assert (field.motes[0]["x"], field.motes[0]["y"]) == pytest.approx((2 * x, y / 2))
+
+
+def test_dust_beam_comes_from_the_upper_left(mod):
+    field = mod.DustField(360, 800, "low", random.Random(2))
+    cx, cy, half_w, half_l, angle, opacity = field.beam()
+    # The texture's top (its source) turned by angle points up and to the left
+    a = math.radians(angle)
+    top = (cx + half_l * math.sin(a), cy - half_l * math.cos(a))
+    assert top[0] < cx and top[1] < 0 and half_w == pytest.approx(0.32 * 360)
+    assert 0.17 * 0.85 <= opacity <= 0.17
+    # Motes in the beam are lit, those far from it barely
+    assert field.beam_distance(72, 0) == 0 and field.beam_distance(360, 0) > half_w
+    assert mod.DustField(0, 0, "low", random.Random(3)).unit() == 1.0
+
+
+def test_dust_field_resize_from_nothing(mod):
+    field = mod.DustField(0, 0, "low", random.Random(4))
+    field.resize(100, 200)
+    assert (field.width, field.height) == (100, 200)
+
+
+@pytest.mark.parametrize("kind", ["beam", "bokeh", 0, 3])
+def test_glow_pixels(mod, kind):
+    size = 16
+    data = mod.glow_pixels(kind, size)
+    height = size * 4 if kind == "beam" else size
+    assert len(data) == size * height * 4
+
+    def pixel(col, row):
+        return data[(row * size + col) * 4:(row * size + col) * 4 + 4]
+    # Premultiplied: colour never above alpha
+    assert all(data[i + c] <= data[i + 3] for i in range(0, len(data), 4) for c in range(3))
+    if kind == "beam":
+        # Bright at its source (top), dark at the far end, strongest in the middle across
+        assert pixel(8, 4)[3] > 200 and pixel(8, height - 1)[3] == 0 and pixel(0, 4)[3] < pixel(8, 4)[3]
+    elif kind == "bokeh":
+        # A disc with a brighter rim, nothing outside of it
+        assert pixel(0, 0)[3] == 0 and pixel(8, 8)[3] < pixel(8, 1)[3]
+    else:
+        assert pixel(0, 0)[3] == 0 and pixel(8, 8)[3] > 200 and pixel(8, 8)[3] > pixel(8, 3)[3]
+
+
+class Clock:
+    def __init__(self):
+        self.us = 0
+
+    def get_frame_time(self):
+        return self.us
+
+
+class Snapshot:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *a: self.calls.append((name, a))
+
+
+def test_dust_area_ticks_and_draws(mod, monkeypatch):
+    area = mod.DustArea("low")
+    ticks = []
+    removed = []
+    area.add_tick_callback = lambda cb: ticks.append(cb) or 5
+    area.remove_tick_callback = removed.append
+    area.queue_draw = lambda: ticks.append("draw")
+    size = [0, 0]
+    area.get_width = lambda: size[0]
+    area.get_height = lambda: size[1]
+    made = []
+    monkeypatch.setattr(mod.DustArea, "texture", staticmethod(lambda kind, px: made.append((kind, px)) or kind))
+    area.set_running(True)
+    area.set_running(True)  # once
+    assert ticks == [area.on_tick] and area.tick == 5
+    clock = Clock()
+    snap = Snapshot()
+    area.do_snapshot(snap)  # not laid out yet: nothing
+    assert snap.calls == [] and area.field is None
+    assert area.on_tick(area, clock) == GLib.SOURCE_CONTINUE  # the first frame only notes the time
+    size[:] = [360, 800]
+    area.do_snapshot(snap)
+    assert {k for k, _ in made} == {"beam", "bokeh", 0, 1, 2, 3}
+    names = [c[0] for c in snap.calls]
+    assert names[:6] == ["save", "translate", "rotate", "push_opacity", "append_texture", "pop"]
+    assert names.count("append_texture") == names.count("push_opacity") >= 2
+    # 30 frames a second: a frame of 120 Hz is too soon, the next 30th of a second steps
+    clock.us = 8_000
+    area.on_tick(area, clock)
+    assert area.field.time == 0 and "draw" not in ticks
+    clock.us = 34_000
+    area.on_tick(area, clock)
+    assert area.field.time == pytest.approx(0.034) and "draw" in ticks
+    # A long pause (screen dark) steps at most 0.1 s
+    clock.us = 5_000_000
+    area.on_tick(area, clock)
+    assert area.field.time == pytest.approx(0.134)
+    # Turned: the same field, resized; the textures stay
+    size[:] = [800, 360]
+    field = area.field
+    area.do_snapshot(Snapshot())
+    assert area.field is field and (field.width, field.height) == (800, 360) and len(made) == 6
+    area.set_running(False)
+    area.set_running(False)
+    assert removed == [5] and area.tick == 0
+    # Unchanged size: the same field; a mote too faint to see is left out
+    field.sprites = lambda: [(0, 1.0, 1.0, 2.0, 0.0), (0, 1.0, 1.0, 2.0, 0.5)]
+    snap = Snapshot()
+    area.do_snapshot(snap)
+    assert area.field is field and [c[0] for c in snap.calls].count("append_texture") == 2  # the beam + one
+    area.field = None
+    ticks.clear()
+    clock.us = 6_000_000
+    area.on_tick(area, clock)  # no field yet: draws only
+    assert ticks == ["draw"]
+
+
+def test_dust_area_texture(mod, monkeypatch):
+    made = []
+    monkeypatch.setattr(mod.Gdk, "MemoryTexture", types.SimpleNamespace(
+        new=lambda w, h, fmt, data, stride: made.append((w, h, data.get_size(), stride))))
+    mod.DustArea.texture("beam", 8)
+    mod.DustArea.texture(1, 8)
+    assert made == [(8, 32, 8 * 32 * 4, 32), (8, 8, 8 * 8 * 4, 32)]
 
 
 # ----- backlight -----
@@ -1665,8 +2163,8 @@ def test_main_activates_a_fullscreen_window(mod, monkeypatch, windowed):
     windows = []
 
     class Window:
-        def __init__(self, app):
-            self.app, self.calls = app, []
+        def __init__(self, app, look):
+            self.app, self.look, self.calls = app, look, []
             windows.append(self)
 
         def fullscreen(self):
@@ -1675,8 +2173,12 @@ def test_main_activates_a_fullscreen_window(mod, monkeypatch, windowed):
         def present(self):
             self.calls.append("present")
     monkeypatch.setattr(mod, "Greeter", Window)
+    look = mod.Look(accent="#ff0000")
+    monkeypatch.setattr(mod, "installation_look", lambda: look)
     setup = fakes.recorder()
     monkeypatch.setattr(mod, "setup_locale", setup)
+    feedback_setup = fakes.recorder()
+    monkeypatch.setattr(mod, "setup_feedback", feedback_setup)
     if windowed:
         monkeypatch.setenv("PLINIUS_GREETER_WINDOWED", "1")
     else:
@@ -1684,12 +2186,12 @@ def test_main_activates_a_fullscreen_window(mod, monkeypatch, windowed):
     monkeypatch.setattr(sys, "argv", ["plinius-greeter", "--ignored"])
     assert mod.main() == 7
     (app,) = made
-    assert setup.calls == [()]
+    assert setup.calls == [()] and feedback_setup.calls == [()]
     assert app.kw["application_id"] == "org.plinius.Greeter"
     assert app.argv == ["plinius-greeter"]
     app.handlers["activate"](app)
-    assert providers == [mod.CSS]
-    assert windows[0].app is app
+    assert providers == [mod.make_css(look)] and "--accent-bg-color: #ff0000;" in providers[0]
+    assert windows[0].app is app and windows[0].look is look
     assert windows[0].calls == (["present"] if windowed else ["fullscreen", "present"])
 
 

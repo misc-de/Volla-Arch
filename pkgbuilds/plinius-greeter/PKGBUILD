@@ -2,7 +2,7 @@
 
 pkgname=plinius-greeter
 pkgver=0.1
-pkgrel=4
+pkgrel=7
 pkgdesc="Account picker in front of Phosh for phones with more than one account (greetd)"
 arch=(any)
 license=(MIT)
@@ -10,13 +10,17 @@ license=(MIT)
 # /etc/greetd/config.toml); with more, greetd starts in the greeter, a tap starts that account's
 # Phosh, which locks itself (PIN or pattern as usual). An account without a password yet (an image
 # for everybody, Plinius Boot) is asked once for a PIN or a password in the greeter, the PIN on its
-# own keypad, a password with Stevia. After a session ends the greeter shows
-# instead of agreety. New accounts: Accounts > Local Accounts > Add in gnome-control-center-plinius
+# own keypad, a password with Stevia; that screen is laid out as Phosh's unlock page (keypad, keyboard
+# and delete keys, Continue below), has no clock and shows the installation's look (background,
+# accent colour and plinius-ambient's dust, from the schemas' defaults), the account picker a plain
+# black background; the power key held down opens a power menu as Phosh's (power off, restart).
+# After a session ends the greeter shows instead of agreety. New accounts: Accounts > Local
+# Accounts > Add in gnome-control-center-plinius
 # (plinius-account's plinius-add-user). Strings are English, translated in *.po (template
 # plinius-greeter.pot).
 depends=(greetd phoc python python-gobject gtk4 libadwaita accountsservice systemd dbus cryptsetup shadow)
-# The on-screen keyboard for a first password
-optdepends=(stevia)
+# The on-screen keyboard for a first password; vibration on a tap
+optdepends=(stevia feedbackd)
 makedepends=(gettext)
 _langs=(de es fr it nl pl pt ru)
 source=(plinius-greeter
@@ -31,7 +35,7 @@ source=(plinius-greeter
 	plinius-greeter.tmpfiles
 	"${_langs[@]/%/.po}"
 	LICENSE)
-sha256sums=('f99509e3462fde4ce944ac4245d0efab06127ae2af3a555c421b83cba2d7ba8a'
+sha256sums=('982a951c292d4c36df652cc69ce806f075aafac361204134afb2922c4f103b51'
 	'f41ca1386b59edb6cadb6f9a842afe2017b9c29f77c0939201d3c1c18af3e93d'
 	'13579ce0b654208f18bfe15d62709a9db89d92e2a6fb5e804ba65afa133ea97e'
 	'5f4c062cffcf72c9457e22f66190ebf130330cad2930a9707b100a370091e2f8'
@@ -41,14 +45,14 @@ sha256sums=('f99509e3462fde4ce944ac4245d0efab06127ae2af3a555c421b83cba2d7ba8a'
 	'24381ae709f0cd33c43a094fd48b96f2b86b870249ac9c8deda52c0bb76a0a75'
 	'4f2f917d3a3029c77ba9742ea59de355e46521cd3df7e4ea00cffa62629537d6'
 	'1231fd46473c544b0d0e4019ec2309ccaf41b1293ef2d21e241f7c52b5e6962a'
-	'3a0d5a65253d14729b34618159a32acd6b4bd5285b6e17f787e9a60cef218088'
-	'5c5de8c52faef73f35b216452220d44aecd57dd6da6f567be6ac0cee362b0e20'
-	'b60ab336b040e5fd262cc934c1e9e22c068360e6daf407372cd77924d5945ed4'
-	'34bf51269fc8068481440639eddb8f48a2b9c189a18054c5d79204575b15a046'
-	'8cb48cc43f6fe0fe26e354bf5c9dd3f1acbf772c8b0fb73292b308ded17e0523'
-	'a1f542d9b69b33e3f8912a8403ab5c70290d9acbae5bc797a6c85ec7485d98cc'
-	'b658a78fc49f157ce64b106d7393b218c6da27832e25703d0110c6af792bf0d1'
-	'a6bb9c229074f603c5e923159da014963fa3583b70588724f54f4dc6945970aa'
+	'fb65499c1366b1f9f0fc91e90d04908f93f3f0caa81c4f18e162248bfbe9223f'
+	'7f7da64dfde3e8ea510b939c908f5de3ecf7a451307e9c5e41f46a4d42b0e418'
+	'4cc26820d1b5ea4d5bd61fad698a2ca860ac82d380f4f994c2e690bf6b800223'
+	'bf8b16f41a1fb26d88503aaf78c7ba3efb74ffb49fd744341d8603ac39fc33f3'
+	'b2e1bc3b15da6c73c82284df8615a1eda3482ebe3453a1634e4e91e75f7e8253'
+	'236a97474fd9c48bb45685a192006e1d338a9779af12d40aad00e6bee1268189'
+	'5e845fae29b63df6799283d1cc4124f48ff68bb06b5c9a8adf02b121540a1885'
+	'c1196b0b83b400a75f24de1ff8e329c3db797ff6c248633916a6700af8fe91b8'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
 build() {
