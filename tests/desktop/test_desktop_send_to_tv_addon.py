@@ -314,6 +314,38 @@ def test_check_finds_every_difference(mkxpi, tmp_path, capsys):
     assert "differs from the sources: background.js" in capsys.readouterr().err
 
 
+def test_check_takes_the_manifest_as_amo_writes_it(mkxpi, tmp_path):
+    """AMO indents manifest.json anew when it signs; the data has to stay the same."""
+    mkxpi.build(PKGDIR, tmp_path / "u.xpi")
+    with zipfile.ZipFile(tmp_path / "u.xpi") as z:
+        data = json.loads(z.read("manifest.json"))
+    for name, text, ok in (
+            ("same.xpi", json.dumps(data, indent=2), True),
+            ("changed.xpi", json.dumps({**data, "version": "9.9"}, indent=2), False),
+            ("broken.xpi", "{", False)):
+        with zipfile.ZipFile(tmp_path / "u.xpi") as a, \
+                zipfile.ZipFile(tmp_path / name, "w") as b:
+            for entry in a.namelist():
+                b.writestr(entry, text if entry == "manifest.json" else a.read(entry))
+            b.writestr("META-INF/cose.sig", b"sig")
+        problems = mkxpi.check(PKGDIR, tmp_path / name)
+        assert problems == ([] if ok else ["differs from the sources: manifest.json"])
+    # Other files still count byte for byte, also as JSON
+    assert mkxpi.same("background.js", b"a", b"a")
+    assert not mkxpi.same("background.js", b"a ", b"a")
+    assert mkxpi.same("x.json", b"[1]", b"[ 1 ]")
+    assert not mkxpi.same("x.json", b"[1]", b"[2]")
+
+
+def test_the_signed_copy_in_the_package_holds_these_sources(mkxpi):
+    """The copy AMO signed, as the package installs it."""
+    pkgbuild = (PKGDIR / "PKGBUILD").read_text()
+    version = re.search(r"^_xpiver=(\S+)$", pkgbuild, re.M).group(1)
+    signed = PKGDIR / f"send-to-tv-{version}.xpi"
+    assert mkxpi.check(PKGDIR, signed) == []
+    assert json.loads((PKGDIR / "manifest.json").read_text())["version"] == version
+
+
 def test_main_builds_and_explains_its_arguments(mkxpi, tmp_path, capsys):
     out = tmp_path / "o.xpi"
     assert mkxpi.main(["make-xpi.py", str(PKGDIR), str(out)]) == 0

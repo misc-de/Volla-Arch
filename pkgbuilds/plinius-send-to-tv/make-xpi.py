@@ -112,6 +112,20 @@ def build(src, out):
             archive.writestr(info, data)
 
 
+def same(name, have, want):
+    """Whether a file of the signed add-on holds what the sources make. AMO writes
+    manifest.json anew when it signs (indented, one list item per line): a JSON file counts
+    as the same when it reads as the same data, every other file only byte for byte."""
+    if have == want:
+        return True
+    if not name.endswith(".json"):
+        return False
+    try:
+        return json.loads(have) == json.loads(want)
+    except ValueError:
+        return False
+
+
 def check(src, signed):
     """The differences between a signed add-on and the sources, an empty list if none."""
     want = contents(src)
@@ -127,7 +141,7 @@ def check(src, signed):
             problems.append(f"missing in the add-on: {name}")
         elif name not in want:
             problems.append(f"not from the sources: {name}")
-        elif have[name] != want[name]:
+        elif not same(name, have[name], want[name]):
             problems.append(f"differs from the sources: {name}")
     return problems
 
