@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=plinius-freigabe
-pkgver=20261124.2034
+pkgver=20261125.1921
 pkgrel=1
 pkgdesc="Approved versions of the packages the Plinius adaptations depend on"
 arch=(aarch64 x86_64)
@@ -26,7 +26,7 @@ conflicts_aarch64=(
 	"cairo>1.18.6-1"  # linked by chatty-plinius
 	"callaudiod>0.1.99-3"  # linked by gnome-calls-plinius
 	"cjson>1.7.19-1"  # linked by lpac
-	"cryptsetup>2.8.8-2"  # linked by plinius-crypt
+	"cryptsetup>2.8.9-1"  # linked by plinius-crypt
 	"curl>8.23.0-2"  # linked by lpac
 	"dbus>1.16.4-1"  # linked by bluez-obex-plinius
 	"dconf>51.0-1"  # linked by phosh-plinius
