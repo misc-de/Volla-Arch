@@ -122,6 +122,23 @@ def test_an_unexpected_restart_fails(rep):
     assert "restarted 0 times: odd.service" in report
 
 
+def test_a_unit_that_must_run_and_may_restart_can_be_between_two_starts(rep):
+    rep.rules_file.write_text(RULES + "restarts greetd.service\n")
+    text = log("@@IMAGE-CHECK restarts greetd.service 6").replace(
+        "unit greetd.service active success", "unit greetd.service activating success")
+    code, report = rep.run(text)
+    assert code == 0, report
+    # but it still has to come up at all
+    code, report = rep.run(text.replace("activating success", "failed exit-code"))
+    assert code == 1 and "not active: greetd.service (failed exit-code)" in report
+
+
+def test_activating_is_not_enough_for_a_unit_that_may_not_restart(rep):
+    code, report = rep.run(log().replace("unit greetd.service active success",
+                                         "unit greetd.service activating success"))
+    assert code == 1 and "not active: greetd.service (activating success)" in report
+
+
 def test_a_unit_that_must_run_but_does_not(rep):
     text = log().replace("unit greetd.service active success", "unit greetd.service failed exit-code")
     code, report = rep.run(text)

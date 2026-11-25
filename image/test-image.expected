@@ -2,7 +2,8 @@
 # hardware, no Android container). One rule per line, a reason after "#":
 #   active UNIT    the unit must be active after the boot
 #   fails UNIT     the unit may fail: it needs the phone
-#   restarts UNIT  the unit may keep restarting: it needs the phone
+#   restarts UNIT  the unit may keep restarting: it needs the phone; one that must be active
+#                  too may then also be found activating, between two starts
 # Every other failed or restarting unit is an error of the image.
 
 active dbus.service
@@ -28,3 +29,6 @@ restarts plinius-backlight-wake.service  # the display's card0-DSI-1 and lcd-bac
 restarts plinius-sar.service             # the modem's radio HAL through /dev/binder
 restarts vibrator-ff-bridge.service      # Android's vibrator HAL through binder
 restarts plinius-appaccessd.service      # see above
+# First start without a PIN: the greeter's phoc finds no GPU in QEMU ("Found 0 GPUs"), the
+# greeter ends and greetd starts it again. It still has to be active (or between two starts).
+restarts greetd.service

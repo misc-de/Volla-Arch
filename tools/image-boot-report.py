@@ -101,7 +101,8 @@ def judge(lines, rules):
         if state is None:
             if facts["end"]:
                 problems.append(f"not reported: {unit}")
-        elif state[:1] != ["active"]:
+        elif state[:1] != ["active"] and not (unit in rules["restarts"] and state[:1] == ["activating"]):
+            # a unit that may restart can be caught between two starts
             problems.append(f"not active: {unit} ({' '.join(state)})")
     if facts["end"] and facts["pacman"] != ["ok"]:
         problems.append("pacman -Dk: the installed packages' dependencies are broken")
