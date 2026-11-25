@@ -2,7 +2,7 @@
 
 pkgname=device-volla-ansuz
 pkgver=0.5
-pkgrel=91
+pkgrel=92
 pkgdesc="Device configuration for Volla Phone Plinius (ansuz): binder, Android container, boot chain check, SSH over USB"
 arch=(any)
 license=(MIT)
@@ -127,7 +127,8 @@ source=(
 	90-plinius-no-binder.conf
 	73-plinius-seat-late-noacl.rules
 	plinius-dev-acl
-	plinius-dev-acl.service)
+	plinius-dev-acl.service
+	50-plinius-log-level.conf)
 sha256sums=(
 	'ba5e6fb7d0b0fa1b4d69cb3aff66f8a416da2da0948a4b59e8304631d0e6753d'
 	'bb7dbfc5506b9eb4340a4fe8de04443ecf02954a75da7c03cf25faac7e89787f'
@@ -184,7 +185,7 @@ sha256sums=(
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
 	'34075e83a93029c4a3c1caf582a63bb55db96e177c37d107b3731ea646d66ba3'
 	'b6c4b6de424d46cb7197e794429733476176a40da27a7d09821490b4822bea0c'
-	'd58a16dba9cbd049c6ed5d4ecce5057d71213c1de88412c327db4ded82dbea95'
+	'95bdc807f628b3995d7a7e304aef6bbefc50d5be7ee905fbf535597f8e3b6888'
 	'3cc663be46ddf5210e8426ddb7747f73071a5d8429068eca0e7401efb6d5908d'
 	'acb10aa3f203ee61778c4bb8fee09f1a443c50afeaee377637d75548fb1f9eaa'
 	'ff04bbd4f055bdd200a050ad3d83f25942f8f6450421849fc31057f337480575'
@@ -226,7 +227,8 @@ sha256sums=(
 	'f25d84776135779d0ad9d1a9476b275b8a3d5b04dfaaf7b620e09bc50865d7d5'
 	'884b46efdb8c2d3958c1b02d9bbc53a07f48a219b9cb5c749aff95536527455a'
 	'32ce5f28c5a4c33e474c57fb437ceece7fec905bf5e1773fea6f6e0291de0bd5'
-	'a8dd8c7420c0f1ee953fa478b97d54c2be5e05f3db16a9240395e9380cd0c406')
+	'a8dd8c7420c0f1ee953fa478b97d54c2be5e05f3db16a9240395e9380cd0c406'
+	'5f77ea3a6e55fb686e68119602ebe855da2026e1cdefcdad1010c322f56c2839')
 
 package() {
 	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
@@ -438,6 +440,15 @@ package() {
 	ln -s ../10-plinius-mobile-firewall "$pkgdir/usr/lib/NetworkManager/dispatcher.d/pre-up.d/"
 	# Journal size on the memory card
 	install -Dm644 50-plinius-journald.conf -t "$pkgdir/usr/lib/systemd/journald.conf.d"
+	# What our services write to stdout and stderr stays in the journal (stored at notice)
+	install -Dm644 50-plinius-log-level.conf -t "$pkgdir/usr/lib/systemd/system/plinius-.service.d"
+	install -Dm644 50-plinius-log-level.conf -t "$pkgdir/usr/lib/systemd/user/plinius-.service.d"
+	for _unit in gnss-nmea-bridge sensor-proxy-bridge vibrator-ff-bridge; do
+		install -Dm644 50-plinius-log-level.conf -t "$pkgdir/usr/lib/systemd/system/$_unit.service.d"
+	done
+	for _unit in audio-hal-bridge camera-hal-bridge mmsd-sim-gate firefox-preload; do
+		install -Dm644 50-plinius-log-level.conf -t "$pkgdir/usr/lib/systemd/user/$_unit.service.d"
+	done
 	# Files phoc reads at start, into the page cache before the container keeps the card busy
 	install -Dm644 plinius-preload.service -t "$pkgdir/usr/lib/systemd/system"
 	install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
