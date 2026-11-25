@@ -5,7 +5,8 @@ plinius-health (the self-test after boot) only asks whether each layer is there:
 a modem in ModemManager, wlan0, hci0. This tool asks whether the functions work: is the SIM
 registered on a network, can calls ring and SMS go out, does mobile data reach the internet, does
 a Wi-Fi and a Bluetooth scan see anything, does the GPS receiver hear satellites, do the sensors,
-cameras, audio nodes, battery, fingerprint reader, NFC, torch and vibration motor answer.
+cameras, audio nodes, battery, fingerprint reader, NFC, torch and vibration motor answer, do
+OpenGL ES, gl4es and Vulkan reach the GPU (drawn off screen, nothing appears).
 
 It changes nothing and reaches nobody: no call, no SMS, no pairing or connection, no sound, no
 vibration, no light, no camera frame (only the camera portal gives apps frames, on purpose: the
@@ -41,6 +42,9 @@ import time
 SYS = "/sys"
 PROC = "/proc"
 RUN = "/run"
+USR = "/usr"
+ETC = "/etc"
+HOME = "/home"
 NMEA_SOCKET = "/run/gnss-nmea-bridge/nmea.sock"
 CONNECTIVITY_URI = "http://ping.archlinux.org/nm-check.txt"  # NetworkManager's, if none is set
 
@@ -532,6 +536,232 @@ def check_display(phone):
     return OK, "touchscreen, " + ", ".join(parts)
 
 
+# Run as the session user in a python3 of its own: a context on a 16x16 pbuffer (nothing on the
+# screen), cleared to a known colour and read back. One line "PROBE {json}" on stdout; the
+# driver's own chatter around it is ignored.
+GL_PROBE = r'''
+import ctypes as C, json, sys
+
+def probe(egl_path, gl_path, api):
+    try:
+        egl, gl = C.CDLL(egl_path), C.CDLL(gl_path)
+    except OSError as e:
+        return {"error": f"cannot load: {e}"}
+    vp, i = C.c_void_p, C.c_int
+    for name, res, args in (
+            ("eglGetDisplay", vp, [vp]), ("eglInitialize", i, [vp, vp, vp]),
+            ("eglBindAPI", i, [i]), ("eglChooseConfig", i, [vp, vp, vp, i, vp]),
+            ("eglCreatePbufferSurface", vp, [vp, vp, vp]),
+            ("eglCreateContext", vp, [vp, vp, vp, vp]), ("eglMakeCurrent", i, [vp, vp, vp, vp]),
+            ("eglGetError", i, []), ("eglTerminate", i, [vp])):
+        f = getattr(egl, name)
+        f.restype, f.argtypes = res, args
+    gl.glGetString.restype, gl.glGetString.argtypes = C.c_char_p, [i]
+    gl.glClearColor.argtypes = [C.c_float] * 4
+    gl.glClear.argtypes = [i]
+    gl.glReadPixels.argtypes = [i, i, i, i, i, i, vp]
+
+    def failed(step):
+        return {"error": f"{step} failed (EGL error 0x{egl.eglGetError() & 0xffff:04x})"}
+
+    d = egl.eglGetDisplay(None)
+    major, minor = i(), i()
+    if not d or not egl.eglInitialize(d, C.byref(major), C.byref(minor)):
+        return failed("eglInitialize")
+    try:
+        if api == "gl" and not egl.eglBindAPI(0x30A2):  # EGL_OPENGL_API
+            return failed("eglBindAPI(OpenGL)")
+        # SURFACE_TYPE pbuffer, RENDERABLE_TYPE ES3 or OpenGL, 8 bits red and blue
+        attrs = (i * 9)(0x3033, 0x1, 0x3040, 0x40 if api == "es" else 0x8, 0x3024, 8, 0x3022, 8,
+                        0x3038)
+        cfg, n = vp(), i()
+        if not egl.eglChooseConfig(d, attrs, C.byref(cfg), 1, C.byref(n)) or n.value < 1:
+            return failed("eglChooseConfig")
+        surf = egl.eglCreatePbufferSurface(d, cfg, (i * 5)(0x3057, 16, 0x3056, 16, 0x3038))
+        if not surf:
+            return failed("eglCreatePbufferSurface")
+        ctx_attrs = (i * 3)(0x3098, 3, 0x3038) if api == "es" else (i * 1)(0x3038)
+        ctx = egl.eglCreateContext(d, cfg, None, ctx_attrs)
+        if not ctx:
+            return failed("eglCreateContext")
+        if not egl.eglMakeCurrent(d, surf, surf, ctx):
+            return failed("eglMakeCurrent")
+        gl.glClearColor(0.0, 0.5, 1.0, 1.0)
+        gl.glClear(0x4000)  # GL_COLOR_BUFFER_BIT
+        pixel = (C.c_ubyte * 4)()
+        gl.glReadPixels(0, 0, 1, 1, 0x1908, 0x1401, pixel)  # GL_RGBA, GL_UNSIGNED_BYTE
+        text = {k: (gl.glGetString(v) or b"").decode(errors="replace")
+                for k, v in (("vendor", 0x1F00), ("renderer", 0x1F01), ("version", 0x1F02))}
+        egl.eglMakeCurrent(d, None, None, None)
+        return {**text, "pixel": list(pixel)}
+    finally:
+        egl.eglTerminate(d)
+
+print("PROBE " + json.dumps(probe(*sys.argv[1:4])), flush=True)
+'''
+
+SOFTWARE_RENDERERS = ("llvmpipe", "softpipe", "swrast", "lavapipe")
+
+
+def expand_env(value, env):
+    """$VAR, ${VAR}, ${VAR:-default} and ${VAR:+alternate} as systemd's environment.d has them."""
+    def one(m):
+        name = m.group(1) or m.group(2)
+        cur = env.get(name, "")
+        if m.group(3) == ":-":
+            return cur or m.group(4)
+        if m.group(3) == ":+":
+            return m.group(4) if cur else ""
+        return cur
+    return re.sub(r"\$(?:([A-Za-z_]\w*)|\{([A-Za-z_]\w*)(?:(:[-+])([^}]*))?\})", one, value)
+
+
+def session_env():
+    """KEY=VALUE of systemd's environment.d, as the session's programs get them (libhybris, the
+    XDG_DATA_DIRS in which the Vulkan loader looks for its drivers)."""
+    env = {}
+    for d in (f"{USR}/lib/environment.d", f"{ETC}/environment.d"):
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".conf"))
+        except OSError:
+            continue
+        for name in names:
+            for line in (read(os.path.join(d, name), "") or "").splitlines():
+                key, sep, value = line.strip().partition("=")
+                if sep and not key.startswith("#") and re.fullmatch(r"[A-Za-z_]\w*", key):
+                    env[key] = expand_env(value, env)
+    return [f"{k}={v}" for k, v in env.items()]
+
+
+def gl_probe(phone, egl, gl, api, extra=()):
+    """The GL_PROBE answer as a dict; {"error": ...} if it gave none."""
+    rc, out = phone.run([*session_env(), *extra, "python3", "-I", "-c", GL_PROBE, egl, gl, api],
+                        timeout=30, user=True)
+    for line in reversed(out.splitlines()):
+        if line.startswith("PROBE "):
+            try:
+                return json.loads(line[6:])
+            except ValueError:
+                break
+    if rc == 124:
+        return {"error": "no answer within 30 s"}
+    return {"error": f"probe ended with status {rc} and no answer"}
+
+
+def gl_problem(what, result):
+    """What is wrong with a GL_PROBE answer, or None."""
+    if "error" in result:
+        return f"{what}: {result['error']}"
+    if any(s in result.get("renderer", "").lower() for s in SOFTWARE_RENDERERS):
+        return f"{what} renders in software ({result['renderer']})"
+    r, g, b, a = (result.get("pixel") or [0, 0, 0, 0])[:4]
+    if not (r <= 8 and 120 <= g <= 136 and b >= 247 and a >= 247):
+        return f"{what} draws a wrong colour ({r}, {g}, {b}, {a} instead of 0, 128, 255, 255)"
+    return None
+
+
+def check_opengl(phone):
+    if not phone.user:
+        return SKIP, "no graphical session"
+    lib = f"{USR}/lib"
+    es = gl_probe(phone, f"{lib}/libEGL.so.1", f"{lib}/libGLESv2.so.2", "es")
+    problems = [gl_problem("OpenGL ES", es)]
+    gl4es_dir = f"{lib}/gl4es"
+    gl4es = None
+    if os.path.exists(f"{gl4es_dir}/libGL.so.1"):
+        # as /usr/bin/gl4es starts a program: its libGL and EGL wrapper first, drawing through
+        # the real EGL and GLES
+        gl4es = gl_probe(phone, f"{gl4es_dir}/libEGL.so.1", f"{gl4es_dir}/libGL.so.1", "gl",
+                         [f"LD_LIBRARY_PATH={gl4es_dir}", f"LIBGL_EGL={lib}/libEGL.so.1",
+                          f"LIBGL_GLES={lib}/libGLESv2.so.2", "LIBGL_NOBANNER=1"])
+        problems.append(gl_problem("OpenGL through gl4es", gl4es))
+    problems = [p for p in problems if p]
+    if problems:
+        return FAIL, "; ".join(problems)
+    version = " ".join(es["version"].split()[:3])  # "OpenGL ES 3.2", without the build
+    msg = f"{version} on {es['renderer']}"
+    if gl4es:
+        msg += f", OpenGL {gl4es['version'].split()[0]} through gl4es"
+    return OK, msg + ", drawn and read back"
+
+
+VK_PATH_VARS = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_ADD_DRIVER_FILES")
+
+
+def stale_vulkan_launchers():
+    """Desktop launchers whose Exec= names a Vulkan driver manifest that is not there."""
+    dirs = [f"{USR}/share/applications", f"{USR}/local/share/applications"]
+    try:
+        dirs += sorted(os.path.join(HOME, u, ".local/share/applications")
+                       for u in os.listdir(HOME))
+    except OSError:
+        pass
+    stale = []
+    for d in dirs:
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".desktop"))
+        except OSError:
+            continue
+        for name in names:
+            for line in (read(os.path.join(d, name), "") or "").splitlines():
+                if not line.startswith("Exec="):
+                    continue
+                for m in re.finditer(r"\b(?:%s)=(\S+)" % "|".join(VK_PATH_VARS), line):
+                    missing = [p for p in m.group(1).split(":") if p and not os.path.exists(p)]
+                    if missing:
+                        stale.append(f"{name} ({', '.join(missing)})")
+    return stale
+
+
+def vulkan_manifests():
+    """(manifest, library) of every installed Vulkan driver; library None if it is missing."""
+    found = []
+    for d in (f"{ETC}/vulkan/icd.d", f"{USR}/share/vulkan/icd.d"):
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".json"))
+        except OSError:
+            continue
+        for name in names:
+            try:
+                path = json.loads(read(os.path.join(d, name), ""))["ICD"]["library_path"]
+            except (ValueError, KeyError, TypeError):
+                found.append((name, None))
+                continue
+            full = path if path.startswith("/") else f"{USR}/lib/{path}"
+            found.append((name, path if os.path.exists(full) else None))
+    return found
+
+
+def check_vulkan(phone):
+    stale = stale_vulkan_launchers()
+    if stale:
+        return FAIL, "launcher(s) point at a missing Vulkan driver: " + "; ".join(stale)
+    manifests = vulkan_manifests()
+    if not manifests:
+        return SKIP, "no Vulkan driver installed (hybris-vulkan)"
+    broken = [name for name, lib in manifests if lib is None]
+    if broken:
+        return FAIL, "driver manifest without its library: " + ", ".join(broken)
+    if not phone.user:
+        return SKIP, "no graphical session"
+    rc, out = phone.run([*session_env(), "vulkaninfo", "--summary"], timeout=30, user=True)
+    if rc == 127:
+        return WARN, f"{len(manifests)} driver(s) installed, device not checked " \
+                     "(vulkaninfo missing: vulkan-tools)"
+    devices = []
+    for block in re.split(r"^GPU\d+:\s*$", out, flags=re.M)[1:]:
+        fields = dict(re.findall(r"^\s+(\w+)\s+=\s+(.*?)\s*$", block, re.M))
+        if "deviceName" in fields:
+            devices.append(fields)
+    if rc != 0 or not devices:
+        return FAIL, "the Vulkan loader finds no device" + (f" (status {rc})" if rc else "")
+    gpus = [f for f in devices if not f.get("deviceType", "").endswith("_CPU")]
+    if not gpus:
+        return FAIL, "only a software device: " + ", ".join(f["deviceName"] for f in devices)
+    gpu = gpus[0]
+    return OK, f"Vulkan {gpu.get('apiVersion', '?')} on {gpu['deviceName']}"
+
+
 def check_battery(phone):
     rc, out = phone.run(["upower", "-i", "/org/freedesktop/UPower/devices/battery_battery"])
     info = dict(re.findall(r"^\s*([\w-]+):\s+(.*?)\s*$", out, re.M)) if rc == 0 else {}
@@ -627,6 +857,8 @@ CHECKS = [
     ("camera", "Cameras", check_camera, "bridge, CameraService in the container"),
     ("audio", "Audio", check_audio, "speaker, earpiece, microphone nodes"),
     ("display", "Display", check_display, "touchscreen, backlight"),
+    ("opengl", "OpenGL", check_opengl, "OpenGL ES and gl4es draw off screen on the GPU"),
+    ("vulkan", "Vulkan", check_vulkan, "driver, GPU device, launchers' driver paths"),
     ("battery", "Battery", check_battery, "charge, state"),
     ("fingerprint", "Fingerprint", check_fingerprint, "reader, enrolled fingers"),
     ("face", "Face unlock", check_face, "plinius-face service"),

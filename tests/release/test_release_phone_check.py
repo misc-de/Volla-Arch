@@ -20,6 +20,8 @@ def pc(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "SYS", str(tmp_path / "sys"))
     monkeypatch.setattr(mod, "PROC", str(tmp_path / "proc"))
     monkeypatch.setattr(mod, "RUN", str(tmp_path / "run"))
+    for name in ("USR", "ETC", "HOME"):
+        monkeypatch.setattr(mod, name, str(tmp_path / name.lower()))
     monkeypatch.setattr(mod, "NMEA_SOCKET", str(tmp_path / "n.sock"))
     return mod
 
@@ -60,6 +62,42 @@ Number of normal camera devices: 2
 """
 
 GSM_AUTO = "802-11-wireless:yes\ngsm:yes\n"
+
+# vulkaninfo --summary on the phone (vulkan-tools 1.4.363, hybris-vulkan 0.2), from "Devices:"
+VULKANINFO = """==========
+VULKANINFO
+==========
+
+Devices:
+========
+GPU0:
+\tapiVersion         = 1.3.247
+\tdriverVersion      = 44.1.0
+\tvendorID           = 0x13b5
+\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+\tdeviceName         = Mali-G615 MC2
+\tdriverID           = DRIVER_ID_ARM_PROPRIETARY
+\tdriverName         = Mali-G615 MC2
+"""
+LLVMPIPE = """Devices:
+========
+GPU0:
+\tapiVersion         = 1.4.318
+\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU
+\tdeviceName         = llvmpipe (LLVM 21.1.0, 128 bits)
+"""
+
+# GL_PROBE's answers as measured on the phone (pbuffer, cleared to 0, 0.5, 1, 1)
+GLES_ANSWER = {"vendor": "ARM", "renderer": "Mali-G615 MC2",
+               "version": "OpenGL ES 3.2 v1.r44p1-01eac0.148b774f93332d7e562320793fb6c4c9",
+               "pixel": [0, 128, 255, 255]}
+GL4ES_ANSWER = {"vendor": "GL4ES wrapping ARM", "renderer": "GL4ES using Mali-G615 MC2",
+                "version": "2.1 gl4es wrapper 1.1.7", "pixel": [0, 128, 255, 255]}
+
+
+def probe_out(answer):
+    """GL_PROBE's stdout: the driver's chatter around the PROBE line."""
+    return "[1.0] (python3) EGL: eglp_unload_callback\nPROBE " + json.dumps(answer) + "\n"
 
 
 class FakePhone:
@@ -123,7 +161,21 @@ class FakePhone:
             ("fprintd-list", "plinius"): (0, "Fingerprints for user plinius on Biomd (press):\n"
                                              " - #0: right-thumb\n - #1: right-index-finger\n"),
             ("timedatectl",): (0, "yes\n"),
+            ("vulkaninfo", "--summary"): (0, VULKANINFO),
         }
+        self.gl = {"es": (0, probe_out(GLES_ANSWER)), "gl": (0, probe_out(GL4ES_ANSWER))}
+        gl4es = tmp_path / "usr/lib/gl4es"
+        gl4es.mkdir(parents=True)
+        (gl4es / "libGL.so.1").write_text("")
+        (tmp_path / "usr/lib/libvulkan_hybris.so").write_text("")
+        icd = tmp_path / "usr/share/vulkan/icd.d"
+        icd.mkdir(parents=True)
+        (icd / "hybris_icd.aarch64.json").write_text(json.dumps(
+            {"file_format_version": "1.0.1", "ICD": {"library_path": "libvulkan_hybris.so"}}))
+        envd = tmp_path / "usr/lib/environment.d"
+        envd.mkdir(parents=True)
+        (envd / "50-plinius-hybris.conf").write_text(
+            "# libhybris\nHYBRIS_LD_LIBRARY_PATH=/system/lib64\n")
         self.fprint_devices = ["/net/reactivated/Fprint/Device/0"]
         self.nfc_powered = True
         sysfs = tmp_path / "sys/class/leds"
@@ -155,6 +207,10 @@ class FakePhone:
         self.calls.append((tuple(cmd), user))
         if cmd[0] == "busctl":
             return self.bus(cmd[2:], user)
+        while "=" in cmd[0]:  # environment in front of the program
+            cmd = cmd[1:]
+        if cmd[0] == "python3":
+            return self.gl[cmd[-1]]
         for n in range(len(cmd), 0, -1):
             if tuple(cmd[:n]) in self.answers:
                 return self.answers[tuple(cmd[:n])]
@@ -211,6 +267,9 @@ def test_healthy_phone_passes_every_check(pc, phone):
     assert by_name["fingerprint"]["message"] == "reader present, 2 finger(s) enrolled"
     assert by_name["display"]["message"] == "touchscreen, backlight 82/259"
     assert by_name["torch"]["message"] == "torch LED with 10 levels"
+    assert by_name["opengl"]["message"] == "OpenGL ES 3.2 on Mali-G615 MC2, OpenGL 2.1 through " \
+                                           "gl4es, drawn and read back"
+    assert by_name["vulkan"]["message"] == "Vulkan 1.3.247 on Mali-G615 MC2"
     assert all(set(r) == {"name", "title", "status", "message", "seconds"} for r in results)
 
 
@@ -241,8 +300,10 @@ def test_no_scan_leaves_the_scans_out(pc, phone):
 def test_session_programs_are_asked_as_the_user(pc, phone):
     pc.check_camera(phone)
     pc.check_calls(phone)
-    as_user = {c[0] for c, user in phone.calls if user}
-    assert as_user == {"systemctl", "pw-dump", "busctl"}
+    pc.check_opengl(phone)
+    pc.check_vulkan(phone)
+    as_user = {next(a for a in c if "=" not in a) for c, user in phone.calls if user}
+    assert as_user == {"systemctl", "pw-dump", "busctl", "python3", "vulkaninfo"}
     assert [c for c, user in phone.calls if c[0] == "busctl" and user][0][:2] == \
         ("busctl", "--user")
 
@@ -575,6 +636,298 @@ def test_display(pc, phone, tmp_path):
     (tmp_path / "sys/class/leds/lcd-backlight/max_brightness").unlink()
     assert pc.check_display(phone) == ("fail", "no touchscreen (fts_ts); no backlight "
                                                "(lcd-backlight)")
+
+
+
+# --- OpenGL, Vulkan ----------------------------------------------------------------------------
+
+def test_opengl_gets_the_session_environment(pc, phone, tmp_path):
+    assert pc.check_opengl(phone)[0] == "ok"
+    es, gl = [c for c, _ in phone.calls if "python3" in c]
+    lib = tmp_path / "usr/lib"
+    assert es[0] == "HYBRIS_LD_LIBRARY_PATH=/system/lib64"
+    assert es[1:5] == ("python3", "-I", "-c", pc.GL_PROBE)
+    assert es[5:] == (f"{lib}/libEGL.so.1", f"{lib}/libGLESv2.so.2", "es")
+    # as /usr/bin/gl4es starts a program
+    assert gl[1:5] == (f"LD_LIBRARY_PATH={lib}/gl4es", f"LIBGL_EGL={lib}/libEGL.so.1",
+                       f"LIBGL_GLES={lib}/libGLESv2.so.2", "LIBGL_NOBANNER=1")
+    assert gl[-3:] == (f"{lib}/gl4es/libEGL.so.1", f"{lib}/gl4es/libGL.so.1", "gl")
+
+
+def test_opengl_without_gl4es_or_session(pc, phone, tmp_path):
+    (tmp_path / "usr/lib/gl4es/libGL.so.1").unlink()
+    assert pc.check_opengl(phone) == ("ok", "OpenGL ES 3.2 on Mali-G615 MC2, drawn and read back")
+    assert len([c for c, _ in phone.calls if "python3" in c]) == 1
+    phone.user = ""
+    assert pc.check_opengl(phone) == ("skip", "no graphical session")
+
+
+def test_opengl_problems(pc, phone):
+    phone.gl["es"] = (0, probe_out({"error": "eglCreateContext failed (EGL error 0x3009)"}))
+    phone.gl["gl"] = (0, probe_out({**GL4ES_ANSWER, "pixel": [0, 0, 0, 255]}))
+    assert pc.check_opengl(phone) == ("fail", "OpenGL ES: eglCreateContext failed (EGL error "
+                                              "0x3009); OpenGL through gl4es draws a wrong colour "
+                                              "(0, 0, 0, 255 instead of 0, 128, 255, 255)")
+    phone.gl["es"] = (0, probe_out({**GLES_ANSWER, "renderer": "llvmpipe (LLVM 21.1.0)"}))
+    phone.gl["gl"] = (0, probe_out({**GL4ES_ANSWER, "pixel": None}))
+    assert pc.check_opengl(phone) == ("fail", "OpenGL ES renders in software (llvmpipe (LLVM "
+                                              "21.1.0)); OpenGL through gl4es draws a wrong colour "
+                                              "(0, 0, 0, 0 instead of 0, 128, 255, 255)")
+
+
+@pytest.mark.parametrize("answer, error", [
+    ((124, "PROBE {\n"), "no answer within 30 s"),           # hung after a torn line
+    ((139, "library \"libz.so\" not found\n"), "probe ended with status 139 and no answer"),
+    ((127, ""), "probe ended with status 127 and no answer"),
+])
+def test_opengl_probe_without_answer(pc, phone, answer, error):
+    phone.gl["es"] = answer
+    assert pc.check_opengl(phone) == ("fail", f"OpenGL ES: {error}")
+
+
+def test_session_env(pc, tmp_path):
+    usr, etc = tmp_path / "usr/lib/environment.d", tmp_path / "etc/environment.d"
+    usr.mkdir(parents=True)
+    etc.mkdir(parents=True)
+    (usr / "50-a.conf").write_text("# comment\nA=1\nB=usr\n\nnot an assignment\n"
+                                   "#C=commented\n1X=bad key\n")
+    (usr / "README").write_text("D=not a .conf\n")
+    (etc / "60-b.conf").write_text("B=etc\nGLIBC_TUNABLES=glibc.rtld.optional_static_tls=4096\n")
+    assert pc.session_env() == ["A=1", "B=etc", "GLIBC_TUNABLES=glibc.rtld.optional_static_tls=4096"]
+
+
+def test_session_env_expands_like_systemd(pc, tmp_path):
+    """The phone's files, as they are: taken literally, XDG_DATA_DIRS hid the Vulkan driver."""
+    envd = tmp_path / "usr/lib/environment.d"
+    envd.mkdir(parents=True)
+    (envd / "50-plinius-callaudio.conf").write_text(
+        "XDG_DATA_DIRS=/usr/share/plinius:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}\n")
+    (envd / "50-plinius-widevine.conf").write_text(
+        "MOZ_GMP_PATH=$MOZ_GMP_PATH${MOZ_GMP_PATH:+:}/var/lib/gmp\n")
+    (envd / "60-more.conf").write_text("MOZ_GMP_PATH=$MOZ_GMP_PATH${MOZ_GMP_PATH:+:}/opt/gmp\n"
+                                       "X=${XDG_DATA_DIRS:-unused}|${UNSET}|${MOZ_GMP_PATH:+set}\n"
+                                       "Y=${UNSET:+alternate}$UNSET.\n")
+    env = dict(e.split("=", 1) for e in pc.session_env())
+    assert env["XDG_DATA_DIRS"] == "/usr/share/plinius:/usr/local/share:/usr/share"
+    assert env["MOZ_GMP_PATH"] == "/var/lib/gmp:/opt/gmp"
+    assert env["X"] == "/usr/share/plinius:/usr/local/share:/usr/share||set"
+    assert env["Y"] == "."
+
+
+def test_vulkan(pc, phone, tmp_path):
+    phone.answers[("vulkaninfo", "--summary")] = (0, VULKANINFO + LLVMPIPE.split("========\n")[1]
+                                                  .replace("GPU0", "GPU1"))
+    assert pc.check_vulkan(phone) == ("ok", "Vulkan 1.3.247 on Mali-G615 MC2")
+    phone.answers[("vulkaninfo", "--summary")] = (0, LLVMPIPE)
+    assert pc.check_vulkan(phone) == ("fail", "only a software device: llvmpipe (LLVM 21.1.0, "
+                                              "128 bits)")
+    phone.answers[("vulkaninfo", "--summary")] = (1, "ERROR: [Loader Message] Code 0 : "
+                                                     "vkCreateInstance: Found no drivers!\n")
+    assert pc.check_vulkan(phone) == ("fail", "the Vulkan loader finds no device (status 1)")
+    phone.answers[("vulkaninfo", "--summary")] = (0, "Devices:\n========\nGPU0:\n"
+                                                     "\tapiVersion = 1.3.0\n")  # cut short
+    assert pc.check_vulkan(phone) == ("fail", "the Vulkan loader finds no device")
+    del phone.answers[("vulkaninfo", "--summary")]
+    assert pc.check_vulkan(phone) == ("warn", "1 driver(s) installed, device not checked "
+                                              "(vulkaninfo missing: vulkan-tools)")
+    phone.user = ""
+    assert pc.check_vulkan(phone) == ("skip", "no graphical session")
+
+
+def test_vulkan_drivers(pc, phone, tmp_path):
+    icd = tmp_path / "usr/share/vulkan/icd.d"
+    (tmp_path / "usr/lib/libvulkan_hybris.so").unlink()
+    (icd / "README").write_text("")
+    assert pc.check_vulkan(phone) == ("fail", "driver manifest without its library: "
+                                              "hybris_icd.aarch64.json")
+    lib = tmp_path / "opt/libvk.so"
+    lib.parent.mkdir()
+    lib.write_text("")
+    (icd / "hybris_icd.aarch64.json").write_text(json.dumps({"ICD": {"library_path": str(lib)}}))
+    etc = tmp_path / "etc/vulkan/icd.d"
+    etc.mkdir(parents=True)
+    (etc / "broken.json").write_text("{not json")
+    assert pc.check_vulkan(phone) == ("fail", "driver manifest without its library: broken.json")
+    (etc / "broken.json").unlink()
+    assert pc.check_vulkan(phone)[0] == "ok"
+    (icd / "hybris_icd.aarch64.json").unlink()
+    assert pc.check_vulkan(phone) == ("skip", "no Vulkan driver installed (hybris-vulkan)")
+    assert not phone.commands("vulkaninfo")
+
+
+def test_vulkan_launcher_with_a_missing_driver(pc, phone, tmp_path):
+    """The Vulkan Cube and Benchmark launchers kept a manifest path that had gone."""
+    manifest = tmp_path / "usr/share/vulkan/icd.d/hybris_icd.aarch64.json"
+    gone = tmp_path / "var/lib/hybris-vulkan-off/hybris_icd.aarch64.json"
+    apps = tmp_path / "home/plinius/.local/share/applications"
+    apps.mkdir(parents=True)
+    (tmp_path / "home/other").mkdir()        # a user without own launchers
+    (tmp_path / "home/.hidden-file").write_text("")
+    (apps / "cube.desktop").write_text(
+        f"[Desktop Entry]\nName=Vulkan Cube\nExec=env VK_DRIVER_FILES={gone} vkcube --wsi "
+        "wayland\n")
+    (apps / "ok.desktop").write_text(f"[Desktop Entry]\nExec=env VK_ICD_FILENAMES={manifest} "
+                                     "vkmark\nTryExec=VK_DRIVER_FILES=/nowhere\n")
+    (apps / "notes.txt").write_text(f"Exec=env VK_DRIVER_FILES={gone} x\n")
+    system = tmp_path / "usr/share/applications"
+    system.mkdir(parents=True)
+    (system / "bench.desktop").write_text(f"Exec=env VK_ADD_DRIVER_FILES={manifest}:{gone} vkmark\n")
+    assert pc.check_vulkan(phone) == ("fail", "launcher(s) point at a missing Vulkan driver: "
+                                              f"bench.desktop ({gone}); cube.desktop ({gone})")
+    assert not phone.commands("vulkaninfo")
+    (apps / "cube.desktop").write_text("Exec=vkcube --wsi wayland\n")
+    (system / "bench.desktop").unlink()
+    assert pc.check_vulkan(phone)[0] == "ok"
+
+
+def test_no_home_directory(pc, phone, tmp_path):
+    assert not (tmp_path / "home").exists()
+    assert pc.stale_vulkan_launchers() == []
+
+
+# --- the probe itself, against a stand-in EGL and GL library ------------------------------------
+
+FAKE_GL = r"""
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int err = 0x3000;
+static float clear[4];
+static unsigned char cleared[4];
+
+static int fails(const char *fn)
+{
+    const char *f = getenv("FAKE_GL_FAIL");
+    if (f && !strcmp(f, fn)) {
+        err = 0x3009;
+        return 1;
+    }
+    return 0;
+}
+
+void *eglGetDisplay(void *native) { return fails("eglGetDisplay") ? NULL : (void *)1; }
+int eglInitialize(void *d, int *major, int *minor)
+{
+    *major = 1;
+    *minor = 5;
+    return !fails("eglInitialize");
+}
+int eglBindAPI(int api) { return api == 0x30A2 && !fails("eglBindAPI"); }
+int eglChooseConfig(void *d, const int *attrs, void **cfg, int size, int *n)
+{
+    int want = 0;
+    for (; *attrs != 0x3038; attrs += 2)
+        if (attrs[0] == 0x3040)
+            want = attrs[1];
+    *n = fails("eglChooseConfig-none") ? 0 : 1;
+    *cfg = (void *)(long)want;
+    return !fails("eglChooseConfig");
+}
+void *eglCreatePbufferSurface(void *d, void *cfg, const int *attrs)
+{
+    return fails("eglCreatePbufferSurface") ? NULL : (void *)2;
+}
+void *eglCreateContext(void *d, void *cfg, void *share, const int *attrs)
+{
+    return fails("eglCreateContext") ? NULL : (void *)3;
+}
+int eglMakeCurrent(void *d, void *draw, void *read, void *ctx)
+{
+    return ctx == NULL || !fails("eglMakeCurrent");
+}
+int eglGetError(void) { return err; }
+int eglTerminate(void *d)
+{
+    const char *mark = getenv("FAKE_GL_TERMINATED");
+    if (mark)
+        fclose(fopen(mark, "w"));
+    return 1;
+}
+
+const char *glGetString(int name)
+{
+    const char *r = getenv("FAKE_GL_RENDERER");
+    switch (name) {
+    case 0x1F00: return "Fake";
+    case 0x1F01: return r ? r : "Fake GPU";
+    case 0x1F02: return "OpenGL ES 3.2 fake";
+    }
+    return NULL;
+}
+void glClearColor(float r, float g, float b, float a)
+{
+    clear[0] = r; clear[1] = g; clear[2] = b; clear[3] = a;
+}
+void glClear(int mask)
+{
+    if (mask == 0x4000 && !getenv("FAKE_GL_NO_DRAW"))
+        for (int i = 0; i < 4; i++)
+            cleared[i] = (unsigned char)lroundf(clear[i] * 255);
+}
+void glReadPixels(int x, int y, int w, int h, int format, int type, void *data)
+{
+    if (format == 0x1908 && type == 0x1401)
+        memcpy(data, cleared, 4);
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def fake_gl(tmp_path_factory):
+    from conftest import compile_c
+    d = tmp_path_factory.mktemp("fakegl")
+    (d / "fakegl.c").write_text(FAKE_GL)
+    return compile_c(d / "libfakegl.so", [d / "fakegl.c"], flags=["-shared", "-fPIC", "-lm"],
+                     counted=False)
+
+
+def run_probe(pc, lib, api="es", **env):
+    import os
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, "-I", "-c", pc.GL_PROBE, str(lib), str(lib), api],
+                       capture_output=True, text=True, env={**os.environ, **env}, timeout=30)
+    assert r.returncode == 0, r.stderr
+    line, = [l for l in r.stdout.splitlines() if l.startswith("PROBE ")]
+    return json.loads(line[6:])
+
+
+def test_probe_draws_and_reads_back(pc, fake_gl):
+    assert run_probe(pc, fake_gl) == {"vendor": "Fake", "renderer": "Fake GPU",
+                                      "version": "OpenGL ES 3.2 fake", "pixel": [0, 128, 255, 255]}
+    assert pc.gl_problem("OpenGL ES", run_probe(pc, fake_gl, "gl")) is None
+    answer = run_probe(pc, fake_gl, FAKE_GL_NO_DRAW="1", FAKE_GL_RENDERER="llvmpipe")
+    assert answer["pixel"] == [0, 0, 0, 0] and answer["renderer"] == "llvmpipe"
+
+
+def test_probe_terminates_the_display(pc, fake_gl, tmp_path):
+    mark = tmp_path / "terminated"
+    run_probe(pc, fake_gl, FAKE_GL_TERMINATED=str(mark))
+    assert mark.exists()
+    mark.unlink()
+    run_probe(pc, fake_gl, FAKE_GL_FAIL="eglCreateContext", FAKE_GL_TERMINATED=str(mark))
+    assert mark.exists()  # also when a later step failed
+
+
+@pytest.mark.parametrize("step, api, error", [
+    ("eglGetDisplay", "es", "eglInitialize failed (EGL error 0x3009)"),
+    ("eglInitialize", "es", "eglInitialize failed (EGL error 0x3009)"),
+    ("eglBindAPI", "gl", "eglBindAPI(OpenGL) failed (EGL error 0x3009)"),
+    ("eglChooseConfig", "es", "eglChooseConfig failed (EGL error 0x3009)"),
+    ("eglChooseConfig-none", "es", "eglChooseConfig failed (EGL error 0x3009)"),
+    ("eglCreatePbufferSurface", "es", "eglCreatePbufferSurface failed (EGL error 0x3009)"),
+    ("eglCreateContext", "gl", "eglCreateContext failed (EGL error 0x3009)"),
+    ("eglMakeCurrent", "es", "eglMakeCurrent failed (EGL error 0x3009)"),
+])
+def test_probe_names_the_step_that_failed(pc, fake_gl, step, api, error):
+    assert run_probe(pc, fake_gl, api, FAKE_GL_FAIL=step) == {"error": error}
+
+
+def test_probe_without_the_library(pc, tmp_path):
+    answer = run_probe(pc, tmp_path / "libnothing.so")
+    assert answer["error"].startswith("cannot load: ") and "libnothing.so" in answer["error"]
 
 
 # --- battery, fingerprint, face, NFC, torch, vibration, clock, storage -------------------------
