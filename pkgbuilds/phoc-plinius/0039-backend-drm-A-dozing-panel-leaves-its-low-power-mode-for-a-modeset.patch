@@ -1,0 +1,116 @@
+From 87c2ab4fa06c42571de8629944ad89cf2dbbf8c4 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 08:20:15 +0100
+Subject: [PATCH] backend/drm: A dozing panel leaves its low-power mode for a
+ modeset
+
+MediaTek's driver skips the planes and the page-flip event of a modeset
+that reaches it with DOZE_ACTIVE set, as it does for a commit that
+changes DOZE_ACTIVE. wlroots then waited for that event forever: no
+frame and no further commit reached the kernel, also not the one that
+was to end the doze, and the panel froze on the always-on display until
+another modeset came from outside. A new mode (also only another
+refresh rate) right after "Doze on" did it: the doze preparation even
+put the panel into its low-power mode right before that modeset.
+
+So a modeset never comes with doze: a dozing panel leaves its
+low-power mode first, with a blocking commit of its own, and a modeset
+never enters it. The next ordinary frame takes it again. When the
+panel cannot leave it, the modeset fails instead of freezing the
+output. An output going off keeps taking DOZE_ACTIVE off with the
+commit itself.
+---
+ backend/drm/drm.c | 42 ++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 36 insertions(+), 6 deletions(-)
+
+diff --git a/backend/drm/drm.c b/backend/drm/drm.c
+index 1e6eef2d7..0c5025e6a 100644
+--- a/backend/drm/drm.c
++++ b/backend/drm/drm.c
+@@ -632,11 +632,18 @@ static void drm_connector_doze_arm_idle(struct wlr_drm_connector *conn) {
+  * its own. The commit itself then leaves DOZE_ACTIVE as it is and needs no modeset for
+  * it. Only an output going off takes DOZE_ACTIVE off with its own commit (see
+  * atomic_connector_add()), from a dozing CRTC that is on.
++ *
++ * A modeset (a new mode, also the refresh rate) must not reach the kernel with
++ * DOZE_ACTIVE set either: the driver skips its planes and its page-flip event, wlroots
++ * waits for that event forever and the panel shows no new frame, also not the one
++ * that ends the doze. So the panel leaves its low-power mode before a modeset and never
++ * enters it with one; the next frame takes it again. Returns false only when the panel
++ * could not leave it for a modeset, the commit must then fail.
+  */
+-static void drm_connector_doze_prepare(struct wlr_drm_connector *conn,
+-		const struct wlr_drm_connector_state *state, bool test_only) {
++static bool drm_connector_doze_prepare(struct wlr_drm_connector *conn,
++		const struct wlr_drm_connector_state *state, bool modeset, bool test_only) {
+ 	if (test_only || conn->crtc == NULL || conn->crtc->props.doze_active == 0) {
+-		return;
++		return true;
+ 	}
+ 
+ 	if (conn->doze_suspended) {
+@@ -647,12 +654,29 @@ static void drm_connector_doze_prepare(struct wlr_drm_connector *conn,
+ 		}
+ 	}
+ 
++	if (modeset) {
++		// An output going off takes DOZE_ACTIVE off with the commit itself
++		if (!state->active || !conn->doze) {
++			return true;
++		}
++		if (conn->doze_suspended || !drm_atomic_doze_commit(conn, true, false)) {
++			wlr_drm_conn_log(conn, WLR_ERROR,
++				"Doze: the panel cannot leave its low-power mode for a modeset");
++			return false;
++		}
++		wlr_drm_conn_log(conn, WLR_INFO,
++			"Doze: the panel leaves its low-power mode for a modeset");
++		conn->doze = false;
++		drm_connector_doze_stop_idle(conn);
++		return true;
++	}
++
+ 	// Only with the CRTC on: one that comes on with this commit (an output enabled
+ 	// right into doze) starts without doze and takes it with its next frame
+ 	bool doze = state->doze;
+ 	if (!state->active || doze == conn->doze || !conn->output.enabled ||
+ 			conn->doze_suspended) {
+-		return;
++		return true;
+ 	}
+ 	if (drm_atomic_doze_commit(conn, true, doze)) {
+ 		wlr_drm_conn_log(conn, WLR_INFO, "Doze: the panel %s its low-power mode",
+@@ -662,6 +686,7 @@ static void drm_connector_doze_prepare(struct wlr_drm_connector *conn,
+ 			drm_connector_doze_stop_idle(conn);
+ 		}
+ 	}
++	return true;
+ }
+ 
+ static void drm_connector_apply_commit(const struct wlr_drm_connector_state *state,
+@@ -1070,7 +1095,9 @@ static bool drm_connector_commit_state(struct wlr_drm_connector *conn,
+ 		goto out;
+ 	}
+ 
+-	drm_connector_doze_prepare(conn, &pending, test_only);
++	if (!drm_connector_doze_prepare(conn, &pending, pending_dev.modeset, test_only)) {
++		goto out;
++	}
+ 
+ 	if (test_only && conn->backend->mgpu_renderer.wlr_rend) {
+ 		// If we're running as a secondary GPU, we can't perform an atomic
+@@ -2119,7 +2146,10 @@ bool commit_drm_device(struct wlr_drm_backend *drm,
+ 		}
+ 
+ 		modeset |= output_state->base.allow_reconfiguration;
+-		drm_connector_doze_prepare(conn, conn_state, test_only);
++		if (!drm_connector_doze_prepare(conn, conn_state,
++				output_state->base.allow_reconfiguration, test_only)) {
++			goto out;
++		}
+ 	}
+ 
+ 	if (test_only && drm->mgpu_renderer.wlr_rend) {
+-- 
+2.56.0
+

@@ -705,11 +705,6 @@ msgid_plural "%u known vulnerabilities in installed packages"
 msgstr[0] "%u bekende kwetsbaarheid in geïnstalleerde pakketten"
 msgstr[1] "%u bekende kwetsbaarheden in geïnstalleerde pakketten"
 
-msgid "%u affects this system"
-msgid_plural "%u affect this system"
-msgstr[0] "%u raakt dit systeem"
-msgstr[1] "%u raken dit systeem"
-
 msgid "%u not assessed"
 msgid_plural "%u not assessed"
 msgstr[0] "%u niet beoordeeld"
@@ -4331,3 +4326,164 @@ msgid "The update of %s cannot be taken back: the earlier version of one package
 msgid_plural "The update of %s cannot be taken back: the earlier versions of %u packages are no longer on the phone."
 msgstr[0] "De update van %s kan niet worden teruggedraaid: de eerdere versie van één pakket staat niet meer op de telefoon."
 msgstr[1] "De update van %s kan niet worden teruggedraaid: de eerdere versies van %u pakketten staan niet meer op de telefoon."
+
+# Plinius: Speech Output (cc-speech-panel.c)
+
+msgid "German"
+msgstr "Duits"
+
+msgid "English"
+msgstr "Engels"
+
+msgid "Spanish"
+msgstr "Spaans"
+
+msgid "French"
+msgstr "Frans"
+
+msgid "Italian"
+msgstr "Italiaans"
+
+msgid "Dutch"
+msgstr "Nederlands"
+
+msgid "Polish"
+msgstr "Pools"
+
+msgid "Portuguese"
+msgstr "Portugees"
+
+msgid "Russian"
+msgstr "Russisch"
+
+msgid "Listen"
+msgstr "Beluisteren"
+
+msgid "Daniel Müller is calling"
+msgstr "Daan de Vries belt"
+
+msgid "Downloading Voice…"
+msgstr "Stem downloaden…"
+
+msgid "Installing Voice…"
+msgstr "Stem installeren…"
+
+msgid "Voice Not Installed"
+msgstr "Stem niet geïnstalleerd"
+
+msgid "Voice Not Available"
+msgstr "Stem niet beschikbaar"
+
+#, c-format
+msgid "The voice %1$s is downloaded now (%2$s, %3$s once installed). It speaks without an internet connection."
+msgstr "De stem %1$s wordt nu gedownload (%2$s, %3$s na installatie). Hij spreekt zonder internetverbinding."
+
+msgid "Download Voice?"
+msgstr "Stem downloaden?"
+
+msgid "Voice Not Removed"
+msgstr "Stem niet verwijderd"
+
+msgid "Removing Voice…"
+msgstr "Stem verwijderen…"
+
+#, c-format
+msgid "Remove the Voice %s?"
+msgstr "De stem %s verwijderen?"
+
+#, c-format
+msgid "This frees %s. The voice can be downloaded again later."
+msgstr "Dit maakt %s vrij. De stem kan later opnieuw worden gedownload."
+
+msgid "The voice can be downloaded again later."
+msgstr "De stem kan later opnieuw worden gedownload."
+
+msgid "Standard voice"
+msgstr "Standaardstem"
+
+msgid "Download"
+msgstr "Downloaden"
+
+#, c-format
+msgid "Not installed, %s"
+msgstr "Niet geïnstalleerd, %s"
+
+msgid "Not installed"
+msgstr "Niet geïnstalleerd"
+
+msgid "No Voice Available"
+msgstr "Geen stem beschikbaar"
+
+msgid "There is no voice for this language yet, so the phone says nothing."
+msgstr "Er is nog geen stem voor deze taal, dus de telefoon zegt niets."
+
+#, c-format
+msgid "Language: %s. The phone always speaks the language set in Region & Language."
+msgstr "Taal: %s. De telefoon spreekt altijd de taal die bij Regio en taal is ingesteld."
+
+msgid "Slower"
+msgstr "Langzamer"
+
+msgid "Faster"
+msgstr "Sneller"
+
+msgid "Speech Rate"
+msgstr "Spreeksnelheid"
+
+msgid "Speech Output"
+msgstr "Spraakuitvoer"
+
+msgid "Voice"
+msgstr "Stem"
+
+msgid "The voice and the speech rate apply to everything the phone says."
+msgstr "De stem en de spreeksnelheid gelden voor alles wat de telefoon zegt."
+
+msgid "Announcements"
+msgstr "Aankondigingen"
+
+msgid "Announce Callers"
+msgstr "Bellers aankondigen"
+
+msgid "In a Bluetooth headset or headphones, the phone says who is calling after the first ring: the name from the contacts, or “Unknown caller”. Not in the car."
+msgstr "In een Bluetooth-headset of -koptelefoon zegt de telefoon na de eerste beltoon wie er belt: de naam uit de contacten of ‘Onbekende beller’. Niet in de auto."
+
+msgid "Belgium"
+msgstr "België"
+
+msgid "Brazil"
+msgstr "Brazilië"
+
+msgid "Germany"
+msgstr "Duitsland"
+
+msgid "Spain"
+msgstr "Spanje"
+
+msgid "France"
+msgstr "Frankrijk"
+
+msgid "United Kingdom"
+msgstr "Verenigd Koninkrijk"
+
+msgid "Italy"
+msgstr "Italië"
+
+msgid "Netherlands"
+msgstr "Nederland"
+
+msgid "Poland"
+msgstr "Polen"
+
+msgid "Portugal"
+msgstr "Portugal"
+
+msgid "Russia"
+msgstr "Rusland"
+
+msgid "United States"
+msgstr "Verenigde Staten"
+
+#, c-format
+msgid "%1$s (%2$s)"
+msgstr "%1$s (%2$s)"

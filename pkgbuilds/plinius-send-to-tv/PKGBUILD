@@ -1,0 +1,60 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-send-to-tv
+pkgver=0.1
+pkgrel=1
+_xpiver=0.1.0
+pkgdesc="Firefox: play YouTube links on the TV that Schwupp casts to (context menu, address bar)"
+arch=(any)
+license=(MIT)
+# The add-on (send-to-tv@de.cais) hands the link to send-to-tv-host over native messaging, the
+# host to Schwupp (PlayLink on the active device); the TV plays the video in its YouTube app.
+# Firefox release only loads add-ons signed by Mozilla: send-to-tv-$_xpiver.xpi is the copy AMO
+# signed (unlisted) from what make-xpi.py builds out of the sources here. check() makes sure it
+# holds exactly these sources. A change to the add-on: raise _xpiver and "version" in
+# manifest.json, build with make-xpi.py, have it signed, put the signed copy here.
+# mobile-config-firefox installs and enables it for every profile (policies.json, from the path
+# below). Firefox is optional, as there.
+depends=(schwupp python python-gobject)
+optdepends=('firefox: the browser it extends')
+source=(send-to-tv-host
+	de.cais.send_to_tv.json
+	make-xpi.py
+	manifest.json
+	background.js
+	send-to-tv.svg
+	send-to-tv.pot
+	de.po es.po fr.po it.po nl.po pl.po pt.po ru.po
+	"send-to-tv-$_xpiver.xpi"
+	LICENSE)
+noextract=("send-to-tv-$_xpiver.xpi")
+sha256sums=('b05672d2bdca97716a2a4c104740245279c4982a14c612a4f3ca1819c8fb3ee6'
+	'6fa7d8816abfb2e73634803b00784190e8eb08b08cf9330f4514dbfd242530ca'
+	'b064df35ba6db66b94c7cecfa5b3e583d1cfa4390f6d5e3c820fc7aff6c2c0b9'
+	'92f1d6928fe82eb6c6b57cb973ebc8c901f8dcac180f866ca0642d2db8333cd7'
+	'928e1743b7ebc5b8a3fe15ede5c0b1389fc343513a45fc686131c1cd156d9b50'
+	'bbf19db32a1682baeaccb0123000e82127f22beb81bcfcf33c0bf27bd399344c'
+	'5f25a698d6b4e5fa81566c15aaea4360882fa3d7d5c4f4dcdabbe332cae21dcc'
+	'026f4221eae4764e20aea7b51afadd615a949656910645df5adc8da4e0805e9f'
+	'2ecb5a2e8ad37ec438c1fe0abc892caaafd3ac427b7e724584eefd7cc4baf476'
+	'26fddf1ac80cbae3f58a7756ba4a2440eb4f9c4565e70e84f35e6e813b73707a'
+	'2355cd74bb154d573ff5a4d7ea82146a73931eb32b94867632a6adfd4f8218fc'
+	'feffbe969099862edb8f27d5916cc4fe114d12c8643c3f8a58be898a006df03f'
+	'cc000efa337a38097a0d5d4430bc3ac139c047f51f7fc756a28bb6292d55bc81'
+	'07eea634e030136bdddce4f0fba7ab2078e0793f0243a3115e4727b792d4d49a'
+	'ffb0b33693962679c4af81d474a089d5b0349193e74871da7b3d4ad2bc426598'
+	'SKIP'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+check() {
+	python3 make-xpi.py --check . "send-to-tv-$_xpiver.xpi"
+}
+
+package() {
+	install -Dm755 send-to-tv-host -t "$pkgdir/usr/lib/plinius-send-to-tv"
+	install -Dm644 de.cais.send_to_tv.json -t "$pkgdir/usr/lib/mozilla/native-messaging-hosts"
+	# Firefox finds system add-ons by their ID as file name
+	install -Dm644 "send-to-tv-$_xpiver.xpi" \
+		"$pkgdir/usr/lib/firefox/browser/extensions/send-to-tv@de.cais.xpi"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

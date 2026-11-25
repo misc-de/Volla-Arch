@@ -415,6 +415,10 @@ main (void)
             wait_job ();
             puts ("ok");
         } else if (sscanf (line, "screen %ld", &n1) == 1) {
+            /* Also the panel the screen poll reads when a lock starts it */
+            g_free (self.dpms_path);
+            self.dpms_path = g_strdup ("/run/plinius-face/panel");
+            fake_set_contents_full (self.dpms_path, n1 ? "On\n" : "Off\n", -1, 0, 0600, NULL);
             self.screen_on = n1 != 0;
             puts ("ok");
         } else if (!strcmp (line, "try")) {

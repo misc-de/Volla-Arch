@@ -87,7 +87,7 @@ if [ -n "$disk" ]; then
 fi
 
 # The connectivity chip (A-die) that the FM driver reads at boot: MT6631 or MT6637
-adie=$(journalctl -k -b -o cat -g 'adie=0x' 2>/dev/null | first 'adie=0x[0-9a-fA-F]+' | sed 's/adie=0x//')
+adie=$(journalctl -b -t kernel -o cat -g 'adie=0x' 2>/dev/null | first 'adie=0x[0-9a-fA-F]+' | sed 's/adie=0x//')
 group connectivity "Name=${adie:+MediaTek MT$adie}"
 
 for f in /sys/bus/spi/devices/*/fts_fw_version; do

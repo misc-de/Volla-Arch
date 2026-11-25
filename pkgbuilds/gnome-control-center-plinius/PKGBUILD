@@ -3,7 +3,7 @@
 
 pkgname=gnome-control-center-plinius
 pkgver=51.2.1
-pkgrel=2
+pkgrel=3
 pkgdesc="GNOME Settings with the Plinius settings built in"
 url="https://apps.gnome.org/Settings/"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
@@ -17,7 +17,8 @@ arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 # cc-plinius-hub-panels.c, cc-lock-panel.*, cc-security-panel.c, cc-plinius-software.*,
 # cc-plinius-hidden-wifi.*, cc-plinius-battery-usage.*, cc-plinius-dnsfilter.*,
 # cc-plinius-webapps.*, cc-plinius-widevine.*, cc-plinius-appearance.*, cc-plinius-bgcolor.*,
-# cc-plinius-bt-contacts.*, cc-feedback-panel.*, cc-plinius-appaccess.*, cc-plinius-selftest.*) are MIT; ce-plinius-ip-row.* (from ce-netmask-entry.c) GPL-2.0-or-later
+# cc-plinius-bt-contacts.*, cc-feedback-panel.*, cc-plinius-appaccess.*, cc-plinius-selftest.*,
+# cc-speech-panel.*) are MIT; ce-plinius-ip-row.* (from ce-netmask-entry.c) GPL-2.0-or-later
 license=(GPL-2.0-or-later MIT)
 # Why a custom build: GNOME Settings has no plugins, all pages are compiled in.
 # Our own settings should still live here, not in separate apps.
@@ -61,6 +62,7 @@ optdepends=(
 	'plinius-epo: Faster GPS Fix on the Location page (orbit predictions for the GPS)'
 	'feedbackd: Sounds and Vibration panel (sound and vibration of calls, messages, alarms, keyboard, alert sound)'
 	'phoc-plinius>=0.59.0-3: the alert sound of Sounds and Vibration (phoc hands the bell of the apps to feedbackd)'
+	'plinius-speech: Speech Output panel (voice and speech rate of everything the phone says, caller announcement)'
 	'plinius-pinguard: Wait After Wrong PINs on the Screen Lock page'
 	'schwupp: Streaming panel (settings for mirroring the screen to TVs)'
 	'plinius-usb: USB panel (file sharing, network and internet for a computer)'
@@ -242,6 +244,9 @@ source=(
 	# Mobile Network > Access Points: the SIM's own provider, nameless suggestions named, no doubles
 	0102-wwan-The-access-points-of-the-SIM-s-own-provider-named-not-Default.patch
 	0103-users-The-password-of-another-account-is-set-now-not-at-its-next-login.patch
+	# Speech Output: a panel of its own below Sounds and Vibration (plinius-speech)
+	cc-speech-panel.c cc-speech-panel.h gnome-speech-panel.desktop plinius-speech-symbolic.svg
+	0104-Speech-Output-as-a-panel-of-its-own-below-Sounds-and-Vibration.patch
 )
 sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'SKIP'
@@ -348,7 +353,7 @@ sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'9d2550dd932ddbac1f8b457648a1a674c383152d36d5dbc7076350878a2c50e1'
 	'017cb43a72371b02ce37fccd5c13fd357b511e9192372a4ff1c76d94b23171e1'
 	'fdd28e911455c3a04b2d6c0639d2c28835bdc518ff0a62b6c37e58aceb7de842'
-	'7f2dc9f0446cee2d331110c71b0dba17b86939b7318ff2da1b083381c42fd4f7'
+	'6a766651dcb0acc8007e45a6f7e8dc97f09961b32ac3d462650bb3d5ecf71f4e'
 	'd43042eca74deba87734499f373604812705561aaf532cb85f985e6a89fd0945'
 	'462a67062abdc0090803d6a7df7800bed9f19028680d71d2fb43853308559bc9'
 	'3acc8029dafda57660008fdb3dd0326860ecafbd7fe3b4106660c211f9451a89'
@@ -402,14 +407,14 @@ sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'ba916bba4c8ad3a428904544d162a979f31f2f3a4582b1c769e3d59aeec4fa18'
 	'cf2e15228ce733f39c1a4134512a8ba3830da222d63093e52341838670009deb'
 	'122f061952866892f077395ac086969715678980fc439ee1cb8a5852a33091ce'
-	'987c3676d2d0f2e87bbe3d0536db1ca571ff08ecbc4510ede8bfb5b046271a90'
-	'aa431711ccc81abb02b70b3f582c8e2e8e9bcfde6e200698c3e5ea0a86f15071'
-	'd9f28547137135e13e5a628968f6db359d0813c37f28ad86410ab0f330fc3207'
-	'70d01d9edde135caa0d2a507e0dab0bc2883ac7d13f1fcbef96d3337f9a06558'
-	'2fca31bb76597f5bfc16cc730a6d9284cb205cba67faaa636827fc87cb33d6d1'
-	'1e7e4e26584b81d349d5d70ad03b3dca9dbe792aaddc0bcf7a4f12673b153e6b'
-	'bd5cbc6c9e439879dc5099def567a73d22ea773c1101c8eb8fbe45d0df9f197f'
-	'a41a22caba551e0e39e5cd19d12caff2476ad34864bd02a668159b443b9591e9'
+	'4062c216b4c5eaac5a8f2211c89c2e4d8a30a0ee702eef698856d2f40a56af11'
+	'ee308cb4c4ea9338e2158a1969419822313daaec28a616011a573ed0575de908'
+	'fee1dcd8598913e22105647e53d007e59ade59b03b7737d47e0a2ed59a501705'
+	'355fbedf8e5080306f678dd9a2ad5abd1fb531b4f0f9e4ddc8a14122bd015b61'
+	'4456bc01bd1e03274a73315795115c8dc940c1217097b3cacd6e3a716d26dc24'
+	'37cba8810e4982f828af5fccd3adfbd08514e4fb7d492621acff424a912246a6'
+	'9b32e4639a7230496b63bec71d1f589c78afedbc5d51d3538d6a41ad013f6354'
+	'52118d04433a4fc74904d22b802595068b3b2c88b31d942bbdeaaa3e4c27b013'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
 	'cd363ab9e113fd69f654a4a4805dffd09dbbbcf6a08f0df78bb337305653cafa'
 	'a99b4f7d7e188037c9c4f79e4c5ca81f2039be022af10b581446fa2192d5b722'
@@ -461,7 +466,12 @@ sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'7249a70e34e84cd66011ed8595509f708b7f1eab37e605e41a70b0d6112e76a9'
 	'92b5b24c8427c44c167ac20dbdaab5b28fac826f9c81c8163cdfb541c864b9bf'
 	'65e2bd980ff170a678d2181ec84464c97dd3609de7d77b72a53c6630110f12a5'
-	'ba57975ab00cb3f4051efd4ce1fcc96416f77febed6c241483b66cea6fa0abf0')
+	'ba57975ab00cb3f4051efd4ce1fcc96416f77febed6c241483b66cea6fa0abf0'
+	'18b644e9e21c3d64914979cd16b600e96bebafb05eb640491b6e9443ed858eff'
+	'7c79725f933ea5fdc077a91ec03b4dfc2208ca800802402af093db5f35df2aff'
+	'03fd58102f5e3ad4d5273d8c4d47685ad8ef3322756266289fec66c34066f875'
+	'14e9978c5c0974b420f1858f532f1dc312cb6a7a01940a7cc1f96f3ba8b2bc2d'
+	'e59ad128d198f97a9452d4ede3e44b7af64f897b9132f931270bbd861b0362df')
 
 prepare() {
 	cd gnome-control-center
@@ -796,6 +806,12 @@ prepare() {
 	# The password of another account is set at once: "set at next login" removed it (passwd -d)
 	# and left the account to whoever holds the phone until then
 	patch -Np1 -i "$srcdir/0103-users-The-password-of-another-account-is-set-now-not-at-its-next-login.patch"
+	# Speech Output: a panel of its own below Sounds and Vibration with the voice of the system
+	# language (to listen to, download and remove through plinius-software), the speech rate (both
+	# for everything the phone says) and the caller announcement of plinius-speech; listed with
+	# plinius-speech only; the patch creates its meson.build
+	patch -Np1 -i "$srcdir/0104-Speech-Output-as-a-panel-of-its-own-below-Sounds-and-Vibration.patch"
+	cp "$srcdir"/cc-speech-panel.{c,h} "$srcdir/gnome-speech-panel.desktop" panels/speech/
 	# German: "WiFi" instead of "WLAN" in GNOME's own translation (msgstr lines only; the search
 	# keyword "WLAN;" stays so that searching for it still finds the page)
 	sed -i '/^msgstr/,/^$/{/^#/!s/WLAN\([^;]\)/WiFi\1/g}' po/de.po
@@ -832,7 +848,7 @@ package() {
 	rmdir --ignore-fail-on-non-empty -p "$pkgdir/usr/share/gettext/its" "$pkgdir/usr/share/pkgconfig"
 
 	# Sidebar icons of the NFC, Streaming and USB panels (the latter two as in Phosh's tiles)
-	install -Dm644 plinius-{nfc,cast,usb,vibration}-symbolic.svg -t "$pkgdir/usr/share/icons/hicolor/symbolic/apps"
+	install -Dm644 plinius-{nfc,cast,usb,vibration,speech}-symbolic.svg -t "$pkgdir/usr/share/icons/hicolor/symbolic/apps"
 
 	# Labels of the SIM cards (Mobile Network and the eSIM page)
 	install -Dm644 org.plinius.sim.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"

@@ -40,7 +40,9 @@ def harness(tmp_path_factory):
     if "exe" not in _built:
         d = tmp_path_factory.mktemp("audio")
         # The jack's input devices and the FM tuner: relative, in the directory a test runs in
-        sandboxed_source(SRC, d, [('"/dev/input', '"input'), ('"/dev/fm"', '"fm"')])
+        # The jingle at a call's end: in the test directory too
+        sandboxed_source(SRC, d, [('"/dev/input', '"input'), ('"/dev/fm"', '"fm"'),
+                                  ('"/usr/share/audio-hal-bridge/call-end.wav"', '"call-end.wav"')])
         _built["exe"] = build_harness(d, "audio", HARNESS.read_text(),
                                       flags=[f"-I{SRC.parent}", *_cflags("libpipewire-0.3", "alsa")],
                                       pkgs=("gio-unix-2.0",))

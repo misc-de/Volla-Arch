@@ -1,0 +1,224 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+# The voices of plinius-speech: Piper 1.5 voices (rhasspy/piper-voices on Hugging Face, retrained
+# in November 2026 on bases of free data: rdh, CC0, or hifi_tts_92, Hi-Fi TTS, CC BY 4.0), one
+# package per voice, medium quality, about 63 MB each. Only voices whose data and base are freely
+# usable: the older versions (also the converted archives of sherpa-onnx) are fine-tuned from
+# lessac (research only) or ryan (non-commercial). Each package ships the voice's MODEL_CARD,
+# which names its data and base: the attribution CC BY asks for.
+# The list of all voices for GNOME Settings is plinius-speech's voices.json: keep both together.
+pkgbase=plinius-speech-voices
+pkgname=(plinius-speech-voice-de-de-thorsten plinius-speech-voice-de-de-kerstin plinius-speech-voice-en-us-joe plinius-speech-voice-en-us-kathleen plinius-speech-voice-en-gb-cori plinius-speech-voice-es-es-davefx plinius-speech-voice-fr-fr-siwis plinius-speech-voice-it-it-paola plinius-speech-voice-nl-nl-pim plinius-speech-voice-nl-be-nathalie plinius-speech-voice-pl-pl-gosia plinius-speech-voice-pl-pl-darkman plinius-speech-voice-pt-pt-tugao plinius-speech-voice-pt-br-faber plinius-speech-voice-ru-ru-dmitri plinius-speech-voice-ru-ru-denis)
+pkgver=20261123
+pkgrel=1
+pkgdesc="Voices for the Plinius speech output (Piper, medium quality)"
+arch=(any)
+url="https://huggingface.co/rhasspy/piper-voices"
+license=(CC0-1.0 CC-BY-4.0)
+# The revision of the voice repository the files are taken from (2026-11-23)
+_rev=e5349433ed883a32f893a434dc43a6c66b95ef7c
+source=("de_DE-thorsten-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx"
+	"de_DE-thorsten-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json"
+	"de_DE-thorsten-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/de/de_DE/thorsten/medium/MODEL_CARD"
+	"de_DE-kerstin-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/de/de_DE/kerstin/medium/de_DE-kerstin-medium.onnx"
+	"de_DE-kerstin-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/de/de_DE/kerstin/medium/de_DE-kerstin-medium.onnx.json"
+	"de_DE-kerstin-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/de/de_DE/kerstin/medium/MODEL_CARD"
+	"en_US-joe-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_US/joe/medium/en_US-joe-medium.onnx"
+	"en_US-joe-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_US/joe/medium/en_US-joe-medium.onnx.json"
+	"en_US-joe-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_US/joe/medium/MODEL_CARD"
+	"en_US-kathleen-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_US/kathleen/medium/en_US-kathleen-medium.onnx"
+	"en_US-kathleen-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_US/kathleen/medium/en_US-kathleen-medium.onnx.json"
+	"en_US-kathleen-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_US/kathleen/medium/MODEL_CARD"
+	"en_GB-cori-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_GB/cori/medium/en_GB-cori-medium.onnx"
+	"en_GB-cori-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_GB/cori/medium/en_GB-cori-medium.onnx.json"
+	"en_GB-cori-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/en/en_GB/cori/medium/MODEL_CARD"
+	"es_ES-davefx-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx"
+	"es_ES-davefx-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json"
+	"es_ES-davefx-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/es/es_ES/davefx/medium/MODEL_CARD"
+	"fr_FR-siwis-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx"
+	"fr_FR-siwis-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json"
+	"fr_FR-siwis-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/fr/fr_FR/siwis/medium/MODEL_CARD"
+	"it_IT-paola-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/it/it_IT/paola/medium/it_IT-paola-medium.onnx"
+	"it_IT-paola-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/it/it_IT/paola/medium/it_IT-paola-medium.onnx.json"
+	"it_IT-paola-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/it/it_IT/paola/medium/MODEL_CARD"
+	"nl_NL-pim-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/nl/nl_NL/pim/medium/nl_NL-pim-medium.onnx"
+	"nl_NL-pim-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/nl/nl_NL/pim/medium/nl_NL-pim-medium.onnx.json"
+	"nl_NL-pim-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/nl/nl_NL/pim/medium/MODEL_CARD"
+	"nl_BE-nathalie-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/nl/nl_BE/nathalie/medium/nl_BE-nathalie-medium.onnx"
+	"nl_BE-nathalie-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/nl/nl_BE/nathalie/medium/nl_BE-nathalie-medium.onnx.json"
+	"nl_BE-nathalie-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/nl/nl_BE/nathalie/medium/MODEL_CARD"
+	"pl_PL-gosia-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx"
+	"pl_PL-gosia-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx.json"
+	"pl_PL-gosia-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pl/pl_PL/gosia/medium/MODEL_CARD"
+	"pl_PL-darkman-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pl/pl_PL/darkman/medium/pl_PL-darkman-medium.onnx"
+	"pl_PL-darkman-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pl/pl_PL/darkman/medium/pl_PL-darkman-medium.onnx.json"
+	"pl_PL-darkman-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pl/pl_PL/darkman/medium/MODEL_CARD"
+	"pt_PT-tugao-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx"
+	"pt_PT-tugao-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium.onnx.json"
+	"pt_PT-tugao-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pt/pt_PT/tug%C3%A3o/medium/MODEL_CARD"
+	"pt_BR-faber-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx"
+	"pt_BR-faber-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json"
+	"pt_BR-faber-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/pt/pt_BR/faber/medium/MODEL_CARD"
+	"ru_RU-dmitri-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx"
+	"ru_RU-dmitri-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx.json"
+	"ru_RU-dmitri-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/ru/ru_RU/dmitri/medium/MODEL_CARD"
+	"ru_RU-denis-medium.onnx::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/ru/ru_RU/denis/medium/ru_RU-denis-medium.onnx"
+	"ru_RU-denis-medium.onnx.json::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/ru/ru_RU/denis/medium/ru_RU-denis-medium.onnx.json"
+	"ru_RU-denis-medium.MODEL_CARD::https://huggingface.co/rhasspy/piper-voices/resolve/$_rev/ru/ru_RU/denis/medium/MODEL_CARD")
+sha256sums=('fd270eb3d1ebf91d763f8a0f949b1b1bebdfefaea18c3aaf8577dd34536e064f'
+	'e5bb7410dcbbcc0be6f4544f6bc66612b315ab5cb3099ec44bb46d860bc7cca9'
+	'c638118fb06eb07d59e60270097c250cf2de81a037320a8a6306fec652ad13b0'
+	'c56d70475fb99248a20e60dafbcd107475e60d7e01deec18ba65201d288d015d'
+	'cf620f4fa16400f7e49d16b08fda3979d50f12d245870c0657e3b2e7ebf05081'
+	'839e83403012b52b1507510f28da2e782654b25d618aa99cabae5ae1a5e1a3b3'
+	'abf4b998e34045cbd00eaf050de2de620f81ded6eb8b85a24b022a1c2b3f08d2'
+	'9b91a652090ffa8a49e36569afa9acc8ead2b3a22a950e8e6ca11914f3e85d56'
+	'4b319248135916e8f5433ce7a9fe5271026b05cb598bab05807b22cb17fd129b'
+	'173115e17ff8efb7aa895a4957fb0bccf7c6d9048d82f8c5821902a68f959cc3'
+	'9cb87b28715abfe6d73a70df52283fe29849950ecce74d2c36556db91d93c124'
+	'd3b55579642e55fede59e8ba0c5c6463d0ce09841fbffad4f657b77db8f11320'
+	'2e0a55e140de672aa19b182602b407607bd2e6c35fc6020c0b1516053c02e995'
+	'7204f5ead17759278419129290e51ebb414f09f7ac6cd0e567532592956bbbac'
+	'b1cdf93d1b0586941518677eb69c4ebd2db65573c57daeb7e45d3a658aae6cb8'
+	'd2c9224e122321aac3c33343957fff4d0f465226cb74c66b0f520ca3f8c0dd07'
+	'7d82d069eccca0f87963bd23c33166fe1ef6d24a6b231543931bfe692397f256'
+	'2d55d0d84100cde9d9ed88866c2625c89d333a45507d88aa8bae40f6de94c134'
+	'b1d946fd68d0347155fa59bce0a018924abbef3c1561181db45ca463d83963ef'
+	'3b3efdbcdcae930c40d8255527170ec5c87bf05e510b67f53d75fd028df40f43'
+	'f75d76ec577b5e7a49a7462883d31ef65383022387818a9a0b75bdaf90b9010c'
+	'f9b8658aa8c01f8280aa88488f6e7643a639b6225a81514c40440a01f6364a20'
+	'10e46e8534dd2d4051f1534ba6542f189f854454acea44a6d45ff464a83260fa'
+	'5213acedfdf04bacd511b8635697741a753aac40b769e64d9c52a58b56f78950'
+	'1e1ed370c3b60ca734e525bdcd1f05f71b42bfb0a15693f1e89c012d72052d2a'
+	'eaf09475a6b62191e2f3045202d63b9eb77d5f9769cf2de2f12d4d3c046bf3ac'
+	'3f7439321a995ecd70fdf480d4702147abb06fc9deca6d195fe5b339fb2b6d15'
+	'2f12aea027806c24a0e9fb00080d2ee4cb0954604cc74e2fcdfe40b5d1015a09'
+	'eb3acc456a61317d72c34a5ca97a047e60a6e7b8b31a9b9cb9318d5217374034'
+	'f3a3d03509b055f587999b26a78813859c926a0a7da67dcc42bf02552ee7b9b4'
+	'd322ded1f1daffeab41bbacd43d6f62ac83a4a5d4d63a297aa39f345f506b358'
+	'f0cc2f4f53d60274a79bf6ec9d8d17c02e188ae3c7cc170f6d308a97526c351b'
+	'238bae411adb04592aedec7f297270323b6f6f4a41542232cfc1c25fb61f75a9'
+	'cf757ee307e3a7c23d5d8f69934deab51683d01c1c6be376d3e13146020f1530'
+	'1208a7d257daba8d0a421e9f55ec8210db009d785cd4f7e0b0c9936b3168f1a0'
+	'a2c89d3059a830d47fb0159973088c02ae3a4c7e56235a3abe63b9507340bdab'
+	'f90d87efaa88ba0d24018f7e74a0ea3feeddeb407bf46332322a3824e9451219'
+	'511b014b3baeeb7dabc0c96b35ebdc1a039e9436f6912ec94cd85e6a7a6a533e'
+	'81ef346f74b0f33b176435437bc345ab22efde5dccd87acf6f44afc0bc7a034d'
+	'75e913eb463db0b6ac7ddf68d3e4c9ac19ace36dc3b710a81039b448352b8ffc'
+	'6b6801319e5a70aa4d75c63343515f55d1cd671ecd1ac511586bc16216812261'
+	'a99caaa7e04fea58294ba4dea46a7ba07fa1f7902c6dff65b6ea2be0e98c5132'
+	'9ed9941bac7373f2ec1be36627e0e71a349a59ca5522d4363fd50701db05193a'
+	'c3741c9c1558fc38e902fd80d39155c32a7d019d7d17e3a43eac66b7bd3fbe09'
+	'4da875aca6642bd96f0327705e874cbbcc44bc1790ee1d08b3fc0eb266523e5d'
+	'879bc365cb14d1380e3f5ed6044162ccf54c99f6161871569b7f830aec3ce841'
+	'5891b94580ae739a8cdc5d17591db6800333f85164d13599aca893883d99b9eb'
+	'917110d5056810771fd3daea2644bbadf1341816b7631f2043b33be245903432')
+# Nothing to strip; the ONNX files hardly compress
+options=(!strip !debug)
+
+# _voice <id> <name> <language> <locale> <default> <license>
+_voice() {
+	depends=(plinius-speech)
+	local dir="$pkgdir/usr/share/plinius-speech/voices/$1"
+	install -Dm644 "$1.onnx" "$dir/$1.onnx"
+	install -Dm644 "$1.onnx.json" "$dir/$1.onnx.json"
+	install -Dm644 "$1.MODEL_CARD" "$pkgdir/usr/share/licenses/$pkgname/MODEL_CARD"
+	printf '{"id": "%s", "name": "%s", "language": "%s", "locale": "%s", "model": "%s.onnx", "config": "%s.onnx.json", "quality": "medium", "license": "%s", "default": %s}\n' \
+		"$1" "$2" "$3" "$4" "$1" "$1" "$6" "$5" >"$dir/voice.json"
+}
+
+package_plinius-speech-voice-de-de-thorsten() {
+	pkgdesc="German voice Thorsten for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0)
+	_voice de_DE-thorsten-medium "Thorsten" de de_DE true "CC0-1.0"
+}
+
+package_plinius-speech-voice-de-de-kerstin() {
+	pkgdesc="German voice Kerstin for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice de_DE-kerstin-medium "Kerstin" de de_DE false "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-en-us-joe() {
+	pkgdesc="US English voice Joe for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0)
+	_voice en_US-joe-medium "Joe" en en_US true "CC0-1.0"
+}
+
+package_plinius-speech-voice-en-us-kathleen() {
+	pkgdesc="US English voice Kathleen for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice en_US-kathleen-medium "Kathleen" en en_US false "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-en-gb-cori() {
+	pkgdesc="British English voice Cori for the Plinius speech output (Piper, medium quality)"
+	license=(CC-BY-4.0)
+	_voice en_GB-cori-medium "Cori" en en_GB true "CC-BY-4.0"
+}
+
+package_plinius-speech-voice-es-es-davefx() {
+	pkgdesc="Spanish voice Davefx for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0)
+	_voice es_ES-davefx-medium "Davefx" es es_ES true "CC0-1.0"
+}
+
+package_plinius-speech-voice-fr-fr-siwis() {
+	pkgdesc="French voice Siwis for the Plinius speech output (Piper, medium quality)"
+	license=(CC-BY-4.0)
+	_voice fr_FR-siwis-medium "Siwis" fr fr_FR true "CC-BY-4.0"
+}
+
+package_plinius-speech-voice-it-it-paola() {
+	pkgdesc="Italian voice Paola for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice it_IT-paola-medium "Paola" it it_IT true "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-nl-nl-pim() {
+	pkgdesc="Dutch voice Pim for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0)
+	_voice nl_NL-pim-medium "Pim" nl nl_NL true "CC0-1.0"
+}
+
+package_plinius-speech-voice-nl-be-nathalie() {
+	pkgdesc="Flemish voice Nathalie for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice nl_BE-nathalie-medium "Nathalie" nl nl_BE true "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-pl-pl-gosia() {
+	pkgdesc="Polish voice Gosia for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice pl_PL-gosia-medium "Gosia" pl pl_PL true "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-pl-pl-darkman() {
+	pkgdesc="Polish voice Darkman for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0)
+	_voice pl_PL-darkman-medium "Darkman" pl pl_PL false "CC0-1.0"
+}
+
+package_plinius-speech-voice-pt-pt-tugao() {
+	pkgdesc="European Portuguese voice Tugão for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice pt_PT-tugao-medium "Tugão" pt pt_PT true "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-pt-br-faber() {
+	pkgdesc="Brazilian Portuguese voice Faber for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice pt_BR-faber-medium "Faber" pt pt_BR true "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-ru-ru-dmitri() {
+	pkgdesc="Russian voice Dmitri for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0 CC-BY-4.0)
+	_voice ru_RU-dmitri-medium "Dmitri" ru ru_RU true "CC0-1.0 AND CC-BY-4.0"
+}
+
+package_plinius-speech-voice-ru-ru-denis() {
+	pkgdesc="Russian voice Denis for the Plinius speech output (Piper, medium quality)"
+	license=(CC0-1.0)
+	_voice ru_RU-denis-medium "Denis" ru ru_RU false "CC0-1.0"
+}

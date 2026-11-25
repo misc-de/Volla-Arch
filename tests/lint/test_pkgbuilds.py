@@ -19,7 +19,11 @@ NOT_SOURCES = {
 }
 
 # Known findings, kept visible: the test fails again (strict xfail) once they are fixed
-KNOWN = {}
+KNOWN = {
+    # The add-on still has to be signed by Mozilla (AMO, unlisted) from make-xpi.py's build; once
+    # the signed copy is there, its checksum replaces the SKIP and this mark goes
+    ("sums", "plinius-send-to-tv"): "send-to-tv-0.1.0.xpi not yet signed",
+}
 
 
 def known(kind, name):

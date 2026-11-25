@@ -784,8 +784,8 @@ update_vulnerabilities_row (SecurityPage *sp, JsonNode *root)
         sp->vulnerabilities_level = LEVEL_GOOD;
         text = g_strdup (P_("No known vulnerabilities in the installed packages."));
     } else {
-        g_autofree char *affecting = g_strdup_printf (NP_("%u affects this system", "%u affect this system",
-                                                          s.affecting + k.affecting), s.affecting + k.affecting);
+        /* Not also how many affect the system: the total comes first, and the level icon tells
+           whether any of them needs a look */
         g_autofree char *unassessed = g_strdup_printf (NP_("%u not assessed", "%u not assessed",
                                                            s.unassessed + k.unassessed), s.unassessed + k.unassessed);
         if (k.total > 0) {
@@ -793,12 +793,12 @@ update_vulnerabilities_row (SecurityPage *sp, JsonNode *root)
                                                     total);
             g_autofree char *where = g_strdup_printf (P_("%u in installed packages, %u in the kernel"),
                                                       s.total, k.total);
-            text = g_strdup_printf ("%s (%s): %s, %s", all, where, affecting, unassessed);
+            text = g_strdup_printf ("%s (%s), %s", all, where, unassessed);
         } else {
             g_autofree char *all = g_strdup_printf (NP_("%u known vulnerability in installed packages",
                                                         "%u known vulnerabilities in installed packages", total),
                                                     total);
-            text = g_strdup_printf ("%s: %s, %s", all, affecting, unassessed);
+            text = g_strdup_printf ("%s, %s", all, unassessed);
         }
         /* A severe issue that really affects the phone is a risk; the rest wants a look. The
            kernel's issues only ask for a look: they are fixed by a newer kernel, not by an update

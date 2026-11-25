@@ -166,6 +166,9 @@ check_host
 # plinius-wake: double tap and tilt to wake (off until switched on in Settings > Display).
 # plinius-assist: actions for the assistant button (chosen in Settings > Power).
 # plinius-sar: SAR back-off, lowers the modem's transmit power while a body is near (docs/MTKRADIOEX.md).
+# plinius-datawatch: reconnects mobile data that is up but carries nothing (after a cell change).
+# plinius-kmsg: the kernel log into the journal without the vendor drivers' status lines
+#   (journald itself does not read it, ReadKMsg=no in device-volla-ansuz).
 # cups-plinius: printing (Settings > Printers), Arch's cups with the fix for printers found on the
 #   network (2.4.20 broke their temporary queues); avahi (its dependency) finds network printers,
 #   nss-mdns (also a dependency) resolves their .local names, cups-pk-helper comes with Settings.
@@ -191,6 +194,8 @@ check_host
 #   brings plinius-freigabe.
 # schwupp: casting to TVs, behind Phosh's cast quick setting; the screen comes from
 # xdg-desktop-portal-wlr-plinius (named here, else pacman takes ALARM's portal for phosh's dependency).
+# plinius-send-to-tv: Firefox hands YouTube links to the TV Schwupp casts to (long press on a link,
+#   button in the address bar).
 # plinius-usb: what a computer gets over USB (USB quick setting), umtp-responder its file sharing.
 # plinius-epo: GPS orbit predictions every 6 hours, a fix in seconds instead of a minute (on by
 #   default; Settings > Privacy > Location > Faster GPS Fix). Also a dependency of the device package.
@@ -246,9 +251,16 @@ check_host
 #   in the image, except the game emulators (plinius-retro-games with plinius-games and
 #   plinius-dos-installer), which Software only offers under "Recommended", and plinius-nfc-lab
 #   (NFC tags and cards), a tool to install from Software.
+# plinius-speech: the speech output of the system and the caller announcement in a Bluetooth
+#   headset (Settings > Sound > Speech Output), with the default voice of the image's language
+#   (plinius-speech-voice-en-us-joe, ~63 MB); the other voices (about 63 MB each) are installed
+#   in Settings, like the emulators they are not in the image.
 # plinius-appaccess: which app may use the cameras, security keys and network (Settings > Privacy);
 #   only an optional dependency of Settings, so it is named here.
 # python-evdev: touch gestures in phonebridge (installed by the user, needs the module).
+# hybris-vulkan: Vulkan for the apps (the Android driver through libhybris; phoc and GTK stay on
+#   GLES), vkmark-plinius the Vulkan Benchmark in the app list to try it, full screen with its
+#   result on the screen.
 # noto-fonts-cjk: Chinese, Japanese and Korean characters (web pages, messages, contact names)
 #   instead of empty boxes; about 310 MB installed.
 # gvfs-mtp, gvfs-smb: cameras and phones on USB, Windows and NAS shares in Files (Nautilus).
@@ -261,16 +273,18 @@ packages=(base openssh sudo device-volla-ansuz hybris-tls-relocate
 	ofono-sailfish ofono-binder-plugin ofono2mm nfcd nfcd-binder-plugin gnss-nmea-bridge audio-hal-bridge
 	sensor-proxy-bridge camera-hal-bridge snapshot-plinius gnome-usage-plinius gnome-keyring rtkit gnome-control-center-plinius
 	gnome-online-accounts-plinius chatty-plinius libhandy-plinius gtk3-plinius
-	plinius-kmod plinius-torch glibc-locales lpac plinius-wake plinius-assist plinius-sar cups-plinius
+	plinius-kmod plinius-torch glibc-locales lpac plinius-wake plinius-assist plinius-sar plinius-datawatch plinius-kmsg cups-plinius
 	plinius-pdf-printer plinius-remote biomd biomd-fprintd biomd-session plinius-udfps plinius-charge
-	ofono-binder-plugin-ext-mtk plinius-pinguard plinius-software schwupp xdg-desktop-portal-wlr-plinius
+	ofono-binder-plugin-ext-mtk plinius-pinguard plinius-software schwupp plinius-send-to-tv xdg-desktop-portal-wlr-plinius
 	networkmanager-openvpn plinius-usb umtp-responder furios-gps-contribute
 	plinius-health plinius-rollback plinius-mce plinius-face plinius-tflite plinius-security plinius-netlog
 	plinius-ambient plinius-suspend plinius-dictate bluez-obex-plinius plinius-callfocus plinius-screentime plinius-satellite
 	pipewire-audio-plinius plinius-ssh plinius-desktop plinius-cardshare plinius-swap plinius-login-keyring vim gnome-calls-plinius plinius-home flatpak
 	plinius-crypt plinius-crypt-ramdisk plinius-vdec plinius-energy plinius-dnsfilter plinius-apparmor
+	hybris-vulkan vkmark-plinius
 	plinius-dictate-models plinius-kernel furios-audio-bt-reconnect biomd-pam libgbinder-tools
 	android-headers mce-dev python-evdev plinius-greeter plinius-appaccess plinius-epo
+	plinius-speech plinius-speech-voice-en-us-joe
 	noto-fonts-cjk gvfs-mtp gvfs-smb exfatprogs dosfstools less)
 # App selection as in the preview (image/mkpreview.sh): plinius-apps (calls, SMS, contacts; fixed)
 # and recommended.list (removable in Software). snapshot and gnome-usage come as snapshot-plinius

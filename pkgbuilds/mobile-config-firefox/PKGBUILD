@@ -2,7 +2,7 @@
 
 pkgname=mobile-config-firefox
 pkgver=5.5.2
-pkgrel=9
+pkgrel=10
 pkgdesc="Mobile and privacy friendly configuration for Firefox (postmarketOS)"
 arch=(any)
 url="https://gitlab.postmarketos.org/postmarketOS/mobile-config-firefox"
@@ -17,7 +17,8 @@ license=(MPL-2.0 MIT)
 # no uBlock at all.
 _ublock=1.75.4
 makedepends=(python)
-optdepends=('firefox: the browser it configures')
+optdepends=('firefox: the browser it configures'
+	'plinius-send-to-tv: YouTube links to the TV (forced on below once it is installed)')
 # plinius-prefs.js: own defaults for start time, security and privacy.
 # swipe-gestures: edge swipes for back/forward (own add-on, signed by Mozilla), the copy
 # that WebApp Manager bundles (extension/swipe-gestures.xpi).
@@ -68,9 +69,11 @@ package() {
 	printf '@import "chrome://mobileconfigfirefox/content/themes/release/chrome/plinius-fullscreen.css";\n' \
 		>>"$_theme/main.css"
 
-	# uBlock Origin and the swipe gestures always on: upstream only offers uBlock
+	# uBlock Origin, the swipe gestures and Send to TV always on: upstream only offers uBlock
 	# (normal_installed, downloaded from AMO, can be disabled, not in private windows).
-	# Here both are forced, from the local files, and run in private windows too.
+	# Here all three are forced, from the local files, and run in private windows too.
+	# Send to TV comes with plinius-send-to-tv (it needs Schwupp); without that package Firefox
+	# finds no file at its path and installs nothing.
 	# Enhanced Tracking Protection "Strict", not locked (Settings can lower it).
 	# The rest of the policies stays as upstream has it.
 	python3 - "$pkgdir/usr/lib/firefox/distribution/policies.json" <<-'EOF'
@@ -79,11 +82,13 @@ package() {
 		with open(path) as f:
 		    data = json.load(f)
 		extensions = data["policies"]["ExtensionSettings"]
-		extensions.setdefault("swipe-gestures@de.cais", {})
 		files = {
 		    "uBlock0@raymondhill.net": "/usr/share/mobile-config-firefox",
 		    "swipe-gestures@de.cais": "/usr/lib/firefox/browser/extensions",
+		    "send-to-tv@de.cais": "/usr/lib/firefox/browser/extensions",
 		}
+		for addon_id in files:
+		    extensions.setdefault(addon_id, {})
 		for addon_id, folder in files.items():
 		    extensions[addon_id].update({
 		        "installation_mode": "force_installed",

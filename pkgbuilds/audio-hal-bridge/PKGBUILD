@@ -2,11 +2,15 @@
 
 pkgname=audio-hal-bridge
 pkgver=0.6
-pkgrel=19
+pkgrel=20
 pkgdesc="Vendor legacy audio HAL (through libhybris) as PipeWire speaker, earpiece and microphone, with callaudiod's call API, echo cancellation for voice apps, Bluetooth hands-free through the HAL and the FM tuner's sound as a source"
 arch=(aarch64)  # needs the Android HAL through libhybris
 license=(MIT)
 depends=(libhybris pipewire wireplumber glib2 webrtc-audio-processing-1 alsa-lib)
+# The jingle at the end of a call (call-end.wav, 16 bit stereo PCM, 48 kHz, 1 s): our own two
+# descending notes, E5 then C5, on the acoustic grand piano of the FluidR3_GM soundfont (MIT),
+# rendered with fluidsynth -g 0.7 -r 48000, cut to 1 s with a fade-out from 0.75 s and peaking at
+# -3 dBFS (ffmpeg atrim, afade, volume=16.5dB).
 makedepends=(android-headers)
 source=(audio-hal-bridge.c
 	aec.cpp
@@ -15,14 +19,16 @@ source=(audio-hal-bridge.c
 	alerts-to-speaker.lua
 	sco-to-hal.lua
 	60-audio-hal-bridge.conf
+	call-end.wav
 	LICENSE)
-sha256sums=('a608ac5bb95dd3dbecaff9bd902fec493bc06d1e0e56765a941f995294a6b728'
+sha256sums=('d9d16da606b893820a9c758c67b54eb7d9b04efc43e0f9b11d51955edc97da53'
 	'2116e3e2264ffe5f110b2146bdeb5691080fdf27220a47d8cae93f0b8f1dc207'
 	'27cc88e004e0d73e60ed2f650c397d3c9708012e21d316498572021f17fad79e'
 	'df0f5f7b5ccbee7a9b6ac1f323bebc58d0d6f7f97f943da06309183cdc4a23d7'
 	'91bf1e134818f3f4102f5d98a74c609612032b4bc0461e9182ae48a6ff6e44a4'
 	'ea1117178c44dfb27091444a9184554b26d67ec6169cec795442db236d7dc751'
 	'934192f0c688ef8e21b81e0e700682575552c97f007d12c788b63050be402d5d'
+	'53336a184a83cd4261f9d4eee4a5a59c319bceeb386a28e0976784b5f2797407'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
 build() {
@@ -43,4 +49,6 @@ package() {
 	# WirePlumber: alerts never play in the earpiece
 	install -Dm644 alerts-to-speaker.lua sco-to-hal.lua -t "$pkgdir/usr/share/wireplumber/scripts/audio-hal-bridge"
 	install -Dm644 60-audio-hal-bridge.conf -t "$pkgdir/usr/share/wireplumber/wireplumber.conf.d"
+	# Played where a call ran, when it ends
+	install -Dm644 call-end.wav -t "$pkgdir/usr/share/audio-hal-bridge"
 }

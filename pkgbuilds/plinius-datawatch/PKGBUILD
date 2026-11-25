@@ -1,0 +1,31 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-datawatch
+pkgver=0.1
+pkgrel=2
+pkgdesc="Mobile data watch: reconnects a mobile connection that is up but carries nothing"
+arch=(aarch64 x86_64)
+license=(MIT)
+# Talks to NetworkManager over the system bus only
+depends=(glib2 networkmanager)
+source=(plinius-datawatch.c
+	plinius-datawatch.service
+	LICENSE)
+sha256sums=('3c2e6302bc63fde70d5622891704bda1400d1eb647c4ee9ae04e5d1047f6f02b'
+	'a69338f939e8f2cc4ea781166a660f086a814d47ddad2d30cc380142aa25fe57'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o plinius-datawatch plinius-datawatch.c $(pkg-config --cflags --libs gio-unix-2.0) $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-datawatch -t "$pkgdir/usr/bin"
+	install -Dm644 plinius-datawatch.service -t "$pkgdir/usr/lib/systemd/system"
+	# On from the start, without a session: mobile data is needed before and without a login
+	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s ../plinius-datawatch.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+}

@@ -17,7 +17,7 @@ only=${2:-}
 phone=${PHONE:-root@10.15.19.82}
 # shellcheck disable=SC2086
 ssh ${PHONE_SSH_OPTS:--o HostKeyAlias=10.15.19.82} "$phone" \
-	"journalctl -k --since '$since' --no-pager -o cat | grep -E 'apparmor=\"(ALLOWED|DENIED)\"' | grep 'profile=\"plinius\\.' || true" |
+	"journalctl -t kernel --since '$since' --no-pager -o cat | grep -E 'apparmor=\"(ALLOWED|DENIED)\"' | grep 'profile=\"plinius\\.' || true" |
 	python3 -c '
 import re, sys, collections
 only = sys.argv[1]

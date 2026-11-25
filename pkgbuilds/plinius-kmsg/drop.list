@@ -1,0 +1,71 @@
+# Kernel log lines that plinius-kmsg leaves out of the journal (dmesg keeps them all).
+# One fixed string per line, matched anywhere in the line, case counts. Never dropped: crit, alert
+# and emerg. Own additions go into /etc/plinius-kmsg/drop.list, read after this one.
+#
+# Chosen from one hour on 2026-11-25 (display on and off, always-on display, USB charging):
+# 34 180 lines. Only status lines that repeat with every round of their driver; real errors of the
+# same drivers stay (other mmc commands than tuning, Trustonic, register dumps, AppArmor).
+
+# Android container: every power-supply uevent, ~3 700 and ~2 700 an hour
+NetlinkListener: recvmsg failed (I/O error)
+SELinux is disabled, skipping restorecon
+Cannot get SELinux label on '/dev/block/
+SetCgroup::ExecuteForProcess: failed to open /dev/blkio//cgroup.procs
+Failed to apply NormalIoPriority process profile
+healthd: battery l=
+
+# Charger chip without the property, with every uevent of the supplies
+power_supply upm6722-standalone: driver failed to report `online' property
+power_supply mtk-gauge: driver failed to report `energy_empty_design' property
+power_supply_show_property:
+
+# Multimedia power domains and command queue, around every display frame
+[cmdq] cmdq_dump_usage:
+mtk_mminfra_pd_callback:
+mminfra clk(3) null
+mminfra_cg_check Scg still on
+mtk_mminfra_gce_sram_en: not support
+[mmdvfs][dbg]
+[ISPDVFS] regulator_event_notify()
+[VCP] vcp_enable_pm_clk
+[mml][drm]mml_drm_put_context
+
+# Display: DisplayPort that is not there, fences and backlight of each frame
+[DPTX][ERROR]mtk_dp_get_dsc_capability: dp not initial
+[DISP][E]mtk_release_layer_fence:
+[DISP][E]mtk_drm_crtc_release_fence no session for CRTC0
+hxl_ch_bl_aal brightness:
+lcm_setbacklight_cmdq level=
+
+# Fuel gauge and charger algorithm, each round (about every 10 s)
+[sh366100] fg_refresh_status(
+[sh366100] fg_read_status(
+[sh366100] __fg_write_word(
+[sh366100] fg_get_property(
+force_get_tbat_internal-xx-TEMP-guage_val
+lpp----CURRENT_AVG val->intval=
+[cs_chrg]
+low_battery_throttling low-battery-throttling:
+pd_adapter pd-adapter: pd_authentication
+chg_alg_set_current_limit
+pe50_hal_is_adapter_ready
+charger_disp_notifier_callback IN value=
+[sc]disable_charger:
+mtk_charger_start_timer: alarm timer start:
+select_charging_current_limit
+do_algorithm is_basic:
+get_charger_zcv: get charger zcv failed
+battery_update_routine
+FG daemon is disabled
+[fg_drv_update_daemon]
+extcon-usb wls_work_mode:
+
+# GPS driver's ring buffer dumps, power statistics, clock buffer dumps
+[gps_dl_hist_rec_rw_do_dump:
+swpm_sp_routine regular update
+[scp_dvfs]: [SCP] [mt_scp_dump_sleep_count:
+[CLKBUF], <
+
+# SD card: the tuning of the bus (SEND_TUNING_BLOCK) tries phases that fail by design
+dat_crc happen cmd=19;
+cmd_crc happen cmd=19 arg=

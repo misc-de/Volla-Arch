@@ -1,0 +1,73 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-speech
+pkgver=0.1
+pkgrel=1
+pkgdesc="Speech output for the Plinius: one voice and rate for every speech output, and the caller announcement in a Bluetooth headset"
+arch=(aarch64 x86_64)  # x86_64 for the KVM preview
+# The service links libespeak-ng (GPL-3.0-or-later)
+license=(GPL-3.0-or-later)
+# Piper voices run on ONNX Runtime as Piper does (sherpa-onnx cannot load Piper 1.5 voices: their
+# vowel clusters are tokens of two codepoints); espeak-ng turns text into phonemes; pw-cat plays;
+# pactl and BlueZ for the caller announcement
+depends=(glib2 glibc json-glib espeak-ng pipewire libpulse 'onnxruntime-plinius>=1.32.0'
+	python python-gobject)
+# The voices are packages of their own (plinius-speech-voices): the image has the default voice of
+# its language, GNOME Settings (Sound > Speech Output) installs more through plinius-software
+optdepends=('plinius-speech-voice-en-us-joe: the default voice for US English'
+	'speech-dispatcher: speech output of apps (Orca, reading aloud in Firefox) with the same voice')
+makedepends=(gcc pkgconf gettext)
+_langs=(de es fr it nl pl pt ru)
+backup=(etc/speech-dispatcher/modules/plinius.conf)
+source=(plinius-speechd.c
+	plinius-speak
+	plinius-callannounce
+	plinius-callannounce.desktop
+	org.plinius.Speech1.service
+	org.plinius.speech.gschema.xml
+	plinius.conf
+	voices.json
+	"${_langs[@]/%/.po}")
+sha256sums=('da647ff3eb5797f58d91fa3ab33ad348f67761de0bb232f9ba2b9a8afa6ddc21'
+	'ee3404c58abf739b223cbdbbeb12ad3ec041df8fe6d66231d9e51568b4149000'
+	'9a1d1185fcdb9a1ecc8c9824a450e5c6f876b637f1820885ae4c45c465c003c0'
+	'b4c51715817cfa357f825c07129aed6b34e532f35e038513a75c4ea9b205fb77'
+	'2987370b2e9c8b0615cf3b61f47276a5f85b21d7b2ec9c35b4eebacc2c93cf4d'
+	'995fd2f4c44e323a79c3383514f35e43b89cbe6532b45de98dc2f51b2346e5bc'
+	'82f5d7e47bce431ea9691298efcceaced86c068a050f1df62b80943fec4df4a4'
+	'aa0f792d5ca1ed420da0c9c51ee62e64a6aa044d91d79cc125d2ff983ca2f4ea'
+	'874faf7c71c243eba9f6603e74578d07713cc2bc43bd34daa3641043cd451124'
+	'64c628ce8a96dc0bc4fc57cc95c2f490c7829bb4cf56414b2c53c85d85f91f4c'
+	'712a02ad20be34bfa58ee79bd0f8e676ef1cf3e98d2a20ad73fc72f63b0df9ed'
+	'cc9b1a97ee29bfd5a713789d92611c4bdac685e1ae70e5135b7d247409165c8c'
+	'e6512291f19424fa57c8d7b894950cca7352487cda1db0343927d50366cde709'
+	'018fc8d194e2cc7404b0fd2df13a14760645e4cea187ff1030235997bf4ebc15'
+	'23162df8096a203c49bcc8fbfca04a8d85e2d567d065beb3065d4f7dfccec075'
+	'c48e844306067b977cc8d3703b71bc830743c789e3d259953886b0ccab2b236f')
+
+build() {
+	# shellcheck disable=SC2086,SC2046
+	gcc $CPPFLAGS $CFLAGS -Wall -o plinius-speechd plinius-speechd.c \
+		$(pkg-config --cflags --libs gio-unix-2.0 json-glib-1.0 espeak-ng libonnxruntime) -lm $LDFLAGS
+	for l in "${_langs[@]}"; do
+		msgfmt --check -o "$l.mo" "$l.po"
+	done
+}
+
+package() {
+	install -Dm755 plinius-speechd plinius-speak plinius-callannounce -t "$pkgdir/usr/lib/plinius-speech"
+	install -Dm644 org.plinius.Speech1.service -t "$pkgdir/usr/share/dbus-1/services"
+	install -Dm644 org.plinius.speech.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"
+	# All voices of the repository, installed or not, for Settings
+	install -Dm644 voices.json -t "$pkgdir/usr/share/plinius-speech"
+	install -dm755 "$pkgdir/usr/share/plinius-speech/voices"
+	# Runs in the session: it follows the session's Calls and plays to its outputs
+	install -Dm644 plinius-callannounce.desktop -t "$pkgdir/etc/xdg/autostart"
+	# speech-dispatcher finds sd_* modules by itself and gives each its <name>.conf
+	install -Dm644 plinius.conf -t "$pkgdir/etc/speech-dispatcher/modules"
+	install -dm755 "$pkgdir/usr/lib/speech-dispatcher-modules"
+	ln -s sd_generic "$pkgdir/usr/lib/speech-dispatcher-modules/sd_plinius"
+	for l in "${_langs[@]}"; do
+		install -Dm644 "$l.mo" "$pkgdir/usr/share/locale/$l/LC_MESSAGES/plinius-speech.mo"
+	done
+}

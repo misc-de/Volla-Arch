@@ -540,14 +540,13 @@ def issue(cve, severity="Medium", status=None, package="openssl", installed="3.0
     ("not json", "Not checked yet. The list is loaded four times a day.", WARN),
     ({"issues": []}, "No known vulnerabilities in the installed packages.", GOOD),
     ({"issues": [issue("CVE-1", "High", "affected"), issue("CVE-2"), issue("CVE-3", status="not-affected")]},
-     "3 known vulnerabilities in installed packages: 1 affects this system, 1 not assessed", BAD),
+     "3 known vulnerabilities in installed packages, 1 not assessed", BAD),
     ({"issues": [issue("CVE-1", "Low", "mitigated")]},
-     "1 known vulnerability in installed packages: 1 affects this system, 0 not assessed", WARN),
+     "1 known vulnerability in installed packages, 0 not assessed", WARN),
     ({"issues": [issue("CVE-3", status="fixed")]},
-     "1 known vulnerability in installed packages: 0 affect this system, 0 not assessed", GOOD),
+     "1 known vulnerability in installed packages, 0 not assessed", GOOD),
     ({"issues": [], "kernel": {"cves": {"issues": [issue("CVE-9", "High", "affected")]}}},
-     "1 known vulnerability (0 in installed packages, 1 in the kernel): 1 affects this system, 0 not "
-     "assessed",
+     "1 known vulnerability (0 in installed packages, 1 in the kernel), 0 not assessed",
      WARN),
 ])
 def test_vulnerabilities_row(program, gcc_world, system, data, subtitle, icon):
@@ -852,8 +851,7 @@ def test_kernel_issues_built_when_opened(program, gcc_world, system):
                                 settle(), dump("open"),
                                 click(type="AdwActionRow", text="CVE-2026-1001"), settle()])
     assert r.dump("main").one(type="AdwActionRow", text="Known Vulnerabilities")["subtitle"] == (
-        "4 known vulnerabilities (0 in installed packages, 4 in the kernel): 2 affect this system, "
-        "2 not assessed")
+        "4 known vulnerabilities (0 in installed packages, 4 in the kernel), 2 not assessed")
     page = r.dump("open").within(type="AdwNavigationPage", tag="plinius-vulnerabilities")
     assert props(page, "Kernel")["Known Issues"] == "3 in kernel 6.1.192"
     rows = page.within(type="AdwExpanderRow", text="Issues with a High Rating").find(type="AdwActionRow")

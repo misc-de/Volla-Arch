@@ -1,0 +1,202 @@
+#!/usr/bin/python3 -I
+# Native messaging host of the Firefox add-on "Send to TV" (send-to-tv@de.cais): hands a link to
+# the TV that Schwupp is connected to right now, which then plays it itself (YouTube in the TV's
+# YouTube app). Firefox starts it per message and talks over stdin/stdout: each message is a
+# 32-bit length in native byte order followed by that many bytes of UTF-8 JSON.
+#
+# Requests:
+#   {"action": "status"}            -> {"connected": bool, "name": str, "links": bool}
+#   {"action": "play", "url": str}  -> {"result": "playing" | "code" | "starting", "name": str}
+#                                      or {"result": "error", "error": <code>, "name": str,
+#                                          "detail": str}
+# Error codes: "no-tv" (nothing connected), "no-links" (the TV cannot play links), "bad-url",
+# "failed" (Schwupp refused or the TV did not start; detail is Schwupp's text), "bad-request".
+#
+# Schwupp is never started by this host: without a running Schwupp there is no connection.
+
+import json
+import struct
+import sys
+import time
+
+from gi.repository import Gio, GLib
+
+SCHWUPP_BUS = "de.cais.Schwupp"
+SCHWUPP_PATH = "/de/cais/Schwupp/Cast"
+SCHWUPP_IFACE = "de.cais.Schwupp.Cast1"
+# How long a play request waits for the TV to start (connection, app start on the TV)
+WAIT_S = 20.0
+POLL_S = 0.2
+MAX_URL = 4096
+# Firefox allows 1 MB to the host; anything bigger is not ours
+MAX_MESSAGE = 1024 * 1024
+CALL_TIMEOUT_MS = 10000
+
+
+class Schwupp:
+    """Schwupp's cast service on the session bus, without auto-starting it."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def running(self):
+        r = self.conn.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                "org.freedesktop.DBus", "NameHasOwner",
+                                GLib.Variant("(s)", (SCHWUPP_BUS,)), GLib.VariantType("(b)"),
+                                Gio.DBusCallFlags.NONE, CALL_TIMEOUT_MS, None)
+        return r.unpack()[0]
+
+    def get(self, name):
+        r = self.conn.call_sync(SCHWUPP_BUS, SCHWUPP_PATH, "org.freedesktop.DBus.Properties", "Get",
+                                GLib.Variant("(ss)", (SCHWUPP_IFACE, name)), GLib.VariantType("(v)"),
+                                Gio.DBusCallFlags.NO_AUTO_START, CALL_TIMEOUT_MS, None)
+        return r.unpack()[0]
+
+    def play_link(self, dev_id, url):
+        self.conn.call_sync(SCHWUPP_BUS, SCHWUPP_PATH, SCHWUPP_IFACE, "PlayLink",
+                            GLib.Variant("(ss)", (dev_id, url)), None,
+                            Gio.DBusCallFlags.NO_AUTO_START, CALL_TIMEOUT_MS, None)
+
+
+def active_tv(schwupp):
+    """(id, name, can play links) of the device Schwupp is connected to, or None."""
+    if not schwupp.running():
+        return None
+    dev_id = schwupp.get("ActiveDevice")
+    if not dev_id:
+        return None
+    names = {row[0]: row[1] for row in schwupp.get("Devices")}
+    actions = schwupp.get("Actions").get(dev_id, [])
+    return dev_id, names.get(dev_id, ""), "youtube" in actions
+
+
+def status(schwupp):
+    tv = active_tv(schwupp)
+    if tv is None:
+        return {"connected": False, "name": "", "links": False}
+    _dev_id, name, links = tv
+    return {"connected": True, "name": name, "links": links}
+
+
+def valid_url(url):
+    if not isinstance(url, str) or not url or len(url) > MAX_URL:
+        return False
+    if any(ord(c) < 0x21 for c in url):
+        return False
+    return url.lower().startswith(("http://", "https://"))
+
+
+def error(code, name="", detail=""):
+    return {"result": "error", "error": code, "name": name, "detail": detail}
+
+
+def wait_for_start(schwupp, dev_id, name, clock=time.monotonic, sleep=time.sleep):
+    """Follows Schwupp's State until the TV plays, asks for a code or the attempt ended."""
+    end = clock() + WAIT_S
+    while True:
+        state = schwupp.get("State")
+        if state == "streaming":
+            return {"result": "playing", "name": name}
+        if state == "pin":
+            return {"result": "code", "name": name}
+        if state == "idle" or schwupp.get("ActiveDevice") != dev_id:
+            # Failed (Schwupp stopped and set Error) or replaced by another request
+            return error("failed", name, schwupp.get("Error"))
+        if clock() >= end:
+            return {"result": "starting", "name": name}
+        sleep(POLL_S)
+
+
+def remote_text(exc):
+    """Schwupp's own text of a D-Bus error, without "GDBus.Error:<name>: " (PyGObject's
+    Gio.DBusError.strip_remote_error changes a copy only)."""
+    text = exc.message or ""
+    if text.startswith("GDBus.Error:") and ": " in text:
+        return text.split(": ", 1)[1]
+    return text
+
+
+def play(schwupp, url, **kw):
+    if not valid_url(url):
+        return error("bad-url")
+    tv = active_tv(schwupp)
+    if tv is None:
+        return error("no-tv")
+    dev_id, name, links = tv
+    if not links:
+        return error("no-links", name)
+    try:
+        schwupp.play_link(dev_id, url)
+    except GLib.Error as exc:
+        return error("failed", name, remote_text(exc))
+    return wait_for_start(schwupp, dev_id, name, **kw)
+
+
+def handle(schwupp, request, **kw):
+    if not isinstance(request, dict):
+        return error("bad-request")
+    action = request.get("action")
+    try:
+        if action == "status":
+            return status(schwupp)
+        if action == "play":
+            return play(schwupp, request.get("url"), **kw)
+    except GLib.Error as exc:
+        # Schwupp went away in between, or the session bus is not there
+        if action == "status":
+            return {"connected": False, "name": "", "links": False}
+        return error("failed", "", remote_text(exc))
+    return error("bad-request")
+
+
+def read_message(stream):
+    """One message from Firefox, None at the end of input."""
+    head = stream.read(4)
+    if len(head) < 4:
+        return None
+    (length,) = struct.unpack("=I", head)
+    if length > MAX_MESSAGE:
+        raise ValueError("message too long")
+    body = stream.read(length)
+    if len(body) < length:
+        return None
+    return json.loads(body.decode("utf-8"))
+
+
+def write_message(stream, message):
+    body = json.dumps(message).encode("utf-8")
+    stream.write(struct.pack("=I", len(body)) + body)
+    stream.flush()
+
+
+def serve(schwupp, stdin, stdout):
+    while True:
+        try:
+            request = read_message(stdin)
+        except ValueError:
+            # Unreadable (too long, no JSON, no UTF-8): answer once and stop, the stream is lost
+            write_message(stdout, error("bad-request"))
+            return 1
+        if request is None:
+            return 0
+        write_message(stdout, handle(schwupp, request))
+
+
+def main():
+    try:
+        conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    except GLib.Error:
+        conn = None
+    if conn is None:
+        # No session bus: no Schwupp, so nothing is connected
+        class NoBus:
+            def running(self):
+                return False
+        schwupp = NoBus()
+    else:
+        schwupp = Schwupp(conn)
+    return serve(schwupp, sys.stdin.buffer, sys.stdout.buffer)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

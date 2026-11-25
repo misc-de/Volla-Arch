@@ -1,0 +1,50 @@
+[Unit]
+Description=Kernel log into the journal, without the vendor drivers' status lines
+Documentation=file:///usr/lib/plinius-kmsg/drop.list
+# In place of journald's own reading of the kernel log (ReadKMsg=no): as early as journald, so the
+# lines of the boot are there; the first start begins with the oldest line in the kernel's buffer
+DefaultDependencies=no
+Wants=systemd-journald.socket
+After=systemd-journald.socket
+Before=sysinit.target
+
+[Service]
+ExecStart=/usr/bin/plinius-kmsg
+Restart=always
+RestartSec=2
+# The last line handed over survives a restart of the service, not a boot
+RuntimeDirectory=plinius-kmsg
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# A boot's buffer arrives at once: journald's limit for one unit must not cut it
+LogRateLimitIntervalSec=0
+# Root with only CAP_SYSLOG: /dev/kmsg is readable only with it (kernel.dmesg_restrict=1)
+CapabilityBoundingSet=CAP_SYSLOG
+AmbientCapabilities=CAP_SYSLOG
+DevicePolicy=closed
+DeviceAllow=/dev/kmsg r
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+PrivateIPC=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=sysinit.target

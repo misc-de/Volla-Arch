@@ -1,0 +1,87 @@
+# Strings of the Firefox add-on Send to TV; msgctxt is the key in messages.json.
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-send-to-tv 0.1\n"
+"Report-Msgid-Bugs-To: https://plinius.cais.de\n"
+"POT-Creation-Date: 2026-11-23 15:00+0100\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: plinius-send-to-tv\n"
+"Language-Team: none\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgctxt "name"
+msgid "Send to TV"
+msgstr ""
+
+#. Shown in the add-ons manager, at most 132 characters
+msgctxt "description"
+msgid "Plays YouTube videos on the TV the phone casts to: hold a video link or tap the button in the address bar."
+msgstr ""
+
+#. Context menu entry and address bar button
+msgctxt "playOnTv"
+msgid "Play on TV"
+msgstr ""
+
+#. $1 is the name of the TV
+msgctxt "playOn"
+msgid "Play on “$1”"
+msgstr ""
+
+#. Context menu entry, greyed out
+msgctxt "notConnected"
+msgid "Play on TV – no TV connected"
+msgstr ""
+
+#. $1 is the name of the TV
+msgctxt "noLinks"
+msgid "“$1” cannot play links"
+msgstr ""
+
+#. Notification; $1 is the name of the TV
+msgctxt "playing"
+msgid "Playing on “$1”."
+msgstr ""
+
+#. Notification; $1 is the name of the TV
+msgctxt "starting"
+msgid "Starting on “$1”…"
+msgstr ""
+
+#. Notification; $1 is the name of the TV. Cast is the quick setting of Phosh, named as there
+msgctxt "code"
+msgid "“$1” shows a code: enter it in the Cast quick setting."
+msgstr ""
+
+#. Notification. Cast is the quick setting of Phosh, named as there
+msgctxt "noTv"
+msgid "No TV is connected. Connect one in the Cast quick setting first."
+msgstr ""
+
+#. Notification
+msgctxt "notAVideo"
+msgid "This is not a link to a YouTube video."
+msgstr ""
+
+#. Notification; $1 is the reason Schwupp gives
+msgctxt "failed"
+msgid "The TV could not play it: $1"
+msgstr ""
+
+#. Reason when Schwupp gives none
+msgctxt "unknownError"
+msgid "unknown error"
+msgstr ""
+
+#. Notification
+msgctxt "noHost"
+msgid "Send to TV cannot reach Schwupp: the package plinius-send-to-tv is missing."
+msgstr ""
+
+#. Stands for the TV's name when Schwupp has none
+msgctxt "theTv"
+msgid "TV"
+msgstr ""

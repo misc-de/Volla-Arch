@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""plinius-callannounce: says who is calling, in a Bluetooth headset.
+
+While a call rings and a Bluetooth headset or headphones are the output, the phone first rings
+once, then says "Daniel Müller is calling" (the name from the address book) or "Unknown caller"
+(no contact, unknown or withheld number), then rings again and repeats, until the call is
+answered, declined or ends. Answering stops the announcement at once, mid-word.
+
+- Only headsets and headphones, never a car kit or a loudspeaker: the device's Bluetooth class
+  must be a wearable headset, hands-free or headphones (Audio/Video, minor 1, 2 or 6), and a
+  device that offers phonebook or message access as a client (PBAP PCE, MAP MCE: car kits read
+  the phone book) is a car. Without a class (LE Audio) BlueZ's icon decides.
+- Only while the headset plays in A2DP (it is the default output), as the ringtone does.
+- Only while the ringtone sounds: in the silent or vibration profile, or after the ringing was
+  silenced (the ringtone stream ends), nothing is said.
+- During the announcement the ringtone is muted, so the two never overlap.
+- Only one ringing call and no other call in progress.
+- Off with Settings > Sound > Speech Output > Announce Callers (org.plinius.speech
+  announce-callers). Voice, rate and language are the system's speech output (plinius-speechd).
+
+Calls come from GNOME Calls (org.gnome.Calls object manager, State 5 = incoming, DisplayName from
+the address book). Runs in the Phosh session (XDG autostart).
+"""
+
+import gettext
+import json
+import re
+import subprocess
+import sys
+
+from gi.repository import Gio, GLib
+
+CALLS = "org.gnome.Calls"
+CALLS_PATH = "/org/gnome/Calls"
+CALL_IFACE = "org.gnome.Calls.Call"
+SPEECH = "org.plinius.Speech1"
+SPEECH_PATH = "/org/plinius/Speech1"
+SPEECH_IFACE = "org.plinius.Speech1"
+BLUEZ = "org.bluez"
+DEVICE_IFACE = "org.bluez.Device1"
+SCHEMA = "org.plinius.speech"
+
+STATE_ACTIVE, STATE_HELD, STATE_DIALING, STATE_ALERTING, STATE_INCOMING = 1, 2, 3, 4, 5
+BUSY_STATES = {STATE_ACTIVE, STATE_HELD, STATE_DIALING, STATE_ALERTING}
+
+FIRST_RING_MS = 3000   # the ringtone is heard once before the first announcement
+REPEAT_RING_MS = 4000  # ringing between two announcements
+
+# Bluetooth: class of device (Audio/Video major class 0x04) and the client roles of car kits
+MAJOR_AUDIO_VIDEO = 0x04
+HEADSET_MINORS = {0x01, 0x02, 0x06}   # wearable headset, hands-free, headphones
+CAR_UUIDS = {"0000112e-0000-1000-8000-00805f9b34fb",   # PBAP client (PCE)
+             "00001133-0000-1000-8000-00805f9b34fb"}   # MAP client (MCE)
+HEADSET_ICONS = {"audio-headset", "audio-headphones"}
+
+NUMBER = re.compile(r"[\d\s+()\-/.*#]+")
+
+_ = gettext.translation("plinius-speech", fallback=True).gettext
+
+
+def log(*args):
+    print("plinius-callannounce:", *args, file=sys.stderr, flush=True)
+
+
+def caller_text(display_name, number):
+    """What is said for a call: the contact's name, else "Unknown caller"."""
+    name = (display_name or "").strip()
+    if name and name != (number or "").strip() and not NUMBER.fullmatch(name):
+        # Translators: %s is the caller's name from the address book
+        return _("%s is calling") % name
+    return _("Unknown caller")
+
+
+def is_headset(cls, uuids, icon):
+    """A headset or headphones, not a car kit, a loudspeaker or anything else."""
+    if CAR_UUIDS & {u.lower() for u in uuids or ()}:
+        return False
+    if cls:
+        major, minor = (cls >> 8) & 0x1F, (cls >> 2) & 0x3F
+        return major == MAJOR_AUDIO_VIDEO and minor in HEADSET_MINORS
+    return icon in HEADSET_ICONS
+
+
+def pactl_json(*args):
+    try:
+        out = subprocess.run(["pactl", "-f", "json", *args], capture_output=True, text=True,
+                             timeout=5, check=True).stdout
+        return json.loads(out or "null")
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log("pactl", *args, "failed:", e)
+        return None
+
+
+def pactl(*args):
+    try:
+        subprocess.run(["pactl", *args], capture_output=True, timeout=5, check=True)
+        return True
+    except (OSError, subprocess.SubprocessError) as e:
+        log("pactl", *args, "failed:", e)
+        return False
+
+
+def headset_address():
+    """Bluetooth address of the default output if it is a device in A2DP, else None."""
+    try:
+        default = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True,
+                                 timeout=5, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        log("no default output:", e)
+        return None
+    if not default.startswith("bluez_output."):
+        return None
+    for sink in pactl_json("list", "sinks") or ():
+        if sink.get("name") != default:
+            continue
+        props = sink.get("properties", {})
+        if props.get("api.bluez5.profile") != "a2dp-sink":
+            return None
+        return props.get("api.bluez5.address")
+    return None
+
+
+def ringtone_inputs():
+    """Indices of feedbackd's ringtone streams."""
+    found = []
+    for si in pactl_json("list", "sink-inputs") or ():
+        props = si.get("properties", {})
+        if (props.get("application.process.binary") == "feedbackd" and
+                str(props.get("media.role", "")).lower() == "ringtone"):
+            found.append(si.get("index"))
+    return [i for i in found if i is not None]
+
+
+class Announcer:
+    def __init__(self, bus=None, system_bus=None, settings=None):
+        self.bus = bus or Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.system_bus = system_bus
+        self.settings = settings
+        self.calls = {}          # object path -> {"state", "inbound", "name", "number"}
+        self.current = None      # path of the call being announced
+        self.timer = 0
+        self.speech_id = None    # id of the announcement being said
+        self.muted = []          # ringtone streams muted for it
+        self.rang = False        # a ringtone stream of this call was seen
+        self.manager = None
+        self.bus.signal_subscribe(SPEECH, SPEECH_IFACE, "Finished", SPEECH_PATH, None,
+                                  Gio.DBusSignalFlags.NONE, self.on_finished)
+
+    # ---- setup ----
+
+    def start(self):
+        if self.settings is None:
+            src = Gio.SettingsSchemaSource.get_default()
+            if src and src.lookup(SCHEMA, True):
+                self.settings = Gio.Settings.new(SCHEMA)
+        if self.system_bus is None:
+            self.system_bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        Gio.bus_watch_name_on_connection(self.bus, CALLS, Gio.BusNameWatcherFlags.NONE,
+                                         self.on_calls_appeared, self.on_calls_vanished)
+
+    def enabled(self):
+        return self.settings is None or self.settings.get_boolean("announce-callers")
+
+    def on_calls_appeared(self, bus, name, owner):
+        # Synchronous, as in plinius-callfocus: the asynchronous constructor never called back
+        try:
+            self.manager = Gio.DBusObjectManagerClient.new_sync(
+                self.bus, Gio.DBusObjectManagerClientFlags.DO_NOT_AUTO_START, CALLS, CALLS_PATH,
+                None, None)
+        except GLib.Error as e:
+            log("no object manager of Calls:", e.message)
+            return
+        self.manager.connect("object-added", lambda m, o: self.track(o))
+        self.manager.connect("object-removed", lambda m, o: self.forget(o.get_object_path()))
+        self.manager.connect("interface-proxy-properties-changed", self.on_properties)
+        for obj in self.manager.get_objects():
+            self.track(obj)
+
+    def on_calls_vanished(self, bus, name):
+        self.manager = None
+        self.calls.clear()
+        self.update()
+
+    # ---- calls ----
+
+    @staticmethod
+    def prop(proxy, name, default):
+        value = proxy.get_cached_property(name)
+        return value.unpack() if value is not None else default
+
+    def track(self, obj):
+        proxy = obj.get_interface(CALL_IFACE)
+        if proxy:
+            self.calls[obj.get_object_path()] = {
+                "state": self.prop(proxy, "State", 0),
+                "inbound": self.prop(proxy, "Inbound", False),
+                "name": self.prop(proxy, "DisplayName", ""),
+                "number": self.prop(proxy, "Id", ""),
+            }
+            self.update()
+
+    def forget(self, path):
+        if self.calls.pop(path, None) is not None:
+            self.update()
+
+    def on_properties(self, manager, obj, proxy, changed, invalidated):
+        call = self.calls.get(obj.get_object_path())
+        if proxy.get_interface_name() != CALL_IFACE or call is None:
+            return
+        keys = {"State": "state", "Inbound": "inbound", "DisplayName": "name", "Id": "number"}
+        for key, field in keys.items():
+            if key in changed.keys():
+                call[field] = changed[key]
+        self.update()
+
+    def ringing_call(self):
+        """The one ringing incoming call, if no other call is in progress."""
+        ringing = [p for p, c in self.calls.items() if c["state"] == STATE_INCOMING and c["inbound"]]
+        busy = any(c["state"] in BUSY_STATES for c in self.calls.values())
+        return ringing[0] if len(ringing) == 1 and not busy else None
+
+    def update(self):
+        path = self.ringing_call() if self.enabled() else None
+        if path != self.current:
+            self.stop()
+            if path:
+                self.begin(path)
+
+    # ---- the announcement ----
+
+    def headset(self):
+        address = headset_address()
+        if not address:
+            return False
+        try:
+            objects = self.system_bus.call_sync(
+                BLUEZ, "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", None,
+                GLib.VariantType("(a{oa{sa{sv}}})"), Gio.DBusCallFlags.NONE, 3000, None).unpack()[0]
+        except GLib.Error as e:
+            log("no BlueZ:", e.message)
+            return False
+        for ifaces in objects.values():
+            dev = ifaces.get(DEVICE_IFACE)
+            if dev and dev.get("Address", "").upper() == address.upper() and dev.get("Connected"):
+                return is_headset(dev.get("Class", 0), dev.get("UUIDs", []), dev.get("Icon", ""))
+        return False
+
+    def begin(self, path):
+        self.current = path
+        self.rang = False
+        # Load the voice during the first ring; errors show up at Speak
+        self.bus.call(SPEECH, SPEECH_PATH, SPEECH_IFACE, "Prepare", None, None,
+                      Gio.DBusCallFlags.NONE, 10000, None, None)
+        self.timer = GLib.timeout_add(FIRST_RING_MS, self.announce)
+
+    def announce(self):
+        self.timer = 0
+        call = self.calls.get(self.current)
+        if call is None or not self.enabled():
+            return GLib.SOURCE_REMOVE
+        ringtones = ringtone_inputs()
+        if not ringtones:
+            # Silent or vibration profile, or the ringing was silenced: nothing is said
+            if self.rang:
+                log("ringing silenced, no more announcements")
+            return GLib.SOURCE_REMOVE
+        self.rang = True
+        if not self.headset():
+            self.timer = GLib.timeout_add(REPEAT_RING_MS, self.announce)
+            return GLib.SOURCE_REMOVE
+        text = caller_text(call["name"], call["number"])
+        self.muted = [i for i in ringtones if pactl("set-sink-input-mute", str(i), "1")]
+        try:
+            reply = self.bus.call_sync(SPEECH, SPEECH_PATH, SPEECH_IFACE, "Speak",
+                                       GLib.Variant("(sa{sv})", (text, {"role": GLib.Variant("s", "Ringtone")})),
+                                       GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error as e:
+            log("cannot speak:", e.message)
+            self.unmute()
+            return GLib.SOURCE_REMOVE
+        self.speech_id = reply.unpack()[0]
+        return GLib.SOURCE_REMOVE
+
+    def on_finished(self, bus, sender, path, iface, name, params):
+        sid, completed = params.unpack()
+        if sid != self.speech_id:
+            return
+        self.speech_id = None
+        self.unmute()
+        if self.current and not self.timer:
+            self.timer = GLib.timeout_add(REPEAT_RING_MS, self.announce)
+
+    def unmute(self):
+        for i in self.muted:
+            pactl("set-sink-input-mute", str(i), "0")
+        self.muted = []
+
+    def stop(self):
+        """Answered, declined, ended or switched off: silence at once."""
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = 0
+        if self.speech_id is not None:
+            try:
+                self.bus.call_sync(SPEECH, SPEECH_PATH, SPEECH_IFACE, "Stop",
+                                   GLib.Variant("(u)", (self.speech_id,)), None,
+                                   Gio.DBusCallFlags.NONE, 2000, None)
+            except GLib.Error as e:
+                log("cannot stop:", e.message)
+            self.speech_id = None
+        self.unmute()
+        self.current = None
+
+
+def main():  # pragma: no cover - the session's main loop
+    announcer = Announcer()
+    announcer.start()
+    if announcer.settings is not None:
+        announcer.settings.connect("changed::announce-callers", lambda *a: announcer.update())
+    GLib.MainLoop().run()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()

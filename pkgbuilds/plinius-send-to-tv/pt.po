@@ -1,0 +1,87 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: plinius-send-to-tv 0.1\n"
+"Report-Msgid-Bugs-To: https://plinius.cais.de\n"
+"POT-Creation-Date: 2026-11-23 15:00+0100\n"
+"PO-Revision-Date: 2026-11-23 15:00+0100\n"
+"Last-Translator: plinius-send-to-tv\n"
+"Language-Team: none\n"
+"Language: pt\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgctxt "name"
+msgid "Send to TV"
+msgstr "Enviar para o televisor"
+
+#. Shown in the add-ons manager, at most 132 characters
+msgctxt "description"
+msgid "Plays YouTube videos on the TV the phone casts to: hold a video link or tap the button in the address bar."
+msgstr "Reproduz vídeos do YouTube no televisor para onde o telefone transmite: mantenha premido um link ou toque no botão da barra."
+
+#. Context menu entry and address bar button
+msgctxt "playOnTv"
+msgid "Play on TV"
+msgstr "Reproduzir no televisor"
+
+#. $1 is the name of the TV
+msgctxt "playOn"
+msgid "Play on “$1”"
+msgstr "Reproduzir em «$1»"
+
+#. Context menu entry, greyed out
+msgctxt "notConnected"
+msgid "Play on TV – no TV connected"
+msgstr "Reproduzir no televisor – nenhum televisor ligado"
+
+#. $1 is the name of the TV
+msgctxt "noLinks"
+msgid "“$1” cannot play links"
+msgstr "«$1» não consegue reproduzir links"
+
+#. Notification; $1 is the name of the TV
+msgctxt "playing"
+msgid "Playing on “$1”."
+msgstr "A reproduzir em «$1»."
+
+#. Notification; $1 is the name of the TV
+msgctxt "starting"
+msgid "Starting on “$1”…"
+msgstr "A iniciar em «$1»…"
+
+#. Notification; $1 is the name of the TV. Cast is the quick setting of Phosh, named as there
+msgctxt "code"
+msgid "“$1” shows a code: enter it in the Cast quick setting."
+msgstr "«$1» mostra um código: introduza-o na definição rápida Transmitir."
+
+#. Notification. Cast is the quick setting of Phosh, named as there
+msgctxt "noTv"
+msgid "No TV is connected. Connect one in the Cast quick setting first."
+msgstr "Nenhum televisor está ligado. Ligue primeiro um na definição rápida Transmitir."
+
+#. Notification
+msgctxt "notAVideo"
+msgid "This is not a link to a YouTube video."
+msgstr "Isto não é um link para um vídeo do YouTube."
+
+#. Notification; $1 is the reason Schwupp gives
+msgctxt "failed"
+msgid "The TV could not play it: $1"
+msgstr "O televisor não conseguiu reproduzir: $1"
+
+#. Reason when Schwupp gives none
+msgctxt "unknownError"
+msgid "unknown error"
+msgstr "erro desconhecido"
+
+#. Notification
+msgctxt "noHost"
+msgid "Send to TV cannot reach Schwupp: the package plinius-send-to-tv is missing."
+msgstr "«Enviar para o televisor» não consegue contactar o Schwupp: falta o pacote plinius-send-to-tv."
+
+#. Stands for the TV's name when Schwupp has none
+msgctxt "theTv"
+msgid "TV"
+msgstr "Televisor"

@@ -75,7 +75,8 @@
 #define UNLOCK_MATCHES 3
 #define UNLOCK_TIMEOUT_S 4
 #define UNLOCK_MAX_FAILURES 5
-/* How often the panel's power state is read while a watched session is locked */
+/* How often the panel's power state is read, only while a session may be unlocked by the face
+ * (watch_wants_models): else the service sleeps until logind or a request wakes it */
 #define SCREEN_POLL_MS 250
 #define DPMS_GLOB "/sys/class/drm/card*-DSI-*/dpms"
 /* Created by phosh-plinius while the always-on display is shown */
@@ -593,6 +594,7 @@ worker (gpointer data)
 static gboolean start_job (JobKind kind, uid_t uid, GDBusMethodInvocation *invocation,
 			   const char *session);
 static void sync_models (void);
+static void sync_screen_poll (gboolean wanted);
 static void restore_watch (Watch *watch);
 
 /* Whether any user switched face unlock on (and has a face): then the service stays */
@@ -812,17 +814,36 @@ sync_models (void)
 	gpointer value;
 	gboolean wanted = FALSE;
 
-	if (!self.sessions || self.job)
+	if (!self.sessions)
 		return;
 	g_hash_table_iter_init (&iter, self.sessions);
 	while (!wanted && g_hash_table_iter_next (&iter, NULL, &value))
 		wanted = watch_wants_models (value);
+	/* Not delayed by a job: the screen coming on during it must still count */
+	sync_screen_poll (wanted);
+	if (self.job)
+		return;
 	if (wanted) {
 		g_clear_handle_id (&self.release_source, g_source_remove);
 		if (!self.pipeline && !self.models_retry)
 			start_job (JOB_PRELOAD, 0, NULL, NULL);
 	} else if (self.pipeline && !self.release_source) {
 		self.release_source = g_timeout_add_seconds (RELEASE_MODELS_S, on_release_due, NULL);
+	}
+}
+
+static gboolean on_screen_poll (gpointer data);
+
+/* The panel is read only while the face may unlock. Its state when that begins is the
+ * starting point, so a lock with the screen still on is no change and tries nothing. */
+static void
+sync_screen_poll (gboolean wanted)
+{
+	if (wanted && !self.screen_source) {
+		self.screen_on = read_screen_on ();
+		self.screen_source = g_timeout_add (SCREEN_POLL_MS, on_screen_poll, NULL);
+	} else if (!wanted && self.screen_source) {
+		g_clear_handle_id (&self.screen_source, g_source_remove);
 	}
 }
 
@@ -923,7 +944,9 @@ on_session_removed (GDBusConnection *bus, const char *sender, const char *path, 
 	const char *id, *object;
 
 	g_variant_get (parameters, "(&s&o)", &id, &object);
-	g_hash_table_remove (self.sessions, object);
+	/* A session that ends while locked no longer holds the models or the screen poll */
+	if (g_hash_table_remove (self.sessions, object))
+		sync_models ();
 }
 
 static void
@@ -958,8 +981,7 @@ start_watching (GDBusConnection *bus)
 	if (glob (DPMS_GLOB, 0, NULL, &found) == 0 && found.gl_pathc > 0)
 		self.dpms_path = g_strdup (found.gl_pathv[0]);
 	globfree (&found);
-	self.screen_on = read_screen_on ();
-	self.screen_source = g_timeout_add (SCREEN_POLL_MS, on_screen_poll, NULL);
+	/* The screen poll starts with sync_models (), if a session may use the face */
 }
 
 /* ---- Bus ---- */

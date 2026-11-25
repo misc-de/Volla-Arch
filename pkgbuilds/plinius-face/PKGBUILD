@@ -2,7 +2,7 @@
 
 pkgname=plinius-face
 pkgver=0.3
-pkgrel=11
+pkgrel=12
 pkgdesc="Face recognition for unlocking the Plinius, on its NPU (YuNet, Face Mesh, SFace)"
 arch=(aarch64 x86_64)  # x86_64 only the probe without the camera, for tests with saved frames
 license=(MIT Apache-2.0)  # own code and YuNet MIT; Face Mesh (MediaPipe) and SFace Apache-2.0
@@ -37,7 +37,7 @@ sha256sums=('b371a8975f50d8c06b901f1ad09ec7c1609ffb2b5d91931e88f85fc8fef56607'
 	'2888bb7218bc4181215b1b4af28e3106587295f76fdad60b7927002929d55afd'
 	'a6179008f2d6e568c35d1ff7f45ad6557b3da5d987034d29222f4bd009284869'
 	'05651eba78e5745f38b8e3fb8eeb5aaccb020e680bf4a1fa1c26122b044b310e'
-	'8ca1ec02e2389e75150b497fbc0068e44d5b312dc0105abc46cf3c11e110123b'
+	'1e2e689fb55d5fbb2024dd2fecffc5a0fc2ad8bfd1309ad0e249d2923e0dcf4d'
 	'c7ff9700a5b6d317ab9901e86452030641592ba42c18edea422201d383cd6888'
 	'52e8db3be96cdbf41ecdb07d0f084b05b5d3d51ce69c37b414996150f736fd7d'
 	'0cef0001caaa1a10439e3f46e6ae178444472c5e8bb0526a15bf54a638f74611'

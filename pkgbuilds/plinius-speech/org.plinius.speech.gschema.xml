@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.plinius.speech" path="/org/plinius/speech/">
+    <key name="voices" type="a{ss}">
+      <default>{}</default>
+      <summary>Voice per language</summary>
+      <description>The voice chosen for each language (language code such as "de" to voice id). A language without an entry speaks with its default voice. Speech is always in the system language.</description>
+    </key>
+    <key name="rate" type="d">
+      <range min="0.5" max="2.0"/>
+      <default>1.2</default>
+      <summary>Speech rate</summary>
+      <description>How fast every speech output of the system speaks; 1.0 is the voice's normal rate.</description>
+    </key>
+    <key name="announce-callers" type="b">
+      <default>true</default>
+      <summary>Announce callers</summary>
+      <description>While a call rings and a Bluetooth headset or headphones are connected, say who is calling (the name from the contacts, else "Unknown caller"). Not in the car.</description>
+    </key>
+    <key name="keep-voice" type="u">
+      <range min="10" max="86400"/>
+      <default>600</default>
+      <summary>Keep the voice loaded</summary>
+      <description>Seconds after the last speech output before the voice is freed again.</description>
+    </key>
+  </schema>
+</schemalist>

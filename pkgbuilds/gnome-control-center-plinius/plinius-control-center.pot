@@ -770,12 +770,6 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: cc-plinius-security.c
-msgid "%u affects this system"
-msgid_plural "%u affect this system"
-msgstr[0] ""
-msgstr[1] ""
-
-#: cc-plinius-security.c
 msgid "%u not assessed"
 msgid_plural "%u not assessed"
 msgstr[0] ""
@@ -4692,3 +4686,220 @@ msgid "The update of %s cannot be taken back: the earlier version of one package
 msgid_plural "The update of %s cannot be taken back: the earlier versions of %u packages are no longer on the phone."
 msgstr[0] ""
 msgstr[1] ""
+
+#: cc-speech-panel.c
+msgid "German"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "English"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Spanish"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "French"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Italian"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Dutch"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Polish"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Portuguese"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Russian"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Listen"
+msgstr ""
+
+#. Translators: the sample sentence a voice speaks; take a typical name of your language
+#: cc-speech-panel.c
+msgid "Daniel Müller is calling"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Downloading Voice…"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Installing Voice…"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Voice Not Installed"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Voice Not Available"
+msgstr ""
+
+#. Translators: %1$s is the voice's name, %2$s the download size, %3$s its size once installed, e.g. "63.2 MB"
+#: cc-speech-panel.c
+#, c-format
+msgid "The voice %1$s is downloaded now (%2$s, %3$s once installed). It speaks without an internet connection."
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Download Voice?"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Voice Not Removed"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Removing Voice…"
+msgstr ""
+
+#. Translators: %s is the voice's name
+#: cc-speech-panel.c
+#, c-format
+msgid "Remove the Voice %s?"
+msgstr ""
+
+#. Translators: %s is a size, e.g. "63.2 MB"
+#: cc-speech-panel.c
+#, c-format
+msgid "This frees %s. The voice can be downloaded again later."
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "The voice can be downloaded again later."
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Standard voice"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Download"
+msgstr ""
+
+#. Translators: a voice that is not installed and its size, e.g. "Not installed, 63.2 MB"
+#: cc-speech-panel.c
+#, c-format
+msgid "Not installed, %s"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Not installed"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "No Voice Available"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "There is no voice for this language yet, so the phone says nothing."
+msgstr ""
+
+#. Translators: %s is the language of the phone, e.g. "German" (Region & Language is the name of GNOME's page where it is set)
+#: cc-speech-panel.c
+#, c-format
+msgid "Language: %s. The phone always speaks the language set in Region & Language."
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Slower"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Faster"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Speech Rate"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Speech Output"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Voice"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "The voice and the speech rate apply to everything the phone says."
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Announcements"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Announce Callers"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "In a Bluetooth headset or headphones, the phone says who is calling after the first ring: the name from the contacts, or “Unknown caller”. Not in the car."
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Belgium"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Brazil"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Germany"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Spain"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "France"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "United Kingdom"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Italy"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Netherlands"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Poland"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Portugal"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "Russia"
+msgstr ""
+
+#: cc-speech-panel.c
+msgid "United States"
+msgstr ""
+
+#. Translators: a voice's name and its region, e.g. Joe (United States)
+#: cc-speech-panel.c
+#, c-format
+msgid "%1$s (%2$s)"
+msgstr ""

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_name__",
+  "description": "__MSG_description__",
+  "version": "0.1.0",
+  "default_locale": "en",
+  "icons": {
+    "32": "send-to-tv.svg",
+    "48": "send-to-tv.svg",
+    "96": "send-to-tv.svg"
+  },
+  "permissions": ["menus", "nativeMessaging", "notifications", "activeTab", "scripting"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "page_action": {
+    "default_icon": "send-to-tv.svg",
+    "default_title": "__MSG_playOnTv__",
+    "show_matches": [
+      "*://www.youtube.com/watch*",
+      "*://m.youtube.com/watch*",
+      "*://youtube.com/watch*",
+      "*://music.youtube.com/watch*",
+      "*://www.youtube.com/shorts/*",
+      "*://m.youtube.com/shorts/*",
+      "*://www.youtube.com/live/*",
+      "*://m.youtube.com/live/*",
+      "*://youtu.be/*"
+    ]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "send-to-tv@de.cais",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}

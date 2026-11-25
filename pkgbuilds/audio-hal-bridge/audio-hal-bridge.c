@@ -27,7 +27,13 @@
 //
 // Calls: the bridge serves the D-Bus API of callaudiod (org.mobian_project.CallAudio), which
 // GNOME Calls uses. The modem's voice runs inside the device between modem and codec; the HAL
-// only has to be in call mode and routed to earpiece, speaker or headset.
+// only has to be in call mode and routed to earpiece, speaker or headset. When a call ends
+// (SelectMode(0) after call mode; GNOME Calls asks for call mode only once a mobile call is
+// active or dialling) a short jingle sounds where the call was: the bridge stays in call mode on
+// the call's route (earpiece, speaker, or a Bluetooth headset over SCO, whose hands-free link
+// stays meanwhile), mixes the jingle (/usr/share/audio-hal-bridge/call-end.wav) into its output
+// as loud as the call, and only then goes to normal mode. Not with feedbackd's profile "silent";
+// a call that starts meanwhile cuts it short. The reply to SelectMode does not wait for it.
 //
 // Conversations in apps (VoIP, SIP, a voice chat in the browser): while the microphone feeds a
 // stream with the role "Communication" or "Phone", or a stream of a process that plays at the
@@ -120,6 +126,13 @@
 /* After the last sink stopped the output stays on this long, writing silence, so that short
  * sounds in a row (keys, a preview tapped again) do not each wait for the amplifiers */
 #define OUT_LINGER_MS 3000
+/* The jingle at the end of a call (see the top): 16 bit PCM, stereo, RATE; a longer file is not
+ * taken. Call mode ends this long after the jingle's last transfer went to the HAL (it buffers
+ * about 107 ms, measured), or at the latest CALL_END_SLACK_MS after the jingle's length. */
+#define CALL_END_SOUND "/usr/share/audio-hal-bridge/call-end.wav"
+#define CALL_END_MAX_S 3
+#define CALL_END_TAIL_MS 200
+#define CALL_END_SLACK_MS 2000
 
 struct bridge;
 
@@ -301,9 +314,29 @@ struct bridge {
 	/* CallAudio D-Bus service, main loop */
 	GMainLoop *main_loop;
 	GDBusConnection *bus;
+	/* The jingle at the end of a call (load_jingle), NULL: none */
+	int16_t *jingle;
+	size_t jingle_frames;
+	/* Under out_lock: the playback thread mixes it while jingle_playing */
+	bool jingle_playing;
+	size_t jingle_pos; /* frames */
+	float jingle_gain;
+	unsigned jingle_gen;
+	/* Under route_lock: the call ended, call mode stays until the jingle is through
+	 * (call_end_start); call_end_gen tells a later call's end from this one's */
+	bool call_ending;
+	unsigned call_end_gen;
+	guint call_end_timeout;
 };
 
 static void route(struct bridge *b);
+
+/* The playback thread hands the end of the jingle to the main loop */
+struct jingle_played {
+	struct bridge *bridge;
+	unsigned gen;
+};
+static gboolean on_jingle_played(gpointer data);
 
 /* The sinks that stream, for route() */
 #define SINK_SPEAKER 1u
@@ -511,7 +544,7 @@ static void *playback_thread(void *data)
 	memset(mix, 0, sizeof mix);
 	pthread_mutex_lock(&b->out_lock);
 	while (!b->quit) {
-		bool any = b->speaker.active || b->earpiece.active || b->phones.active;
+		bool any = b->speaker.active || b->earpiece.active || b->phones.active || b->jingle_playing;
 		if (!any && !standby && lingered < linger_chunks) {
 			/* What a stopped sink left queued is not played after a pause */
 			if (lingered++ == 0)
@@ -591,6 +624,20 @@ static void *playback_thread(void *data)
 			for (uint32_t s = 0; aec_on && s < got / 2; s++)
 				unmixed[s] += buf[s] * unvolume;
 		}
+		/* The jingle at the end of a call (call_end_start), on top of what the sinks play */
+		struct jingle_played *played = NULL;
+		if (b->jingle_playing) {
+			size_t n = SPA_MIN(chunk / 4, b->jingle_frames - b->jingle_pos);
+			const int16_t *j = b->jingle + b->jingle_pos * 2;
+			for (size_t s = 0; s < n * 2; s++)
+				mix[s] = SPA_CLAMP(mix[s] + (int32_t)(j[s] * b->jingle_gain), INT16_MIN, INT16_MAX);
+			b->jingle_pos += n;
+			if (b->jingle_pos == b->jingle_frames) {
+				b->jingle_playing = false;
+				played = g_new(struct jingle_played, 1);
+				*played = (struct jingle_played){b, b->jingle_gen};
+			}
+		}
 		pthread_mutex_unlock(&b->out_lock);
 		if (aec_on) {
 			for (size_t s = 0; s < chunk / 2; s++)
@@ -604,6 +651,8 @@ static void *playback_thread(void *data)
 		pthread_mutex_lock(&b->hal_out_lock);
 		b->out->write(b->out, mix, chunk);
 		pthread_mutex_unlock(&b->hal_out_lock);
+		if (played) /* its last transfer is with the HAL */
+			g_idle_add(on_jingle_played, played);
 		/* After the write: the HAL sets its path (both amplifiers on) when it leaves standby
 		 * or changes the routing, so a speakerphone conversation checks about twice a second */
 		writes++;
@@ -2230,6 +2279,172 @@ static void call_audio_changed(struct bridge *b)
 				      g_variant_new("(sa{sv}as)", "org.mobian_project.CallAudio", &changed, NULL), NULL);
 }
 
+/* Call mode on or off. Call with route_lock held. */
+static void select_mode(struct bridge *b, bool call)
+{
+	bool was_call = b->call;
+	b->call = call;
+	b->call_speaker = false;
+	b->dev->set_mode(b->dev, b->call ? AUDIO_MODE_IN_CALL : AUDIO_MODE_NORMAL);
+	if (was_call && !b->call)
+		reopen_input(b);
+	route(b);
+	fprintf(stderr, "audio-hal-bridge: %s\n", b->call ? "call mode" : "normal mode");
+	call_volume_schedule(b); /* the HAL gets it at every call's start, as on Android */
+}
+
+/* Reads the jingle: a RIFF/WAVE file, 16 bit PCM, two channels at RATE, at most CALL_END_MAX_S
+ * long. Without it a call ends without a sound. Returns its frames. */
+static size_t load_jingle(struct bridge *b, const char *path)
+{
+	gchar *data = NULL;
+	gsize size = 0;
+	if (!g_file_get_contents(path, &data, &size, NULL)) {
+		fprintf(stderr, "audio-hal-bridge: no call end sound %s\n", path);
+		return 0;
+	}
+	const uint8_t *p = (const uint8_t *)data;
+	bool pcm = false;
+	size_t frames = 0;
+	for (size_t at = 12; size >= 12 && !memcmp(p, "RIFF", 4) && !memcmp(p + 8, "WAVE", 4) && at + 8 <= size;) {
+		const uint8_t *c = p + at + 8;
+		size_t len = p[at + 4] | p[at + 5] << 8 | p[at + 6] << 16 | (size_t)p[at + 7] << 24;
+		if (len > size - at - 8)
+			break;
+		if (!memcmp(p + at, "fmt ", 4) && len >= 16) {
+			unsigned tag = c[0] | c[1] << 8, channels = c[2] | c[3] << 8, bits = c[14] | c[15] << 8;
+			unsigned long rate = c[4] | c[5] << 8 | c[6] << 16 | (unsigned long)c[7] << 24;
+			pcm = tag == 1 && channels == 2 && bits == 16 && rate == RATE;
+		} else if (!memcmp(p + at, "data", 4)) {
+			if (pcm && len / 4 <= (size_t)CALL_END_MAX_S * RATE) {
+				frames = len / 4;
+				b->jingle = g_memdup2(c, frames * 4); /* little endian, as the HAL takes it */
+			}
+			break;
+		}
+		at += 8 + len + (len & 1);
+	}
+	g_free(data);
+	if (!frames)
+		fprintf(stderr, "audio-hal-bridge: call end sound %s is not 16 bit stereo PCM at %d Hz up to %d s\n", path,
+			RATE, CALL_END_MAX_S);
+	b->jingle_frames = frames;
+	return frames;
+}
+
+/* feedbackd's profile "silent": a call ends without the jingle ("full" and "quiet" play it).
+ * Without feedbackd's schema: not silent. */
+static bool feedback_silent(void)
+{
+	GSettingsSchemaSource *src = g_settings_schema_source_get_default();
+	GSettingsSchema *schema = src ? g_settings_schema_source_lookup(src, "org.sigxcpu.feedbackd", TRUE) : NULL;
+	bool silent = false;
+	if (schema && g_settings_schema_has_key(schema, "profile")) {
+		GSettings *settings = g_settings_new_full(schema, NULL, NULL);
+		char *profile = g_settings_get_string(settings, "profile");
+		silent = !g_strcmp0(profile, "silent");
+		g_free(profile);
+		g_object_unref(settings);
+	}
+	if (schema)
+		g_settings_schema_unref(schema);
+	return silent;
+}
+
+/* Normal mode after the jingle, as SelectMode(0) without it. Main thread. */
+static void call_end_finish(struct bridge *b, const char *why)
+{
+	pthread_mutex_lock(&b->route_lock);
+	if (b->call_ending) {
+		b->call_ending = false;
+		if (b->call_end_timeout)
+			g_source_remove(b->call_end_timeout);
+		b->call_end_timeout = 0;
+		pthread_mutex_lock(&b->out_lock);
+		b->jingle_playing = false;
+		pthread_mutex_unlock(&b->out_lock);
+		fprintf(stderr, "audio-hal-bridge: call end sound %s\n", why);
+		select_mode(b, false);
+		if (b->bus)
+			call_audio_changed(b);
+	}
+	pthread_mutex_unlock(&b->route_lock);
+	bt_schedule(b); /* a headset leaves hands-free now */
+}
+
+static gboolean on_call_end_timeout(gpointer data)
+{
+	struct bridge *b = data;
+	pthread_mutex_lock(&b->route_lock);
+	b->call_end_timeout = 0;
+	pthread_mutex_unlock(&b->route_lock);
+	call_end_finish(b, "not through in time");
+	return G_SOURCE_REMOVE;
+}
+
+/* The jingle's last transfer is with the HAL: normal mode once it has sounded */
+static gboolean on_jingle_tail(gpointer data)
+{
+	struct jingle_played *played = data;
+	struct bridge *b = played->bridge;
+	pthread_mutex_lock(&b->route_lock);
+	bool current = b->call_ending && played->gen == b->call_end_gen;
+	pthread_mutex_unlock(&b->route_lock);
+	if (current)
+		call_end_finish(b, "played");
+	g_free(played);
+	return G_SOURCE_REMOVE;
+}
+
+static gboolean on_jingle_played(gpointer data)
+{
+	g_timeout_add(CALL_END_TAIL_MS, on_jingle_tail, data);
+	return G_SOURCE_REMOVE;
+}
+
+/* A call ended: the jingle plays on the call's route (earpiece, speaker, or the headset over
+ * SCO, whose hold stays while call mode does), call mode stays until it is through
+ * (call_end_finish). As loud as the call; a headset sets its own volume. Call with route_lock
+ * held, main thread. Returns false if no jingle plays: then normal mode follows at once. */
+static bool call_end_start(struct bridge *b)
+{
+	if (!b->jingle_frames || feedback_silent())
+		return false;
+	float gain = 1.0f;
+	if (!atomic_load(&b->sco)) {
+		float slider = atomic_load(&b->role_phone_gain) >= 0.0f ? b->voice_applied : (float)b->call_step / CALL_STEPS;
+		slider = SPA_CLAMP(slider, 1.0f / CALL_STEPS, 1.0f);
+		gain = slider * slider * slider; /* as PipeWire turns a slider into a gain */
+	}
+	b->call_ending = true;
+	b->call_end_gen++;
+	pthread_mutex_lock(&b->out_lock);
+	b->jingle_pos = 0;
+	b->jingle_gain = gain;
+	b->jingle_gen = b->call_end_gen;
+	b->jingle_playing = true;
+	pthread_cond_signal(&b->out_cond); /* out of standby */
+	pthread_mutex_unlock(&b->out_lock);
+	b->call_end_timeout = g_timeout_add(b->jingle_frames * 1000 / RATE + OUT_WARMUP_MS + CALL_END_SLACK_MS,
+					    on_call_end_timeout, b);
+	fprintf(stderr, "audio-hal-bridge: call end sound, gain %.2f\n", gain);
+	return true;
+}
+
+/* A call again while the jingle plays: it stops, call mode stays. Call with route_lock held. */
+static void call_end_cancel(struct bridge *b)
+{
+	b->call_ending = false;
+	b->call_end_gen++; /* the jingle's end belongs to no call any more */
+	if (b->call_end_timeout)
+		g_source_remove(b->call_end_timeout);
+	b->call_end_timeout = 0;
+	pthread_mutex_lock(&b->out_lock);
+	b->jingle_playing = false;
+	pthread_mutex_unlock(&b->out_lock);
+	fprintf(stderr, "audio-hal-bridge: call end sound cut short: a call again\n");
+}
+
 static void on_call_audio_method(GDBusConnection *bus, const char *sender, const char *path, const char *iface,
 				 const char *method, GVariant *params, GDBusMethodInvocation *invocation,
 				 gpointer user_data)
@@ -2245,15 +2460,12 @@ static void on_call_audio_method(GDBusConnection *bus, const char *sender, const
 							      "Unknown mode %u", mode);
 			return;
 		}
-		bool was_call = b->call;
-		b->call = mode == 1;
-		b->call_speaker = false;
-		b->dev->set_mode(b->dev, b->call ? AUDIO_MODE_IN_CALL : AUDIO_MODE_NORMAL);
-		if (was_call && !b->call)
-			reopen_input(b);
-		route(b);
-		fprintf(stderr, "audio-hal-bridge: %s\n", b->call ? "call mode" : "normal mode");
-		call_volume_schedule(b); /* the HAL gets it at every call's start, as on Android */
+		if (mode == 1 && b->call_ending)
+			call_end_cancel(b);
+		/* After a call the jingle first, normal mode follows it (call_end_finish); the reply
+		 * does not wait for it */
+		if (!b->call_ending && !(mode == 0 && b->call && call_end_start(b)))
+			select_mode(b, mode == 1);
 	} else if (!strcmp(method, "EnableSpeaker")) {
 		gboolean enable;
 		g_variant_get(params, "(b)", &enable);
@@ -2324,6 +2536,7 @@ int main(int argc, char *argv[])
 	describe_ports(&b);
 	atomic_store(&b.volume_port, &b.speaker); /* until the "default" metadata says otherwise */
 	load_call_volume(&b);
+	load_jingle(&b, CALL_END_SOUND);
 	if (open_hal(&b))
 		return 1;
 	b.aec = aec_new(RATE, 2, 1);
@@ -2418,6 +2631,7 @@ int main(int argc, char *argv[])
 	b.dev->common.close(&b.dev->common);
 	if (b.aec)
 		aec_free(b.aec);
+	g_free(b.jingle);
 	pw_deinit();
 	return 0;
 }

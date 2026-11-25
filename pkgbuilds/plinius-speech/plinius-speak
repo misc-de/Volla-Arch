@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""plinius-speak: say a text with the system's voice (org.plinius.Speech1).
+
+    plinius-speak TEXT...       say the arguments
+    plinius-speak --stdin       say what comes on standard input
+
+Waits until the text has been said. SIGTERM or SIGINT stops the speech at once; that is how
+speech-dispatcher's generic module (plinius.conf) stops it. Voice, rate and language are the
+system's (GNOME Settings > Sound > Speech Output), whatever the caller asks for.
+Exit status: 0 said, 1 stopped or failed, 2 no voice for the system language.
+"""
+
+import signal
+import sys
+
+from gi.repository import Gio, GLib
+
+BUS_NAME = "org.plinius.Speech1"
+PATH = "/org/plinius/Speech1"
+IFACE = "org.plinius.Speech1"
+NO_VOICE = "org.plinius.Speech1.Error.NoVoice"
+
+
+def log(*args):
+    print("plinius-speak:", *args, file=sys.stderr, flush=True)
+
+
+class Speaker:
+    def __init__(self, bus, loop):
+        self.bus = bus
+        self.loop = loop
+        self.id = None
+        self.status = 1
+        self.early = {}  # id -> completed, for a Finished seen before Speak returned
+        bus.signal_subscribe(BUS_NAME, IFACE, "Finished", PATH, None, Gio.DBusSignalFlags.NONE,
+                             self.on_finished)
+
+    def on_finished(self, bus, sender, path, iface, name, params):
+        sid, completed = params.unpack()
+        if self.id is None:
+            self.early[sid] = completed
+        elif sid == self.id:
+            self.done(completed)
+
+    def done(self, completed):
+        self.status = 0 if completed else 1
+        self.loop.quit()
+
+    def speak(self, text):
+        try:
+            reply = self.bus.call_sync(BUS_NAME, PATH, IFACE, "Speak",
+                                       GLib.Variant("(sa{sv})", (text, {})), GLib.VariantType("(u)"),
+                                       Gio.DBusCallFlags.NONE, 30000, None)
+        except GLib.Error as e:
+            log(e.message)
+            # A remote error's message is "GDBus.Error:<name>: <message>"
+            return 2 if e.message.startswith(f"GDBus.Error:{NO_VOICE}:") else 1
+        self.id = reply.unpack()[0]
+        if self.id in self.early:
+            self.done(self.early.pop(self.id))
+            return self.status
+        self.loop.run()
+        return self.status
+
+    def stop(self):
+        if self.id is not None:
+            try:
+                self.bus.call_sync(BUS_NAME, PATH, IFACE, "Stop", GLib.Variant("(u)", (self.id,)),
+                                   None, Gio.DBusCallFlags.NONE, 5000, None)
+            except GLib.Error as e:
+                log(e.message)
+        self.status = 1
+        self.loop.quit()
+        return GLib.SOURCE_REMOVE
+
+
+def read_text(argv, stdin):
+    if argv[1:2] == ["--stdin"]:
+        return stdin.read()
+    return " ".join(argv[1:])
+
+
+def main(argv=None, stdin=None):
+    argv = sys.argv if argv is None else argv
+    text = read_text(argv, stdin or sys.stdin).strip()
+    if not text:
+        return 0
+    loop = GLib.MainLoop()
+    speaker = Speaker(Gio.bus_get_sync(Gio.BusType.SESSION, None), loop)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, speaker.stop)
+    return speaker.speak(text)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

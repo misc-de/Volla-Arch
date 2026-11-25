@@ -888,7 +888,8 @@ def test_startup_wiring(faced):
         "subscribe org.freedesktop.login1 org.freedesktop.login1.Manager SessionRemoved "
         "/org/freedesktop/login1 -",
     ]
-    assert out[8] == "timer+ on_screen_poll 250ms"
+    # No session may use the face: the panel is not read
+    assert not only(out, "timer+ on_screen_poll")
     # The main loop ended (end of the script): the process ends through pltfl_exit
     assert out[-1] == "exit 0"
 
@@ -1122,6 +1123,52 @@ def test_screen_off_forgets_a_pending_try(faced):
     assert not only(out, "call ", "camera")
 
 
+def test_the_panel_is_read_only_while_the_face_may_unlock(faced):
+    d, sh = faced
+    dpms(d, "Off\n")
+    (d / "run" / "sessions").write_text("s1 1 0\n")
+    out = sh("session s1 1001 seat0 user 0", *enrolled(), "main", "own", "timers",
+             "lockhint s1 1", "timers", "wait", "lockhint s1 0", "timers", start=())
+    polls = ["on_screen_poll" in t for t in only(out, "timers")]
+    # Unlocked: no reads, 4 wake-ups a second less; locked: reads; unlocked again: none
+    assert polls == [False, True, False]
+    assert only(out, "timer+ on_screen_poll") == ["timer+ on_screen_poll 250ms"]
+    assert only(out, "timer- on_screen_poll") == ["timer- on_screen_poll"]
+
+
+@pytest.mark.parametrize("state,enabled", [
+    ("s1 0 0\n", 1),   # no PIN since the start
+    ("s1 1 0\n", 0),   # face unlock off
+    ("s1 1 5\n", 1),   # too many failed tries
+])
+def test_no_panel_reads_for_a_lock_the_face_may_not_open(faced, state, enabled):
+    d, sh = faced
+    (d / "run" / "sessions").write_text(state)
+    out = sh("session s1 1001 seat0 user 1", f"settings 1001 {enabled} 1", "templates 1001 3",
+             "main", "own", "timers", start=())
+    assert not only(out, "timer+ on_screen_poll")
+
+
+def test_a_session_ending_while_locked_gives_back_the_panel_and_the_models(faced):
+    d, sh = faced
+    out = sh(*locked_and_ready(d), "wait", "removed s1", "removed s1", "timers", start=())
+    assert only(out, "timer- on_screen_poll") == ["timer- on_screen_poll"]
+    assert "timer+ on_release_due 30000ms" in out
+    assert "on_screen_poll" not in only(out, "timers")[-1]
+
+
+def test_a_lock_during_a_job_reads_the_panel_at_once(faced):
+    d, sh = faced
+    dpms(d, "Off\n")
+    (d / "run" / "sessions").write_text("s1 1 0\n")
+    out = sh("session s1 1001 seat0 user 0", *enrolled(), "main", "own", "frames w",
+             "method Verify", "blocked", "lockhint s1 1", f"write {screen(d)} On",
+             "fire on_screen_poll", "state", "release", "wait", start=())
+    # The screen came on while the Verify ran: the try follows its end
+    assert out.index("timer+ on_screen_poll 250ms") < out.index("fired on_screen_poll")
+    assert "state job=busy models=1 pending=1 screen=1" in out
+
+
 def test_pin_unlock_during_a_try_stops_it(faced):
     d, sh = faced
     (d / "run" / "sessions").write_text("s1 1 3\n")
@@ -1222,7 +1269,7 @@ def test_idle_exit_unless_face_unlock_is_on(faced, files, stays):
             (d / "state" / name).write_text(content)
     out, code = sh("fire on_idle_exit", "timers", check=False)
     if stays:
-        assert out[-3:-1] == ["fired on_idle_exit", "timers on_screen_poll"]
+        assert out[-3:-1] == ["fired on_idle_exit", "timers"]
     else:
         assert out[-2:] == ["log: idle, exiting", "exit 0"]
     assert code == 0

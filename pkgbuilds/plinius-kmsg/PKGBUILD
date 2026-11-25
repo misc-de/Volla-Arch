@@ -1,0 +1,33 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-kmsg
+pkgver=0.1
+pkgrel=3
+pkgdesc="Kernel log into the journal without the vendor drivers' status lines"
+arch=(aarch64 x86_64)
+license=(MIT)
+depends=(systemd-libs)
+source=(plinius-kmsg.c
+	plinius-kmsg.service
+	drop.list
+	LICENSE)
+sha256sums=('d6d1033b17729c47e33c2c1cbdc267b73be90e894139855358023de17fc6e8da'
+	'0a87e17a2f1059dbf5827a2210699dc70f8fd558b7d6f3739066d1127668cb38'
+	'a83ad910fcc0806866b0679f9da230f54ecc9abd1b5a701feb40a55dae047ecf'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra \
+		-o plinius-kmsg plinius-kmsg.c $(pkg-config --cflags --libs libsystemd) $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 plinius-kmsg -t "$pkgdir/usr/bin"
+	install -Dm644 drop.list -t "$pkgdir/usr/lib/plinius-kmsg"
+	install -Dm644 plinius-kmsg.service -t "$pkgdir/usr/lib/systemd/system"
+	# From the start: journald no longer reads the kernel log itself (device-volla-ansuz)
+	install -d "$pkgdir/usr/lib/systemd/system/sysinit.target.wants"
+	ln -s ../plinius-kmsg.service "$pkgdir/usr/lib/systemd/system/sysinit.target.wants/"
+}

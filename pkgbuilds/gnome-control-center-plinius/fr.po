@@ -705,11 +705,6 @@ msgid_plural "%u known vulnerabilities in installed packages"
 msgstr[0] "%u vulnérabilité connue dans les paquets installés"
 msgstr[1] "%u vulnérabilités connues dans les paquets installés"
 
-msgid "%u affects this system"
-msgid_plural "%u affect this system"
-msgstr[0] "%u concerne ce système"
-msgstr[1] "%u concernent ce système"
-
 msgid "%u not assessed"
 msgid_plural "%u not assessed"
 msgstr[0] "%u non évaluée"
@@ -4331,3 +4326,164 @@ msgid "The update of %s cannot be taken back: the earlier version of one package
 msgid_plural "The update of %s cannot be taken back: the earlier versions of %u packages are no longer on the phone."
 msgstr[0] "La mise à jour du %s ne peut pas être annulée : la version précédente de %u paquet n’est plus sur le téléphone."
 msgstr[1] "La mise à jour du %s ne peut pas être annulée : les versions précédentes de %u paquets ne sont plus sur le téléphone."
+
+# Plinius: Speech Output (cc-speech-panel.c)
+
+msgid "German"
+msgstr "allemand"
+
+msgid "English"
+msgstr "anglais"
+
+msgid "Spanish"
+msgstr "espagnol"
+
+msgid "French"
+msgstr "français"
+
+msgid "Italian"
+msgstr "italien"
+
+msgid "Dutch"
+msgstr "néerlandais"
+
+msgid "Polish"
+msgstr "polonais"
+
+msgid "Portuguese"
+msgstr "portugais"
+
+msgid "Russian"
+msgstr "russe"
+
+msgid "Listen"
+msgstr "Écouter"
+
+msgid "Daniel Müller is calling"
+msgstr "Camille Martin vous appelle"
+
+msgid "Downloading Voice…"
+msgstr "Téléchargement de la voix…"
+
+msgid "Installing Voice…"
+msgstr "Installation de la voix…"
+
+msgid "Voice Not Installed"
+msgstr "Voix non installée"
+
+msgid "Voice Not Available"
+msgstr "Voix indisponible"
+
+#, c-format
+msgid "The voice %1$s is downloaded now (%2$s, %3$s once installed). It speaks without an internet connection."
+msgstr "La voix %1$s est téléchargée maintenant (%2$s, %3$s une fois installée). Elle parle sans connexion à Internet."
+
+msgid "Download Voice?"
+msgstr "Télécharger la voix ?"
+
+msgid "Voice Not Removed"
+msgstr "Voix non supprimée"
+
+msgid "Removing Voice…"
+msgstr "Suppression de la voix…"
+
+#, c-format
+msgid "Remove the Voice %s?"
+msgstr "Supprimer la voix %s ?"
+
+#, c-format
+msgid "This frees %s. The voice can be downloaded again later."
+msgstr "Cela libère %s. La voix pourra être téléchargée à nouveau plus tard."
+
+msgid "The voice can be downloaded again later."
+msgstr "La voix pourra être téléchargée à nouveau plus tard."
+
+msgid "Standard voice"
+msgstr "Voix standard"
+
+msgid "Download"
+msgstr "Télécharger"
+
+#, c-format
+msgid "Not installed, %s"
+msgstr "Non installée, %s"
+
+msgid "Not installed"
+msgstr "Non installée"
+
+msgid "No Voice Available"
+msgstr "Aucune voix disponible"
+
+msgid "There is no voice for this language yet, so the phone says nothing."
+msgstr "Il n’existe pas encore de voix pour cette langue, le téléphone ne dit donc rien."
+
+#, c-format
+msgid "Language: %s. The phone always speaks the language set in Region & Language."
+msgstr "Langue : %s. Le téléphone parle toujours la langue choisie dans Région et langue."
+
+msgid "Slower"
+msgstr "Plus lent"
+
+msgid "Faster"
+msgstr "Plus rapide"
+
+msgid "Speech Rate"
+msgstr "Débit de parole"
+
+msgid "Speech Output"
+msgstr "Synthèse vocale"
+
+msgid "Voice"
+msgstr "Voix"
+
+msgid "The voice and the speech rate apply to everything the phone says."
+msgstr "La voix et le débit s’appliquent à tout ce que dit le téléphone."
+
+msgid "Announcements"
+msgstr "Annonces"
+
+msgid "Announce Callers"
+msgstr "Annoncer l’appelant"
+
+msgid "In a Bluetooth headset or headphones, the phone says who is calling after the first ring: the name from the contacts, or “Unknown caller”. Not in the car."
+msgstr "Dans un casque ou des écouteurs Bluetooth, le téléphone annonce qui appelle après la première sonnerie : le nom des contacts ou « Appelant inconnu ». Pas dans la voiture."
+
+msgid "Belgium"
+msgstr "Belgique"
+
+msgid "Brazil"
+msgstr "Brésil"
+
+msgid "Germany"
+msgstr "Allemagne"
+
+msgid "Spain"
+msgstr "Espagne"
+
+msgid "France"
+msgstr "France"
+
+msgid "United Kingdom"
+msgstr "Royaume-Uni"
+
+msgid "Italy"
+msgstr "Italie"
+
+msgid "Netherlands"
+msgstr "Pays-Bas"
+
+msgid "Poland"
+msgstr "Pologne"
+
+msgid "Portugal"
+msgstr "Portugal"
+
+msgid "Russia"
+msgstr "Russie"
+
+msgid "United States"
+msgstr "États-Unis"
+
+#, c-format
+msgid "%1$s (%2$s)"
+msgstr "%1$s (%2$s)"

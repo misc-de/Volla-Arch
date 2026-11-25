@@ -2,7 +2,7 @@
 
 pkgname=phoc-plinius
 pkgver=0.59.0
-pkgrel=9
+pkgrel=10
 pkgdesc="Phosh compositor with embedded, patched wlroots 0.20.2 as upstream intends"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 url="https://gitlab.gnome.org/World/Phosh/phoc"
@@ -65,6 +65,7 @@ source=(
 	0036-cursor-A-dragged-window-keeps-half-its-title-bar-out.patch
 	0037-view-Windows-can-be-minimized.patch
 	0038-input-method-relay-The-OSK-only-for-the-phone-s-own-.patch
+	0039-backend-drm-A-dozing-panel-leaves-its-low-power-mode-for-a-modeset.patch
 )
 sha256sums=('SKIP'
 	'SKIP'
@@ -102,7 +103,8 @@ sha256sums=('SKIP'
 	'264d44ec3b1811e3c0bd1297aa3cc9561dde33279552b08f8a810a603c205647'
 	'c40be68caace2db39ead878727440aa17cf9ef4e8d35490bc9fcb0ccef55aed8'
 	'47bfb6fdd682f1e4d293f999ab1754af68f862dfa02c994ba7b48db1d59641a9'
-	'41da21271531577d4a0aee94621c59f8fe4768b9bf2b8a5722557819a14a926e')
+	'41da21271531577d4a0aee94621c59f8fe4768b9bf2b8a5722557819a14a926e'
+	'853a8c2c0fb7f7bd64117b40c0205dd143e6b0d091394c4eb76027b739aa26b9')
 
 prepare() {
 	# Place the subprojects where phoc's .wrap files expect them (no download during build)
@@ -217,6 +219,10 @@ prepare() {
 	# panel, not under the cursor, and a field on the desktop (typed into with the PC's keyboard)
 	# does not unfold it
 	patch -d phoc -Np1 -i "$srcdir/0038-input-method-relay-The-OSK-only-for-the-phone-s-own-.patch"
+	# A modeset (a new mode or refresh rate) while the always-on display dozed froze the panel:
+	# MediaTek's driver skips the page-flip event of a modeset with DOZE_ACTIVE set and wlroots
+	# waited for it forever. The panel now leaves its low-power mode before a modeset
+	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0039-backend-drm-A-dozing-panel-leaves-its-low-power-mode-for-a-modeset.patch"
 }
 
 build() {

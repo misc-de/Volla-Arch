@@ -99,6 +99,10 @@ image to download yet.
 - web apps from Settings
 - the DNS filter for clients of the hotspot and of USB
 - Bluetooth earbuds dialled back when the display comes on
+- mobile data that stays connected without internet after a cell change reconnects by itself
+  (plinius-datawatch)
+- the kernel log in the journal without the vendor drivers' status lines: a sixth of the lines remain
+  (plinius-kmsg; all of them stay in dmesg)
 
 ### Open
 
@@ -245,6 +249,7 @@ tools/kernel-kmi.py -C build/kernel-trial types --genksyms <old> <new> --symtype
 tools/kernel-checkbuild.sh [--package] <rev>   # check build of a kernel commit, pkgrel 99, never into the repo
 tools/run-tests.sh            # the test suite; a full green run is the test gate of publish.sh
 tools/phone-check.py          # everyday functions of the phone live over SSH (reads and scans only)
+tools/lpm-night.sh start|status|fetch|stop   # passive night log of the SoC's low-power states and what blocks them
 ```
 
 A merge of a new linux-6.1.y release into `plinius-kernel` is measured with `tools/kernel-kmi.py`
@@ -277,7 +282,7 @@ Settings, GPL-2.0-or-later). The licenses of each package are recorded in its `P
 | `gl4es` | [ptitSeb/gl4es](https://github.com/ptitSeb/gl4es) | MIT | patches: builds with GCC 14, the EGL wrapper asks a GLES driver for a GLES config, a deleted program no longer stays the current one; a starter `gl4es <program>` |
 | `vkmark-plinius` | [vkmark/vkmark](https://github.com/vkmark/vkmark) | LGPL-2.1-only | patches: fills the screen at a fractional output scale and in portrait, shows the scene and the score on screen |
 | `lxc-android-halium` | [UBports lxc-android-config](https://gitlab.com/ubports/development/core/hybris-support/lxc-android-config) | GPL-3.0-or-later | the subset the Plinius uses under UT |
-| `phoc-plinius` | [Phosh/phoc](https://gitlab.gnome.org/World/Phosh/phoc) | GPL-3.0-or-later | patches: GPU sync, keyboard only after a tap and unfolded by a tap into the field, 90/120 Hz, boot logo in the accent color, night light without CRTC gamma, custom accent color, animated background effect, outputs kept over a session pause, doze for an always-on display, virtual output on request and windows that follow the screen they were picked on, window scale that starts over when arranged anew, a crash fix (built with embedded wlroots, see below) |
+| `phoc-plinius` | [Phosh/phoc](https://gitlab.gnome.org/World/Phosh/phoc) | GPL-3.0-or-later | patches: GPU sync, keyboard only after a tap and unfolded by a tap into the field, 90/120 Hz, boot logo in the accent color, night light without CRTC gamma, custom accent color, animated background effect, outputs kept over a session pause, doze for an always-on display (also across a change of mode), virtual output on request and windows that follow the screen they were picked on, window scale that starts over when arranged anew, a crash fix (built with embedded wlroots, see below) |
 | `phosh-plinius` | [Phosh/phosh](https://gitlab.gnome.org/World/Phosh/phosh), PKGBUILD based on Arch's | GPL-3.0-or-later | patches: restart and Restart UI in the power menu, top bar from the panel data, notch search across apps, settings, contacts and events (GNOME search providers), camera light that follows a turned screen, unlock pattern, NFC, cast, USB and desktop-over-VNC quick settings, hotspot on `ap0`, accent color, dimming fade, brightness without visible steps, brightness slider in auto mode, flashlight tile follows the button, lock state to logind at startup, Bluetooth headset as one device per direction, modem with a SIM first, always-on display, emergency button on the lock screen and a full-screen emergency menu, unlocking on a second screen, folders sorted by name, "Remove from Folder" and "Dissolve Folder" in the folder menus, gradual automatic brightness; libical 4 patch from Arch |
 | `stevia-plinius` | [Phosh/stevia](https://gitlab.gnome.org/World/Phosh/stevia) | GPL-3.0-or-later | patches: glass look of the password prompt at startup, glass or original look as a setting, microphone key for speech to text, symbol rows at full width, keys keep their height with a virtual output, starts along with Phosh |
 | `gnome-control-center-plinius` | [GNOME/gnome-control-center](https://gitlab.gnome.org/GNOME/gnome-control-center), PKGBUILD based on Arch's | GPL-2.0-or-later | patches and own panels: phone display and notch, users with pattern, fingerprint and face unlock, encryption, Device Security, charging, eSIM, hotspot, NFC, VPN editors and dialogs as pages, accent color, Hardware page, beaconDB contribution, speech to text, Streaming, USB and Desktop over VNC panels, Memory and Swap, networks allowed for SSH, always-on display, look of the on-screen keyboard, no automatic focus into text fields, panels that open without waiting, battery use per app, DNS Filter, Web Apps, Access Control |

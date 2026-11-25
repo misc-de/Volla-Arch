@@ -1350,7 +1350,7 @@ static bool unlocked_cmd(const char *cmd)
 					    "jack", "hal-sco", "reopen-input", "cycle", "amp", "route", "call", "deadline",
 					    "role-volume", "step-volume", "load-volume", "save-volume", "record", "play",
 					    "ring", "ref-reset", "active", "open-hal", "report-wired", "phones-update",
-					    "process", "trigger-done", "fill"};
+					    "process", "trigger-done", "fill", "call-end", "jingle-load"};
 	for (size_t i = 0; i < G_N_ELEMENTS(names); i++)
 		if (!strcmp(cmd, names[i]))
 			return true;
@@ -1506,6 +1506,10 @@ static void exec_locked(char **a, const char *line)
 			B->call_step = v;
 		else if (!strcmp(a[1], "aec_delay"))
 			B->aec_delay = v;
+		else if (!strcmp(a[1], "voice_applied"))
+			B->voice_applied = g_ascii_strtod(ARG(2), NULL);
+		else if (!strcmp(a[1], "role_phone_gain"))
+			atomic_store(&B->role_phone_gain, g_ascii_strtod(ARG(2), NULL));
 	} else if (!strcmp(cmd, "fail")) {
 		add_fails(ARG(1));
 	} else if (!strcmp(cmd, "compact")) {
@@ -1890,6 +1894,35 @@ static void exec_locked(char **a, const char *line)
 				g_usleep(10000);
 		}
 		say("signals=%d", n_signals);
+	} else if (!strcmp(cmd, "jingle-load")) {
+		/* jingle-load:<path>: load_jingle() and what it kept */
+		g_clear_pointer(&B->jingle, g_free);
+		size_t frames = load_jingle(B, a[1]);
+		say("jingle-load frames=%zu first=%d last=%d", frames, frames ? B->jingle[0] : 0,
+		    frames ? B->jingle[frames * 2 - 1] : 0);
+	} else if (!strcmp(cmd, "jingle")) {
+		/* jingle:<frames>:<value>: a jingle of one value */
+		size_t frames = atol(a[1]);
+		g_free(B->jingle);
+		B->jingle = g_new(int16_t, frames * 2);
+		for (size_t i = 0; i < frames * 2; i++)
+			B->jingle[i] = atoi(a[2]);
+		B->jingle_frames = frames;
+	} else if (!strcmp(cmd, "feedback-silent")) {
+		say("feedback-silent=%d", feedback_silent());
+	} else if (!strcmp(cmd, "call-end")) {
+		/* call-end:start|cancel|state: the jingle at a call's end */
+		pthread_mutex_lock(&B->route_lock);
+		if (!strcmp(a[1], "start"))
+			say("call-end-start=%d", call_end_start(B));
+		else if (!strcmp(a[1], "cancel"))
+			call_end_cancel(B);
+		pthread_mutex_lock(&B->out_lock);
+		say("call-end ending=%d gen=%u timeout=%d call=%d playing=%d pos=%zu gain=%.3f jingle-gen=%u", B->call_ending,
+		    B->call_end_gen, B->call_end_timeout != 0, B->call, B->jingle_playing, B->jingle_pos, B->jingle_gain,
+		    B->jingle_gen);
+		pthread_mutex_unlock(&B->out_lock);
+		pthread_mutex_unlock(&B->route_lock);
 	} else if (!strcmp(cmd, "sigterm")) {
 		kill(getpid(), SIGTERM);
 	} else {
