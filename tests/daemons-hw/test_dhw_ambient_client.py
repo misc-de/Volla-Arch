@@ -267,9 +267,9 @@ def test_gravity_into_the_screen_axes(client):
                  "signal:Gravity:(0.0, 9.80665, 0.0)", "state",
                  "signal:Gravity:(9.80665, 0.0, 0.0)", "state", "quit").stdout
     g = [tuple(map(float, v.split(","))) for v in states(out, "gravity")]
-    # Held upright: down the screen; the second sample smoothed by 0.35 towards lying on the side
+    # Held upright: down the screen; the second sample smoothed by 0.6 towards lying on the side
     assert g[0] == pytest.approx((0, 9.80665), abs=1e-3)
-    assert g[1] == pytest.approx((-9.80665 * 0.35, 9.80665 * 0.65), abs=1e-3)
+    assert g[1] == pytest.approx((-9.80665 * 0.6, 9.80665 * 0.4), abs=1e-3)
 
 
 @pytest.mark.parametrize("transform,expected", [(0, (-1, 0)), (1, (0, -1)), (2, (1, 0)), (3, (0, 1))])

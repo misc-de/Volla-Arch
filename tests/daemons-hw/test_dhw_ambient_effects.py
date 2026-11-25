@@ -91,7 +91,7 @@ int main(int argc, char **argv)
 	if (e->wants_motion)
 		sc.shake = 100;
 	else
-		sc.gravity[0] = 9.81f;
+		sc.gravity[0] = argc > 6 ? strtof(argv[6], NULL) : 9.81f;
 	printf("rest=%d still=%d woken=%d\n", !moving, still, e->wake ? e->wake(st, &sc) : -1);
 	e->destroy(st);
 	return 0;
@@ -133,6 +133,12 @@ def test_zero_time_step(sim, name):
 @pytest.mark.parametrize("name", sorted(CONTAINED))
 def test_contained_effects_rest_and_wake(sim, name):
     out = kv(sim(name, 0, 60, "nozero", 30 * 60).stdout)
+    assert out["rest"] == "1 still=0 woken=1"
+
+
+def test_slight_tilt_wakes_balls(sim):
+    # Half a degree of tilt (0.09 m/s²) sets resting balls rolling again
+    out = kv(sim("balls", 0, 60, "nozero", 30 * 60, 0.09).stdout)
     assert out["rest"] == "1 still=0 woken=1"
 
 

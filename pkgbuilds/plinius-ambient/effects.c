@@ -679,9 +679,10 @@ struct ball {
 	float r, mass;
 };
 
-/* Pixels per metre: slower than a real marble on a phone-sized tray, which crosses the screen
- * in a fifth of a second */
-#define PX_PER_M 1100.0f
+/* Pixels per metre: slower than a real marble on a phone-sized tray (about 6800 px/m, which
+ * crosses the screen in a fifth of a second when held upright), but quick enough that a
+ * slight tilt sets the balls rolling at once */
+#define PX_PER_M 2600.0f
 /* A rolling solid ball accelerates at 5/7 of the slope's pull */
 #define ROLLING (5.0f / 7.0f)
 #define ROLL_DAMPING 0.35f /* 1/s */
@@ -691,7 +692,8 @@ struct ball {
 /* At rest: every ball slower than this (px/s) for REST_TIME; woken by a change of the tilt */
 #define REST_SPEED 6.0f
 #define REST_TIME 0.6f
-#define WAKE_GRAVITY 0.35f /* m/s² */
+/* m/s², about a third of a degree of tilt; the gravity sensor's noise at rest is 0.007 */
+#define WAKE_GRAVITY 0.06f
 
 struct balls {
 	int n;

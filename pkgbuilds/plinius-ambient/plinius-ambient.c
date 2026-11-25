@@ -50,8 +50,8 @@
 #define GRAVITY_PATH "/net/hadess/SensorProxy/Gravity"
 #define GRAVITY_IFACE "org.plinius.SensorProxyBridge.Gravity"
 #define STANDARD_GRAVITY 9.80665f
-/* Share of each new sample in the smoothed gravity vector */
-#define GRAVITY_SMOOTHING 0.35f
+/* Share of each new sample in the smoothed gravity vector (at 50 Hz a time constant of 22 ms) */
+#define GRAVITY_SMOOTHING 0.6f
 /* Linear acceleration: one sample every 20 ms (sensor-proxy-bridge asks for 50 Hz). A single
  * knock (the phone put down on a table: up to 35 m/s², measured) counts no more than this. The
  * shake level is its square smoothed over SHAKE_TIME seconds. */
