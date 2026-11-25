@@ -1,0 +1,30 @@
+# What image/test-image.sh expects of an image booted in QEMU (generic ALARM kernel, no phone
+# hardware, no Android container). One rule per line, a reason after "#":
+#   active UNIT    the unit must be active after the boot
+#   fails UNIT     the unit may fail: it needs the phone
+#   restarts UNIT  the unit may keep restarting: it needs the phone
+# Every other failed or restarting unit is an error of the image.
+
+active dbus.service
+active systemd-logind.service
+active polkit.service
+active NetworkManager.service
+active plinius-pacman-init.service   # pacman keyring of the phone, made at the first start
+active greetd.service                # first start: the PIN prompt of plinius-greeter
+active sshd.service
+
+fails mount-android-system.service                  # Android's system image (loop device on the phone's data)
+fails android-set-boot-completion-property.service  # the Android container (bionic libc, libcutils)
+fails plinius-bootcheck.service                     # androidboot.slot_suffix from the phone's bootloader
+fails plinius-gpu.service                           # the Mali GPU's /sys/kernel/ged
+# The generic kernel 7.x refuses a helper of its cgroup device program (-EINVAL); the phone's 6.1
+# loads it. A newer phone kernel would need the program changed.
+fails plinius-appaccessd.service
+
+restarts plinius-charge.service          # charger in /sys/devices/platform/charger
+restarts plinius-usb.service             # USB and pogo pins in /sys/usb
+restarts plinius-wake.service            # touch and motion sensors of the phone
+restarts plinius-backlight-wake.service  # the display's card0-DSI-1 and lcd-backlight
+restarts plinius-sar.service             # the modem's radio HAL through /dev/binder
+restarts vibrator-ff-bridge.service      # Android's vibrator HAL through binder
+restarts plinius-appaccessd.service      # see above

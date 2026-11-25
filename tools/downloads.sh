@@ -4,7 +4,8 @@
 # downloads/. Everything is put together in build/downloads first, as the server will have it.
 #
 #   tools/downloads.sh image IMAGE.img [VERSION]
-#       Checks the image (tools/image-check.sh), packs it with zstd and writes latest.json:
+#       Checks the image (tools/image-check.sh) and boots it in QEMU (image/test-image.sh;
+#       IMAGE_BOOT_TEST=off leaves that out and says so), packs it with zstd and writes latest.json:
 #       {"version", "url", "size", "sha256"} as Plinius Boot reads it (latest_image), and
 #       IMAGE.img.zst.sha256 for a check by hand. VERSION defaults to the date. The image
 #       latest.json named before stays as the previous one, older ones leave.
@@ -52,6 +53,11 @@ do_image() {
 	name_ok "$name" || die "$name is not a name Plinius Boot takes (letters, digits, . _ -, ending in .img.zst)"
 	[[ $version =~ ^[A-Za-z0-9._-]{1,40}$ ]] || die "invalid version: $version"
 	"$VOLLA_DIR/tools/image-check.sh" "$img" || die "$img failed the check, it is not offered"
+	if [[ ${IMAGE_BOOT_TEST:-on} == off ]]; then
+		msg "boot test left out (IMAGE_BOOT_TEST=off)"
+	else
+		"$VOLLA_DIR/image/test-image.sh" "$img" || die "$img failed the boot test, it is not offered"
+	fi
 	mkdir -p "$dir"
 	previous=$(named_image "$dir")
 	msg "Packing $img (zstd -$ZSTD_LEVEL)"

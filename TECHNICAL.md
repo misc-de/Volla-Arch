@@ -212,11 +212,17 @@ differ from the pins in `/usr/share/plinius-boot/vendor.sha256`. `tools/image-ch
 image with `debugfs` and refuses anything of the builder (SSH keys, host keys, machine-id, pacman
 keyring, package cache, shell history, a password), the two vendor images, and anything missing
 (`[plinius]` signed over https, `plinius-keyring`, the pinned Android and boot files, the pins of
-the vendor images and room for them, the first-start PIN). Plinius Boot finds the image through
-`images/latest.json` on the web server.
+the vendor images and room for them, the first-start PIN). Then `image/test-image.sh` boots the
+image itself in QEMU (snapshot, the image stays unchanged) with ALARM's generic kernel and its
+modules, up to `graphical.target`: every unit that fails or keeps restarting and is not named in
+`image/test-image.expected` as one that needs the phone (Android container, GPU, charger,
+sensors), a unit that must run and does not, broken package dependencies (`pacman -Dk`) or a
+dead system bus stop the download. Plinius Boot finds the image through `images/latest.json` on
+the web server.
 
 ```
-tools/downloads.sh image build/plinius-arch-<date>.img   # check, pack, latest.json → build/downloads/images
+tools/downloads.sh image build/plinius-arch-<date>.img   # check, boot test, pack, latest.json → build/downloads/images
+image/test-image.sh build/plinius-arch-<date>.img        # the boot test alone (about 6 to 10 minutes) → build/image-test/
 tools/downloads.sh app org.plinius.Boot-x86_64.flatpak plinius-boot.tar.gz   # Plinius Boot → build/downloads/downloads
 DOWNLOAD_TARGET=user@host:/path tools/downloads.sh upload # images, then latest.json, then the app
 ```

@@ -87,7 +87,21 @@ def volla(tmp_path, fake_bin):
     (root / "tools" / "boot-files.sha256").write_text(f"{sha('kernel')}  zImage\n{sha('ut ramdisk')}  initrd.cpio.gz\n")
     (fake_bin.path / "debugfs").symlink_to(shutil.which("debugfs"))
     fake_bin.stub("rsync")
+    boot_test(root, 0)
     return root
+
+
+def boot_test(root, status):
+    """image/test-image.sh as a stand-in: logs the image it was given, answers with status."""
+    f = root / "image" / "test-image.sh"
+    f.parent.mkdir(exist_ok=True)
+    f.write_text(f'#!/bin/bash\necho "$@" >> "{root}/boot-test.log"\nexit {status}\n')
+    f.chmod(0o755)
+
+
+def boot_tests(root):
+    log = root / "boot-test.log"
+    return log.read_text().splitlines() if log.exists() else []
 
 
 def run(volla, fake_bin, script, *args, **env):
@@ -319,6 +333,29 @@ def test_latest_json_is_what_plinius_boot_accepts(tmp_path, volla, fake_bin):
     assert type(data["size"]) is int and 0 < data["size"] < 1 << 40
     assert len(data["sha256"]) == 64 and set(data["sha256"]) <= set("0123456789abcdef")
     assert len(data["version"]) == 10  # the date, YYYY.MM.DD
+
+
+def test_the_image_is_booted_before_it_is_packed(tmp_path, volla, fake_bin):
+    image = make_image(good_tree(tmp_path / "t"), tmp_path / "plinius-arch-22112026.img")
+    assert run(volla, fake_bin, "downloads.sh", "image", image).returncode == 0
+    assert boot_tests(volla) == [str(image)]
+
+
+def test_an_image_that_fails_the_boot_test_is_not_offered(tmp_path, volla, fake_bin):
+    image = make_image(good_tree(tmp_path / "t"), tmp_path / "plinius-arch-22112026.img")
+    boot_test(volla, 1)
+    r = run(volla, fake_bin, "downloads.sh", "image", image)
+    assert r.returncode == 1 and "failed the boot test, it is not offered" in r.stderr
+    assert not (downloads(volla) / "images").exists()
+
+
+def test_the_boot_test_left_out_on_purpose(tmp_path, volla, fake_bin):
+    image = make_image(good_tree(tmp_path / "t"), tmp_path / "plinius-arch-22112026.img")
+    boot_test(volla, 1)
+    r = run(volla, fake_bin, "downloads.sh", "image", image, IMAGE_BOOT_TEST="off")
+    assert r.returncode == 0, r.stderr
+    assert "boot test left out (IMAGE_BOOT_TEST=off)" in r.stderr
+    assert boot_tests(volla) == []
 
 
 def test_an_image_that_fails_the_check_is_not_offered(tmp_path, volla, fake_bin):

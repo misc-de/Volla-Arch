@@ -26,6 +26,9 @@ image/mkimage.sh -a build/ut/04112026/android/android-rootfs.img -P -k ~/.ssh/id
   it the password stays locked and the lock screen cannot be passed. `-k` gives root your SSH key;
   without it nobody can log in over SSH. `-r` keeps the phone receiving updates of our packages.
   The image holds `/etc/shadow` and is readable only by you (0600).
+- `image/test-image.sh IMAGE.img` boots the image in QEMU and checks what came up (failed or
+  restarting units beyond those that need the phone, `image/test-image.expected`; broken
+  dependencies; the system bus); `tools/downloads.sh image` runs it before an image is offered.
 - The image is written to the phone with Plinius Boot, a separate PC app (microSD card by default,
   internal storage optional). Never write to the phone's partitions without the owner's consent.
 - `tools/ut-build.sha256` pins every file of that UT build (boot images, Android images).
