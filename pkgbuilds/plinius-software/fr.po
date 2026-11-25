@@ -615,16 +615,16 @@ msgid "Updates could not be verified"
 msgstr "Les mises à jour n’ont pas pu être vérifiées"
 
 #: plinius-software
-#, python-brace-format
-msgid "{n} update waits for approval"
-msgid_plural "{n} updates wait for approval"
-msgstr[0] "{n} mise à jour attend une validation"
-msgstr[1] "{n} mises à jour attendent une validation"
+msgid "A system update is being tested"
+msgstr "Une mise à jour du système est en cours de test"
 
 #: plinius-software
-#, python-brace-format
-msgid "Plinius has not yet approved {packages}. Until then no system package is updated, security updates included."
-msgstr "Plinius n’a pas encore validé {packages}. D’ici là, aucun paquet système n’est mis à jour, y compris les mises à jour de sécurité."
+msgid "New versions from Arch Linux are first tested with the Plinius adaptations and installed once they work together. You do not need to do anything."
+msgstr "Les nouvelles versions d’Arch Linux sont d’abord testées avec les adaptations Plinius, puis installées dès qu’elles fonctionnent ensemble. Aucune action n’est nécessaire."
+
+#: plinius-software
+msgid "Security updates are waiting too."
+msgstr "Les mises à jour de sécurité attendent aussi."
 
 #: plinius-software
 #, python-brace-format

@@ -2,7 +2,7 @@
 
 pkgname=plinius-software
 pkgver=0.12
-pkgrel=27
+pkgrel=28
 pkgdesc="Install phone-ready apps and update the whole system, without partial upgrades"
 arch=(any)
 # The app icon is GNOME Software's (GPL-2.0-or-later), renamed so it does not clash with an
@@ -73,7 +73,7 @@ source=(plinius-software
 	"org.plinius.Software-symbolic.svg::https://gitlab.gnome.org/GNOME/gnome-software/-/raw/$_gs/data/icons/hicolor/symbolic/org.gnome.Software-symbolic.svg"
 	de.po fr.po es.po it.po pt.po nl.po pl.po ru.po
 	LICENSE)
-sha256sums=('7cf96bf116d940426f35b9a9a59cc139379904c94152e9be18b7ccad1c9b3352'
+sha256sums=('fe6f65a995f79f6360048e50813918d507e71e6ebe52037e6146ef4aff69cc3b'
 	'519d54ae57bece1a4480294bb84ed16a4ec876aa9b9b94250424625f73930c94'
 	'ecc866cadc4ae0ec246f310b2cc3544c5290c9b5a0d1f45204401adcefc274e9'
 	'b21ce8f0a11e405e21dc610dd656eaf85814a0447b57e3e5d3d619525b032a9e'
@@ -87,14 +87,14 @@ sha256sums=('7cf96bf116d940426f35b9a9a59cc139379904c94152e9be18b7ccad1c9b3352'
 	'bd7f2e601bdcb1463f150564f12224a545cbcac378e03615bf389c6200a47e86'
 	'e51489d0fb7c722b0b52d089a34948ca15da693e3a80e7395ecd572cf68beaef'
 	'f2bad571f9c24491f863bec1b32f95a9be5eb0fd85d250af975a75bb7c185c3c'
-	'dfa725a390ebbf3a2b85c588917d61cfcd240ce69c715409cdeba5d024c39eb6'
-	'e26a9547f35607f917498d2d87df448de88ea37ced2f80966ad6dc6b1c49534e'
-	'd6418da26acb7f38b6a1578ac8c7aa596180ad2fedc298def8bb524ffc2dbd35'
-	'26a19a66a9163e2592e1f9ef5e653bc332aa4586d9106374223de1c82ff19498'
-	'11ad921d0d8979581bbfaa869ad50241e7076a722c7742318076e5f715c464dd'
-	'dd71ab8653845a18729f8252bfca9b0ce351dfe37eca7f8037c55515a27e241e'
-	'1102c4b523b6f789e308e22e3873a5697a4cf4e767bb26e4e848912206a3b791'
-	'98f97df747a06a5d11df37aaef67ce6942b7f0683a07a5f373eafdc2ff66d75c'
+	'd15da5d5cb57c570c9d4adfa08ab3c9019083c584576da7c63914ddd2877fcee'
+	'53c06711196725f23f5952169e4eaf5008bc396948cf3076879e64c66dc1d49f'
+	'fef1ea525c516494b2a0eaf5c6605eefc87f805bde99f34221e5b26fc5754c0f'
+	'f691f82c565a04216a55bea776c7ee210e7bf1cbb4c2803af47e580e19edcea3'
+	'a8eb6a0ff52263735b07049c6b79d3246254124122e0b66200d6df71a08afb66'
+	'35c1e02e011fc812aa7574229d7c4e978641b8fbae5d922a725a25b6056bb898'
+	'b73a881475614e5926280a757862e32a1024de8b243dc16f814953b6d36eeb41'
+	'6c72d7436e6fc0c8473eb8958c73f35424979f538f31a22b2641dbc6308b0521'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
 # Compile the translations; --check catches broken format strings in *.po

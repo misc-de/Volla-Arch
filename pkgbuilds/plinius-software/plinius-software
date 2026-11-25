@@ -625,13 +625,21 @@ def flatpak_updates():
             lines("flatpak", "remote-ls", "--updates", "--system", "--columns=application,version,origin")]
 
 
+def hold_days(hold):
+    """Whole days the hold by plinius-freigabe has lasted (0 without a start, or one ahead)."""
+    return max(int((time.time() - hold["since"]) // 86400), 0) if hold.get("since") else 0
+
+
 def hold_texts(hold):
-    """(title, description) of a hold by plinius-freigabe (find_updates), localized."""
-    n = len(hold["packages"])
-    names = ", ".join(f"{name} {version}" for name, version, _op, _limit in hold["limits"])
-    title = ngettext("{n} update waits for approval", "{n} updates wait for approval", n).format(n=n)
-    text = _("Plinius has not yet approved {packages}. Until then no system package is updated, "
-             "security updates included.").format(packages=names)
+    """(title, description) of a hold by plinius-freigabe (find_updates), localized. Written for
+    the user, who can do nothing about it: no package names (they are in "limits" of
+    --updates-json), only that it is being tested and comes by itself; after HELD_ALARM_DAYS
+    also that security updates wait with it."""
+    title = _("A system update is being tested")
+    text = _("New versions from Arch Linux are first tested with the Plinius adaptations and installed "
+             "once they work together. You do not need to do anything.")
+    if hold_days(hold) >= HELD_ALARM_DAYS:
+        text += " " + _("Security updates are waiting too.")
     if hold.get("since"):
         text += "\n" + _("Waiting since {when}").format(when=when_text(hold["since"]))
     return title, text
@@ -642,9 +650,8 @@ def hold_json(hold):
     if not hold:
         return None
     title, text = hold_texts(hold)
-    days = int((time.time() - hold["since"]) // 86400) if hold.get("since") else 0
     return {"limits": hold["limits"], "packages": hold["packages"], "since": hold.get("since"),
-            "days": max(days, 0), "title": title, "text": text}
+            "days": hold_days(hold), "title": title, "text": text}
 
 
 def check_repo_stamp():
@@ -749,22 +756,17 @@ def notify_repo_warning(warning):
 
 
 def notify_hold(hold):
-    """Timer: a hold by plinius-freigabe, once when it starts (or names other packages) and once
-    more after HELD_ALARM_DAYS: security updates wait with it."""
-    if not hold:
+    """Timer: a hold by plinius-freigabe that has lasted HELD_ALARM_DAYS, once; security updates
+    wait with it. A hold that has just started is not notified: the user cannot do anything about
+    it, and it usually ends before anyone would miss an update."""
+    days = hold_days(hold) if hold else 0
+    if days < HELD_ALARM_DAYS:
         notify_once("held-notified", None, None, None)
         return
-    data = hold_json(hold)
-    names = " ".join(name for name, _v, _op, _l in hold["limits"])
-    if data["days"] >= HELD_ALARM_DAYS:
-        body = ngettext("System updates have been on hold for {n} day. Security updates wait too.",
-                        "System updates have been on hold for {n} days. Security updates wait too.",
-                        data["days"]).format(n=data["days"]) + "\n" + data["text"].split("\n")[0]
-        key = f"long {names}"
-    else:
-        body = data["text"].split("\n")[0]
-        key = f"new {names}"
-    notify_once("held-notified", key, _("System updates are on hold"), body)
+    body = ngettext("System updates have been on hold for {n} day. Security updates wait too.",
+                    "System updates have been on hold for {n} days. Security updates wait too.",
+                    days).format(n=days)
+    notify_once("held-notified", "long", _("System updates are on hold"), body)
 
 
 def notify_updates():

@@ -351,30 +351,43 @@ def test_find_updates_asks_flathub_while_checkupdates_runs(mod, sw, monkeypatch)
 HOLD = {"limits": [("glibc", "2.45-1", ">", "2.44-1"), ("mesa", "26.0-1", ">=", "26.0-1")],
         "packages": [("glibc", "2.44-1", "2.45-1"), ("mesa", "25.9-1", "26.0-1"), ("zlib", "1-1", "1-2")],
         "since": None}
-HELD_TEXT = ("Plinius has not yet approved glibc 2.45-1, mesa 26.0-1. Until then no system package is "
-             "updated, security updates included.")
+HELD_TITLE = "A system update is being tested"
+HELD_TEXT = ("New versions from Arch Linux are first tested with the Plinius adaptations and installed once "
+             "they work together. You do not need to do anything.")
 
 
 def test_hold_texts(mod, sw):
-    assert mod.hold_texts(HOLD) == ("3 updates wait for approval", HELD_TEXT)
+    # For the user, who can do nothing about it: no package names, no count of packages
+    assert mod.hold_texts(HOLD) == (HELD_TITLE, HELD_TEXT)
     since = int(time.time())
     one = {"limits": HOLD["limits"][:1], "packages": HOLD["packages"][:1], "since": since}
     title, text = mod.hold_texts(one)
-    assert title == "1 update waits for approval"
-    assert text.split("\n") == [
-        "Plinius has not yet approved glibc 2.45-1. Until then no system package is updated, "
-        "security updates included.",
-        "Waiting since today at " + time.strftime("%H:%M", time.localtime(since))]
+    assert title == HELD_TITLE
+    assert text.split("\n") == [HELD_TEXT, "Waiting since today at " + time.strftime("%H:%M", time.localtime(since))]
+    assert "glibc" not in title + text
+
+
+def test_hold_texts_name_security_updates_after_a_week(mod, sw, clock):
+    six = dict(HOLD, since=clock["now"] - 6 * 86400 - 60)
+    assert mod.hold_texts(six)[1].split("\n")[0] == HELD_TEXT
+    week = dict(HOLD, since=clock["now"] - 7 * 86400)
+    assert mod.hold_texts(week)[1].split("\n")[0] == HELD_TEXT + " Security updates are waiting too."
+
+
+def test_hold_days(mod, sw, clock):
+    assert mod.hold_days(HOLD) == 0
+    assert mod.hold_days(dict(HOLD, since=clock["now"] - 3 * 86400 - 1)) == 3
+    assert mod.hold_days(dict(HOLD, since=clock["now"] + 86400)) == 0
 
 
 def test_hold_json(mod, sw, clock):
     assert mod.hold_json(None) is None
     data = mod.hold_json(HOLD)
     assert data == {"limits": HOLD["limits"], "packages": HOLD["packages"], "since": None, "days": 0,
-                    "title": "3 updates wait for approval", "text": HELD_TEXT}
+                    "title": HELD_TITLE, "text": HELD_TEXT}
     held = dict(HOLD, since=1_800_000_000 - 8 * 86400 - 60)
     assert mod.hold_json(held)["days"] == 8
-    assert mod.hold_json(held)["text"].startswith(HELD_TEXT + "\nWaiting since on ")
+    assert mod.hold_json(held)["text"].startswith(HELD_TEXT + " Security updates are waiting too.\nWaiting since on ")
     # A start in the future (clock set back) is no negative wait
     assert mod.hold_json(dict(HOLD, since=1_800_000_000 + 86400))["days"] == 0
     # As Settings reads it: limits and packages become lists
@@ -554,7 +567,7 @@ def test_updates_json_names_the_hold(mod, sw, checks, monkeypatch, capsys):
     mod.updates_json()
     out = json.loads(capsys.readouterr().out)
     assert out["packages"] == [] and out["repo_warning"] is None
-    assert out["held"]["title"] == "3 updates wait for approval" and out["held"]["days"] == 2
+    assert out["held"]["title"] == HELD_TITLE and out["held"]["days"] == 2
     assert out["held"]["packages"] == [list(p) for p in HOLD["packages"]]
     assert out["held"]["limits"] == [list(limit) for limit in HOLD["limits"]]
     assert out["held"]["since"] == 1_800_000_000 - 2 * 86400
@@ -612,47 +625,51 @@ def test_repo_warning_notified_once_per_text(mod, timer):
     assert [b for _s, b in timer["sent"]] == [replay, unsigned, unsigned]
 
 
-def test_hold_notified_when_it_starts_and_after_a_week(mod, timer, clock):
-    first_line = HELD_TEXT
-    timer["result"] = (0, [], [], dict(HOLD, since=clock["now"]))
+def test_hold_notified_only_after_a_week(mod, sw, timer, clock):
+    # A hold that has just started is no news for the user: nothing to do, usually over soon
+    since = clock["now"]
+    timer["result"] = (0, [], [], dict(HOLD, since=since))
     mod.notify_updates()
-    assert timer["sent"] == [("System updates are on hold", first_line)]
     clock["now"] += 6 * 86400
     mod.notify_updates()
-    assert len(timer["sent"]) == 1
-    # A week on: once more, louder; then quiet again
+    assert timer["sent"] == []
+    # A week on: once, with what waits; then quiet
     clock["now"] += 86400
     mod.notify_updates()
-    assert timer["sent"][-1] == ("System updates are on hold",
-                                 "System updates have been on hold for 7 days. Security updates wait too.\n"
-                                 + first_line)
+    assert timer["sent"] == [("System updates are on hold",
+                              "System updates have been on hold for 7 days. Security updates wait too.")]
+    assert "glibc" not in timer["sent"][0][1]
     clock["now"] += 3 * 86400
+    mod.notify_updates()
+    assert len(timer["sent"]) == 1
+    notified = sw / "statedir" / "plinius-software" / "held-notified"
+    assert notified.read_text() == "long"
+
+
+def test_hold_notified_again_after_it_ended(mod, sw, timer, clock):
+    notified = sw / "statedir" / "plinius-software" / "held-notified"
+    old = dict(HOLD, since=clock["now"] - 8 * 86400)
+    timer["result"] = (0, [], [], old)
+    mod.notify_updates()
+    # Other packages, the same hold: no second notification
+    timer["result"] = (0, [], [], dict(old, limits=[("mesa", "26.0-1", ">=", "26.0-1")]))
+    mod.notify_updates()
+    assert len(timer["sent"]) == 1
+    # Over: forgotten; a new hold is quiet until it has lasted a week
+    timer["result"] = (2, [], [], None)
+    mod.notify_updates()
+    assert not notified.exists()
+    timer["result"] = (0, [], [], dict(HOLD, since=clock["now"]))
+    mod.notify_updates()
+    assert len(timer["sent"]) == 1
+    timer["result"] = (0, [], [], dict(HOLD, since=clock["now"] - 7 * 86400))
     mod.notify_updates()
     assert len(timer["sent"]) == 2
 
 
-def test_hold_notified_again_for_other_packages_and_after_it_ended(mod, sw, timer, clock):
-    notified = sw / "statedir" / "plinius-software" / "held-notified"
-    hold = dict(HOLD, since=clock["now"])
-    timer["result"] = (0, [], [], hold)
-    mod.notify_updates()
-    other = dict(hold, limits=[("mesa", "26.0-1", ">=", "26.0-1")])
-    timer["result"] = (0, [], [], other)
-    mod.notify_updates()
-    assert timer["sent"][-1][1].startswith("Plinius has not yet approved mesa 26.0-1.")
-    assert notified.read_text() == "new mesa"
-    # Over, and the same hold again later: told again
-    timer["result"] = (2, [], [], None)
-    mod.notify_updates()
-    assert not notified.exists()
-    timer["result"] = (0, [], [], other)
-    mod.notify_updates()
-    assert len(timer["sent"]) == 3
-
-
 def test_hold_and_update_notifications_are_separate(mod, timer, clock):
     # Flatpak apps still update while the system packages are on hold
-    timer["result"] = (0, [], [("org.a", "3", "flathub")], dict(HOLD, since=clock["now"]))
+    timer["result"] = (0, [], [("org.a", "3", "flathub")], dict(HOLD, since=clock["now"] - 7 * 86400))
     timer["verdict"] = {"result": "stale", "days": 40}
     mod.notify_updates()
     assert [s for s, _b in timer["sent"]] == ["Updates could not be verified", "System updates are on hold",
@@ -690,7 +707,7 @@ def updates_tab(mod, sw, monkeypatch):
 
 def test_updates_tab_names_a_hold_instead_of_up_to_date(mod, updates_tab):
     win = updates_tab(0, [], [], HOLD)
-    assert win.update_status.last("set_title") == ("3 updates wait for approval",)
+    assert win.update_status.last("set_title") == (HELD_TITLE,)
     assert win.update_status.last("set_description") == (HELD_TEXT,)
     assert win.update_list.last("set_visible") == (False,) and win.upgrade_button.last("set_visible") == (False,)
     assert win.updates_page.last("set_badge_number") == (0,)
@@ -700,7 +717,7 @@ def test_updates_tab_names_a_hold_instead_of_up_to_date(mod, updates_tab):
 
 def test_updates_tab_hold_with_flatpak_updates(mod, updates_tab):
     win = updates_tab(0, [], [("org.a", "3", "flathub")], HOLD)
-    assert win.update_status.last("set_title") == ("3 updates wait for approval",)
+    assert win.update_status.last("set_title") == (HELD_TITLE,)
     # The Flatpak update is listed and can be installed
     assert win.update_rows == [("row", "org.a", "Flathub 3")]
     assert win.upgrade_button.last("set_visible") == (True,)
