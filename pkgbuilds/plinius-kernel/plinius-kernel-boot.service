@@ -1,6 +1,8 @@
 [Unit]
-Description=Confirm or drop a kernel on trial (plinius-kernel)
-ConditionPathExists=/var/lib/plinius-kernel/trial
+Description=Confirm or drop a kernel on trial, set up the first one (plinius-kernel)
+# A trial to confirm or drop, or a new system whose package kernel is not set up yet
+ConditionPathExists=|/var/lib/plinius-kernel/trial
+ConditionPathExists=|!/var/lib/plinius-kernel/installed
 After=multi-user.target
 
 [Service]

@@ -14,6 +14,17 @@
 #    menu remembers the choice as autostart); boot then drops the trial entry.
 # Without the card, install writes boot<slot> at once; "restore" writes the fallback back.
 #
+# An Arch on a memory card partition (systempart=, set up by Plinius Boot) starts from its own entry
+# in the boot menu, not from boot<slot>. There a new kernel starts from "<entry>-kernel-trial" first,
+# with the entry's own ramdisk, device tree and command line; once the system is up it goes into the
+# entry, and the kernel that was there becomes "<entry>-kernel-previous". The names leave the trial
+# and fallback entries of an Arch on the phone's storage alone. plinius-bootcheck does not judge
+# entries of card systems, so nothing is reported to it there.
+#
+# A new system starts with the kernel of the installation (UT's 6.1.145): the package's kernel was
+# installed while the image was built, where nothing can be written. The first start sets it up as
+# an update would (boot, once: no kernel recorded as installed yet).
+#
 # The fallback is always the kernel that last started for sure: the one in boot<slot> when the new
 # one is confirmed, or, when the system runs on the fallback because the installed kernel does not
 # work, the fallback stays and only the installed one is replaced.
@@ -29,7 +40,8 @@
 # Usage: plinius-kernel-install hook       (pacman, after install/upgrade; boot.img paths on stdin)
 #        plinius-kernel-install keep       (pacman, before upgrade/removal)
 #        plinius-kernel-install install RELEASE
-#        plinius-kernel-install boot       (plinius-kernel-boot.service: confirm or drop a trial)
+#        plinius-kernel-install boot       (plinius-kernel-boot.service: confirm or drop a trial,
+#                                           or set up the package's kernel on a new system)
 #        plinius-kernel-install dlkm       (mount-android-partitions: this kernel's GKI modules)
 #        plinius-kernel-install restore    (fallback back into boot<slot>)
 #        plinius-kernel-install status
@@ -75,13 +87,16 @@ role() { sed -n 's/.*\bplinius\.kernel=\([a-z]*\).*/\1/p' /proc/cmdline; }
 # An Arch on a memory card partition (systempart=) has its kernel in its own card entry
 on_card_system() { grep -qw 'systempart=[^ ]*' /proc/cmdline; }
 
-# Release of the kernel inside a boot image (gzip-compressed Image after the 4 KiB header)
+# Release of the kernel inside a boot image (gzip-compressed Image after the 4 KiB header), or of
+# a kernel file of a card entry (gzip-compressed or plain Image)
 image_release() {
 	python3 - "$1" <<-'EOF'
 	import gzip, re, struct, sys
 	d = open(sys.argv[1], 'rb').read()
-	size, = struct.unpack_from('<I', d, 8)
-	k = d[4096:4096 + size]
+	k = d
+	if d[:8] == b'ANDROID!':
+	    size, = struct.unpack_from('<I', d, 8)
+	    k = d[4096:4096 + size]
 	if k[:2] == b'\x1f\x8b':
 	    k = gzip.decompress(k)
 	m = re.search(rb'Linux version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*) \(', k)
@@ -299,7 +314,7 @@ card_entry() {
 # autostart (db/last_index, a position) is moved along so it keeps naming the same entry, also one
 # that another tool set (plinius-crypt's trial entry, for one).
 card_order() {
-	local root=$1 d=$1/db/entries new=$1/db/.entries.new f auto="" index i=0
+	local root=$1 d=$1/db/entries new=$1/db/.entries.new f x auto="" index i=0
 	local -a order=()
 	# The entry the autostart names now, from the on-disk order the menu reads
 	sync
@@ -316,8 +331,20 @@ card_order() {
 	for f in real.conf "$previous.conf" "$trial.conf"; do
 		if [[ -e $d/$f ]]; then cp -p "$d/$f" "$new/"; order+=("$f"); fi
 	done
+	# A card system's entry with its previous kernel and trial right below it
 	for f in "$d"/*; do
-		if [[ -e $f && ! -e $new/${f##*/} ]]; then cp -pr "$f" "$new/"; order+=("${f##*/}"); fi
+		[[ -e $f && ! -e $new/${f##*/} ]] || continue
+		# They follow their entry (copied below when it comes)
+		if [[ $f == *-kernel-trial.conf && -e ${f%-kernel-trial.conf}.conf ]] ||
+			[[ $f == *-kernel-previous.conf && -e ${f%-kernel-previous.conf}.conf ]]; then
+			continue
+		fi
+		cp -pr "$f" "$new/"
+		order+=("${f##*/}")
+		[[ $f == *.conf && $f != *-kernel-trial.conf && $f != *-kernel-previous.conf ]] || continue
+		for x in "${f%.conf}-kernel-previous.conf" "${f%.conf}-kernel-trial.conf"; do
+			if [[ -e $x ]]; then cp -p "$x" "$new/"; order+=("${x##*/}"); fi
+		done
 	done
 	sync
 	# One atomic swap (renameat2 RENAME_EXCHANGE): the menu never sees the directory missing
@@ -352,6 +379,161 @@ card_drop() {
 	card_order "$root"
 }
 
+# --- an Arch on a memory card partition ---
+entry_field() { sed -n "s/^$2 //p" "$1" | head -1; }
+
+# The system's own entry on the card mounted at ROOT: the one whose options name its systempart=
+own_entry() {
+	local root=$1 sp f name
+	local -a found=()
+	sp=$(sed -n 's/.*\bsystempart=\([^ ]*\).*/\1/p' /proc/cmdline)
+	for f in "$root"/db/entries/*.conf; do
+		[[ -e $f ]] || continue
+		name=${f##*/}
+		name=${name%.conf}
+		[[ $name == *-kernel-trial || $name == *-kernel-previous ]] && continue
+		if entry_field "$f" options | grep -Fqw -- "systempart=$sp"; then found+=("$name"); fi
+	done
+	(( ${#found[@]} == 1 )) || die "no single entry for systempart=$sp in the boot menu (${found[*]:-none})"
+	echo "${found[0]}"
+}
+
+# The kernel file of the entry ENTRY on the card at ROOT
+own_kernel() { echo "$1/$(entry_field "$1/db/entries/$2.conf" linux)"; }
+
+# Copies a file to the card through a rename and reads it back
+copy_to_card() {
+	cp "$1" "$2.new"
+	sync
+	mv "$2.new" "$2"
+	sync
+	cmp -s "$1" "$2" || die "$2 on the card differs from $1 after writing"
+}
+
+# own_entry_conf ROOT ENTRY NAME TITLE OPTIONS: the entry NAME, a copy of ENTRY that starts the
+# kernel NAME/zImage with OPTIONS added (plinius.kernel=<role>); ramdisk, device tree, logo and
+# partitions stay ENTRY's, so a new ramdisk of the entry (halium-rebuild) is the trial's too
+own_entry_conf() {
+	local root=$1 entry=$2 name=$3 title=$4 extra=$5 src=$1/db/entries/$2.conf opts
+	opts=$(entry_field "$src" options | sed -E 's/(^| )plinius\.kernel=[a-z]*//g')
+	{
+		echo "title $title"
+		echo "linux $name/zImage"
+		grep -vE '^(title|linux|options) ' "$src" || true
+		echo "options $opts $extra"
+	} > "$root/db/$name.conf.new"
+	mv "$root/db/$name.conf.new" "$root/db/entries/$name.conf"
+}
+
+card_system_install() {
+	local rel=$1 dir=$2 root entry kernel running installed title
+	have_card || die "this Arch runs from a memory card partition, but the boot menu is missing"
+	root=$(card_mount)
+	entry=$(own_entry "$root")
+	kernel=$(own_kernel "$root" "$entry")
+	[[ -f $kernel ]] || die "$kernel missing"
+	running=$(uname -r)
+	installed=$(get installed)
+	if [[ -z $installed ]]; then
+		installed=$(image_release "$kernel")
+		put installed "$installed"
+	fi
+	if cmp -s "$dir/Image.gz" "$kernel"; then
+		put installed "$rel"
+		say "kernel $rel is already in the boot menu entry $entry"
+		return
+	fi
+	# The fallback is the kernel that started for sure: the entry's while it runs, else the
+	# existing fallback stays (decided now, the confirmation runs on the trial kernel)
+	if [[ $running == "$installed" || -z $(get previous) ]]; then
+		put replace_previous 1
+	else
+		unset_state replace_previous
+	fi
+	title=$(entry_field "$root/db/entries/$entry.conf" title)
+	install -d -m 700 "$root/$entry-kernel-trial"
+	copy_to_card "$dir/Image.gz" "$root/$entry-kernel-trial/zImage"
+	own_entry_conf "$root" "$entry" "$entry-kernel-trial" "$title (new kernel $rel, trial)" \
+		"plinius.kernel=trial${PLINIUS_KERNEL_OPTIONS:+ $PLINIUS_KERNEL_OPTIONS}"
+	card_order "$root"
+	card_autostart "$entry-kernel-trial"
+	put entry "$entry"
+	put trial "$rel"
+	say "the next start runs kernel $rel as a trial; once the system is up, it goes into the entry"
+	say "\"$title\". If it does not start, choose \"$title\" in the boot menu."
+}
+
+# The rest of a confirmation on a card system once the entry holds kernel REL; each step can run again
+card_system_finish() {
+	local root=$1 entry=$2 rel=$3
+	rm -f "$root/db/entries/$entry-kernel-trial.conf"
+	rm -rf "${root:?}/$entry-kernel-trial"
+	card_order "$root"
+	card_autostart "$entry"
+	unset_state replace_previous
+	unset_state trial
+	say "kernel $rel confirmed and written to the boot menu entry $entry; fallback: $(get previous)"
+}
+
+card_system_boot() {
+	local rel=$1 root entry kernel prev title
+	root=$(card_mount)
+	entry=$(get entry)
+	[[ -n $entry && -e $root/db/entries/$entry.conf ]] || entry=$(own_entry "$root")
+	kernel=$(own_kernel "$root" "$entry")
+	# A confirmation that was cut off: the entry holds the trial kernel already
+	if [[ $(get installed) == "$rel" ]]; then
+		trap '' TERM HUP INT
+		card_system_finish "$root" "$entry" "$rel"
+		trap - TERM HUP INT
+		return 0
+	fi
+	if [[ $(role) == trial && $(uname -r) == "$rel" ]]; then
+		if ! system_up; then
+			say "system not up, kernel $rel stays a trial"
+			return 0
+		fi
+		trap '' TERM HUP INT
+		prev=$(get installed)
+		if [[ -n $(get replace_previous) || ! -e $root/db/entries/$entry-kernel-previous.conf ]]; then
+			title=$(entry_field "$root/db/entries/$entry.conf" title)
+			install -d -m 700 "$root/$entry-kernel-previous"
+			copy_to_card "$kernel" "$root/$entry-kernel-previous/zImage"
+			own_entry_conf "$root" "$entry" "$entry-kernel-previous" "$title (previous kernel $prev)" \
+				plinius.kernel=previous
+			put previous "$prev"
+		fi
+		copy_to_card "$(release_dir "$rel")/Image.gz" "$kernel"
+		put installed "$rel"
+		card_system_finish "$root" "$entry" "$rel"
+		trap - TERM HUP INT
+	else
+		if [[ -r /sys/fs/pstore/console-ramoops-0 ]]; then
+			cp /sys/fs/pstore/console-ramoops-0 "$state/console-$rel.log" || true
+		fi
+		unset_state trial
+		unset_state replace_previous
+		card_drop "$root" "$entry-kernel-trial"
+		card_autostart "$entry"
+		put failed "$rel"
+		say "kernel $rel was not confirmed (running $(uname -r)); trial entry removed"
+	fi
+}
+
+card_system_restore() {
+	local root entry kernel prev
+	have_card || die "the boot menu on the memory card is missing"
+	root=$(card_mount)
+	entry=$(own_entry "$root")
+	[[ -f $root/$entry-kernel-previous/zImage ]] || die "no previous kernel in the boot menu"
+	kernel=$(own_kernel "$root" "$entry")
+	prev=$(get previous)
+	copy_to_card "$root/$entry-kernel-previous/zImage" "$kernel"
+	card_umount
+	put installed "$prev"
+	say "fallback $prev written to the boot menu entry $entry; it starts with the next restart"
+}
+
 # --- fallback bookkeeping ---
 # Keeps the content of boot<slot> as the fallback image, with its release
 save_fallback() {
@@ -379,8 +561,7 @@ cmd_install() {
 	dir=$lib/$rel
 	[[ -f $dir/boot.img && -f $dir/Image.gz ]] || die "no kernel $rel in $lib"
 	if on_card_system; then
-		say "this Arch runs from a memory card partition; its kernel is in its boot menu entry."
-		say "Nothing written. The new kernel is $dir/Image.gz."
+		card_system_install "$rel" "$dir"
 		return
 	fi
 	part=$(boot_part)
@@ -436,11 +617,46 @@ finish_confirm() {
 	say "kernel $rel confirmed and written to $part; fallback: $prev"
 }
 
+# Waits for the end of the start. A single job that hangs keeps the state at "starting" for long
+# (seen on the phone), so the graphical session being up counts as well; a kernel that gets neither
+# is not confirmed.
+system_up() {
+	timeout 300 systemctl is-system-running --wait >/dev/null 2>&1 || true
+	case $(systemctl is-system-running 2>/dev/null || true) in
+	running|degraded) return 0 ;;
+	esac
+	systemctl -q is-active graphical.target
+}
+
+# The first start of a new system: the package's kernel (one release) is set up as an update
+# would, unless it runs already or its trial failed. Once: afterwards a kernel is recorded as
+# installed.
+first_install() {
+	local f rel=""
+	[[ -z $(get installed) ]] || return 0
+	for f in "$lib"/*; do
+		if [[ -f $f/boot.img ]]; then rel=${f##*/}; fi
+	done
+	[[ -n $rel && $rel != "$(get failed)" ]] || return 0
+	if [[ $(uname -r) == "$rel" ]]; then
+		put installed "$rel"
+		return 0
+	fi
+	say "first start with kernel $(uname -r); setting up kernel $rel"
+	cmd_install "$rel"
+}
+
 cmd_boot() {
 	local rel role part installed root
 	rel=$(get trial)
-	[[ -n $rel ]] || return 0
-	on_card_system && return 0
+	if [[ -z $rel ]]; then
+		first_install
+		return 0
+	fi
+	if on_card_system; then
+		card_system_boot "$rel"
+		return 0
+	fi
 	role=$(role)
 	# A confirmation that was cut off: boot<slot> holds the trial kernel already
 	if [[ $(get installed) == "$rel" ]]; then
@@ -450,19 +666,10 @@ cmd_boot() {
 		return 0
 	fi
 	if [[ $role == trial && $(uname -r) == "$rel" ]]; then
-		# Wait for the end of the start. A single job that hangs keeps the state at "starting" for
-		# long (seen on the phone), so the graphical session being up counts as well; a kernel
-		# that gets neither is not confirmed.
-		timeout 300 systemctl is-system-running --wait >/dev/null 2>&1 || true
-		case $(systemctl is-system-running 2>/dev/null || true) in
-		running|degraded) ;;
-		*)
-			if ! systemctl -q is-active graphical.target; then
-				say "system not up, kernel $rel stays a trial"
-				return 0
-			fi
-			;;
-		esac
+		if ! system_up; then
+			say "system not up, kernel $rel stays a trial"
+			return 0
+		fi
 		# From here on a restart must not cut the writing off: SIGTERM is ignored, also by dd, cp
 		# and debugfs (an ignored signal stays ignored across exec), and the unit gives the stop
 		# time (TimeoutStopSec). A half-written card made the bootloader crash on every restart.
@@ -522,7 +729,10 @@ cmd_keep() {
 
 cmd_restore() {
 	local part prev
-	on_card_system && die "this Arch runs from a memory card partition; nothing to restore here"
+	if on_card_system; then
+		card_system_restore
+		return
+	fi
 	[[ -f $state/boot-previous.img ]] || die "no fallback kept in $state"
 	part=$(boot_part)
 	prev=$(get previous)

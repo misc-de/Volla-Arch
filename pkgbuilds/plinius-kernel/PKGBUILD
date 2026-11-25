@@ -29,7 +29,7 @@ pkgname=plinius-kernel
 _kcommit=68ec656752b738e6c420def339c66b98e8c36792
 pkgver=6.1.193
 # 100: the check build of 6.1.193 ran as pkgrel 99 on a phone, which takes 99 for newer than 1
-pkgrel=101
+pkgrel=102
 _krelease=$pkgver-plinius$pkgrel
 pkgdesc="Kernel for Volla Phone Plinius: Halium kernel on android14-6.1 with the prebuilt MediaTek modules' interface"
 arch=(aarch64)
@@ -60,10 +60,10 @@ sha256sums=('9b196515e5ed38ddd6632d229c7483643ebc74ac4dd49e6d5aa099962be2ba5d'
             'df1e4652b80fd5c4704a64eea6294c7530d8e21ab99426740095d5c7fed028b4'
             '94dade8930576dbf267b40fa355fcf7068853f51ccc4f88b491a867cd98c07e3'
             'aa644341a1004b6558059faf2674a70fe8ade8b49f5d5c5074f8ff3de79cd54f'
-            'dcfda63c2ab29633c9aa6aaf1a7165d538f1ddca1611ee47e18116e6c4581df6'
+            '80bfc5de931ae72a669e252750771523ac8aa31267b573ec16e492c17ad8327e'
             '36ec058b4f86ed0cf29be04e19b33a38a541c2ac7af108bf6d392960c72f9330'
             '265b4a8ff700dc57095c1ab0d27df2209bda064b5df05b14cea1a68b7acfd3f8'
-            '89a5e144d11003a353907a442631bcad9d4c31ea3f15c23fff80b4bc3100577d'
+            '5ddb41f4bec8d5bf9f01ab0975d9da2d0e5fe0164f229bfe0c42e12f00bc4f87'
             '87797466637fe4f16f8bfa21be7fcdb2d1033731f0579474a199e5d03fd4a313'
             'fe99da3b4e6d5314c7c9d4afd375763c3f6d326eca55adcf4f828de9319178e1'
             '04ca4ad3d4acfd5ec0e7b4a3254aa34c352dd9ebabc5db15e6fed8a48ea4a313'
