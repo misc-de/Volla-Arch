@@ -2,7 +2,7 @@
 
 pkgname=mobile-config-firefox
 pkgver=5.5.2
-pkgrel=10
+pkgrel=11
 pkgdesc="Mobile and privacy friendly configuration for Firefox (postmarketOS)"
 arch=(any)
 url="https://gitlab.postmarketos.org/postmarketOS/mobile-config-firefox"
@@ -28,16 +28,16 @@ optdepends=('firefox: the browser it configures'
 # first start does not wait for the SD card: 7.1 s cold vs. 1.3-1.9 s warm until the window.
 source=("$url/-/archive/$pkgver/$pkgname-$pkgver.tar.gz"
         plinius-prefs.js
-        swipe-gestures-0.2.10.xpi
+        swipe-gestures-0.2.12.xpi
         "https://addons.mozilla.org/firefox/downloads/file/5203014/ublock_origin-$_ublock.xpi"
         firefox-preload
         firefox-preload.service
         firefox-preload.timer
         plinius-fullscreen.css)
-noextract=(swipe-gestures-0.2.10.xpi "ublock_origin-$_ublock.xpi")
+noextract=(swipe-gestures-0.2.12.xpi "ublock_origin-$_ublock.xpi")
 sha256sums=('3b69740272619d74c7bdada4ffe6284c40c7535821023afc178f56d55b8dd9ec'
             'a0e6b301f0889f7a11bce8e7de2ef1e9102ec3a410853679e5ad8a8c4e08fafa'
-            'a6498b1694df7274e1bc18d46a85907fc479d3b4c50e9129658447f3f5588f83'
+            'd1e043ccb39eabe781b8715fe7d1d4a456c434d4d7cfa8ce979032760c19f9ac'
             'e2df503cce7cf5069130618c349695f62bdddb9eb8c189156d027269ae4ae267'
             'f8a0ff883113ca254e73066e51878dfa6c7b508224ab2e11f9b9864625ca113c'
             '4a35eae7bbc5fdbdb87430282a81ec7d1e365aeb6ed582faa3594b558c554bac'
@@ -47,7 +47,7 @@ sha256sums=('3b69740272619d74c7bdada4ffe6284c40c7535821023afc178f56d55b8dd9ec'
 package() {
 	install -Dm644 plinius-prefs.js -t "$pkgdir/usr/lib/firefox/defaults/pref"
 	# Firefox finds system add-ons by their ID as file name
-	install -Dm644 swipe-gestures-0.2.10.xpi \
+	install -Dm644 swipe-gestures-0.2.12.xpi \
 		"$pkgdir/usr/lib/firefox/browser/extensions/swipe-gestures@de.cais.xpi"
 	# Outside browser/extensions: that path belongs to firefox-ublock-origin, if installed
 	install -Dm644 "ublock_origin-$_ublock.xpi" \
