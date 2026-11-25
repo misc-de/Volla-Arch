@@ -5,9 +5,14 @@
 # tools/upload-repo.sh brings both to the web server. Devices get stable configured via
 # image/mkimage.sh -r; beta is a switch under Settings → Apps → Settings.
 #
-# Usage: [ARCH=x86_64] tools/publish.sh [--stable] [--force]
-#   --stable  release the new state to stable right away (tools/release.sh), for urgent fixes
-#   --force   publish even if the approval does not match the repo (tools/freigabe.py)
+# Usage: [ARCH=x86_64] tools/publish.sh [--stable] [--force] [--untested]
+#   --stable    release the new state to stable right away (tools/release.sh), for urgent fixes
+#   --force     publish even if the approval does not match the repo (tools/freigabe.py)
+#   --untested  publish even if a package new for beta has not passed the test gate
+#
+# The test gate (tools/test-gate.py): every package beta does not have yet must be built from the
+# version its PKGBUILD in the tree has, and its directory must be unchanged since the last green
+# full run of tools/run-tests.sh.
 #
 # All packages and the database are signed with the key from tools/keygen.sh. Packages that
 # already have a valid signature are not signed again; one unchanged since stable keeps the
@@ -15,12 +20,13 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-force= stable=
+force= stable= untested=
 for a; do
 	case $a in
 		--force) force=1 ;;
 		--stable) stable=1 ;;
-		*) die "usage: tools/publish.sh [--stable] [--force]" ;;
+		--untested) untested=1 ;;
+		*) die "usage: tools/publish.sh [--stable] [--force] [--untested]" ;;
 	esac
 done
 
@@ -50,6 +56,10 @@ fi
 
 out=$(channel_dir beta "$PUBREPO")
 released=$(channel_dir stable "$PUBREPO")
+if ! "$VOLLA_DIR/tools/test-gate.py" check "$db" "$out"; then
+	[[ -n $untested ]] || die "packages for beta have not passed the test gate, or use --untested"
+	msg "publishing packages that have not passed the test gate (--untested)"
+fi
 mkdir -p "$out"
 # Copy changed packages (via .part, so no half-written file is ever served; a stale .sig goes
 # with the old file), then sign every package without a valid signature. A package that stable

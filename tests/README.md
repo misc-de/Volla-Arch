@@ -5,6 +5,14 @@ without the phone: `tools/run-tests.sh` (all), `tools/run-tests.sh tests/boot` (
 `tools/run-tests.sh --coverage` (line coverage in `build/coverage/`: `report.txt` for the Python
 code, `c-report.txt` for the C code the tests compile, counted by gcov with `-O0`; it also lists
 the versioned C files no test compiles). `--jobs N` runs N pytest processes side by side (default: half the CPUs), each on a group of test files of about the same running time (`tools/test-shards.py`, times of the last run in `build/test-durations.json`); the whole suite takes about 9 minutes that way, 11 with `--coverage`.
+With groups, a test that failed is run once more on its own; one that passes then is listed as
+WOBBLY and the run counts as green (a wobbly test is still a bug to fix: timing or a race).
+
+A full run (no paths, no pytest arguments, no `--quick`) is the test gate of `tools/publish.sh`:
+green, it writes the fingerprints of the package directories that did not change while it ran
+to `build/test-pass.json` (`tools/test-gate.py`); red, it removes that file. `publish.sh` takes
+a package new for beta only when it was built from the version in its PKGBUILD and its
+directory still has the fingerprint of that run.
 
 Aim: at least 98 % of the lines, reached with tests of real behaviour, not with tests that only
 run lines; what cannot run on the host (main loops, hardware, BPF loading) is named, not hidden

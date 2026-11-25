@@ -94,11 +94,23 @@ class Repo:
         fake_bin.stub("bsdtar", f'exec {bsdtar} "$@"')
         fake_bin.stub("rmdir", f'exec {shutil.which("rmdir")} "$@"')
         self.freigabe(0)
+        self.gate(0)
 
     def freigabe(self, status):
         f = self.tools / "freigabe.py"
         f.write_text(f"#!/bin/bash\n[[ $1 == --check ]] || exit 9\nexit {status}\n")
         f.chmod(0o755)
+
+    def gate(self, status):
+        """tools/test-gate.py as a stand-in: logs its arguments, answers check with status."""
+        f = self.tools / "test-gate.py"
+        f.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> "{self.tmp}/gate.log"\n'
+                     f'[[ $1 == check ]] || exit 9\nexit {status}\n')
+        f.chmod(0o755)
+
+    def gate_calls(self):
+        log = self.tmp / "gate.log"
+        return log.read_text().splitlines() if log.exists() else []
 
     def local_repo(self, packages, keyring_fpr=FPR):
         """packages: {name: version}; plinius-keyring is added with keyring_fpr (None: left out)."""
@@ -316,6 +328,36 @@ def test_publish_refuses_when_the_approval_does_not_match(repo):
     r = ok(repo.run("publish.sh", "--force"))
     assert "publishing anyway" in r.stderr
     assert (repo.beta / "plinius.db").exists()
+
+
+def test_publish_asks_the_test_gate_about_beta(repo):
+    repo.local_repo({"foo": "1-1"})
+    ok(repo.run("publish.sh"))
+    assert repo.gate_calls() == [f"check {repo.local / 'plinius-local.db.tar.gz'} {repo.beta}"]
+
+
+def test_publish_refuses_what_has_not_passed_the_test_gate(repo):
+    repo.local_repo({"foo": "1-1"})
+    repo.gate(1)
+    fails(repo.run("publish.sh"), "have not passed the test gate, or use --untested")
+    assert not repo.pub.exists()
+    fails(repo.run("publish.sh", "--stable"), "have not passed the test gate")
+    assert not repo.pub.exists()
+    # The approval is checked first: a mismatch there stops before the gate is asked
+    repo.freigabe(1)
+    (repo.tmp / "gate.log").unlink()
+    fails(repo.run("publish.sh"), "approval does not match")
+    assert repo.gate_calls() == []
+
+
+def test_publish_untested_on_purpose(repo):
+    repo.local_repo({"foo": "1-1"})
+    repo.gate(1)
+    r = ok(repo.run("publish.sh", "--untested"))
+    assert "have not passed the test gate (--untested)" in r.stderr
+    assert (repo.beta / "plinius.db").exists()
+    # --force covers the approval only, not the gate
+    fails(repo.run("publish.sh", "--force"), "have not passed the test gate")
 
 
 def test_publish_to_beta(repo):

@@ -229,14 +229,15 @@ tools/devtree.sh <pkg> setup  # persistent build tree for quick incremental test
 REMOTE=user@host tools/remote-build.sh <pkg>   # build on a second host, packages come back
 tools/candidate.sh            # check all packages against the current mirrors before an approval
 tools/freigabe.py             # approve the tested state of the repo
-tools/publish.sh              # sign the local repo into the channel beta → build/repo/plinius/beta
+tools/publish.sh              # sign the local repo into the channel beta → build/repo/plinius/beta;
+                              # only packages whose sources passed a full green tools/run-tests.sh
 tools/release.sh              # after testing: the signed beta state 1:1 to stable, nothing re-signed
 REPO_TARGET=user@host:/path tools/upload-repo.sh   # beta, then stable: packages, database, old packages last
 tools/kernel-trial.sh build/ut/<build>   # try a new UT kernel through a second boot entry
 tools/kernel-kmi.py -C build/kernel-trial types --genksyms <old> <new> --symtypes <obj> --needs pkgbuilds/plinius-kernel/vendor-needs.txt
                               # after a linux-6.1.y merge: what the vendor modules' interface sees changed
 tools/kernel-checkbuild.sh [--package] <rev>   # check build of a kernel commit, pkgrel 99, never into the repo
-tools/run-tests.sh            # the test suite
+tools/run-tests.sh            # the test suite; a full green run is the test gate of publish.sh
 tools/phone-check.py          # everyday functions of the phone live over SSH (reads and scans only)
 ```
 

@@ -63,6 +63,12 @@ tools/run-tests.sh            # all host tests, about 10 minutes; tools/run-test
 tools/run-tests.sh --coverage # line coverage of Python and C in build/coverage/
 ```
 
+`tools/publish.sh` puts a package into beta only through the test gate (`tools/test-gate.py`):
+it must be built from the version its PKGBUILD has in the tree, and its directory must be
+unchanged since the last full green run of `tools/run-tests.sh` (no paths, no pytest arguments;
+a red full run takes every package back). So after the last change to a package: build it, run
+the full suite, then publish. `--untested` overrides the gate for an emergency and says so.
+
 The phone is reachable over USB networking at `10.15.19.82` (the PC side is `10.15.19.100`), SSH
 with keys only. `tools/phone-check.py` checks its everyday functions live over that link (SIM,
 network, calls, SMS, mobile data, Wi-Fi, Bluetooth, GPS, sensors, cameras, audio, OpenGL, Vulkan
