@@ -40,7 +40,7 @@ crypt_src=$VOLLA_DIR/pkgbuilds/plinius-crypt
 for f in vendor_boot.img init_boot.img; do
 	[[ -f $src/$f ]] || die "$src/$f missing"
 done
-for cmd in bsdtar cpio lz4 readelf python3; do
+for cmd in bsdtar cpio lz4 zstd readelf python3; do
 	command -v "$cmd" >/dev/null || die "$cmd missing"
 done
 python3 -I -c 'import PIL' 2>/dev/null || die "Pillow (python-pillow) missing"
@@ -124,6 +124,10 @@ total=$(stat -c %s "$out/initrd.cpio.gz")
 printf 'programs %d bytes, init_boot ramdisk %d bytes, whole ramdisk %d bytes\n' \
 	"$(stat -c %s "$out/parts/programs.zst")" "$isize" "$total" >&2
 ((total == vsize + isize)) || die "the card's ramdisk ($total) is not vendor_boot's and init_boot's ($vsize + $isize)"
+# The card's ramdisk as one zstd archive, some 5 MB smaller (card-initrd.py says why)
+python3 -I "$VOLLA_DIR/tools/card-initrd.py" "$out/initrd.cpio.gz" "$tmp/card-initrd"
+mv "$tmp/card-initrd" "$out/initrd.cpio.gz"
+total=$(stat -c %s "$out/initrd.cpio.gz")
 # The largest ramdisk lk loads with plinius-kernel's 6.1.192 (09.11.2026: 22,090,524 bytes failed
 # with "data fault ... FAR 0x68400000", 22,018,783 started); UT's 6.1.145 took more (25,397,680 on
 # 07.11.). lk puts the bootconfig (some 640 bytes) behind it in the same room, so 1 kB stays free;
