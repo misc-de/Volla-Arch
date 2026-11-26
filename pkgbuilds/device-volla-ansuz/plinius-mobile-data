@@ -1,0 +1,212 @@
+#!/usr/bin/python3 -I
+"""Mobile data without setting it up: the first access point of a SIM, from oFono.
+
+A new phone (or a SIM it has not seen) has no mobile broadband connection in NetworkManager, so
+there is no mobile data until the user creates one in Settings. oFono already provisions the
+SIM's internet context: from Android's apns-conf.xml by network and by the SIM's provider name,
+which picks the right one where several providers share a network (libnma's database lookup in
+Settings took another provider's access point, which ended mobile data).
+
+So, once per SIM, when NetworkManager has no mobile connection for it: a connection from oFono's
+internet context, saved as Settings saves one (Settings > Mobile Network shows and changes it),
+with mobile data on and roaming off, as Settings starts. NetworkManager connects it at once.
+
+Never twice for a SIM: a stamp per SIM (a hash of its ICCID) in the state directory. A user who
+switches mobile data off (autoconnect off) or deletes the access point keeps it that way.
+
+Usage: plinius-mobile-data   (plinius-mobile-data.service, at every boot; waits for the modems)
+"""
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+
+STATE = os.environ.get("STATE_DIRECTORY", "/var/lib/plinius-mobile-data")
+# How long to wait at boot for the SIMs (oFono provisions a context a little after the SIM)
+WAIT_S = 600
+POLL_S = 5
+# Once a SIM is set up, a slot still without a SIM this much later is taken as empty and the wait ends
+# (a second SIM comes up within seconds of the first); with no SIM set up yet the boot may still be early
+EMPTY_S = 60
+# As Settings saves a connection of a SIM that is not the preferred one (cc-wwan-data.c)
+DNS_PRIORITY = "120"
+ROUTE_METRIC = "1050"
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def run(*cmd):
+    """stdout of a command, None if it failed"""
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def nm_split(line):
+    """Fields of a line of nmcli -t: ':' separates, '\\:' and '\\\\' are escaped."""
+    fields, cur, i = [], "", 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            cur += line[i + 1]
+            i += 2
+            continue
+        if c == ":":
+            fields.append(cur)
+            cur = ""
+        else:
+            cur += c
+        i += 1
+    fields.append(cur)
+    return fields
+
+
+def modem_devices():
+    """{device: state} of NetworkManager's mobile devices, e.g. {"/ril_0": "disconnected"}"""
+    out = run("nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device") or ""
+    devices = {}
+    for line in out.splitlines():
+        f = nm_split(line)
+        if len(f) >= 3 and f[1] == "gsm":
+            devices[f[0]] = f[2]
+    return devices
+
+
+def keyvalue(out):
+    kv = {}
+    for line in (out or "").splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            kv[key.strip()] = value.strip()
+    return kv
+
+
+def sim_of(device):
+    """ICCID of the SIM in the modem of NetworkManager's device, None if there is none"""
+    out = run("mmcli", "-L") or ""
+    for word in out.split():
+        if not word.startswith("/org/freedesktop/ModemManager1/Modem/"):
+            continue
+        modem = keyvalue(run("mmcli", "-m", word, "--output-keyvalue"))
+        if modem.get("modem.generic.device") != device:
+            continue
+        sim = modem.get("modem.generic.sim", "--")
+        if not sim.startswith("/"):
+            return None
+        iccid = keyvalue(run("mmcli", "-i", sim, "--output-keyvalue")).get("sim.properties.iccid", "")
+        return iccid if iccid and iccid != "--" else None
+    return None
+
+
+def has_connection(iccid):
+    """Whether NetworkManager has a mobile connection for this SIM (or one for every SIM)"""
+    out = run("nmcli", "-t", "-f", "UUID,TYPE", "connection", "show")
+    if out is None:
+        return None
+    for line in out.splitlines():
+        f = nm_split(line)
+        if len(f) < 2 or f[1] != "gsm":
+            continue
+        sim_id = run("nmcli", "-g", "gsm.sim-id", "connection", "show", f[0])
+        if sim_id is None:
+            return None
+        if sim_id.strip() in ("", iccid):
+            return True
+    return False
+
+
+def internet_context(device):
+    """oFono's internet context of the modem (its path is NetworkManager's device name)"""
+    out = run("busctl", "--json=short", "call", "org.ofono", device,
+              "org.ofono.ConnectionManager", "GetContexts")
+    if not out:
+        return None
+    try:
+        contexts = json.loads(out)["data"][0]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+    for _path, props in contexts:
+        p = {k: v.get("data") for k, v in props.items()}
+        if p.get("Type") == "internet" and p.get("AccessPointName"):
+            return p
+    return None
+
+
+def stamp(iccid):
+    return os.path.join(STATE, hashlib.sha256(iccid.encode()).hexdigest()[:16])
+
+
+def create(device, iccid, ctx):
+    name = ctx.get("Name") or "Mobile Broadband"
+    cmd = ["nmcli", "connection", "add", "type", "gsm", "con-name", name,
+           "connection.autoconnect", "yes", "gsm.apn", ctx["AccessPointName"],
+           "gsm.sim-id", iccid, "gsm.home-only", "yes"]
+    if ctx.get("Username"):
+        cmd += ["gsm.username", ctx["Username"]]
+    if ctx.get("Password"):
+        cmd += ["gsm.password", ctx["Password"], "gsm.password-flags", "0"]
+    protocol = ctx.get("Protocol", "dual")
+    for ip in ("ipv4", "ipv6"):
+        if (ip, protocol) in (("ipv4", "ipv6"), ("ipv6", "ip")):
+            cmd += [f"{ip}.method", "disabled"]
+        else:
+            cmd += [f"{ip}.dns-priority", DNS_PRIORITY, f"{ip}.route-metric", ROUTE_METRIC]
+    if run(*cmd) is None:
+        log(f"{device}: could not save the access point {ctx['AccessPointName']}")
+        return False
+    log(f"{device}: mobile data with access point {ctx['AccessPointName']} ({name}), "
+        "as oFono provisioned it for the SIM")
+    return True
+
+
+def settle(device):
+    """Handles one modem; True once there is nothing more to do for it at this boot"""
+    iccid = sim_of(device)
+    if not iccid:
+        return False
+    if os.path.exists(stamp(iccid)):
+        return True
+    have = has_connection(iccid)
+    if have is None:
+        return False
+    if not have:
+        ctx = internet_context(device)
+        if not ctx or not create(device, iccid, ctx):
+            return False
+    os.makedirs(STATE, exist_ok=True)
+    with open(stamp(iccid), "w"):
+        pass
+    return True
+
+
+def main():
+    done = set()
+    deadline = time.monotonic() + WAIT_S
+    empty_since = None
+    while True:
+        devices = modem_devices()
+        for device, state in devices.items():
+            # unavailable: no SIM (or flight mode); unmanaged: not NetworkManager's
+            if device in done or state in ("unavailable", "unmanaged"):
+                continue
+            if settle(device):
+                done.add(device)
+        if devices and done >= set(devices):
+            return 0
+        # Only slots without a SIM left once one SIM is done: an empty second slot
+        if done and all(devices[d] in ("unavailable", "unmanaged") for d in set(devices) - done):
+            empty_since = time.monotonic() if empty_since is None else empty_since
+            if time.monotonic() - empty_since >= EMPTY_S:
+                return 0
+        else:
+            empty_since = None
+        if time.monotonic() >= deadline:
+            return 0
+        time.sleep(POLL_S)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

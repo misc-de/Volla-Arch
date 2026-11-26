@@ -2,7 +2,7 @@
 
 pkgname=device-volla-ansuz
 pkgver=0.5
-pkgrel=93
+pkgrel=95
 pkgdesc="Device configuration for Volla Phone Plinius (ansuz): binder, Android container, boot chain check, SSH over USB"
 arch=(any)
 license=(MIT)
@@ -23,7 +23,7 @@ license=(MIT)
 # plinius-kmsg: the kernel log into the journal without the vendor drivers' status lines
 #   (50-plinius-journald.conf: ReadKMsg=no)
 # libhybris >= 5: TLS padding preloaded below. hybris-gbm: GBM backend for wlroots on the GPU (linked below under the DRM driver's name)
-depends=(systemd openssh 'libhybris>=0.1.0.20260624-5' plinius-freigabe 'plinius-bootcheck>=0.2' lxc-android-halium 'plinius-backlight-wake>=0.3' hybris-gbm plinius-usb bluez-utils ccid plinius-epo plinius-greeter plinius-datawatch plinius-speech plinius-kmsg)
+depends=(systemd openssh python networkmanager modemmanager 'libhybris>=0.1.0.20260624-5' plinius-freigabe 'plinius-bootcheck>=0.2' lxc-android-halium 'plinius-backlight-wake>=0.3' hybris-gbm plinius-usb bluez-utils ccid plinius-epo plinius-greeter plinius-datawatch plinius-speech plinius-kmsg)
 # The hook that hides pulled-in launchers came from plinius-apps up to 0.11-5
 conflicts=('plinius-apps<0.11-6')
 # Adds the lines to /etc/bash.bashrc that source the prompt and the aliases
@@ -55,6 +55,8 @@ source=(
 	plinius-android.sysusers
 	plinius-wlan
 	plinius-wlan.service
+	plinius-mobile-data
+	plinius-mobile-data.service
 	50-plinius-nm.conf
 	droid-get-bt-address.sh
 	bluebinder-plinius.conf
@@ -155,6 +157,8 @@ sha256sums=(
 	'e5b6f05cd9e43166ab736d3b3bbe44dd6e4086f294cff4cfdb0e6c7a22d0daff'
 	'b833b087ec932d3cf5077d10aad6029aa6127cac44e0ba142587202301bcd33e'
 	'73c4207681787e90e086ce629d78c27d9427b3a91fb48ab98024010d8fb2e295'
+	'4d86a7924a324877c2b370cce22f9baf48512be65694e199720d6484504f3ffb'
+	'9099243f07ba94a278d7bcaee0780c67e96138fb6e54304b054dda02297529cb'
 	'd43476809c7869882f4f6f21566a1c690d2d43f47385ce6f24ca23779b3771dd'
 	'1cbf4a85e42c0618bf2902fa3af4bd2ff9dc35538d417a8d72deaa4364c3ffcc'
 	'fc42667f192d4e347a8b77e67f5ce81062dfd7a19f7e785f7ba09922a3cc20f1'
@@ -216,7 +220,7 @@ sha256sums=(
 	'4e693960382049997cefc0845806337befd07a9c2b798e0f80467dc61eacf04e'
 	'cb87abfa4a929ce9611101e5acabd6d0dab8cd56c3714c561e73331b3d6ccadb'
 	'4535cacc62f50503f75a7af84db0a5bb3a49df0213b2fada032cf17620991717'
-	'fd14b8bc4f0350a2503928eef375870f589a6f2d16aeff903cc76f455f751782'
+	'd79d755ece319a2cd48be86d3cdbfe38fc7a118fc83d73602f64e0f20ddae12e'
 	'600fe11ecbeafbfb02075017f89cb1ac0138b4a690a374fd5800216aa919cc1b'
 	'4a8eb74a43c85ae71985d6ba788c959ba57f39f10eebd052d9989a75a3bff7f9'
 	'14f05ed9e440918e3b97ebdfe9516875d8ece9ec93fb381d872275f30a41a186'
@@ -327,6 +331,10 @@ package() {
 	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
 	ln -s ../plinius-wlan.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
 	install -Dm644 50-plinius-nm.conf -t "$pkgdir/usr/lib/NetworkManager/conf.d"
+	# Mobile data on a new phone at once: the first access point of a SIM from oFono's context
+	install -Dm755 plinius-mobile-data -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 plinius-mobile-data.service -t "$pkgdir/usr/lib/systemd/system"
+	ln -s ../plinius-mobile-data.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
 	# Chip and firmware versions for Settings > System > Hardware, collected as root at boot
 	install -Dm755 plinius-hardware-info -t "$pkgdir/usr/lib/plinius"
 	install -Dm644 plinius-hardware-info.service -t "$pkgdir/usr/lib/systemd/system"

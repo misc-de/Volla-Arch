@@ -1,0 +1,40 @@
+[Unit]
+Description=Mobile data without setting it up: the first access point of a new SIM from oFono
+After=NetworkManager.service ModemManager.service ofono.service
+
+[Service]
+# Waits up to 10 minutes for the SIMs and their provisioned contexts; holds up nothing
+Type=exec
+ExecStart=/usr/lib/plinius/plinius-mobile-data
+# One stamp per SIM that had its first access point
+StateDirectory=plinius-mobile-data
+StateDirectoryMode=0700
+# Root without capabilities: NetworkManager lets uid 0 add connections without polkit; nmcli,
+# mmcli and busctl talk to the system bus only (a socket file, so PrivateNetwork= does not cut
+# it off)
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

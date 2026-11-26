@@ -11,9 +11,12 @@ import pytest
 
 DEVICE = pathlib.Path(__file__).resolve().parents[2] / "pkgbuilds" / "device-volla-ansuz"
 
-# Directories under /var/lib that the package of the service ships itself (checked on a newly
-# installed phone, 25.11.2026); everything else under /var/lib needs StateDirectory=.
-SHIPPED = {"/var/lib/bluetooth", "/var/lib/nfcd", "/var/lib/ofono"}
+# Directories under /var/lib that are there before the service starts (checked with pacman -Qo on a
+# newly installed phone, 26.11.2026): ofono-sailfish ships /var/lib/ofono, nfcd's tmpfiles.d makes
+# /var/lib/nfcd. Everything else under /var/lib needs StateDirectory=; /var/lib/bluetooth is not
+# shipped, bluetooth.service makes it only after bluebinder. tools/image-check.sh checks the
+# same on the image itself (tools/unit-paths.py).
+SHIPPED = {"/var/lib/nfcd", "/var/lib/ofono"}
 
 
 def settings(path):
@@ -45,4 +48,13 @@ def test_biomd_gets_its_database_directory_from_systemd():
     conf = settings(DEVICE / "biomd-sandbox.conf")
     assert conf["StateDirectory"] == ["biomd"]
     assert conf["StateDirectoryMode"] == ["0700"]
+    assert conf["ProtectSystem"] == ["strict"]
+
+
+def test_bluebinder_gets_the_bluetooth_directory_from_systemd():
+    # bluebinder runs before bluetooth.service, which makes /var/lib/bluetooth with the same mode
+    conf = settings(DEVICE / "bluebinder-sandbox.conf")
+    assert conf["StateDirectory"] == ["bluetooth"]
+    assert conf["StateDirectoryMode"] == ["0700"]
+    assert "ReadWritePaths" not in conf
     assert conf["ProtectSystem"] == ["strict"]
