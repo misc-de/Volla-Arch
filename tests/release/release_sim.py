@@ -304,9 +304,14 @@ BOOTCHECK_MAPPING = {
     "STATE=/var/lib/plinius-bootcheck": "STATE=@ROOT@/var/lib/plinius-bootcheck",
     "RUN=/run/plinius-bootcheck": "RUN=@ROOT@/run/plinius-bootcheck",
     "/proc/bootconfig": "@ROOT@/proc/bootconfig",
+    "/proc/cmdline": "@ROOT@/proc/cmdline",
     "[[ -n $card && -b $card ]]": "[[ -n $card && -e $card ]]",
 }
 
 
+# A pattern for words of the kernel command line, not a path that is opened
+CMDLINE_PATTERNS = ("=/dev/mmcblk*)",)
+
+
 def bootcheck_copy(src, dst, root):
-    return copy_script(src, dst, BOOTCHECK_MAPPING, root)
+    return copy_script(src, dst, BOOTCHECK_MAPPING, root, allowed=("/dev/zero", "/dev/null") + CMDLINE_PATTERNS)

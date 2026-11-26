@@ -31,7 +31,7 @@ pkgname=plinius-kernel
 _kcommit=68ec656752b738e6c420def339c66b98e8c36792
 pkgver=6.1.193
 # 100: the check build of 6.1.193 ran as pkgrel 99 on a phone, which takes 99 for newer than 1
-pkgrel=103
+pkgrel=104
 _krelease=$pkgver-plinius$pkgrel
 pkgdesc="Kernel for Volla Phone Plinius: Halium kernel on android14-6.1 with the prebuilt MediaTek modules' interface"
 arch=(aarch64)
@@ -63,7 +63,7 @@ sha256sums=('9b196515e5ed38ddd6632d229c7483643ebc74ac4dd49e6d5aa099962be2ba5d'
             'df1e4652b80fd5c4704a64eea6294c7530d8e21ab99426740095d5c7fed028b4'
             '94dade8930576dbf267b40fa355fcf7068853f51ccc4f88b491a867cd98c07e3'
             'aa644341a1004b6558059faf2674a70fe8ade8b49f5d5c5074f8ff3de79cd54f'
-            'bd9ba895e1bf378d4a37c071358622e93aec09f0b18a2e716871f8170f7c88ec'
+            'abd24dd10a9d5b460e5f553aeadab4e7a6d23f044ad26fe0a5d9883eb5052d40'
             '5697bf01731d1a2b78c3457f6388ad68ef130d78e4fb466fa3136a9501128c57'
             '36ec058b4f86ed0cf29be04e19b33a38a541c2ac7af108bf6d392960c72f9330'
             '265b4a8ff700dc57095c1ab0d27df2209bda064b5df05b14cea1a68b7acfd3f8'
@@ -181,6 +181,9 @@ package() {
 	done
 
 	install -Dm755 plinius-kernel-install plinius-kernel-avb -t "$pkgdir/usr/lib/plinius/kernel"
+	# For Plinius Boot: plinius-kernel-install looks after an Arch on the card that names only its data
+	# partition (datapart=, the system in rootfs.img there), so an image with this package may go there
+	install -Dm644 /dev/null "$pkgdir/usr/lib/plinius/kernel/card-data-system"
 	install -Dm644 90-plinius-kernel.hook 10-plinius-kernel-keep.hook -t "$pkgdir/usr/share/libalpm/hooks"
 	install -Dm644 plinius-kernel-boot.service -t "$pkgdir/usr/lib/systemd/system"
 	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"

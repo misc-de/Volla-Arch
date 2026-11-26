@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from conftest import PKG
-from release_sim import (DEBUGFS, avb_partition, boot_img, card_list, copy_script, init_boot,
+from release_sim import (CMDLINE_PATTERNS, DEBUGFS, avb_partition, boot_img, card_list, copy_script, init_boot,
                          kernel_blob, last_index, need_inode_order, read_avb, vendor_boot,
                          write_last_index)
 
@@ -60,10 +60,11 @@ class Phone:
         for d in (self.lib, self.kmods, self.parts, self.root / "proc",
                   self.root / "var/lib/lxc/android", self.root / "sys/fs/pstore"):
             d.mkdir(parents=True, exist_ok=True)
-        self.script = copy_script(SRC, tmp_path / "plinius-kernel-install", MAPPING, self.root)
+        allowed = ("/dev/zero", "/dev/null") + CMDLINE_PATTERNS
+        self.script = copy_script(SRC, tmp_path / "plinius-kernel-install", MAPPING, self.root, allowed=allowed)
         shutil.copy(AVB, self.lib / "plinius-kernel-avb")
         self.functions = copy_script(SRC, tmp_path / "kernel-functions.sh", MAPPING, self.root,
-                                     cut="\ncase ${1:-} in")
+                                     cut="\ncase ${1:-} in", allowed=allowed)
         self.bootconfig('_b')
         self.cmdline("")
         self.orig_img = boot_img(ORIG)
@@ -137,18 +138,20 @@ esac''')
         write_last_index(self.card, 0)
         self.card_dev.write_text(str(self.card))
 
-    def card_system(self, entry="plinius", sp="/dev/mmcblk0p2", kernel=ORIG):
+    def card_system(self, entry="plinius", sp="/dev/mmcblk0p2", kernel=ORIG, in_data=False):
         """An Arch on card partitions as Plinius Boot sets it up: its own entry next to real.conf,
-        and the command line of a start from it."""
+        and the command line of a start from it. in_data: the system is rootfs.img on the data
+        partition, and the entry names only that one."""
         self.boot_menu()
         (self.card / entry).mkdir()
         (self.card / entry / "zImage").write_bytes(kernel_blob(kernel))
         (self.card / entry / "initrd.cpio.gz").write_bytes(b"SD-RAMDISK")
+        parts = "datapart=/dev/mmcblk0p3" if in_data else f"systempart={sp} datapart=/dev/mmcblk0p3"
         (self.card / "db/entries" / f"{entry}.conf").write_text(
             f"title Arch Linux (SD)\nlinux {entry}/zImage\ninitrd {entry}/initrd.cpio.gz\n"
-            f"dtb {entry}/dtb.dtb\noptions {VENDOR_CMDLINE} systempart={sp} datapart=/dev/mmcblk0p3\n"
+            f"dtb {entry}/dtb.dtb\noptions {VENDOR_CMDLINE} {parts}\n"
             "xtype UT\nxpart 2:3\n")
-        self.cmdline(f"{VENDOR_CMDLINE} systempart={sp} datapart=/dev/mmcblk0p3")
+        self.cmdline(f"{VENDOR_CMDLINE} {parts}")
         return self.card / entry
 
     # --- running ---
@@ -679,8 +682,8 @@ def test_card_system_install_creates_a_trial_of_its_own_entry(phone, tmp_path):
         f"options {VENDOR_CMDLINE} systempart=/dev/mmcblk0p2 datapart=/dev/mmcblk0p3 "
         "plinius.kernel=trial initcall_debug"]
     assert (phone.card / "plinius-kernel-trial/zImage").read_bytes() == kernel_blob(NEW)
-    # plinius-bootcheck leaves card systems alone
-    assert phone.accepted() == []
+    # plinius-bootcheck judges the entries of the card system it runs from: the new one is reported
+    assert phone.accepted() == [["accept", "--written", "abm-entry:plinius-kernel-trial"]]
     assert "Arch Linux (SD)" in r.stdout
 
 
@@ -705,7 +708,7 @@ def test_card_system_trial_confirmed_goes_into_the_entry(phone, tmp_path):
     assert conf.rstrip().endswith("datapart=/dev/mmcblk0p3 plinius.kernel=previous")
     assert "plinius.kernel=trial" not in conf
     assert (phone.card / "plinius-kernel-previous/zImage").read_bytes() == kernel_blob(ORIG)
-    assert phone.accepted() == []
+    assert phone.accepted()[-1] == ["accept", "--written", "abm-entry:plinius", "abm-entry:plinius-kernel-previous"]
 
 
 def test_card_system_second_update_and_the_fallback_rule(phone, tmp_path):
@@ -1231,6 +1234,100 @@ def test_kernel_update_raises_no_boot_chain_alarm(phone, tmp_path):
     (phone.card / "plinius-previous/zImage").write_bytes(b"swapped by someone")
     r = check()
     assert r.returncode == 2 and "abm:/plinius-previous/zImage" in r.stderr
+
+
+def test_card_system_on_its_data_partition_is_a_card_system(phone, tmp_path):
+    """The system in rootfs.img on its data partition: the command line names only datapart=, and the
+    kernel still goes through the trial of its own entry, never into boot<slot>."""
+    need_inode_order(tmp_path)
+    phone.package(NEW)
+    own = phone.card_system(in_data=True)
+    ok(phone.run("install", NEW))
+    assert phone.boot() == avb_partition(phone.orig_img, PART_SIZE, VB_OFF)
+    assert phone.get("entry") == "plinius" and phone.get("trial") == NEW
+    conf = entry(phone, "plinius-kernel-trial")
+    assert f"options {VENDOR_CMDLINE} datapart=/dev/mmcblk0p3 plinius.kernel=trial\n" in conf + "\n"
+    phone.cmdline(conf.split("options ", 1)[1].split("\n")[0])
+    ok(phone.run("boot", uname=NEW))
+    assert (own / "zImage").read_bytes() == kernel_blob(NEW)
+    assert phone.boot() == avb_partition(phone.orig_img, PART_SIZE, VB_OFF)
+    assert card_list(phone.card) == ["real.conf", "plinius.conf", "plinius-kernel-previous.conf"]
+    phone.cmdline(f"{VENDOR_CMDLINE} datapart=/dev/mmcblk0p3")
+    ok(phone.run("restore", uname=NEW))
+    assert (own / "zImage").read_bytes() == kernel_blob(ORIG)
+    assert phone.accepted()[-1] == ["accept", "--written", "abm-entry:plinius"]
+
+
+def test_a_data_partition_in_the_phone_is_no_card_system(phone):
+    """datapart= naming the phone's own storage is the Arch there: its kernel goes into boot<slot>."""
+    phone.package(NEW)
+    phone.cmdline(f"{VENDOR_CMDLINE} datapart=/dev/disk/by-partlabel/userdata")
+    ok(phone.run("install", NEW))
+    assert phone.get("installed") == NEW and phone.boot() != avb_partition(phone.orig_img, PART_SIZE, VB_OFF)
+
+
+def test_card_system_entry_matches_its_whole_word(phone, tmp_path):
+    """Another system on the data partition mmcblk0p31 is not this one on mmcblk0p3."""
+    need_inode_order(tmp_path)
+    phone.package(NEW)
+    phone.card_system(in_data=True)
+    (phone.card / "db/entries/other.conf").write_text(
+        "title Other\nlinux other/zImage\noptions datapart=/dev/mmcblk0p31\nxpart 30:31\n")
+    ok(phone.run("install", NEW))
+    assert phone.get("entry") == "plinius"
+    (phone.card / "db/entries/plinius.conf").unlink()
+    phone.state.joinpath("trial").unlink()
+    r = fails(phone.run("install", NEW))
+    assert "no single entry for datapart=/dev/mmcblk0p3 in the boot menu (none)" in r.stderr
+
+
+def test_first_start_on_a_card_system_reports_its_fallback_entry(phone, tmp_path):
+    need_inode_order(tmp_path)
+    phone.package(NEW)
+    phone.kept(ORIG)
+    phone.card_system(in_data=True, kernel=NEW)
+    ok(phone.run("boot", uname=NEW))
+    assert phone.get("installed") == NEW
+    assert phone.accepted() == [["accept", "--written", "abm-entry:plinius-kernel-previous"]]
+    phone.fake_bin.path.joinpath("plinius-bootcheck.log").unlink()
+    phone.state.joinpath("installed").unlink()
+    ok(phone.run("boot", uname=NEW))
+    assert phone.accepted() == []  # the fallback entry was there already
+
+
+def test_card_system_kernel_update_raises_no_boot_chain_alarm(phone, tmp_path):
+    """On an Arch on the card plinius-bootcheck judges its entries; what the trial and the confirmation
+    write there is accepted, a change by anyone else still raises the alarm."""
+    from release_sim import bootcheck_copy
+    need_inode_order(tmp_path)
+    phone.package(NEW)
+    own = phone.card_system(in_data=True)
+    lists = phone.root / "usr/lib/plinius-bootcheck.d"
+    lists.mkdir(parents=True)
+    (lists / "device.list").write_text(f"{phone.parts}/boot@slot\nabm {phone.card_dev}\n")
+    bootcheck = bootcheck_copy(PKG / "plinius-bootcheck" / "plinius-bootcheck",
+                               phone.fake_bin.path / "plinius-bootcheck", phone.root)
+    phone.fake_bin.stub("id", "echo 0")
+
+    def check():
+        env = phone.fake_bin.env(isolated=True)
+        return subprocess.run(["bash", str(bootcheck), "check"], env=env, capture_output=True,
+                              text=True, timeout=60)
+
+    assert check().returncode == 0
+    r = ok(phone.run("install", NEW))
+    assert "did not take" not in r.stdout + r.stderr
+    phone.cmdline(entry(phone, "plinius-kernel-trial").split("options ", 1)[1].split("\n")[0])
+    r = check()
+    assert r.returncode == 0, r.stderr
+    r = ok(phone.run("boot", uname=NEW))
+    assert "did not take" not in r.stdout + r.stderr
+    phone.cmdline(f"{VENDOR_CMDLINE} datapart=/dev/mmcblk0p3")
+    r = check()
+    assert r.returncode == 0, r.stderr
+    (own / "initrd.cpio.gz").write_bytes(b"a prompt that keeps the password")
+    r = check()
+    assert r.returncode == 2 and "abm:/plinius/initrd.cpio.gz" in r.stderr
 
 
 # --- the pacman hooks and the unit call it the way it expects ------------------------------------

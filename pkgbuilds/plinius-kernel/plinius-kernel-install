@@ -14,12 +14,14 @@
 #    menu remembers the choice as autostart); boot then drops the trial entry.
 # Without the card, install writes boot<slot> at once; "restore" writes the fallback back.
 #
-# An Arch on a memory card partition (systempart=, set up by Plinius Boot) starts from its own entry
-# in the boot menu, not from boot<slot>. There a new kernel starts from "<entry>-kernel-trial" first,
-# with the entry's own ramdisk, device tree and command line; once the system is up it goes into the
-# entry, and the kernel that was there becomes "<entry>-kernel-previous". The names leave the trial
-# and fallback entries of an Arch on the phone's storage alone. plinius-bootcheck does not judge
-# entries of card systems, so nothing is reported to it there.
+# An Arch on memory card partitions (set up by Plinius Boot) starts from its own entry in the boot
+# menu, not from boot<slot>. Its command line names its card partition: systempart=, or datapart=
+# alone when the system is rootfs.img on its (encrypted) data partition. There a new kernel starts
+# from "<entry>-kernel-trial" first, with the entry's own ramdisk, device tree and command line; once
+# the system is up it goes into the entry, and the kernel that was there becomes
+# "<entry>-kernel-previous". The names leave the trial and fallback entries of an Arch on the phone's
+# storage alone. plinius-bootcheck judges these entries as its own, so what is written there is
+# reported to it as well.
 #
 # A new system from image/mkimage.sh starts with the package's kernel already: the image carries it
 # in place of UT's 6.1.145, and an older plinius-kernel as the fallback (kept, named as previous).
@@ -87,8 +89,22 @@ slot() {
 # Role of the running start: trial or previous (entries on the card), or empty (boot partition)
 role() { sed -n 's/.*\bplinius\.kernel=\([a-z]*\).*/\1/p' /proc/cmdline; }
 
-# An Arch on a memory card partition (systempart=) has its kernel in its own card entry
-on_card_system() { grep -qw 'systempart=[^ ]*' /proc/cmdline; }
+# The word of the command line that names the card partition of an Arch on the memory card:
+# systempart=, or datapart= alone for a system in rootfs.img on its data partition there. Empty for
+# the Arch on the phone's storage, which names neither.
+card_word() {
+	local w sys= data=
+	for w in $(cat /proc/cmdline); do
+		case $w in
+		systempart=?*) sys=$w ;;
+		datapart=/dev/mmcblk*) data=$w ;;
+		esac
+	done
+	echo "${sys:-$data}"
+}
+
+# An Arch on memory card partitions has its kernel in its own card entry
+on_card_system() { [[ -n $(card_word) ]]; }
 
 # Release of the kernel inside a boot image (gzip-compressed Image after the 4 KiB header), or of
 # a kernel file of a card entry (gzip-compressed or plain Image)
@@ -327,19 +343,19 @@ card_drop() {
 # --- an Arch on a memory card partition ---
 entry_field() { sed -n "s/^$2 //p" "$1" | head -1; }
 
-# The system's own entry on the card mounted at ROOT: the one whose options name its systempart=
+# The system's own entry on the card mounted at ROOT: the one whose options carry its card_word
 own_entry() {
-	local root=$1 sp f name
+	local root=$1 word f name
 	local -a found=()
-	sp=$(sed -n 's/.*\bsystempart=\([^ ]*\).*/\1/p' /proc/cmdline)
+	word=$(card_word)
 	for f in "$root"/db/entries/*.conf; do
 		[[ -e $f ]] || continue
 		name=${f##*/}
 		name=${name%.conf}
 		[[ $name == *-kernel-trial || $name == *-kernel-previous ]] && continue
-		if entry_field "$f" options | grep -Fqw -- "systempart=$sp"; then found+=("$name"); fi
+		if entry_field "$f" options | tr ' ' '\n' | grep -Fqx -- "$word"; then found+=("$name"); fi
 	done
-	(( ${#found[@]} == 1 )) || die "no single entry for systempart=$sp in the boot menu (${found[*]:-none})"
+	(( ${#found[@]} == 1 )) || die "no single entry for $word in the boot menu (${found[*]:-none})"
 	echo "${found[0]}"
 }
 
@@ -402,6 +418,7 @@ card_system_install() {
 		"plinius.kernel=trial${PLINIUS_KERNEL_OPTIONS:+ $PLINIUS_KERNEL_OPTIONS}"
 	card_order "$root"
 	card_autostart "$entry-kernel-trial"
+	bootcheck_accept "abm-entry:$entry-kernel-trial"
 	put entry "$entry"
 	put trial "$rel"
 	say "the next start runs kernel $rel as a trial; once the system is up, it goes into the entry"
@@ -415,6 +432,11 @@ card_system_finish() {
 	rm -rf "${root:?}/$entry-kernel-trial"
 	card_order "$root"
 	card_autostart "$entry"
+	if [[ -e $root/db/entries/$entry-kernel-previous.conf ]]; then
+		bootcheck_accept "abm-entry:$entry" "abm-entry:$entry-kernel-previous"
+	else
+		bootcheck_accept "abm-entry:$entry"
+	fi
 	unset_state replace_previous
 	unset_state trial
 	say "kernel $rel confirmed and written to the boot menu entry $entry; fallback: $(get previous)"
@@ -475,6 +497,7 @@ card_system_restore() {
 	prev=$(get previous)
 	copy_to_card "$root/$entry-kernel-previous/zImage" "$kernel"
 	card_umount
+	bootcheck_accept "abm-entry:$entry"
 	put installed "$prev"
 	say "fallback $prev written to the boot menu entry $entry; it starts with the next restart"
 }
@@ -595,8 +618,10 @@ first_fallback() {
 				plinius.kernel=previous
 			card_order "$root"
 			put entry "$entry"
+			made=1
 		fi
 		card_umount
+		[[ -z ${made:-} ]] || bootcheck_accept "abm-entry:$entry-kernel-previous"
 		say "fallback: kernel $prev, boot menu entry $entry-kernel-previous"
 		return 0
 	fi
