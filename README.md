@@ -224,13 +224,13 @@ Flathub, or as a web app under **Settings › Apps › Web Apps**.
 <details>
 <summary><b>Can I go back to Volla OS or Ubuntu Touch?</b></summary>
 
-Yes, at any time. By default Plinius goes onto a microSD card and the system inside the phone stays
-as it is: without the card, or picked in the boot menu, the phone starts Volla OS or Ubuntu Touch as
-before.
+Yes, at any time. By default Arch Linux goes onto a microSD card and the system inside the phone
+stays as it is: without the card, or picked in the boot menu, the phone starts Volla OS or Ubuntu
+Touch as before.
 
-If Plinius has replaced Volla OS inside the phone, Plinius Boot first saved a backup of Volla OS on
-your computer, and under Advanced it writes that backup back. Volla's own installation packages for
-Volla OS and the UBports Installer for Ubuntu Touch work as well.
+If Arch Linux has replaced Volla OS inside the phone, Plinius Boot first saved a backup of Volla OS
+on your computer, and under Advanced it writes that backup back. Volla's own installation packages
+for Volla OS and the UBports Installer for Ubuntu Touch work as well.
 
 </details>
 
@@ -251,10 +251,10 @@ kernel first starts as a trial, and the previous one stays as a fallback.
 <details>
 <summary><b>Why does the GPS take a while to find my position?</b></summary>
 
-Plinius finds your position by satellite alone; it never asks a server about the Wi-Fi networks and
-cell towers around you. For a position the GPS needs at least four satellites and must know their
-orbits. Without that knowledge it reads the orbits from the satellites' own signals, which takes up
-to about a minute.
+Arch Linux finds your position by satellite alone; it never asks a server about the Wi-Fi networks
+and cell towers around you. For a position the GPS needs at least four satellites and must know
+their orbits. Without that knowledge it reads the orbits from the satellites' own signals, which
+takes up to about a minute.
 
 MediaTek, the maker of the phone's chip, offers predicted orbits for download. With them the GPS
 finds the position within seconds. Each download shows MediaTek your IP address, so it is off on a
@@ -290,7 +290,7 @@ charging with Qi works too.
 <details>
 <summary><b>Why does my phone list security vulnerabilities?</b></summary>
 
-Most phones only show the date of their last security update. Plinius names every known
+Most phones only show the date of their last security update. Arch Linux names every known
 vulnerability in the installed software and in the kernel, under **Settings › Privacy & Security ›
 Device Security › Known Vulnerabilities**, each with a link to its description. The list is updated
 every day, and each vulnerability we have looked into carries our assessment, such as “Fixed here”
@@ -321,16 +321,16 @@ account; apps connect to their own services when you use them.
 <details>
 <summary><b>The bootloader stays unlocked. Is that a risk?</b></summary>
 
-An unlocked bootloader starts any system without checking who made it. Plinius needs that: the boot
-menu, the rescue system and Plinius itself are not signed by the phone's maker. It applies to every
-system on the phone, Volla OS inside it included. Your data stays protected all the same: the data
-partition with the system on it is fully encrypted, and whoever takes the phone reads nothing
-without the encryption password.
+An unlocked bootloader starts any system without checking who made it. Arch Linux needs that: the
+boot menu, the rescue system and Arch Linux itself are not signed by the phone's maker. It applies
+to every system on the phone, Volla OS inside it included. Your data stays protected all the same:
+the data partition with the system on it is fully encrypted, and whoever takes the phone reads
+nothing without the encryption password.
 
 What remains is a calculable scenario: someone who has the phone in hand unnoticed could swap its
-start files to capture the password the next time you type it. Plinius cannot prevent that, but it
-checks its start files at every start and reports any change it did not make itself. If it reports a
-manipulation you did not cause, treat the encryption password as known.
+start files to capture the password the next time you type it. Arch Linux cannot prevent that, but
+it checks its start files at every start and reports any change it did not make itself. If it
+reports a manipulation you did not cause, treat the encryption password as known.
 
 </details>
 
