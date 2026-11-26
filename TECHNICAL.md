@@ -101,6 +101,8 @@ image to download yet.
 - Bluetooth earbuds dialled back when the display comes on
 - mobile data that stays connected without internet after a cell change reconnects by itself
   (plinius-datawatch)
+- mobile data from the first start: a new SIM gets the access point oFono provisioned for it
+  (by network and the SIM's provider name), with roaming off, once per SIM (plinius-mobile-data)
 - the kernel log in the journal without the vendor drivers' status lines: a sixth of the lines remain
   (plinius-kmsg; all of them stay in dmesg)
 
@@ -150,7 +152,10 @@ On an internal installation, kernel (`plinius-kernel`) and Halium ramdisk (UT's,
 there; it mounts it, the data partition and the Android image, then hands over to systemd. With an
 SD card in the phone, the bootloader shows its boot menu first; it also carries trial starts of a
 new kernel or ramdisk and a rescue system. An installation on the SD card starts from this menu:
-kernel and ramdisk come from the card, and the system from a partition there.
+kernel and ramdisk come from the card. The system lies as `rootfs.img` on the card's data partition,
+as on the internal storage, so that the encryption covers it too; the entry names only that partition
+(`datapart=`), and plinius-bootcheck judges the entry. Installations from older images keep their
+system on a plain partition of its own (`systempart=`).
 
 ![Boot flow from the bootloader to Phosh](assets/boot-flow.svg)
 
@@ -222,8 +227,9 @@ image with `debugfs` and refuses anything of the builder (SSH keys, host keys, m
 keyring, package cache, shell history, a password), the two vendor images, and anything missing
 (`[plinius]` signed over https, `plinius-keyring`, the pinned Android and boot files, the kernel
 of `plinius-kernel` in `zImage` and in `boot.img` with valid AVB data, the kept fallback kernel,
-the pins of the vendor images and room for them, the first-start PIN). Then `image/test-image.sh` boots the
-image itself in QEMU (snapshot, the image stays unchanged) with ALARM's generic kernel and its
+the pins of the vendor images and room for them, the first-start PIN, every path a service's
+sandbox needs that neither systemd nor tmpfiles.d makes, from `tools/unit-paths.py`). Then
+`image/test-image.sh` boots the image itself in QEMU (snapshot, the image stays unchanged) with ALARM's generic kernel and its
 modules, up to `graphical.target`: every unit that fails or keeps restarting and is not named in
 `image/test-image.expected` as one that needs the phone (Android container, GPU, charger,
 sensors), a unit that must run and does not, broken package dependencies (`pacman -Dk`) or a
