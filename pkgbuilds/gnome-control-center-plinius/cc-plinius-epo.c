@@ -174,7 +174,7 @@ cc_plinius_epo_setup (AdwPreferencesPage *page)
     adw_action_row_set_subtitle (ADW_ACTION_ROW (row),
                                  P_("Downloads satellite orbit predictions from MediaTek every 6 hours, about "
                                     "80 KB. The GPS then finds the position in seconds instead of about a "
-                                    "minute. Nothing about the phone is sent."));
+                                    "minute. No data is sent."));
     adw_preferences_group_add (group, row);
 
     last_row = adw_action_row_new ();

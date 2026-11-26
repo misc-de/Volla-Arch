@@ -3,7 +3,7 @@
 
 pkgname=gnome-control-center-plinius
 pkgver=51.2.1
-pkgrel=4
+pkgrel=5
 pkgdesc="GNOME Settings with the Plinius settings built in"
 url="https://apps.gnome.org/Settings/"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
@@ -17,6 +17,7 @@ arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 # cc-plinius-hub-panels.c, cc-lock-panel.*, cc-security-panel.c, cc-plinius-software.*,
 # cc-plinius-hidden-wifi.*, cc-plinius-battery-usage.*, cc-plinius-dnsfilter.*,
 # cc-plinius-webapps.*, cc-plinius-widevine.*, cc-plinius-appearance.*, cc-plinius-bgcolor.*,
+# cc-plinius-connections.*,
 # cc-plinius-bt-contacts.*, cc-feedback-panel.*, cc-plinius-appaccess.*, cc-plinius-selftest.*,
 # cc-speech-panel.*) are MIT; ce-plinius-ip-row.* (from ce-netmask-entry.c) GPL-2.0-or-later
 license=(GPL-2.0-or-later MIT)
@@ -247,6 +248,9 @@ source=(
 	# Speech Output: a panel of its own below Sounds and Vibration (plinius-speech)
 	cc-speech-panel.c cc-speech-panel.h gnome-speech-panel.desktop plinius-speech-symbolic.svg
 	0104-Speech-Output-as-a-panel-of-its-own-below-Sounds-and-Vibration.patch
+	# Privacy: Automatic Connections, the update search and NetworkManager's connection check
+	cc-plinius-connections.c cc-plinius-connections.h
+	0105-privacy-Automatic-Connections-the-update-search-and-the-connection-check.patch
 )
 sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'SKIP'
@@ -407,14 +411,14 @@ sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'ba916bba4c8ad3a428904544d162a979f31f2f3a4582b1c769e3d59aeec4fa18'
 	'cf2e15228ce733f39c1a4134512a8ba3830da222d63093e52341838670009deb'
 	'122f061952866892f077395ac086969715678980fc439ee1cb8a5852a33091ce'
-	'4062c216b4c5eaac5a8f2211c89c2e4d8a30a0ee702eef698856d2f40a56af11'
-	'ee308cb4c4ea9338e2158a1969419822313daaec28a616011a573ed0575de908'
-	'fee1dcd8598913e22105647e53d007e59ade59b03b7737d47e0a2ed59a501705'
-	'355fbedf8e5080306f678dd9a2ad5abd1fb531b4f0f9e4ddc8a14122bd015b61'
-	'4456bc01bd1e03274a73315795115c8dc940c1217097b3cacd6e3a716d26dc24'
-	'37cba8810e4982f828af5fccd3adfbd08514e4fb7d492621acff424a912246a6'
-	'9b32e4639a7230496b63bec71d1f589c78afedbc5d51d3538d6a41ad013f6354'
-	'52118d04433a4fc74904d22b802595068b3b2c88b31d942bbdeaaa3e4c27b013'
+	'e05178f7e37ede205c1f3391b2d836195377895144d72b38c7fd1e3e97dc16f6'
+	'74fe42ac4a644f9d95199860da11375eb5b57c927b6180aadc85e74e2c10e3a1'
+	'a3d8268736fd9351df220693a05d8566440507bf3eb1969403646eb6c9b7fefb'
+	'471294e49c54a92834b54a4fa9a6c76af96a050a9b80b1e0e0cd566798592481'
+	'8d32838202e5dd63b14ae940b9801fa4c9e3b7862d7a54d78728522d70956388'
+	'823c20ae1eeaf8dd5f0e29109475eaab5d3c5963cd3ba4aa0e3c27abfbc2198d'
+	'4831259409dbd14732a683b096ce780a7b0f580ac6dbab93c730d5227da02b67'
+	'126132191b803b1e5257edbe9b83f56580b998200e7719c2b5ee7fdac8afd83a'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
 	'cd363ab9e113fd69f654a4a4805dffd09dbbbcf6a08f0df78bb337305653cafa'
 	'a99b4f7d7e188037c9c4f79e4c5ca81f2039be022af10b581446fa2192d5b722'
@@ -457,7 +461,7 @@ sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'19c147d8d01187ec7866293d3399502d0da0a6df38afefec33c20f3606f0d36d'
 	'dfa332fb9e1ff6373bf5c998dc6946ea0cda054cd207e67a5a4b5c1dd76e4a24'
 	'f4b87990d23454ce08927d2096b4e95767ae97158a731e5afb65db72a94f7f4f'
-	'6c7b6b23c351d904d51173db858fd5f3d3fef5abdc3249eac5543d9979405171'
+	'5849a9d62002d8fd24714389d8d851747b4cb133845752ed9d3f471c64bd3c16'
 	'f3ef819f9b737d4592840881c55ab0b0fdf91f7b670d32b36b105f54543d520e'
 	'ede9cd65a24d15d9180d02b47a8fd34e63323610fc4902da423061a51131f7e2'
 	'06b07846e85ed5f795f9dc857766c2743b27c83fe2250989a1dcbb09edc34943'
@@ -471,7 +475,10 @@ sha256sums=('7b104148f38e7004d2594eb86811b70f4b2572a3f9b8a8adf7a44860d4f8d572'
 	'7c79725f933ea5fdc077a91ec03b4dfc2208ca800802402af093db5f35df2aff'
 	'03fd58102f5e3ad4d5273d8c4d47685ad8ef3322756266289fec66c34066f875'
 	'14e9978c5c0974b420f1858f532f1dc312cb6a7a01940a7cc1f96f3ba8b2bc2d'
-	'e59ad128d198f97a9452d4ede3e44b7af64f897b9132f931270bbd861b0362df')
+	'e59ad128d198f97a9452d4ede3e44b7af64f897b9132f931270bbd861b0362df'
+	'bfd9955f0174569cb16b8607f29ba58f9663b8b55035cafea1e97f627ec95ca5'
+	'26cd720139fa1a43c4b4104f7263890f92533b3fe2c987321dfddeee1586b551'
+	'8b89056d9dc17214e630bb567025ab415410229d8ee014c776553ea825ba9439')
 
 prepare() {
 	cd gnome-control-center
@@ -811,6 +818,10 @@ prepare() {
 	# for everything the phone says) and the caller announcement of plinius-speech; listed with
 	# plinius-speech only; the patch creates its meson.build
 	patch -Np1 -i "$srcdir/0104-Speech-Output-as-a-panel-of-its-own-below-Sounds-and-Vibration.patch"
+	# Privacy: Automatic Connections at the end, the update search (plinius-software's timer) and
+	# NetworkManager's connection check with its server (plinius-connectivity-set)
+	cp "$srcdir"/cc-plinius-connections.{c,h} panels/privacy/
+	patch -Np1 -i "$srcdir/0105-privacy-Automatic-Connections-the-update-search-and-the-connection-check.patch"
 	cp "$srcdir"/cc-speech-panel.{c,h} "$srcdir/gnome-speech-panel.desktop" panels/speech/
 	# German: "WiFi" instead of "WLAN" in GNOME's own translation (msgstr lines only; the search
 	# keyword "WLAN;" stays so that searching for it still finds the page)

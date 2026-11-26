@@ -1,0 +1,56 @@
+From 168e4bc55caf40508ffbbc00ea212f9fc8e4b1fe Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 18:56:29 +0100
+Subject: [PATCH] privacy: Automatic Connections, the update search and the
+ connection check
+
+Plinius: a group at the end of the Privacy page with the connections the
+phone makes on its own and the owner may turn off: the update search of
+plinius-software (its user timer, masked or not) and NetworkManager's
+connection check with its server (written by plinius-connectivity-set).
+The group is a file of its own, cc-plinius-connections.c, which
+prepare() copies next to the panel; this only hooks it in.
+---
+ panels/privacy/cc-privacy-panel.c | 6 ++++++
+ panels/privacy/meson.build        | 1 +
+ 2 files changed, 7 insertions(+)
+
+diff --git a/panels/privacy/cc-privacy-panel.c b/panels/privacy/cc-privacy-panel.c
+index 99d0bef2c..002a1e061 100644
+--- a/panels/privacy/cc-privacy-panel.c
++++ b/panels/privacy/cc-privacy-panel.c
+@@ -28,6 +28,7 @@
+ #endif
+ #include "camera/cc-camera-page.h"
+ #include "cc-list-row.h"
++#include "cc-plinius-connections.h"
+ #include "cc-plinius-widevine.h"
+ #include "cc-privacy-resources.h"
+ #include "diagnostics/cc-diagnostics-page.h"
+@@ -132,6 +133,11 @@ cc_privacy_panel_init (CcPrivacyPanel *self)
+      * (cc-plinius-widevine.c, nothing without plinius-widevine) */
+     cc_plinius_widevine_add (self->privacy_page);
+ 
++    /* Plinius: what the phone connects to on its own and may be turned off, at the end: the
++     * update search and NetworkManager's connection check (cc-plinius-connections.c, nothing
++     * without plinius-software and the device package) */
++    cc_plinius_connections_add (self->privacy_page);
++
+     /* Plinius: which Bluetooth devices may read the contacts, the same row and page as on the
+      * Bluetooth panel, below Cameras (cc-plinius-bt-contacts.c, nothing without bluez-obex-plinius) */
+     contacts_row = cc_plinius_bt_contacts_row_new (CC_PANEL (self), TRUE);
+diff --git a/panels/privacy/meson.build b/panels/privacy/meson.build
+index 6ab901def..f74943837 100644
+--- a/panels/privacy/meson.build
++++ b/panels/privacy/meson.build
+@@ -54,6 +54,7 @@ sources = files(
+   'location/cc-location-page.c',
+   'location/cc-plinius-beacondb.c',
+   'location/cc-plinius-epo.c',
++  'cc-plinius-connections.c',
+   'cc-plinius-crypt.c',
+   'cc-plinius-security.c',
+   'cc-plinius-widevine.c',
+-- 
+2.56.1
+

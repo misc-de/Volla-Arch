@@ -4131,8 +4131,8 @@ msgid "Faster GPS Fix"
 msgstr "Быстрое определение GPS"
 
 #: cc-plinius-epo.c
-msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. Nothing about the phone is sent."
-msgstr "Каждые 6 часов загружает с MediaTek прогнозы орбит спутников, около 80 КБ. Тогда GPS находит местоположение за секунды, а не примерно за минуту. Данные о телефоне не отправляются."
+msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. No data is sent."
+msgstr "Каждые 6 часов загружает с MediaTek прогнозы орбит спутников, около 80 КБ. Тогда GPS находит местоположение за секунды, а не примерно за минуту. Никакие данные не передаются."
 
 #: cc-plinius-epo.c
 msgid "Last Download"
@@ -4511,3 +4511,47 @@ msgstr "США"
 #, c-format
 msgid "%1$s (%2$s)"
 msgstr "%1$s (%2$s)"
+
+#: cc-plinius-connections.c
+msgid "Automatic Connections"
+msgstr "Автоматические соединения"
+
+#: cc-plinius-connections.c
+msgid "Search for Updates Automatically"
+msgstr "Автоматически искать обновления"
+
+#: cc-plinius-connections.c
+msgid "Every 4 hours the phone asks plinius.cais.de and the servers of Arch Linux ARM for new versions. When off, look for them yourself under System › Updates."
+msgstr "Каждые 4 часа телефон спрашивает plinius.cais.de и серверы Arch Linux ARM о новых версиях. Если выключено, ищите их сами в разделе Система › Обновления."
+
+#: cc-plinius-connections.c
+msgid "Connection Check"
+msgstr "Проверка соединения"
+
+#: cc-plinius-connections.c
+msgid "NetworkManager regularly asks a server whether the internet is reachable; that is how it recognises Wi-Fi networks with a login page. When off, no server is asked and such networks are not recognised."
+msgstr "NetworkManager регулярно спрашивает сервер, доступен ли интернет; так он распознаёт сети Wi-Fi со страницей входа. Если выключено, никакой сервер не опрашивается и такие сети не распознаются."
+
+#: cc-plinius-connections.c
+msgid "Check Server"
+msgstr "Сервер проверки"
+
+#: cc-plinius-connections.c
+msgid "Own Server"
+msgstr "Свой сервер"
+
+#: cc-plinius-connections.c
+msgid "Server Address"
+msgstr "Адрес сервера"
+
+#: cc-plinius-connections.c
+msgid "Expected Answer"
+msgstr "Ожидаемый ответ"
+
+#: cc-plinius-connections.c
+msgid "The server must answer the address with the expected text, or with nothing when it is left empty."
+msgstr "Сервер должен отвечать на адрес ожидаемым текстом или пустым ответом, если поле оставлено пустым."
+
+#: cc-plinius-connections.c
+msgid "The address or the answer was not accepted."
+msgstr "Адрес или ответ не приняты."

@@ -4111,8 +4111,8 @@ msgid "Faster GPS Fix"
 msgstr "Snellere GPS-positie"
 
 #: cc-plinius-epo.c
-msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. Nothing about the phone is sent."
-msgstr "Downloadt elke 6 uur baanvoorspellingen van de satellieten van MediaTek, ongeveer 80 KB. De GPS vindt de positie dan in seconden in plaats van in ongeveer een minuut. Er worden geen gegevens van de telefoon verzonden."
+msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. No data is sent."
+msgstr "Downloadt elke 6 uur baanvoorspellingen van de satellieten van MediaTek, ongeveer 80 KB. De GPS vindt de positie dan in seconden in plaats van in ongeveer een minuut. Er worden geen gegevens verzonden."
 
 #: cc-plinius-epo.c
 msgid "Last Download"
@@ -4487,3 +4487,47 @@ msgstr "Verenigde Staten"
 #, c-format
 msgid "%1$s (%2$s)"
 msgstr "%1$s (%2$s)"
+
+#: cc-plinius-connections.c
+msgid "Automatic Connections"
+msgstr "Automatische verbindingen"
+
+#: cc-plinius-connections.c
+msgid "Search for Updates Automatically"
+msgstr "Automatisch naar updates zoeken"
+
+#: cc-plinius-connections.c
+msgid "Every 4 hours the phone asks plinius.cais.de and the servers of Arch Linux ARM for new versions. When off, look for them yourself under System › Updates."
+msgstr "Elke 4 uur vraagt de telefoon plinius.cais.de en de servers van Arch Linux ARM naar nieuwe versies. Uitgeschakeld zoek je ze zelf op onder Systeem › Updates."
+
+#: cc-plinius-connections.c
+msgid "Connection Check"
+msgstr "Verbindingscontrole"
+
+#: cc-plinius-connections.c
+msgid "NetworkManager regularly asks a server whether the internet is reachable; that is how it recognises Wi-Fi networks with a login page. When off, no server is asked and such networks are not recognised."
+msgstr "NetworkManager vraagt regelmatig aan een server of het internet bereikbaar is; zo herkent hij wifinetwerken met een inlogpagina. Uitgeschakeld wordt geen server gevraagd en worden zulke netwerken niet herkend."
+
+#: cc-plinius-connections.c
+msgid "Check Server"
+msgstr "Controleserver"
+
+#: cc-plinius-connections.c
+msgid "Own Server"
+msgstr "Eigen server"
+
+#: cc-plinius-connections.c
+msgid "Server Address"
+msgstr "Serveradres"
+
+#: cc-plinius-connections.c
+msgid "Expected Answer"
+msgstr "Verwacht antwoord"
+
+#: cc-plinius-connections.c
+msgid "The server must answer the address with the expected text, or with nothing when it is left empty."
+msgstr "De server moet het adres beantwoorden met de verwachte tekst, of zonder inhoud als het veld leeg blijft."
+
+#: cc-plinius-connections.c
+msgid "The address or the answer was not accepted."
+msgstr "Het adres of het antwoord is niet geaccepteerd."

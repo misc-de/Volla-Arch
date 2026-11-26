@@ -4471,7 +4471,7 @@ msgid "Faster GPS Fix"
 msgstr ""
 
 #: cc-plinius-epo.c
-msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. Nothing about the phone is sent."
+msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. No data is sent."
 msgstr ""
 
 #: cc-plinius-epo.c
@@ -4902,4 +4902,48 @@ msgstr ""
 #: cc-speech-panel.c
 #, c-format
 msgid "%1$s (%2$s)"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Automatic Connections"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Search for Updates Automatically"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Every 4 hours the phone asks plinius.cais.de and the servers of Arch Linux ARM for new versions. When off, look for them yourself under System › Updates."
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Connection Check"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "NetworkManager regularly asks a server whether the internet is reachable; that is how it recognises Wi-Fi networks with a login page. When off, no server is asked and such networks are not recognised."
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Check Server"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Own Server"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Server Address"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "Expected Answer"
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "The server must answer the address with the expected text, or with nothing when it is left empty."
+msgstr ""
+
+#: cc-plinius-connections.c
+msgid "The address or the answer was not accepted."
 msgstr ""

@@ -4111,8 +4111,8 @@ msgid "Faster GPS Fix"
 msgstr "Posición GPS más rápida"
 
 #: cc-plinius-epo.c
-msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. Nothing about the phone is sent."
-msgstr "Descarga cada 6 horas las predicciones de órbita de los satélites desde MediaTek, unos 80 KB. Así el GPS encuentra la posición en segundos en lugar de en un minuto aproximadamente. No se envía ningún dato del teléfono."
+msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. No data is sent."
+msgstr "Descarga cada 6 horas las predicciones de órbita de los satélites desde MediaTek, unos 80 KB. Así el GPS encuentra la posición en segundos en lugar de en un minuto aproximadamente. No se transmite ningún dato."
 
 #: cc-plinius-epo.c
 msgid "Last Download"
@@ -4487,3 +4487,47 @@ msgstr "Estados Unidos"
 #, c-format
 msgid "%1$s (%2$s)"
 msgstr "%1$s (%2$s)"
+
+#: cc-plinius-connections.c
+msgid "Automatic Connections"
+msgstr "Conexiones automáticas"
+
+#: cc-plinius-connections.c
+msgid "Search for Updates Automatically"
+msgstr "Buscar actualizaciones automáticamente"
+
+#: cc-plinius-connections.c
+msgid "Every 4 hours the phone asks plinius.cais.de and the servers of Arch Linux ARM for new versions. When off, look for them yourself under System › Updates."
+msgstr "Cada 4 horas el teléfono pregunta a plinius.cais.de y a los servidores de Arch Linux ARM si hay versiones nuevas. Si está desactivado, búscalas tú en Sistema › Actualizaciones."
+
+#: cc-plinius-connections.c
+msgid "Connection Check"
+msgstr "Comprobación de conexión"
+
+#: cc-plinius-connections.c
+msgid "NetworkManager regularly asks a server whether the internet is reachable; that is how it recognises Wi-Fi networks with a login page. When off, no server is asked and such networks are not recognised."
+msgstr "NetworkManager pregunta con regularidad a un servidor si Internet es accesible; así reconoce las redes Wi-Fi con página de inicio de sesión. Si está desactivado, no se pregunta a ningún servidor y esas redes no se reconocen."
+
+#: cc-plinius-connections.c
+msgid "Check Server"
+msgstr "Servidor de comprobación"
+
+#: cc-plinius-connections.c
+msgid "Own Server"
+msgstr "Servidor propio"
+
+#: cc-plinius-connections.c
+msgid "Server Address"
+msgstr "Dirección del servidor"
+
+#: cc-plinius-connections.c
+msgid "Expected Answer"
+msgstr "Respuesta esperada"
+
+#: cc-plinius-connections.c
+msgid "The server must answer the address with the expected text, or with nothing when it is left empty."
+msgstr "El servidor debe responder a la dirección con el texto esperado, o sin contenido si se deja vacío."
+
+#: cc-plinius-connections.c
+msgid "The address or the answer was not accepted."
+msgstr "No se aceptó la dirección o la respuesta."

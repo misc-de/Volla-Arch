@@ -44,7 +44,7 @@ gcc_test_call (GccTest *t, const char *name, JsonArray *args, JsonBuilder *resul
 '''
 
 SUBTITLE = ("Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then "
-            "finds the position in seconds instead of about a minute. Nothing about the phone is sent.")
+            "finds the position in seconds instead of about a minute. No data is sent.")
 
 
 @pytest.fixture(scope="module")

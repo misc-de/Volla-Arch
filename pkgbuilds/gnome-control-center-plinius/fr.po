@@ -4111,8 +4111,8 @@ msgid "Faster GPS Fix"
 msgstr "Localisation GPS plus rapide"
 
 #: cc-plinius-epo.c
-msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. Nothing about the phone is sent."
-msgstr "Télécharge toutes les 6 heures les prévisions d’orbite des satellites depuis MediaTek, environ 80 Ko. Le GPS trouve alors la position en quelques secondes au lieu d’une minute environ. Aucune donnée du téléphone n’est envoyée."
+msgid "Downloads satellite orbit predictions from MediaTek every 6 hours, about 80 KB. The GPS then finds the position in seconds instead of about a minute. No data is sent."
+msgstr "Télécharge toutes les 6 heures les prévisions d’orbite des satellites depuis MediaTek, environ 80 Ko. Le GPS trouve alors la position en quelques secondes au lieu d’une minute environ. Aucune donnée n’est transmise."
 
 #: cc-plinius-epo.c
 msgid "Last Download"
@@ -4487,3 +4487,47 @@ msgstr "États-Unis"
 #, c-format
 msgid "%1$s (%2$s)"
 msgstr "%1$s (%2$s)"
+
+#: cc-plinius-connections.c
+msgid "Automatic Connections"
+msgstr "Connexions automatiques"
+
+#: cc-plinius-connections.c
+msgid "Search for Updates Automatically"
+msgstr "Rechercher les mises à jour automatiquement"
+
+#: cc-plinius-connections.c
+msgid "Every 4 hours the phone asks plinius.cais.de and the servers of Arch Linux ARM for new versions. When off, look for them yourself under System › Updates."
+msgstr "Toutes les 4 heures, le téléphone demande à plinius.cais.de et aux serveurs d'Arch Linux ARM s'il y a de nouvelles versions. Désactivé, cherchez-les vous-même sous Système › Mises à jour."
+
+#: cc-plinius-connections.c
+msgid "Connection Check"
+msgstr "Vérification de la connexion"
+
+#: cc-plinius-connections.c
+msgid "NetworkManager regularly asks a server whether the internet is reachable; that is how it recognises Wi-Fi networks with a login page. When off, no server is asked and such networks are not recognised."
+msgstr "NetworkManager demande régulièrement à un serveur si Internet est joignable ; c'est ainsi qu'il reconnaît les réseaux Wi-Fi avec page de connexion. Désactivé, aucun serveur n'est interrogé et ces réseaux ne sont pas reconnus."
+
+#: cc-plinius-connections.c
+msgid "Check Server"
+msgstr "Serveur de vérification"
+
+#: cc-plinius-connections.c
+msgid "Own Server"
+msgstr "Serveur personnel"
+
+#: cc-plinius-connections.c
+msgid "Server Address"
+msgstr "Adresse du serveur"
+
+#: cc-plinius-connections.c
+msgid "Expected Answer"
+msgstr "Réponse attendue"
+
+#: cc-plinius-connections.c
+msgid "The server must answer the address with the expected text, or with nothing when it is left empty."
+msgstr "Le serveur doit répondre à l'adresse par le texte attendu, ou sans contenu si le champ reste vide."
+
+#: cc-plinius-connections.c
+msgid "The address or the answer was not accepted."
+msgstr "L'adresse ou la réponse n'a pas été acceptée."
