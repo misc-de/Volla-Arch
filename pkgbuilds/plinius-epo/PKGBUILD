@@ -2,7 +2,7 @@
 
 pkgname=plinius-epo
 pkgver=0.1
-pkgrel=3
+pkgrel=4
 pkgdesc="Orbit predictions (EPO) for MediaTek's GNSS daemon: a GPS fix in seconds, not a minute"
 arch=(any)
 license=(MIT)
@@ -23,14 +23,15 @@ sha256sums=('aecd7ecb1ed855b30824594ee738e924fc121a687a8fcd001da25a58060c3618'
 	'cf8f742dd3b95595c4025a453e4298e4c220361c5e347817114a55197bc5bdb2'
 	'8129cdc2c04845b9294173c10cf68fde064775972d410d89e3ca55469b646baa'
 	'fabaff78fc1430859d0a84b813404af866aa3b45a83a38b7e8e1b48cd20930f6'
-	'598d5571935f428a4297109275cefd416d9940f3bbb2ba54c70812f3dc9681a6'
+	'e08c2928890ef818ed763dc49ef8967b3712a884cd9bbd8595e3c69ba7249a43'
 	'1b2f7990e8ef139978f6f6d8849df466a71377f43b65276946dd46aa4f80ac56'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
 package() {
 	install -Dm755 plinius-epo plinius-epo-set -t "$pkgdir/usr/lib/plinius-epo"
 	install -Dm644 plinius-epo.service plinius-epo.timer -t "$pkgdir/usr/lib/systemd/system"
-	# On by default (Settings switch on): the timer is enabled by the package
+	# The timer is enabled by the package; it downloads only once the switch is on
+	# (plinius-epo.conf ships with enabled=no)
 	install -d "$pkgdir/usr/lib/systemd/system/timers.target.wants"
 	ln -s ../plinius-epo.timer "$pkgdir/usr/lib/systemd/system/timers.target.wants/"
 	install -Dm644 plinius-epo.conf "$pkgdir/etc/plinius-epo.conf"

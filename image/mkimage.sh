@@ -252,8 +252,9 @@ check_host
 # plinius-send-to-tv: Firefox hands YouTube links to the TV Schwupp casts to (long press on a link,
 #   button in the address bar).
 # plinius-usb: what a computer gets over USB (USB quick setting), umtp-responder its file sharing.
-# plinius-epo: GPS orbit predictions every 6 hours, a fix in seconds instead of a minute (on by
-#   default; Settings > Privacy > Location > Faster GPS Fix). Also a dependency of the device package.
+# plinius-epo: GPS orbit predictions every 6 hours, a fix in seconds instead of a minute (off by
+#   default: they come from MediaTek's servers; Settings > Privacy > Location > Faster GPS Fix). Also
+#   a dependency of the device package.
 # plinius-ssh: the networks SSH answers on (USB only by default; Settings > System > Secure Shell).
 # plinius-desktop: a desktop on another computer's screen over VNC (off by default; Settings > Desktop
 #   over VNC), brings wayvnc-plinius.

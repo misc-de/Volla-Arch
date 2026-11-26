@@ -15,6 +15,9 @@ from system_helpers import rewritten_copy, run
 EPO = PKG / "plinius-epo" / "plinius-epo"
 EPO_SET = PKG / "plinius-epo" / "plinius-epo-set"
 SHIPPED_CONF = (PKG / "plinius-epo" / "plinius-epo.conf").read_text()
+# The file ships switched off; most tests start from it switched on
+CONF_ON = SHIPPED_CONF.replace("\nenabled=no\n", "\nenabled=yes\n")
+CONF_OFF = SHIPPED_CONF
 
 EPO_HOST = "uepodownload.mediatek.com"
 NAV_HOST = "ugepodownload.mediatek.com"
@@ -45,7 +48,7 @@ class Epo:
         self.server = tmp_path / "server"
         for d in (self.conf.parent, self.gps, self.state, self.server):
             d.mkdir(parents=True)
-        self.conf.write_text(SHIPPED_CONF)
+        self.conf.write_text(CONF_ON)
         self.script = tmp_path / "plinius-epo"
         rewritten_copy(EPO, self.script, {
             "/etc/plinius-epo.conf": self.conf,
@@ -141,7 +144,7 @@ def test_epo_apply_unchanged_file_does_not_restart_mnld(epo):
 
 def test_epo_apply_off_follows_the_setting(epo):
     (epo.gps / "mnl.prop").write_text(mnl_prop(1))
-    epo.conf.write_text(SHIPPED_CONF.replace("enabled=yes", "enabled=no"))
+    epo.conf.write_text(CONF_OFF)
     r = epo.run("apply")
     assert r.returncode == 0, r.stderr
     assert (epo.gps / "mnl.prop").read_text() == mnl_prop(0)
@@ -393,7 +396,7 @@ def test_epo_fetch_switched_off_removes_the_files(epo):
     assert epo.run("fetch").returncode == 0
     (epo.gps / "mnl.prop").write_text(mnl_prop(0))
     (epo.gps / "other.dat").write_text("mnld's own\n")
-    epo.conf.write_text(SHIPPED_CONF.replace("enabled=yes", "enabled=no"))
+    epo.conf.write_text(CONF_OFF)
     r = epo.run("fetch")
     assert r.returncode == 0, r.stderr
     assert sorted(p.name for p in epo.gps.iterdir()) == ["mnl.prop", "other.dat"]
@@ -445,7 +448,7 @@ class EpoSet:
         self.bin = fake_bin
         self.conf = tmp_path / "etc" / "plinius-epo.conf"
         self.conf.parent.mkdir(parents=True)
-        self.conf.write_text(SHIPPED_CONF)
+        self.conf.write_text(CONF_ON)
         self.script = rewritten_copy(EPO_SET, tmp_path / "plinius-epo-set",
                                      {"/etc/plinius-epo.conf": self.conf})
         fake_bin.stub("systemctl")
@@ -462,10 +465,10 @@ def epo_set(tmp_path, fake_bin):
 def test_epo_set_off_and_on(epo_set):
     r = epo_set.run("off")
     assert r.returncode == 0, r.stderr
-    assert epo_set.conf.read_text() == SHIPPED_CONF.replace("enabled=yes", "enabled=no")
+    assert epo_set.conf.read_text() == CONF_OFF
     assert epo_set.run("on").returncode == 0
     # Everything else in the file stays as it was
-    assert epo_set.conf.read_text() == SHIPPED_CONF
+    assert epo_set.conf.read_text() == CONF_ON
     assert epo_set.bin.calls("systemctl") == [["start", "--no-block", "plinius-epo.service"]] * 2
 
 
@@ -525,7 +528,7 @@ def test_epo_set_leaves_no_temporary_file_when_it_fails(epo_set):
     finally:
         epo_set.conf.chmod(0o644)
     assert r.returncode != 0
-    assert epo_set.conf.read_text() == SHIPPED_CONF
+    assert epo_set.conf.read_text() == CONF_ON
     assert sorted(p.name for p in epo_set.conf.parent.iterdir()) == ["plinius-epo.conf"]
     assert epo_set.bin.calls("systemctl") == []
 
@@ -535,5 +538,15 @@ def test_epo_set_usage(epo_set, args):
     r = epo_set.run(*args)
     assert r.returncode == 2
     assert "usage: plinius-epo-set on|off" in r.stderr
-    assert epo_set.conf.read_text() == SHIPPED_CONF
+    assert epo_set.conf.read_text() == CONF_ON
     assert epo_set.bin.calls("systemctl") == []
+
+
+def test_epo_ships_switched_off(epo):
+    # A new phone fetches nothing from MediaTek until its owner turns "Faster GPS Fix" on
+    assert "\nenabled=no\n" in SHIPPED_CONF and CONF_ON != SHIPPED_CONF
+    epo.conf.write_text(SHIPPED_CONF)
+    epo.serve_all()
+    r = epo.run("fetch")
+    assert r.returncode == 0, r.stderr
+    assert epo.bin.calls("curl") == []
