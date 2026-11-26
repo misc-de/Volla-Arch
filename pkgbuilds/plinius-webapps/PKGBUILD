@@ -1,0 +1,36 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-webapps
+pkgver=0.1
+pkgrel=1
+pkgdesc="Catalog of web apps with their starting settings, by country and language, for Settings > Apps > Web Apps"
+arch=(any)
+license=(MIT)
+# The catalog (catalog.json) is published signed on plinius.cais.de (tools/publish-webapps.sh),
+# so a new entry needs no package update; this copy is for the time before the first download
+# and without a network. plinius-webapps-catalog fetches and checks the published one and prints
+# the entries for the phone's language and country to gnome-control-center-plinius.
+# plinius.cais.de/webapps.html shows the same list (site/build.py).
+depends=(python
+	# The signed catalog: gpgv and the key of the package repository
+	gnupg plinius-keyring)
+# webapps-icons.tar: icons/<id>.png, 128 x 128, made by tools/webapps-icons.py from the websites
+source=(plinius-webapps-catalog
+	catalog.json
+	webapps-icons.tar
+	LICENSE)
+sha256sums=('2a9edbfa4aea4ed1188e982d212810f0cb1783837a83a51794d340734cbfb288'
+	'68d323052bfef4842a8dec7bd605b571b8687bf955f517455793143faf6924b0'
+	'ae1e947ca42db986d1403d3f7e704cc83433cd0f6009044489f448e55779414e'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+check() {
+	python3 -I plinius-webapps-catalog --check catalog.json
+}
+
+package() {
+	install -Dm755 plinius-webapps-catalog -t "$pkgdir/usr/lib/plinius-webapps"
+	install -Dm644 catalog.json -t "$pkgdir/usr/share/plinius-webapps"
+	install -Dm644 icons/*.png -t "$pkgdir/usr/share/plinius-webapps/icons"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

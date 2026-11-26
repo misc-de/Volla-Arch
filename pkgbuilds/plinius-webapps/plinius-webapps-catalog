@@ -1,0 +1,514 @@
+#!/usr/bin/python3
+"""The catalog of web apps for Settings > Apps > Web Apps > Add > Search.
+
+The catalog lists well-known websites with the settings a web app of them starts with (Frameless,
+Identify As, deleting cache and cookies), so that adding one is a search and a tap. Websites
+differ by country and language: an entry may be limited to some countries or languages, and may
+carry variants for some of them (another address or name: amazon.de in Germany, the Wikipedia of
+the phone's language).
+
+It comes from two places, as the DOS Installer's list of games:
+  - the list on the project server (URL), so that a new entry needs no package update. It is
+    signed with the key of the package repository (plinius-keyring) and used only when gpgv
+    confirms that signature; a list older than the one already kept is refused, so an old signed
+    copy cannot bring back removed entries. The verified copy and its signature are kept in
+    ~/.cache/plinius-webapps and checked again whenever they are read.
+  - the copy in this package (BUNDLED), for the time before the first download and without a
+    network.
+The newer one by "updated" (the publication time, set by tools/publish-webapps.sh) wins.
+
+Icons: 128 x 128 PNG files, icons/<id>.png. The package brings them (ICONS, from
+webapps-icons.tar, tools/webapps-icons.py); the published catalog names the SHA-256 of each
+("icon"), and an icon is used only when its file has exactly that checksum: the package's when it
+matches, else one fetched from ICON_URL into ~/.cache/plinius-webapps/icons (only by the run
+with the server, at most ICON_FETCHES at once, each at most MAX_ICON bytes). An entry of the
+bundled catalog takes the package's icon as it is. No icon: "", Settings shows a generic one.
+
+Run by Settings, it prints the entries for the phone's language and country as JSON:
+  {"updated": UNIX_TIME, "language": "de", "country": "DE",
+   "apps": [{"id", "name", "url", "category", "keywords": [...],
+             "frameless", "clear_cache", "clear_cookies", "identify_as", "icon": PATH or ""}, ...]}
+in the order of CATEGORIES, by name within a category. --offline leaves the server out (Settings
+shows that answer at once and asks again with the server). --check FILE checks a catalog the way
+tools/publish-webapps.sh needs it: every entry valid, nothing unknown.
+
+The language is that of the messages (LC_ALL, LANGUAGE, LC_MESSAGES, LANG), the country that of
+the formats (LC_ALL, then LC_MONETARY, LC_PAPER, LC_MEASUREMENT, LC_TIME, LC_NUMERIC, then LANG,
+which the formats follow when none of them is set, and only then LC_MESSAGES): Settings >
+System > Region & Language keeps them apart, so English messages with German formats are an
+English speaker in Germany.
+
+Catalog file:
+  {"schema": 1, "updated": UNIX_TIME (the published copy),
+   "apps": [{"id": "amazon", "name": "Amazon", "url": "https://www.amazon.com/",
+             "category": "shopping", "keywords": ["shop"],
+             "countries": ["DE", ...] (shown only there; missing: everywhere),
+             "languages": ["de", ...] (shown only to these languages; missing: to all),
+             "settings": {"frameless": true, "clear_cache": false, "clear_cookies": false,
+                          "identify_as": "" | "android" | "iphone" | "windows" | "macos" | "linux"},
+             "variants": [{"countries": [...] and/or "languages": [...],
+                           and any of "name", "url", "keywords", "settings"}]}]}
+An entry with both "countries" and "languages" needs both to match. All variants that match are
+applied, the less specific first: a language, then a country, then both; later ones win, the
+settings key by key. Missing settings are those of a new web app: frameless, nothing deleted,
+the browser's own identity.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.request
+import base64
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+URL = "https://plinius.cais.de/webapps/catalog.json"
+BUNDLED = Path("/usr/share/plinius-webapps/catalog.json")
+CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "plinius-webapps"
+ICONS = Path("/usr/share/plinius-webapps/icons")
+ICON_URL = "https://plinius.cais.de/webapps/icons/{id}.png"
+MAX_ICON = 256 << 10
+ICON_FETCHES = 8
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+FETCH_TIMEOUT = 6  # seconds
+MAX_CATALOG = 4 << 20
+MAX_SIGNATURE = 64 << 10
+SCHEMA = 1
+# The repository's signing key (ASCII armored) and the fingerprints pacman trusts or revoked
+KEYRING = "/usr/share/pacman/keyrings/plinius.gpg"
+TRUSTED = "/usr/share/pacman/keyrings/plinius-trusted"
+REVOKED = "/usr/share/pacman/keyrings/plinius-revoked"
+
+# The order of the groups in Settings; their names are translated there
+CATEGORIES = ["communication", "social", "news", "media", "games", "shopping", "travel", "office", "finance"]
+# Identify As of cc-plinius-webapps.c ("" = the browser's own)
+IDENTITIES = {"", "android", "iphone", "windows", "macos", "linux"}
+DEFAULTS = {"frameless": True, "clear_cache": False, "clear_cookies": False, "identify_as": ""}
+
+APP_KEYS = {"id", "name", "url", "category", "keywords", "countries", "languages", "settings", "variants", "icon"}
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+VARIANT_KEYS = {"countries", "languages", "name", "url", "keywords", "settings"}
+ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+COUNTRY = re.compile(r"^[A-Z]{2}$")
+LANGUAGE = re.compile(r"^[a-z]{2,3}$")
+LOCALE = re.compile(r"^([a-z]{2,3})(?:_([A-Z]{2}))?(?:[.@]|$)")
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+MAX_NAME = 60
+MAX_URL = 2048
+MAX_KEYWORDS = 20
+MAX_KEYWORD = 40
+
+
+class CatalogError(Exception):
+    pass
+
+
+# Signature check, as plinius-cve-update and the DOS Installer do it
+
+
+def _fingerprints(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return {line.split(":")[0].strip().upper() for line in f
+                    if line.strip() and not line.startswith("#")}
+    except OSError:
+        return set()
+
+
+def _dearmor(text):
+    """The binary key data of an ASCII armored key block (gpgv reads binary keyrings only)."""
+    lines = [line.strip() for line in text.splitlines()]
+    begin = next(i for i, line in enumerate(lines) if line.startswith("-----BEGIN PGP"))
+    end = next(i for i, line in enumerate(lines) if i > begin and line.startswith("-----END PGP"))
+    body = lines[begin + 1:end]
+    if "" in body:
+        body = body[body.index("") + 1:]
+    body = [line for line in body if line and not (line.startswith("=") and len(line) == 5)]
+    return base64.b64decode("".join(body), validate=True)
+
+
+def verify(data, signature):
+    """True if signature is a valid signature of data by a key pacman trusts for this repo."""
+    trusted = _fingerprints(TRUSTED) - _fingerprints(REVOKED)
+    if not trusted:
+        return False
+    try:
+        with open(KEYRING, encoding="ascii") as f:
+            keyring = _dearmor(f.read())
+    except (OSError, ValueError, StopIteration):
+        return False
+    with tempfile.TemporaryDirectory(prefix="plinius-webapps-") as tmp:
+        paths = {}
+        for name, content in (("keyring.gpg", keyring), ("data", data), ("data.sig", signature)):
+            paths[name] = os.path.join(tmp, name)
+            with open(paths[name], "wb") as f:
+                f.write(content)
+        try:
+            result = subprocess.run(
+                ["gpgv", "--homedir", tmp, "--status-fd", "1", "--keyring", paths["keyring.gpg"],
+                 paths["data.sig"], paths["data"]],
+                capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if fields[:2] == ["[GNUPG:]", "VALIDSIG"] and len(fields) > 2:
+            if fields[2].upper() in trusted or fields[-1].upper() in trusted:
+                return True
+    return False
+
+
+# Checking entries
+
+
+def _text(value, what, limit):
+    if not isinstance(value, str) or not value.strip() or len(value) > limit or CONTROL.search(value):
+        raise CatalogError(f"{what}: one line of text, at most {limit} characters")
+    return value.strip()
+
+
+def _codes(value, pattern, what):
+    if not isinstance(value, list) or not value or not all(isinstance(v, str) and pattern.match(v) for v in value):
+        raise CatalogError(f"{what}: a list of codes like {'DE' if pattern is COUNTRY else 'de'}")
+    return list(value)
+
+
+def _url(value):
+    text = _text(value, "url", MAX_URL)
+    if not text.startswith("https://") or " " in text or len(text) <= len("https://"):
+        raise CatalogError("url: an https:// address")
+    host = text[len("https://"):].split("/", 1)[0].split("?", 1)[0]
+    if not host or "@" in host:
+        raise CatalogError("url: an https:// address with a host")
+    return text
+
+
+def _keywords(value):
+    if not isinstance(value, list) or len(value) > MAX_KEYWORDS:
+        raise CatalogError(f"keywords: a list of at most {MAX_KEYWORDS} words")
+    return [_text(k, "keyword", MAX_KEYWORD) for k in value]
+
+
+def _settings(value):
+    if not isinstance(value, dict) or set(value) - set(DEFAULTS):
+        raise CatalogError(f"settings: only {', '.join(sorted(DEFAULTS))}")
+    for key, v in value.items():
+        if key == "identify_as":
+            if v not in IDENTITIES:
+                raise CatalogError(f"settings: identify_as is one of {', '.join(sorted(IDENTITIES))}")
+        elif not isinstance(v, bool):
+            raise CatalogError(f"settings: {key} is true or false")
+    return dict(value)
+
+
+def _fields(entry, out):
+    """The fields an entry and a variant share."""
+    if "name" in entry:
+        out["name"] = _text(entry["name"], "name", MAX_NAME)
+    if "url" in entry:
+        out["url"] = _url(entry["url"])
+    if "keywords" in entry:
+        out["keywords"] = _keywords(entry["keywords"])
+    if "settings" in entry:
+        out["settings"] = _settings(entry["settings"])
+    for key, pattern in (("countries", COUNTRY), ("languages", LANGUAGE)):
+        if key in entry:
+            out[key] = _codes(entry[key], pattern, key)
+    return out
+
+
+def check_app(app):
+    """The entry with its texts stripped, or CatalogError."""
+    if not isinstance(app, dict):
+        raise CatalogError("an entry is an object")
+    if not isinstance(app.get("id"), str) or not ID.match(app["id"]):
+        raise CatalogError(f"id {app.get('id')!r}: lower case letters, digits and -")
+    try:
+        unknown = set(app) - APP_KEYS
+        if unknown:
+            raise CatalogError(f"unknown keys {', '.join(sorted(unknown))}")
+        if "name" not in app or "url" not in app:
+            raise CatalogError("name and url are needed")
+        if app.get("category") not in CATEGORIES:
+            raise CatalogError(f"category is one of {', '.join(CATEGORIES)}")
+        out = _fields(app, {"id": app["id"], "category": app["category"]})
+        if "icon" in app:
+            if not isinstance(app["icon"], str) or not SHA256.match(app["icon"]):
+                raise CatalogError("icon: the SHA-256 of the icon file, 64 hex digits")
+            out["icon"] = app["icon"]
+        variants = app.get("variants", [])
+        if not isinstance(variants, list):
+            raise CatalogError("variants: a list")
+        out["variants"] = []
+        for v in variants:
+            if not isinstance(v, dict) or set(v) - VARIANT_KEYS:
+                raise CatalogError(f"a variant has only {', '.join(sorted(VARIANT_KEYS))}")
+            if "countries" not in v and "languages" not in v:
+                raise CatalogError("a variant names countries or languages")
+            variant = _fields(v, {})
+            # A variant for a country where the entry is never shown would never apply
+            if "countries" in out and set(variant.get("countries", [])) - set(out["countries"]):
+                raise CatalogError("a variant's countries are among the entry's")
+            if "languages" in out and set(variant.get("languages", [])) - set(out["languages"]):
+                raise CatalogError("a variant's languages are among the entry's")
+            out["variants"].append(variant)
+    except CatalogError as e:
+        raise CatalogError(f"{app['id']}: {e}") from None
+    return out
+
+
+def parse(data, strict=False):
+    """The catalog of data (bytes): {"updated", "apps": [checked entries]}. An entry that is not
+    valid is left out, or with strict an error, as a repeated id is."""
+    try:
+        catalog = json.loads(data)
+    except ValueError as e:
+        raise CatalogError(f"not JSON: {e}") from None
+    if not isinstance(catalog, dict) or catalog.get("schema") != SCHEMA or not isinstance(catalog.get("apps"), list):
+        raise CatalogError("unknown kind of catalog")
+    if strict and set(catalog) - {"schema", "updated", "apps"}:
+        raise CatalogError("unknown keys at the top")
+    updated = catalog.get("updated", 0)
+    if not isinstance(updated, int) or isinstance(updated, bool) or updated < 0:
+        raise CatalogError("updated: a time in seconds")
+    apps, ids = [], set()
+    for app in catalog["apps"]:
+        try:
+            checked = check_app(app)
+            if checked["id"] in ids:
+                raise CatalogError(f"{checked['id']}: id repeated")
+        except CatalogError as e:
+            if strict:
+                raise
+            print(f"plinius-webapps-catalog: entry left out: {e}", file=sys.stderr)
+            continue
+        ids.add(checked["id"])
+        apps.append(checked)
+    return {"updated": updated, "apps": apps}
+
+
+# The list for this phone
+
+
+def _locale_parts(value):
+    m = LOCALE.match(value or "")
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def phone_locale(env=None):
+    """(language, country) of the user's session; either may be None (C locale, no country)."""
+    env = os.environ if env is None else env
+    language = country = None
+    message_vars = [env.get("LC_ALL"), (env.get("LANGUAGE") or "").split(":")[0], env.get("LC_MESSAGES"),
+                    env.get("LANG")]
+    for value in message_vars:
+        lang, _ = _locale_parts(value)
+        if lang:
+            language = lang
+            break
+    for value in [env.get("LC_ALL"), env.get("LC_MONETARY"), env.get("LC_PAPER"), env.get("LC_MEASUREMENT"),
+                  env.get("LC_TIME"), env.get("LC_NUMERIC"), env.get("LANG"), env.get("LC_MESSAGES")]:
+        _, c = _locale_parts(value)
+        if c:
+            country = c
+            break
+    return language, country
+
+
+def _matches(entry, language, country):
+    if "countries" in entry and country not in entry["countries"]:
+        return False
+    if "languages" in entry and language not in entry["languages"]:
+        return False
+    return True
+
+
+def _specificity(variant):
+    return ("countries" in variant) * 2 + ("languages" in variant)
+
+
+def _sha256(path):
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def icon_file(app):
+    """The icon of app that may be shown, as a path; "" when there is none."""
+    own = ICONS / f"{app['id']}.png"
+    if "icon" not in app:
+        return str(own) if own.is_file() else ""
+    for path in (own, CACHE / "icons" / f"{app['id']}.png"):
+        if _sha256(path) == app["icon"]:
+            return str(path)
+    return ""
+
+
+def _fetch_icon(app):
+    data = _get(ICON_URL.format(id=app["id"]), MAX_ICON)
+    if hashlib.sha256(data).hexdigest() != app["icon"] or not data.startswith(PNG_MAGIC):
+        raise OSError("does not match the catalog")
+    folder = CACHE / "icons"
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f"{app['id']}.png.tmp"
+    tmp.write_bytes(data)
+    os.replace(tmp, folder / f"{app['id']}.png")
+
+
+def fetch_icons(catalog, log):
+    """Icons of the catalog that are neither in the package nor kept, from the server; kept icons
+    of entries that are gone or have another icon now are removed."""
+    wanted = {a["id"]: a for a in catalog["apps"] if "icon" in a}
+    folder = CACHE / "icons"
+    for path in folder.glob("*.png") if folder.is_dir() else ():
+        app = wanted.get(path.stem)
+        if not app or _sha256(path) != app["icon"]:
+            path.unlink(missing_ok=True)
+    missing = [a for a in wanted.values() if not icon_file(a)]
+    if not missing:
+        return
+
+    def one(app):
+        try:
+            _fetch_icon(app)
+        except (OSError, ValueError) as e:
+            log(f"icon of {app['id']} not fetched ({e})")
+    with ThreadPoolExecutor(ICON_FETCHES) as pool:
+        list(pool.map(one, missing))
+
+
+def resolve(catalog, language, country):
+    """The entries shown for language and country, their variants applied, in display order."""
+    out = []
+    for app in catalog["apps"]:
+        if not _matches(app, language, country):
+            continue
+        entry = {"id": app["id"], "name": app["name"], "url": app["url"], "category": app["category"],
+                 "keywords": list(app.get("keywords", []))}
+        settings = dict(DEFAULTS, **app.get("settings", {}))
+        variants = [v for v in app["variants"] if _matches(v, language, country)]
+        for v in sorted(variants, key=_specificity):
+            for key in ("name", "url", "keywords"):
+                if key in v:
+                    entry[key] = v[key]
+            settings.update(v.get("settings", {}))
+        entry.update(settings)
+        entry["icon"] = icon_file(app)
+        out.append(entry)
+    out.sort(key=lambda e: (CATEGORIES.index(e["category"]), e["name"].casefold(), e["id"]))
+    return out
+
+
+# Where the catalog comes from
+
+
+def _read_cache():
+    try:
+        data = (CACHE / "catalog.json").read_bytes()
+        signature = (CACHE / "catalog.json.sig").read_bytes()
+    except OSError:
+        return None
+    if not verify(data, signature):
+        return None
+    try:
+        return parse(data)
+    except CatalogError:
+        return None
+
+
+def _get(url, limit):
+    with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise OSError(f"more than {limit} bytes")
+    return data
+
+
+def _fetch(log):
+    """The catalog from the server if it is signed and not older than the kept one; else None."""
+    try:
+        data = _get(URL, MAX_CATALOG)
+        signature = _get(URL + ".sig", MAX_SIGNATURE)
+    except (OSError, ValueError) as e:
+        log(f"not fetched ({e})")
+        return None
+    if not verify(data, signature):
+        log("the fetched catalog fails the signature check, not used")
+        return None
+    try:
+        catalog = parse(data)
+    except CatalogError as e:
+        log(f"the fetched catalog is not usable ({e})")
+        return None
+    kept = _read_cache()
+    if kept and kept["updated"] > catalog["updated"]:
+        log("the fetched catalog is older than the kept one, not used")
+        return kept
+    try:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        for name, content in (("catalog.json", data), ("catalog.json.sig", signature)):
+            tmp = CACHE / (name + ".tmp")
+            tmp.write_bytes(content)
+            os.replace(tmp, CACHE / name)
+    except OSError as e:
+        log(f"not kept ({e})")
+    return catalog
+
+
+def load(fetch=True, log=None):
+    """The newest usable catalog: fetched, kept from an earlier fetch, or the bundled one."""
+    def note(text):
+        print(f"plinius-webapps-catalog: {text}", file=sys.stderr)
+    if log is None:
+        log = note
+    candidates = []
+    fetched = _fetch(log) if fetch else None
+    if fetched:
+        candidates.append(fetched)
+    else:
+        kept = _read_cache()
+        if kept:
+            candidates.append(kept)
+    try:
+        candidates.append(parse(BUNDLED.read_bytes()))
+    except (OSError, CatalogError) as e:
+        log(f"bundled catalog not readable ({e})")
+    if not candidates:
+        return {"updated": 0, "apps": []}
+    best = max(candidates, key=lambda c: c["updated"])
+    # Icons come with the run that asks the server
+    if fetch:
+        fetch_icons(best, log)
+    return best
+
+
+def main(argv):
+    args = argv[1:]
+    if args[:1] == ["--check"] and len(args) == 2:
+        try:
+            catalog = parse(Path(args[1]).read_bytes(), strict=True)
+        except (OSError, CatalogError) as e:
+            print(f"{args[1]}: {e}", file=sys.stderr)
+            return 1
+        print(f"{len(catalog['apps'])} web apps")
+        return 0
+    if args not in ([], ["--offline"]):
+        print("usage: plinius-webapps-catalog [--offline] | --check FILE", file=sys.stderr)
+        return 2
+    catalog = load(fetch=not args)
+    language, country = phone_locale()
+    json.dump({"updated": catalog["updated"], "language": language, "country": country,
+               "apps": resolve(catalog, language, country)}, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
