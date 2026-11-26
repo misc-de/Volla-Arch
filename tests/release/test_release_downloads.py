@@ -46,6 +46,17 @@ def good_tree(root):
         "etc/ssh/sshd_config": "PasswordAuthentication no\n",
         "var/lib/pacman/local/plinius-keyring-1-1/desc": "%NAME%\nplinius-keyring\n",
         "usr/lib/systemd/system/plinius-greeter-password.path": "[Path]\n",
+        # Sandbox paths a newly installed phone has: in the image, made by systemd for the unit
+        # or by tmpfiles.d, allowed to be missing, or a condition skips the unit without it
+        "usr/lib/systemd/system/ofono.service": "[Service]\nReadWritePaths=/var/lib/ofono\n",
+        "var/lib/ofono/.keep": "",
+        "usr/lib/systemd/system/biomd.service": "[Service]\nExecStart=/usr/bin/biomd\n",
+        "usr/lib/systemd/system/biomd.service.d/sandbox.conf":
+            "[Service]\nStateDirectory=biomd\nReadWritePaths=/var/lib/biomd\n",
+        "usr/lib/tmpfiles.d/nfcd.conf": "d /var/lib/nfcd 0700 nfc nfc -\n",
+        "usr/lib/systemd/system/nfcd.service": "[Service]\nReadWritePaths=/var/lib/nfcd -/var/lib/x\n",
+        "usr/lib/systemd/system/wkd-sync.service": "[Unit]\nConditionPathIsDirectory=/etc/pacman.d/gnupg/\n"
+            "[Service]\nReadWritePaths=/etc/pacman.d/gnupg\n",
         "usr/share/plinius-boot/ut/vendor_boot.img": "ut vendor_boot without systempart",
         "usr/share/plinius-boot/vendor_boot.img": "vendor_boot with prompt",
         "usr/share/plinius-boot/init_boot.img": "init_boot with prompt",
@@ -102,7 +113,7 @@ def sha(text):
 def volla(tmp_path, fake_bin):
     root = tmp_path / "volla"
     (root / "tools").mkdir(parents=True)
-    for script in ("lib.sh", "image-check.sh", "downloads.sh"):
+    for script in ("lib.sh", "image-check.sh", "downloads.sh", "unit-paths.py"):
         shutil.copy2(TOOLS / script, root / "tools" / script)
     (root / "tools" / "ut-build.sha256").write_text("# build 04112026\n" + "".join(
         f"{sha('content of ' + name)}  {name}\n" for name in UT_FILES) +
@@ -142,7 +153,7 @@ def test_a_clean_image_passes_every_check(tmp_path, volla, fake_bin):
     r = check(volla, fake_bin, make_image(good_tree(tmp_path / "t"), tmp_path / "a.img"))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "FAIL" not in r.stdout
-    assert r.stdout.count("ok: ") == 36
+    assert r.stdout.count("ok: ") == 37
     assert "can be offered for download" in r.stderr
 
 
@@ -270,6 +281,14 @@ def spoil_no_prompt(t):
     (t / "usr/share/plinius-boot/init_boot.img").unlink()
 
 
+def spoil_sandbox_path(t):
+    # bluebinder before bluetooth.service, which makes the directory: 226/NAMESPACE on a new phone
+    d = t / "usr/lib/systemd/system/bluebinder.service.d"
+    d.mkdir(parents=True)
+    (t / "usr/lib/systemd/system/bluebinder.service").write_text("[Service]\nExecStart=/x\n")
+    (d / "sandbox.conf").write_text("[Service]\nProtectSystem=strict\nReadWritePaths=/var/lib/bluetooth\n")
+
+
 @pytest.mark.parametrize("spoil, line", [
     (spoil_key, "no SSH key in /root"),
     (spoil_user_key, "no SSH key in /home/plinius"),
@@ -299,6 +318,8 @@ def spoil_no_prompt(t):
     (spoil_fallback_files, "an older plinius-kernel kept as the fallback"),
     (spoil_fallback_is_the_kernel, "an older plinius-kernel kept as the fallback"),
     (spoil_no_prompt, "init_boot.img with the password prompt"),
+    (spoil_sandbox_path, "every path the services' sandboxes need is there: missing "
+                         "/var/lib/bluetooth (bluebinder.service)"),
 ], ids=lambda v: v.__name__ if callable(v) else None)
 def test_an_image_with_a_flaw_is_refused(tmp_path, volla, fake_bin, spoil, line):
     tree = good_tree(tmp_path / "t")

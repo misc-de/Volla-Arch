@@ -184,6 +184,27 @@ check boot_holds /usr/share/plinius-boot/boot.img "$kdir/boot.img" \
 previous=$(content /var/lib/plinius-kernel/previous)
 check kept_fallback "$previous" "${kdir##*/}" -- "an older plinius-kernel kept as the fallback"
 check exists /usr/share/plinius-boot/initrd.cpio.gz -- "initrd.cpio.gz for a boot entry"
+# The paths the services' sandboxes need (tools/unit-paths.py): a missing one stops the service
+# at every start of a newly installed phone (status 226/NAMESPACE)
+units=$(mktemp -d)
+trap 'rm -rf "$units"' EXIT
+mkdir -p "$units/usr/lib/systemd" "$units/etc/systemd" "$units/usr/lib" "$units/etc"
+# debugfs cannot hand the files to their owners as an ordinary user and says so: only noise
+for dir in /usr/lib/systemd/system /usr/lib/systemd/user /etc/systemd/system /etc/systemd/user \
+	/usr/lib/tmpfiles.d /etc/tmpfiles.d; do
+	debugfs -R "rdump \"$dir\" \"$units${dir%/*}\"" "$img" > /dev/null 2>&1 || true
+done
+unit_paths=$(python3 -I "$VOLLA_DIR/tools/unit-paths.py" "$units") || die "tools/unit-paths.py failed"
+missing=
+while read -r unit path; do
+	[[ -n $path ]] || continue
+	exists "$path" || missing+=${missing:+, }"$path ($unit)"
+done <<< "$unit_paths"
+if [[ -z $missing ]]; then
+	pass "every path the services' sandboxes need is there"
+else
+	fail "every path the services' sandboxes need is there: missing $missing"
+fi
 
 if ((failed)); then
 	echo "$img must not be offered for download" >&2
