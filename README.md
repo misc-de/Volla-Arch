@@ -259,7 +259,7 @@ takes up to about a minute.
 MediaTek, the maker of the phone's chip, offers predicted orbits for download. With them the GPS
 finds the position within seconds. Each download shows MediaTek your IP address, so it is off on a
 new phone. Switch it on under **Settings › Privacy & Security › Location › Faster GPS Fix**: it
-loads about 80&nbsp;KB every 6 hours and sends nothing about the phone.
+loads about 80&nbsp;KB every 6 hours and sends no data.
 
 </details>
 
