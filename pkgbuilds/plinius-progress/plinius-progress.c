@@ -7,6 +7,11 @@
  *       -B a second one below it for the alternative (exit status 2).
  * Without -p or -b the view stays until the process is terminated.
  *
+ * With -F (and -b) a question at the first start of the system takes the look of the system's own
+ * first question, the PIN prompt of plinius-greeter: black, the title as a heading in Adwaita Sans
+ * Bold (bbx_font_title) with the message below it in subdued white, and at the bottom the default
+ * answer as a pill in the accent color with the alternative below it as plain text.
+ *
  * With -l it shows nothing but the boot logo of the system on black, the picture that phoc
  * shows when the session starts (phoc-plinius patches 0004/0007): the mark turns like a coin
  * above the wordmark, both in the accent color. Started once the disk is open, it fills the
@@ -80,6 +85,14 @@
 /* After the handover the last picture stays at most this long, should no compositor take over */
 #define HANDOVER_MAX_MS 30000
 
+/* The first-start look (-F), from plinius-greeter's CSS: the subtitle in white at 62 %, the
+ * alternative answer at 80 % */
+#define FIRST_MESSAGE_OPA 158
+#define FIRST_ALT_OPA LV_OPA_80
+
+/* Adwaita Sans Bold at 44 px (font_title.c), the heading of -F */
+LV_FONT_DECLARE(bbx_font_title);
+
 typedef struct {
     bbx_cli_common_opts common;
     const char **config_files;
@@ -95,6 +108,7 @@ typedef struct {
     int timeout;
     bool handover;
     bool progress;
+    bool first_start;
 } pp_cli_opts;
 
 static pp_cli_opts cli_opts;
@@ -133,6 +147,9 @@ static void print_usage(void) {
         "  -B, --button2=TEXT        With -b: second button below it, exits with\n"
         "                            status 2\n"
         "  -T, --timeout=SECONDS     With -b or -l: exit after this many seconds\n"
+        "  -F, --first-start         With -b: the look of the first start, black\n"
+        "                            with a heading, the button a pill in the\n"
+        "                            accent color at the bottom\n"
         "  -l, --logo=DIR            Show only the boot logo: DIR/mark.bin right\n"
         "                            above DIR/wordmark.bin (LVGL ARGB8888 images\n"
         "                            at their size on the screen), -m below them as\n"
@@ -163,6 +180,7 @@ static void parse_opts(int argc, char *argv[]) {
         { "button",          required_argument, NULL, 'b' },
         { "button2",         required_argument, NULL, 'B' },
         { "timeout",         required_argument, NULL, 'T' },
+        { "first-start",     no_argument,       NULL, 'F' },
         { "logo",            required_argument, NULL, 'l' },
         { "handover",        no_argument,       NULL, 'H' },
         { "backlight",       required_argument, NULL, 'L' },
@@ -176,7 +194,7 @@ static void parse_opts(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "t:m:i:pr:b:B:T:l:HL:C:g:d:vhV", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "t:m:i:pr:b:B:T:Fl:HL:C:g:d:vhV", long_opts, NULL)) != -1) {
         switch (opt) {
         case 't': cli_opts.title = optarg; break;
         case 'm': cli_opts.message = optarg; break;
@@ -186,6 +204,7 @@ static void parse_opts(int argc, char *argv[]) {
         case 'b': cli_opts.button = optarg; break;
         case 'B': cli_opts.button2 = optarg; break;
         case 'T': cli_opts.timeout = atoi(optarg); break;
+        case 'F': cli_opts.first_start = true; break;
         case 'l': cli_opts.logo = optarg; break;
         case 'H': cli_opts.handover = true; break;
         case 'L': cli_opts.backlight = optarg; break;
@@ -569,6 +588,60 @@ static void hand_over(void) {
 }
 
 /* Build the view: icon, title, progress bar with percentage, message, buttons */
+/* Button of the first-start look: as wide as the column, round ends, no frame or shadow of the
+ * theme; filled with the accent color, or plain text for the alternative */
+static void style_first_button(lv_obj_t *button, bool filled) {
+    lv_obj_set_width(button, LV_PCT(100));
+    lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_border_width(button, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(button, 0, LV_PART_MAIN);
+    lv_obj_set_style_text_color(button, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(button, filled ? lv_color_hex(theme_accent) : lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(button, filled ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_MAIN);
+    /* Pressed: the pill gets lighter, the text answer a light disc as the greeter's keys */
+    lv_obj_set_style_bg_color(button, filled ? lv_color_lighten(lv_color_hex(theme_accent), LV_OPA_20)
+                                             : lv_color_white(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(button, filled ? LV_OPA_COVER : LV_OPA_30, LV_STATE_PRESSED);
+    if (!filled)
+        lv_obj_set_style_text_opa(button, FIRST_ALT_OPA, LV_PART_MAIN);
+}
+
+/* The first-start look (-F): black, heading and message at the top, the answers at the bottom */
+static void build_first_start_ui(lv_obj_t *screen, int32_t ver_res, int32_t padding) {
+    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_flex_align(screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    /* The heading where the greeter has it below the status bar, the answers above the gesture bar */
+    lv_obj_set_style_pad_top(screen, ver_res / 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(screen, padding * 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(screen, padding / 3, LV_PART_MAIN);
+
+    if (cli_opts.title) {
+        lv_obj_t *title = add_label(screen, cli_opts.title);
+        lv_obj_set_style_text_font(title, &bbx_font_title, LV_PART_MAIN);
+        lv_obj_set_style_text_color(title, lv_color_white(), LV_PART_MAIN);
+    }
+    if (cli_opts.message) {
+        lv_obj_t *message = add_label(screen, cli_opts.message);
+        lv_obj_set_style_text_color(message, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_text_opa(message, FIRST_MESSAGE_OPA, LV_PART_MAIN);
+    }
+
+    /* Everything below goes to the bottom */
+    lv_obj_t *space = lv_obj_create(screen);
+    lv_obj_remove_style_all(space);
+    lv_obj_set_width(space, LV_PCT(100));
+    lv_obj_set_flex_grow(space, 1);
+
+    lv_obj_t *button = add_button(screen, cli_opts.button, button_clicked_cb, padding);
+    style_first_button(button, true);
+    if (cli_opts.button2) {
+        lv_obj_t *button2 = add_button(screen, cli_opts.button2, button2_clicked_cb, padding);
+        style_first_button(button2, false);
+    }
+    lv_group_focus_obj(button);
+}
+
 static void build_ui(lv_display_t *disp, const bbx_theme *theme) {
     const int32_t hor_res = lv_display_get_horizontal_resolution(disp);
     const int32_t ver_res = lv_display_get_vertical_resolution(disp);
@@ -580,7 +653,9 @@ static void build_ui(lv_display_t *disp, const bbx_theme *theme) {
 
     lv_obj_t *screen = lv_screen_active();
     lv_theme_apply(screen);
-    if (conf_opts.theme.background) {
+    const bool first_look = cli_opts.first_start && cli_opts.button && !cli_opts.progress;
+    /* The first-start look is black, without the system's background picture */
+    if (conf_opts.theme.background && !first_look) {
         bbx_background_apply(screen, conf_opts.theme.background);
     }
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -589,6 +664,11 @@ static void build_ui(lv_display_t *disp, const bbx_theme *theme) {
     lv_obj_set_style_pad_left(screen, side_pad, LV_PART_MAIN);
     lv_obj_set_style_pad_right(screen, side_pad, LV_PART_MAIN);
     lv_obj_set_style_pad_row(screen, padding, LV_PART_MAIN);
+
+    if (first_look) {
+        build_first_start_ui(screen, ver_res, padding);
+        return;
+    }
 
     if (cli_opts.icon) {
         bool warning = strcmp(cli_opts.icon, "warning") == 0;

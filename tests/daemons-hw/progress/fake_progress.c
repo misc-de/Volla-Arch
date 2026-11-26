@@ -161,6 +161,7 @@ static const char *selector_name(uint32_t s)
     case LV_PART_MAIN: return "main";
     case LV_PART_INDICATOR: return "indicator";
     case LV_STATE_FOCUS_KEY: return "focus_key";
+    case LV_STATE_PRESSED: return "pressed";
     default: return "other";
     }
 }
@@ -376,6 +377,20 @@ lv_color_t lv_color_white(void)
     return (lv_color_t){0xffffff};
 }
 
+/* As LVGL: each channel mixed with white by lvl */
+lv_color_t lv_color_lighten(lv_color_t c, lv_opa_t lvl)
+{
+    uint32_t out = 0;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        uint32_t v = (c.hex >> shift) & 0xff;
+        out |= ((v * (255 - lvl) + 255 * lvl) / 255) << shift;
+    }
+    return (lv_color_t){out};
+}
+
+/* The heading font of -F (font_title.c in the package) */
+const lv_font_t bbx_font_title = {1};
+
 /* LVGL's table: round(32767 sin a) per degree, with ±32767 widened to ±32768 */
 int32_t lv_trigo_sin(int16_t angle)
 {
@@ -406,6 +421,11 @@ int32_t lv_trigo_sin(int16_t angle)
 int32_t lv_trigo_cos(int16_t angle)
 {
     return lv_trigo_sin(angle + 90);
+}
+
+lv_obj_t *lv_obj_create(lv_obj_t *parent)
+{
+    return new_obj("obj", parent);
 }
 
 lv_obj_t *lv_label_create(lv_obj_t *parent)
@@ -480,6 +500,16 @@ void lv_obj_set_size(lv_obj_t *obj, int32_t w, int32_t h)
 void lv_obj_center(lv_obj_t *obj)
 {
     obj->centered = true;
+}
+
+void lv_obj_remove_style_all(lv_obj_t *obj)
+{
+    set_style(obj, "style_removed", 1, LV_PART_MAIN, false);
+}
+
+void lv_obj_set_flex_grow(lv_obj_t *obj, uint8_t grow)
+{
+    set_style(obj, "flex_grow", grow, LV_PART_MAIN, false);
 }
 
 void lv_obj_add_flag(lv_obj_t *obj, uint32_t flag)
@@ -564,6 +594,14 @@ FAKE_STYLE_NUM(border_width, int32_t)
 FAKE_STYLE_COLOR(border_color)
 FAKE_STYLE_NUM(radius, int32_t)
 FAKE_STYLE_NUM(anim_duration, uint32_t)
+FAKE_STYLE_NUM(shadow_width, int32_t)
+FAKE_STYLE_NUM(pad_top, int32_t)
+FAKE_STYLE_NUM(pad_bottom, int32_t)
+
+void lv_obj_set_style_text_font(lv_obj_t *obj, const lv_font_t *value, uint32_t selector)
+{
+    set_style(obj, "text_font", value ? value->id : 0, selector, false);
+}
 
 void lv_anim_init(lv_anim_t *a)
 {

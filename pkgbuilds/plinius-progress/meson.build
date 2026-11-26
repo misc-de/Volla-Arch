@@ -28,7 +28,7 @@ endif
 # unl0kr's config parser for the shared configuration
 executable('plinius-progress',
     include_directories: common_include_dirs,
-    sources: files('plinius-progress.c', 'sq2lv_layouts.c', '../unl0kr/config.c')
+    sources: files('plinius-progress.c', 'font_title.c', 'sq2lv_layouts.c', '../unl0kr/config.c')
         + shared_sources + shared_sources_ul_f0 + squeek2lvgl_sources + lvgl_sources,
     dependencies: plinius_progress_dependencies,
     c_args: plinius_progress_args,

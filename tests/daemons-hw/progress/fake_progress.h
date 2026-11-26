@@ -22,11 +22,17 @@
 #define LV_PCT(x) (LV_PCT_FLAG | (x))
 
 typedef uint8_t lv_opa_t;
-enum { LV_OPA_TRANSP = 0, LV_OPA_60 = 153, LV_OPA_80 = 204, LV_OPA_COVER = 255 };
+enum { LV_OPA_TRANSP = 0, LV_OPA_20 = 51, LV_OPA_30 = 76, LV_OPA_60 = 153, LV_OPA_80 = 204, LV_OPA_COVER = 255 };
 
 typedef struct {
     uint32_t hex;
 } lv_color_t;
+
+/* A font: the fake's fonts only differ by their id */
+typedef struct {
+    int id;
+} lv_font_t;
+#define LV_FONT_DECLARE(name) extern const lv_font_t name;
 
 typedef struct lv_obj_t lv_obj_t;
 typedef struct lv_group_t lv_group_t;
@@ -43,6 +49,8 @@ typedef void (*lv_log_print_g_cb_t)(lv_log_level_t level, const char *msg);
 #define LV_PART_MAIN 0x000000
 #define LV_PART_INDICATOR 0x020000
 #define LV_STATE_FOCUS_KEY 0x0004
+#define LV_STATE_PRESSED 0x0020
+#define LV_RADIUS_CIRCLE 0x7FFF
 
 enum { LV_EVENT_CLICKED = 10 };
 enum { LV_ANIM_OFF = 0, LV_ANIM_ON = 1 };
@@ -50,7 +58,7 @@ enum { LV_ANIM_OFF = 0, LV_ANIM_ON = 1 };
 enum { LV_LABEL_LONG_MODE_WRAP = 0 };
 enum { LV_TEXT_ALIGN_CENTER = 2 };
 enum { LV_FLEX_FLOW_COLUMN = 1 };
-enum { LV_FLEX_ALIGN_CENTER = 2 };
+enum { LV_FLEX_ALIGN_START = 0, LV_FLEX_ALIGN_CENTER = 2 };
 enum { LV_ALIGN_OUT_BOTTOM_MID = 17 };
 enum { LV_OBJ_FLAG_SCROLLABLE = 1 << 4, LV_OBJ_FLAG_FLOATING = 1 << 17 };
 
@@ -99,9 +107,11 @@ int32_t lv_dpx(int32_t n);
 lv_color_t lv_color_hex(uint32_t c);
 lv_color_t lv_color_black(void);
 lv_color_t lv_color_white(void);
+lv_color_t lv_color_lighten(lv_color_t c, lv_opa_t lvl);
 int32_t lv_trigo_sin(int16_t angle);
 int32_t lv_trigo_cos(int16_t angle);
 
+lv_obj_t *lv_obj_create(lv_obj_t *parent);
 lv_obj_t *lv_label_create(lv_obj_t *parent);
 lv_obj_t *lv_button_create(lv_obj_t *parent);
 lv_obj_t *lv_bar_create(lv_obj_t *parent);
@@ -115,6 +125,8 @@ void lv_image_set_scale_x(lv_obj_t *obj, uint32_t scale);
 void lv_obj_set_width(lv_obj_t *obj, int32_t w);
 void lv_obj_set_size(lv_obj_t *obj, int32_t w, int32_t h);
 void lv_obj_center(lv_obj_t *obj);
+void lv_obj_remove_style_all(lv_obj_t *obj);
+void lv_obj_set_flex_grow(lv_obj_t *obj, uint8_t grow);
 void lv_obj_add_flag(lv_obj_t *obj, uint32_t flag);
 void lv_obj_remove_flag(lv_obj_t *obj, uint32_t flag);
 void lv_obj_set_flex_flow(lv_obj_t *obj, int flow);
@@ -146,7 +158,12 @@ FAKE_STYLE(border_width, int32_t)
 FAKE_STYLE(border_color, lv_color_t)
 FAKE_STYLE(radius, int32_t)
 FAKE_STYLE(anim_duration, uint32_t)
+FAKE_STYLE(shadow_width, int32_t)
+FAKE_STYLE(pad_top, int32_t)
+FAKE_STYLE(pad_bottom, int32_t)
 #undef FAKE_STYLE
+/* Recorded as the font's id */
+void lv_obj_set_style_text_font(lv_obj_t *obj, const lv_font_t *value, uint32_t selector);
 
 void lv_anim_init(lv_anim_t *a);
 void lv_anim_set_var(lv_anim_t *a, void *var);

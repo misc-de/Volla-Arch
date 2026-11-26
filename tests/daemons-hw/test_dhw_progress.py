@@ -417,6 +417,71 @@ def test_two_buttons(progress, press, status):
     assert [r.children(b)[0]["text"] for b in (first, second)] == ["Restart", "Rescue system"]
 
 
+QUESTION = ("Encrypt the device?", "You choose a password that is asked at every start.", "Set password",
+            "Continue without encryption")
+
+
+@pytest.mark.parametrize("press,status", [(1, 0), (2, 2)])
+def test_first_start_look_as_the_first_pin_prompt(progress, tmp_path, press, status):
+    title, message, yes, no = QUESTION
+    conf = config(tmp_path, accent="1793d1", background="/boot/bg.png")
+    r = progress("-F", "-t", title, "-m", message, "-b", yes, "-B", no, "-C", conf, env={"FAKE_PRESS": press})
+    assert r.code == status, r.err
+    screen = r.of_type("screen")[0]
+    s = styles(screen)
+    # Black, without the system's background picture; the column starts at the top
+    assert (s["bg_color/main"], s["bg_opa/main"]) == ("#000000", 255)
+    assert r.lines("BACKGROUND") == []
+    assert s["flex_align/main"] == 0 * 100 + 2 * 10 + 2
+    assert (s["pad_top/main"], s["pad_bottom/main"], s["pad_row/main"]) == (2400 // 8, 2 * 96, 96 // 3)
+    kids = r.children(screen)
+    assert [k["type"] for k in kids] == ["label", "label", "obj", "button", "button"]
+    heading, text, space, first, second = kids
+    # The heading in Adwaita Sans Bold (bbx_font_title), the explanation in white at 62 %
+    assert heading["text"] == title and styles(heading)["text_font/main"] == 1
+    assert styles(heading)["text_color/main"] == "#ffffff" and "text_opa/main" not in styles(heading)
+    assert text["text"] == message and styles(text)["text_opa/main"] == 158
+    assert "text_font/main" not in styles(text)
+    # The answers at the bottom
+    assert styles(space)["flex_grow/main"] == 1 and styles(space)["style_removed/main"] == 1
+    for b in (first, second):
+        bs = styles(b)
+        assert b["width"] == "100%" and bs["radius/main"] == 0x7FFF
+        assert bs["border_width/main"] == bs["shadow_width/main"] == 0
+        assert bs["text_color/main"] == "#ffffff"
+    # The default answer a pill in the accent colour, lighter while pressed
+    f = styles(first)
+    assert (f["bg_color/main"], f["bg_opa/main"]) == ("#1793d1", 255)
+    assert f["bg_color/pressed"] == "#45a8da" and f["bg_opa/pressed"] == 255
+    # The alternative plain text, a light disc while pressed
+    o = styles(second)
+    assert o["bg_opa/main"] == 0 and o["text_opa/main"] == 204
+    assert (o["bg_color/pressed"], o["bg_opa/pressed"]) == ("#ffffff", 76)
+    assert first["focused"] and not second["focused"]
+    assert [r.children(b)[0]["text"] for b in (first, second)] == [yes, no]
+
+
+def test_first_start_look_with_one_answer(progress):
+    r = progress("-F", "-t", "Ready", "-b", "Continue", env={"FAKE_PRESS": 1})
+    assert r.code == 0
+    kids = r.children(r.of_type("screen")[0])
+    assert [k["type"] for k in kids] == ["label", "obj", "button"]
+    assert styles(kids[2])["bg_color/main"] == "#3584e4"
+
+
+def test_first_start_look_only_for_a_question(progress, started, tmp_path):
+    # A progress bar or a plain message keeps the look of unl0kr, background included
+    conf = config(tmp_path, background="/boot/bg.png")
+    bar = progress("-F", "-t", "Encrypting", "-p", "-C", conf)
+    finish = started("-F", "-t", "Please wait", "-C", str(conf))
+    time.sleep(0.3)
+    plain = finish(signal.SIGTERM)
+    for r in (bar, plain):
+        screen = r.of_type("screen")[0]
+        assert "bg_color/main" not in styles(screen)
+        assert r.lines("BACKGROUND") == [f"{screen['id']} /boot/bg.png"]
+
+
 def test_button_times_out(progress):
     t0 = time.monotonic()
     r = progress("-b", "OK", "-T", "1")

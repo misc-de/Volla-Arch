@@ -2,7 +2,7 @@
 
 pkgname=plinius-progress
 pkgver=0.1
-pkgrel=17
+pkgrel=18
 pkgdesc="Full-screen progress and message view for the initramfs, in the look of unl0kr"
 arch=(aarch64 x86_64)
 url="https://gitlab.postmarketos.org/postmarketOS/buffybox"
@@ -23,6 +23,7 @@ source=(
 	"git+$url.git#commit=$_bbx_commit"
 	"git+https://github.com/lvgl/lvgl.git#commit=$_lvgl_commit"
 	plinius-progress.c
+	font_title.c
 	meson.build
 	0001-themes-make-the-text-cursor-of-the-Breezy-themes-2-d.patch
 	0002-unl0kr-add-placeholder-for-the-text-of-the-empty-pas.patch
@@ -38,8 +39,9 @@ source=(
 )
 sha256sums=('SKIP'
             'SKIP'
-            '708db45c2d740d096b408e1aa4c52f65b8c784d6aeeda6eb23adf0c58b25c0cb'
-            'c758402859507c6e4dbb38136e19833e594944fda015461c6bcb7cf25d882bc0'
+            'b951f85f491a8b4a9062f967ddc67a8f01b787c5dd3eac1639392ba0f458dba0'
+            'a8de8947bada9ac1f50f0c8166900281b78eba458313f75375c2f99978924699'
+            '96f03df8b1e18db209c11961a49b40aece8c89984d64e6b628958b468b6f07e6'
             'b5b53154c23768cf826e3336d2c6d108702c08e8da56b7098e7e3a576bdc946b'
             '836ab89c3df0d323777b1bf5bb7eb09843dafc57e3ba5d32ab007b9840ef1658'
             'ae3937e118991f0ac2b2fa78b273095439859c6c0b78fa90bb3108a61cfccb64'
@@ -64,7 +66,13 @@ prepare() {
 	done
 
 	mkdir -p plinius-progress
-	cp "$srcdir/plinius-progress.c" "$srcdir/meson.build" unl0kr/sq2lv_layouts.[ch] plinius-progress/
+	# font_title.c: Adwaita Sans Bold at 44 px, the heading of -F (adwaita-fonts 51.0, license in
+	# AdwaitaSans-LICENSE of patch 0008), made as the key fonts of that patch:
+	#   fonttools varLib.instancer AdwaitaSans-Regular.ttf wght=700 -o AdwaitaSans-TitleBold.ttf
+	#   npx lv_font_conv --bpp 4 --size 44 --no-compress --format lvgl --lv-fallback bbx_font_32 \
+	#     --lv-font-name bbx_font_title -o font_title.c --font AdwaitaSans-TitleBold.ttf --range \
+	#     0x0020-0x007E,0x00A0-0x00FF,0x0100-0x017F,0x0400-0x045F,0x2013-0x2014,0x2018-0x201E,0x2026,0x20AC
+	cp "$srcdir/plinius-progress.c" "$srcdir/font_title.c" "$srcdir/meson.build" unl0kr/sq2lv_layouts.[ch] plinius-progress/
 	# unl0kr's LVGL configuration plus the bar widget
 	sed 's/^#define LV_USE_BAR        0$/#define LV_USE_BAR        1/' unl0kr/lv_conf.h \
 		> plinius-progress/lv_conf.h
