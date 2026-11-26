@@ -209,14 +209,15 @@ own icon, without the browser's bars and with a profile of its own. That closes 
 </details>
 
 <details>
-<summary><b>Do WhatsApp, Telegram and Signal work?</b></summary>
+<summary><b>Which messengers work?</b></summary>
 
-Yes, as an additional device of an existing account, the way they also run on a computer: you link
-Plinius to your account, usually by scanning a QR code with the phone the account is on.
+Messengers such as Matrix and Delta Chat come as native apps made for phones, for example Fractal
+for Matrix. They run on Plinius alone, with an account of their own.
 
-Depending on the service this works through an app from the catalog or from Flathub, or as a web app
-under **Settings › Apps › Web Apps**. Calls and SMS over your own number go through the phone's
-Phone and Messages apps.
+WhatsApp, Telegram and Signal work as an additional device of an existing account, the way they also
+run on a computer: you link Plinius to your account, usually by scanning a QR code with the phone
+the account is on. Depending on the service this works through an app from the catalog or from
+Flathub, or as a web app under **Settings › Apps › Web Apps**.
 
 </details>
 
