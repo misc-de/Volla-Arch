@@ -2,7 +2,7 @@
 
 pkgname=plinius-bootcheck
 pkgver=0.2
-pkgrel=3
+pkgrel=4
 pkgdesc="Detect changes to the boot chain (kernel, ramdisk, bootloader) and warn in the session"
 arch=(any)
 license=(MIT)
@@ -20,7 +20,7 @@ source=(plinius-bootcheck
 	org.plinius.bootcheck.policy
 	"${_langs[@]/%/.po}"
 	LICENSE)
-sha256sums=('f4f7bb9af30e7268e63375e484559817702be2c36043562df22c762830e7fb4b'
+sha256sums=('51a70bedb3a1723dc00e1aef548a7ca1b8620d1887726f67b619efffe28e57aa'
 	'2af9373333580bc3babd95938dfd415ae5de7e2f8d1bc95f904b9c79060cf4db'
 	'386c79cf790369ea1217637239e0bdb0473032a8e5676cb64856eb155c45c00f'
 	'a9b3c01b8dd97fd07eafe63033cd8fedcc9ada4ce52d785a79ecc6022481bdd0'

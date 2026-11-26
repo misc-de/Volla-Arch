@@ -6,7 +6,11 @@
 #
 # Only what starts this installation is judged: the partitions of the active slot (the other
 # slot holds the Volla OS of the delivery) and, on a boot menu card, the entries that start the
-# system on the phone's storage. Entries for systems on card partitions are left alone.
+# system on the phone's storage. An Arch on card partitions (Plinius Boot) also has its own
+# entries judged: those whose command line names its partition as the running start does
+# (systempart=, or datapart= alone for a system in rootfs.img on its data partition), with the
+# trial and fallback entries plinius-kernel-install makes from it. Entries of other systems on
+# card partitions are left alone.
 #
 # Usage: plinius-bootcheck check | accept [--written] [PATH...] | status
 #   check   compare checksums with the reference state (plinius-bootcheck.service at boot).
@@ -91,17 +95,37 @@ entry_files() {
 	awk '$1 == "linux" || $1 == "initrd" || $1 == "dtb" || $1 == "logo" { print "abm:/" $2 }'
 }
 
+# The word of the command line that names the card partition this system started from:
+# systempart=, or datapart= alone for a system in rootfs.img on its data partition on the card.
+# Empty for a system on the phone's storage, which names neither.
+own_card_word() {
+	local w sys= data=
+	for w in $(cat /proc/cmdline 2>/dev/null); do
+		case $w in
+		systempart=?*) sys=$w ;;
+		datapart=/dev/mmcblk*) data=$w ;;
+		esac
+	done
+	echo "${sys:-$data}"
+}
+
 # Own entries start the system on the phone's storage: "xpart real" (plinius-kernel's trial and
 # fallback entries) or no xpart at all (real.conf, which starts the active slot). Entries with
-# "xpart N:M" start systems on card partitions and are not judged; db/removed is not read.
+# "xpart N:M" start systems on card partitions and are only judged when this system is one of
+# them: when their command line carries own_card_word. db/removed is not read.
 # Prints "abm:/PATH" for each own entry file and the files it names.
 card_paths() {
-	local e conf xpart
+	local e conf xpart own
+	own=$(own_card_word)
 	while read -r e; do
 		[[ $e == *.conf ]] || continue
 		conf=$(card_cat "/db/entries/$e")
 		xpart=$(awk '$1 == "xpart" { print $2; exit }' <<< "$conf")
-		[[ -z $xpart || $xpart == real ]] || continue
+		if [[ -n $xpart && $xpart != real ]]; then
+			[[ -n $own ]] || continue
+			awk -v w="$own" '$1 == "options" { for (i = 2; i <= NF; i++) if ($i == w) f = 1 }
+				END { exit !f }' <<< "$conf" || continue
+		fi
 		echo "abm:/db/entries/$e"
 		entry_files <<< "$conf"
 	done < <(debugfs -c -R 'ls -p /db/entries' "$card" 2>/dev/null | cut -d/ -f6)

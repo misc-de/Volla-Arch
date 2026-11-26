@@ -221,6 +221,84 @@ def test_entries_for_card_systems_are_left_alone(check):
     code(check.run("check"), 0)
 
 
+def card_system(check, entry="plinius", parts="datapart=/dev/mmcblk0p3", xpart="2:3"):
+    """An Arch on card partitions as Plinius Boot sets it up, next to the others of boot_menu, and the
+    command line of a start from it."""
+    (check.card / entry).mkdir()
+    for f in ("zImage", "initrd.cpio.gz", "dtb.dtb"):
+        (check.card / entry / f).write_bytes(f"{entry}/{f}".encode())
+    options = f"bootopt=64S3,32N2,64N2 androidboot.selinux=permissive rootdelay=10 {parts}"
+    (check.card / f"db/entries/{entry}.conf").write_text(
+        f"title Arch Linux\nlinux {entry}/zImage\ninitrd {entry}/initrd.cpio.gz\ndtb {entry}/dtb.dtb\n"
+        f"options {options}\nxtype UT\nxpart {xpart}\n")
+    (check.root / "proc/cmdline").write_text(options + "\n")
+
+
+OWN_CARD_ENTRY = {"abm:/db/entries/plinius.conf", "abm:/plinius/zImage", "abm:/plinius/initrd.cpio.gz",
+                  "abm:/plinius/dtb.dtb"}
+
+
+@pytest.mark.parametrize("parts", ["datapart=/dev/mmcblk0p3", "systempart=/dev/mmcblk0p2 datapart=/dev/mmcblk0p3"])
+def test_a_card_system_judges_its_own_entry(check, parts):
+    """Its system in rootfs.img on the data partition (datapart= alone) or on a system partition of its own:
+    the entry the start came from is judged, the other card systems still are not."""
+    check.boot_menu()
+    card_system(check, parts=parts)
+    code(check.run("check"), 0)
+    ref = check.reference()
+    assert OWN_CARD_ENTRY <= set(ref) and "abm:/sd/zImage" not in ref
+    (check.card / "sd/zImage").write_bytes(b"new sd kernel")
+    code(check.run("check"), 0)
+    (check.card / "plinius/initrd.cpio.gz").write_bytes(b"prompt that keeps the password")
+    r = code(check.run("check"), 2)
+    assert check.changed() == ["abm:/plinius/initrd.cpio.gz"] and "abm:/plinius/initrd.cpio.gz" in r.stderr
+
+
+def test_a_card_system_on_the_same_data_partition_only_by_the_whole_word(check):
+    """datapart=/dev/mmcblk0p3 is not datapart=/dev/mmcblk0p31, nor a system partition of that name."""
+    check.boot_menu()
+    card_system(check, entry="other", parts="datapart=/dev/mmcblk0p31", xpart="30:31")
+    card_system(check, entry="third", parts="systempart=/dev/mmcblk0p3", xpart="3:4")
+    card_system(check)
+    code(check.run("check"), 0)
+    ref = set(check.reference())
+    assert OWN_CARD_ENTRY <= ref and not any(p.startswith(("abm:/other/", "abm:/third/")) for p in ref)
+
+
+def test_a_new_entry_starting_the_card_system_raises_the_alarm(check):
+    """An entry that starts this system with a kernel and ramdisk of its own, as plinius-kernel-install's
+    trial does: until it is accepted (which plinius-kernel-install does for its own)."""
+    check.boot_menu()
+    card_system(check)
+    code(check.run("check"), 0)
+    (check.card / "evil").mkdir()
+    (check.card / "evil/zImage").write_bytes(b"keylogger")
+    (check.card / "db/entries/plinius-kernel-trial.conf").write_text(
+        "title Arch Linux (trial)\nlinux evil/zImage\ninitrd plinius/initrd.cpio.gz\n"
+        "options bootopt=64S3 datapart=/dev/mmcblk0p3 plinius.kernel=trial\nxpart 2:3\n")
+    code(check.run("check"), 2)
+    assert set(check.changed()) == {"abm:/db/entries/plinius-kernel-trial.conf", "abm:/evil/zImage"}
+    code(check.run("accept", "--written", "abm-entry:plinius-kernel-trial"), 0)
+    assert set(check.changed()) == {"abm:/db/entries/plinius-kernel-trial.conf", "abm:/evil/zImage"}
+    code(check.run("accept", "abm-entry:plinius-kernel-trial"), 0)
+    code(check.run("check"), 0)
+
+
+def test_accept_of_a_rewritten_card_ramdisk(check):
+    """halium-rebuild names the ramdisk it wrote into the card system's entry; on a system on the phone's
+    storage that path is not in the lists, and nothing changes."""
+    check.boot_menu()
+    card_system(check)
+    code(check.run("check"), 0)
+    (check.card / "plinius/initrd.cpio.gz").write_bytes(b"new prompt")
+    code(check.run("accept", "--written", "abm:/plinius/initrd.cpio.gz"), 0)
+    code(check.run("check"), 0)
+    (check.root / "proc/cmdline").write_text("bootopt=64S3,32N2,64N2\n")
+    before = check.reference()
+    r = code(check.run("accept", "--written", "abm:/plinius/initrd.cpio.gz"), 1)
+    assert "not in the lists" in r.stderr and check.reference() == before
+
+
 def test_changed_kernel_of_a_card_entry_raises_the_alarm(check):
     check.boot_menu()
     code(check.run("check"), 0)
