@@ -2,7 +2,7 @@
 
 pkgname=plinius-apps
 pkgver=0.11
-pkgrel=19
+pkgrel=20
 pkgdesc="Plinius app selection: adaptive GNOME/Phosh apps for phone use"
 arch=(any)
 license=(MIT)
@@ -29,6 +29,8 @@ depends=(
 	mobile-config-firefox
 	# Protected Content (DRM): idle until switched on in Settings > Apps > Settings
 	plinius-widevine
+	# The catalog behind Settings > Apps > Web Apps > Add > Search (0.11-20)
+	plinius-webapps
 )
 source=(90-plinius-apps.gschema.override
 	recommended.list
