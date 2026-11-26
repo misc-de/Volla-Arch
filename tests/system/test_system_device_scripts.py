@@ -619,6 +619,8 @@ def test_all_device_shell_scripts_are_covered():
                "plinius-nfc-power", "plinius-polkit-helper", "plinius-udev-reload",
                "plinius-user-sessions-generator", "plinius-wlan", "plinius-prompt.sh",
                "plinius-aliases.sh", "plinius-mobile-firewall", "plinius-hardware-info",
+               # tested in test_system_connectivity.py
+               "plinius-connectivity-set",
                # Only exports of constant variables
                "plinius-hybris.sh"}
     found = set()

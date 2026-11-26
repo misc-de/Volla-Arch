@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The rows "Connection Check" and "Check Server" in GNOME Settings > Privacy > Automatic
+     Connections run pkexec /usr/lib/plinius/plinius-connectivity-set off | on URI RESPONSE. It
+     only turns NetworkManager's connection check off or points it at another server, and takes
+     only a plain http(s) address: no password. -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <action id="org.plinius.connectivity.set">
+    <description>Change NetworkManager's connection check</description>
+    <message>Authentication is required to change the connection check</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/plinius/plinius-connectivity-set</annotate>
+  </action>
+</policyconfig>

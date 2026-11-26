@@ -2,7 +2,7 @@
 
 pkgname=device-volla-ansuz
 pkgver=0.5
-pkgrel=95
+pkgrel=96
 pkgdesc="Device configuration for Volla Phone Plinius (ansuz): binder, Android container, boot chain check, SSH over USB"
 arch=(any)
 license=(MIT)
@@ -130,7 +130,9 @@ source=(
 	73-plinius-seat-late-noacl.rules
 	plinius-dev-acl
 	plinius-dev-acl.service
-	50-plinius-log-level.conf)
+	50-plinius-log-level.conf
+	plinius-connectivity-set
+	org.plinius.connectivity.policy)
 sha256sums=(
 	'ba5e6fb7d0b0fa1b4d69cb3aff66f8a416da2da0948a4b59e8304631d0e6753d'
 	'bb7dbfc5506b9eb4340a4fe8de04443ecf02954a75da7c03cf25faac7e89787f'
@@ -232,7 +234,9 @@ sha256sums=(
 	'884b46efdb8c2d3958c1b02d9bbc53a07f48a219b9cb5c749aff95536527455a'
 	'32ce5f28c5a4c33e474c57fb437ceece7fec905bf5e1773fea6f6e0291de0bd5'
 	'a8dd8c7420c0f1ee953fa478b97d54c2be5e05f3db16a9240395e9380cd0c406'
-	'5f77ea3a6e55fb686e68119602ebe855da2026e1cdefcdad1010c322f56c2839')
+	'5f77ea3a6e55fb686e68119602ebe855da2026e1cdefcdad1010c322f56c2839'
+	'59dd097679ba927c89832c2e43b81f495f917aaa8103c4632fcd8f1371a58b74'
+	'a26c066cf7290c1a4fdf37e01c5a43062d74610680b4a27f7c28657c0146f196')
 
 package() {
 	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
@@ -331,6 +335,10 @@ package() {
 	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
 	ln -s ../plinius-wlan.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
 	install -Dm644 50-plinius-nm.conf -t "$pkgdir/usr/lib/NetworkManager/conf.d"
+	# NetworkManager's connection check off or with another server, from Settings > Privacy >
+	# Automatic Connections (pkexec, no password; writes /etc/NetworkManager/conf.d)
+	install -Dm755 plinius-connectivity-set -t "$pkgdir/usr/lib/plinius"
+	install -Dm644 org.plinius.connectivity.policy -t "$pkgdir/usr/share/polkit-1/actions"
 	# Mobile data on a new phone at once: the first access point of a SIM from oFono's context
 	install -Dm755 plinius-mobile-data -t "$pkgdir/usr/lib/plinius"
 	install -Dm644 plinius-mobile-data.service -t "$pkgdir/usr/lib/systemd/system"

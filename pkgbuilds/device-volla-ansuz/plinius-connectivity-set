@@ -1,0 +1,63 @@
+#!/bin/bash
+# plinius-connectivity-set off | on URI RESPONSE: NetworkManager's connection check, the rows
+# "Connection Check" and "Check Server" in GNOME Settings > Privacy > Automatic Connections, run
+# through pkexec (org.plinius.connectivity.policy, no password).
+#
+# NetworkManager asks URI every few minutes and compares the start of the answer with RESPONSE;
+# that is how it finds Wi-Fi networks with a login page. An empty RESPONSE expects an empty
+# answer (HTTP 204). Writes /etc/NetworkManager/conf.d/90-plinius-connectivity.conf, which comes
+# after Arch's 20-connectivity.conf (http://ping.archlinux.org/nm-check.txt, what applies without
+# this file), and has NetworkManager read its configuration again. Only a plain http(s) address
+# and a short answer of letters, digits and a few signs are taken, so nothing else can get into
+# NetworkManager's configuration.
+#
+# Exit status: 0 written, 2 usage error, 3 address or answer refused.
+#
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+
+CONF=/etc/NetworkManager/conf.d/90-plinius-connectivity.conf
+
+usage() {
+	echo "usage: plinius-connectivity-set off | on URI RESPONSE" >&2
+	exit 2
+}
+
+refuse() {
+	echo "plinius-connectivity-set: $*" >&2
+	exit 3
+}
+
+# http or https, a host name or IPv4 address (a trailing dot allowed), an optional port and path
+URI_RE='^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9.])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/%-]*)?$'
+# Words of letters, digits and . , : ! ? _ - with single spaces between them, or nothing
+RESPONSE_RE='^([A-Za-z0-9.,:!?_-]+( [A-Za-z0-9.,:!?_-]+)*)?$'
+
+case ${1:-} in
+	off)
+		(($# == 1)) || usage
+		body=$'[connectivity]\nenabled=false\n'
+		;;
+	on)
+		(($# == 3)) || usage
+		uri=$2 response=$3
+		[[ ${#uri} -le 200 && $uri =~ $URI_RE ]] || refuse "not an http or https address: $uri"
+		[[ ${#response} -le 100 && $response =~ $RESPONSE_RE ]] || refuse "not a plain answer: $response"
+		body=$'[connectivity]\nenabled=true\nuri='"$uri"$'\nresponse='"$response"$'\n'
+		;;
+	*) usage ;;
+esac
+
+# Written anew next to it and renamed over it: never half a file, never through a link at the path
+mkdir -p "${CONF%/*}"
+tmp=$(mktemp "$CONF.XXXXXX")
+trap 'rm -f -- "$tmp"' EXIT
+printf '# Written by plinius-connectivity-set (GNOME Settings > Privacy > Automatic Connections)\n%s' \
+	"$body" >"$tmp"
+chmod 644 "$tmp"
+mv -f -- "$tmp" "$CONF"
+trap - EXIT
+
+# NetworkManager takes a changed connection check on reload; when it does not run, it reads the
+# file at its next start
+nmcli general reload conf >/dev/null 2>&1 || true
