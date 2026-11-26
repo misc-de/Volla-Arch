@@ -191,6 +191,53 @@ for everyone. Here is what that means today.
 
 The full status is on the technical page under [State](TECHNICAL.md#state).
 
+<sub><b>FAQ</b></sub>
+
+## Questions and answers
+
+<details>
+<summary><b>Are there enough apps?</b></summary>
+
+By now there is a good choice of useful apps made for phones, yet next to the established platforms
+their number is still small. **Settings › Apps › Explore** shows for each app whether it fits the
+screen. Flathub adds several hundred more apps; switch it on under **Settings › Apps › Settings**.
+
+Many service providers offer no app for Linux at all, and that can get in the way. Their website
+often does the same job: under **Settings › Apps › Web Apps** any website becomes an app with its
+own icon, without the browser's bars and with a profile of its own. That closes much of the gap.
+
+</details>
+
+<details>
+<summary><b>Why does the GPS take a while to find my position?</b></summary>
+
+Plinius finds your position by satellite alone; it never asks a server about the Wi-Fi networks and
+cell towers around you. For a position the GPS needs at least four satellites and must know their
+orbits. Without that knowledge it reads the orbits from the satellites' own signals, which takes up
+to about a minute.
+
+MediaTek, the maker of the phone's chip, offers predicted orbits for download. With them the GPS
+finds the position within seconds. Each download shows MediaTek your IP address, so it is off on a
+new phone. Switch it on under **Settings › Privacy & Security › Location › Faster GPS Fix**: it
+loads about 80&nbsp;KB every 6 hours and sends nothing about the phone.
+
+</details>
+
+<details>
+<summary><b>Why does my phone list security vulnerabilities?</b></summary>
+
+Most phones only show the date of their last security update. Plinius names every known
+vulnerability in the installed software and in the kernel, under **Settings › Privacy & Security ›
+Device Security › Known Vulnerabilities**, each with a link to its description. The list is updated
+every day, and each vulnerability we have looked into carries our assessment, such as “Fixed here”
+or “Mitigated”.
+
+Once a vulnerability becomes known, a fix is usually under way and soon reaches the phone with the
+next updates. Until then you know what is open and can deal with it deliberately. This openness
+takes you seriously: it is your phone, so you get to know its weak spots too.
+
+</details>
+
 <sub><b>THE IMAGE</b></sub>
 
 ## Get Plinius
