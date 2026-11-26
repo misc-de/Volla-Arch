@@ -1434,3 +1434,21 @@ def test_check_updates_on_the_command_line_tells_nothing_twice(program):
     assert r.returncode == 0, r.stderr
     assert (state / "notified").read_text() == "glibc 2.44-1"
     assert not (state / "held-notified").exists()  # the hold is over
+
+
+def test_update_check_runs_every_four_hours_and_catches_up():
+    # Daily was too rare: updates should be reported within hours of their release.
+    timer = (PKG / "plinius-software" / "plinius-software-check.timer").read_text()
+    section = timer.split("[Timer]", 1)[1].split("[", 1)[0]
+    keys = dict(line.split("=", 1) for line in section.split() if "=" in line)
+    assert keys["OnCalendar"] == "00/4:00"
+    # a start or a wake-up after a missed run checks soon, without waiting for the next slot
+    assert keys["Persistent"] == "true" and keys["OnBootSec"] == "15min"
+    # spread over less than the interval, so a check still comes every 4 hours
+    assert keys["RandomizedDelaySec"] == "30min"
+    if shutil.which("systemd-analyze"):
+        out = subprocess.run(["systemd-analyze", "calendar", "--iterations=6", keys["OnCalendar"]],
+                             capture_output=True, text=True, check=True).stdout
+        hours = [line.split()[-2][:2] for line in out.splitlines()
+                 if "elapse:" in line or "Iteration" in line]
+        assert sorted(set(hours)) == ["00", "04", "08", "12", "16", "20"]

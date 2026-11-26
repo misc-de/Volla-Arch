@@ -1,12 +1,12 @@
-# Daily update check for plinius-software (user timer, enabled for all users by the package).
-# Runs plinius-software-check.service, which notifies once about a new set of updates.
+# Update check for plinius-software every 4 hours (user timer, enabled for all users by the
+# package). Runs plinius-software-check.service, which notifies once about a new set of updates.
 [Unit]
-Description=Check for system updates daily
+Description=Check for system updates every 4 hours
 
 [Timer]
 OnBootSec=15min
-OnCalendar=daily
-RandomizedDelaySec=1h
+OnCalendar=00/4:00
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
