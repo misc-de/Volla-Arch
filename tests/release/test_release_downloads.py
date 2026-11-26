@@ -17,6 +17,7 @@ import tarfile
 import pytest
 
 from conftest import TOOLS
+from release_sim import avb_partition, boot_img, kernel_blob
 
 pytestmark = pytest.mark.skipif(not (shutil.which("mkfs.ext4") and shutil.which("debugfs")),
                                 reason="e2fsprogs missing")
@@ -63,7 +64,29 @@ def good_tree(root):
         (root / path).write_text(text)
     (root / "var/cache/pacman/pkg").mkdir(parents=True)
     (root / "root/.ssh").mkdir(mode=0o700)
+    kernel(root, KREL)
+    share = root / "usr/share/plinius-boot"
+    (share / "zImage").write_bytes(kernel_blob(KREL))
+    (share / "boot.img").write_bytes(avb_partition(boot_img(KREL), 256 * 1024, 160 * 1024))
+    # The fallback as image/mkimage.sh keeps it
+    kept = root / "var/lib/plinius-kernel/kept" / OLDREL
+    (kept / "modules").mkdir(parents=True)
+    for name in ("boot.img", "Image.gz", "system_dlkm.img", "modules/plinius-backlight.ko"):
+        (kept / name).write_bytes(b"x")
+    (root / "var/lib/plinius-kernel/previous").write_text(OLDREL + "\n")
     return root
+
+
+KREL, OLDREL = "6.1.193-plinius103", "6.1.192-plinius23"
+
+
+def kernel(root, rel):
+    """The files of plinius-kernel's release rel in the image."""
+    d = root / "usr/lib/plinius/kernel" / rel
+    d.mkdir(parents=True)
+    (d / "boot.img").write_bytes(boot_img(KREL))
+    (d / "Image.gz").write_bytes(kernel_blob(KREL))
+    (d / "system_dlkm.img").write_bytes(b"erofs")
 
 
 def make_image(tree, out, size="96M"):
@@ -119,7 +142,7 @@ def test_a_clean_image_passes_every_check(tmp_path, volla, fake_bin):
     r = check(volla, fake_bin, make_image(good_tree(tmp_path / "t"), tmp_path / "a.img"))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "FAIL" not in r.stdout
-    assert r.stdout.count("ok: ") == 34
+    assert r.stdout.count("ok: ") == 36
     assert "can be offered for download" in r.stderr
 
 
@@ -210,6 +233,39 @@ def spoil_kernel(t):
     (t / "usr/share/plinius-boot/zImage").write_text("another kernel")
 
 
+def spoil_boot_kernel(t):
+    (t / "usr/share/plinius-boot/boot.img").write_bytes(
+        avb_partition(boot_img("6.1.145-g8bd3c12ba5c3"), 256 * 1024, 160 * 1024))
+
+
+def spoil_boot_avb(t):
+    # The kernel is there, but the hash descriptor still describes another image
+    part = bytearray(avb_partition(boot_img("6.1.145-g8bd3c12ba5c3"), 256 * 1024, 160 * 1024))
+    img = boot_img(KREL)
+    part[:len(img)] = img
+    (t / "usr/share/plinius-boot/boot.img").write_bytes(bytes(part))
+
+
+def spoil_boot_no_footer(t):
+    (t / "usr/share/plinius-boot/boot.img").write_bytes(boot_img(KREL))
+
+
+def spoil_two_kernels(t):
+    kernel(t, "6.1.194-plinius1")
+
+
+def spoil_no_fallback(t):
+    (t / "var/lib/plinius-kernel/previous").unlink()
+
+
+def spoil_fallback_files(t):
+    shutil.rmtree(t / "var/lib/plinius-kernel/kept" / OLDREL / "modules")
+
+
+def spoil_fallback_is_the_kernel(t):
+    (t / "var/lib/plinius-kernel/previous").write_text(KREL + "\n")
+
+
 def spoil_no_prompt(t):
     (t / "usr/share/plinius-boot/init_boot.img").unlink()
 
@@ -234,7 +290,14 @@ def spoil_no_prompt(t):
     (spoil_pins, "vendor.sha256 names vendor.img"),
     (spoil_no_pins, "vendor.sha256 names vendor.img"),
     (spoil_android, "system_dlkm.img as pinned"),
-    (spoil_kernel, "zImage as pinned"),
+    (spoil_kernel, "zImage is the kernel of plinius-kernel"),
+    (spoil_boot_kernel, "boot.img holds the kernel of plinius-kernel"),
+    (spoil_boot_avb, "boot.img holds the kernel of plinius-kernel"),
+    (spoil_boot_no_footer, "boot.img holds the kernel of plinius-kernel"),
+    (spoil_two_kernels, "one release of plinius-kernel installed"),
+    (spoil_no_fallback, "an older plinius-kernel kept as the fallback"),
+    (spoil_fallback_files, "an older plinius-kernel kept as the fallback"),
+    (spoil_fallback_is_the_kernel, "an older plinius-kernel kept as the fallback"),
     (spoil_no_prompt, "init_boot.img with the password prompt"),
 ], ids=lambda v: v.__name__ if callable(v) else None)
 def test_an_image_with_a_flaw_is_refused(tmp_path, volla, fake_bin, spoil, line):

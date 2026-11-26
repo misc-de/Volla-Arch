@@ -17,7 +17,6 @@ active sshd.service
 fails mount-android-system.service                  # Android's system image (loop device on the phone's data)
 fails android-set-boot-completion-property.service  # the Android container (bionic libc, libcutils)
 fails plinius-bootcheck.service                     # androidboot.slot_suffix from the phone's bootloader
-fails plinius-kernel-boot.service                   # the phone's boot partitions or boot menu card (first start: its kernel)
 fails plinius-gpu.service                           # the Mali GPU's /sys/kernel/ged
 # The generic kernel 7.x refuses a helper of its cgroup device program (-EINVAL); the phone's 6.1
 # loads it. A newer phone kernel would need the program changed.

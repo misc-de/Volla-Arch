@@ -199,7 +199,12 @@ your SSH key in for root, and `-r` keeps the phone receiving updates from the re
 goes into the image only as a yescrypt hash, as every password set on the phone, and never on a
 command line; the image is readable only by its builder. Plinius Boot writes the image to a microSD
 card or to the internal storage. The image carries what a start needs: Android images, kernel,
-ramdisk and the boot images. `tools/ut-build.sha256` pins every file of the UT build; `ut-fetch.sh`,
+ramdisk and the boot images. A new system starts with the kernel of `plinius-kernel`, not UT's
+6.1.145: `mkimage.sh` puts its `boot.img` into UT's boot partition content with the AVB data
+moved behind it (`plinius-kernel-avb`) and its `Image.gz` into the boot entry. The older
+`plinius-kernel` pinned in `image/fallback-kernel.sha256` (6.1.192) is kept in the image as the
+fallback; at the first start `plinius-kernel-install` gives it its boot image and boot menu
+entry. `tools/ut-build.sha256` pins every file of the UT build; `ut-fetch.sh`,
 `tools/boot-files.sh` and `mkimage.sh` refuse a file that differs, a download or one already
 there. `tools/boot-files.sh` also checks kernel and ramdisks against `tools/boot-files.sha256`,
 because `plinius-kmod` is built for exactly that kernel. `tools/repo-fetch.sh` takes a channel only
@@ -215,8 +220,9 @@ them from Volla OS on the phone (the active slot in `super`) and notes, without 
 differ from the pins in `/usr/share/plinius-boot/vendor.sha256`. `tools/image-check.sh` reads the
 image with `debugfs` and refuses anything of the builder (SSH keys, host keys, machine-id, pacman
 keyring, package cache, shell history, a password), the two vendor images, and anything missing
-(`[plinius]` signed over https, `plinius-keyring`, the pinned Android and boot files, the pins of
-the vendor images and room for them, the first-start PIN). Then `image/test-image.sh` boots the
+(`[plinius]` signed over https, `plinius-keyring`, the pinned Android and boot files, the kernel
+of `plinius-kernel` in `zImage` and in `boot.img` with valid AVB data, the kept fallback kernel,
+the pins of the vendor images and room for them, the first-start PIN). Then `image/test-image.sh` boots the
 image itself in QEMU (snapshot, the image stays unchanged) with ALARM's generic kernel and its
 modules, up to `graphical.target`: every unit that fails or keeps restarting and is not named in
 `image/test-image.expected` as one that needs the phone (Android container, GPU, charger,
@@ -361,6 +367,6 @@ Settings, GPL-2.0-or-later). The licenses of each package are recorded in its `P
 | What | Origin | License |
 |---|---|---|
 | Base system and desktop (wlroots0.20, PipeWire, libgbinder, lxc, ModemManager, Firefox, GNOME apps, …) | [Arch Linux ARM](https://archlinuxarm.org) packages | per package |
-| UT's kernel 6.1.145 (`android14-6.1-halium`), fallback until `plinius-kernel` has started once, and in the rescue system | [UBports kernel-android-common](https://gitlab.com/ubports/porting/community-ports/android12/generic/kernel-android-common) | GPL-2.0-only |
+| UT's kernel 6.1.145 (`android14-6.1-halium`), the base of `plinius-kernel`, and in the rescue system | [UBports kernel-android-common](https://gitlab.com/ubports/porting/community-ports/android12/generic/kernel-android-common) | GPL-2.0-only |
 | Halium ramdisk, overlays | [UT reference port volla-ansuz](https://gitlab.com/ubports/porting/reference-device-ports/halium-14/volla-phone-plinius/volla-ansuz) | per file in that repository |
 | Android vendor image and firmware (`vendor`, `vendor_dlkm`) | from a UT build of the port, not part of this repository and not redistributed: the image for download leaves them out, Plinius Boot copies them from Volla OS on the phone | proprietary (Volla/MediaTek) |

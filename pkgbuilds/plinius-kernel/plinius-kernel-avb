@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Puts a boot image into the content of a boot partition with its AVB data kept valid.
+
+Usage: plinius-kernel-avb IMAGE PARTITION OUT [KEEP]
+
+lk reads the vbmeta block named by the AVB footer (last 64 bytes of the partition) on every start,
+card entries included, and loads nothing if it is gone: on 09.11.2026 6.1.192-5's boot.img
+(15,151,104 bytes) reached over the block at 15,147,008, every start ended in
+"ASSERT g_boot_info.hdr_loaded". So the block moves behind the image (4 KiB aligned), its hash
+descriptor gets the image's size and digest, the footer points to it. OUT is the whole new
+partition content, as large as PARTITION (a partition or a file holding one, such as UT's boot.img).
+
+KEEP: where a valid vbmeta block is kept, and taken from when the one in PARTITION is broken;
+without one, nothing is written. A partition without a footer gets the image alone.
+
+Used by plinius-kernel-install (write_boot, the fallback of a new system) and image/mkimage.sh
+(the image's boot.img).
+"""
+import hashlib
+import os
+import struct
+import sys
+
+
+def main(argv):
+    if len(argv) not in (3, 4):
+        sys.exit(__doc__.split("\n\n")[1])
+    img_path, part_path, out_path = argv[:3]
+    keep_path = argv[3] if len(argv) == 4 else None
+    img = open(img_path, 'rb').read()
+    with open(part_path, 'rb') as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(size - 64)
+        footer = f.read(64)
+        if footer[:4] != b'AVBf':
+            open(out_path, 'wb').write(img)
+            print(f'{part_path}: no AVB footer, the image goes in alone', file=sys.stderr)
+            return
+        major, minor, _, voff, vsize = struct.unpack_from('>IIQQQ', footer, 4)
+        f.seek(voff)
+        vbmeta = bytearray(f.read(vsize))
+    if vbmeta[:4] == b'AVB0':
+        if keep_path:
+            open(keep_path + '.new', 'wb').write(vbmeta)
+            os.replace(keep_path + '.new', keep_path)
+    elif keep_path and os.path.exists(keep_path):
+        vbmeta = bytearray(open(keep_path, 'rb').read())
+        vsize = len(vbmeta)
+        print(f'{part_path}: vbmeta at {voff} is broken, the kept copy is used', file=sys.stderr)
+    else:
+        sys.exit(f'{part_path}: no valid vbmeta at {voff} and no kept copy')
+    # vbmeta header (big endian, avb_vbmeta_image.h): auth block, aux block with the descriptors
+    auth_size, aux_size = struct.unpack_from('>QQ', vbmeta, 12)
+    desc_off, desc_size = struct.unpack_from('>QQ', vbmeta, 96)
+    p = 256 + auth_size + desc_off
+    end = p + desc_size
+    hashes = 0
+    while p < end:
+        tag, following = struct.unpack_from('>QQ', vbmeta, p)
+        if tag == 2:  # hash descriptor
+            algorithm = vbmeta[p + 24:p + 56].split(b'\0')[0].decode()
+            name_len, salt_len, digest_len = struct.unpack_from('>III', vbmeta, p + 56)
+            q = p + 132 + name_len
+            salt = bytes(vbmeta[q:q + salt_len])
+            digest = hashlib.new(algorithm, salt + img).digest()
+            if len(digest) != digest_len:
+                sys.exit(f'{part_path}: hash descriptor has an unexpected digest length')
+            struct.pack_into('>Q', vbmeta, p + 16, len(img))
+            vbmeta[q + salt_len:q + salt_len + digest_len] = digest
+            hashes += 1
+        p += 16 + following
+    if hashes != 1:
+        sys.exit(f'{part_path}: vbmeta has {hashes} hash descriptors instead of one')
+    new_off = (len(img) + 4095) // 4096 * 4096
+    if new_off + vsize > size - 64:
+        sys.exit(f'{img_path}: image and vbmeta do not fit into {part_path}')
+    out = bytearray(size)
+    out[:len(img)] = img
+    out[new_off:new_off + vsize] = vbmeta
+    out[-64:] = footer
+    struct.pack_into('>QQQ', out, size - 64 + 12, len(img), new_off, vsize)
+    open(out_path, 'wb').write(out)
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

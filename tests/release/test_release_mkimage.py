@@ -241,3 +241,132 @@ def test_mkimage_vendor_from_the_phone_goes_on_with_the_ut_build(tree, fake_bin)
     r = mkimage(tree, fake_bin, "-V", "-a", str(ut / "android" / "android-rootfs.img"))
     assert "UT files as pinned in tools/ut-build.sha256" in r.stderr
     assert r.returncode != 0 and "build chroot missing" in r.stderr
+
+
+# --- the kernel of the image and its fallback ---------------------------------------------------
+
+from release_sim import avb_partition, boot_img, kernel_blob, read_avb  # noqa: E402
+
+KREL, OLDREL = "6.1.193-plinius103", "6.1.192-plinius23"
+UT_PART = 256 * 1024
+
+
+def kernel_package(path, rel):
+    """A plinius-kernel package with the files image_kernel takes from it."""
+    src = path.parent / f"src-{rel}"
+    d = src / "usr/lib/plinius/kernel" / rel
+    d.mkdir(parents=True)
+    (d / "boot.img").write_bytes(boot_img(rel))
+    (d / "Image.gz").write_bytes(kernel_blob(rel))
+    (src / "usr/lib/plinius/kernel/plinius-kernel-install").write_text("#!/bin/bash\n")
+    (src / "usr/lib/plinius/modules" / rel).mkdir(parents=True)
+    subprocess.run(["bsdtar", "--zstd", "-cf", str(path), "-C", str(src), "usr"], check=True)
+    return path
+
+
+def local_repo(repo, entries):
+    """plinius-local.db.tar.gz naming (name, file) pairs, as repo-add writes desc."""
+    import io
+    import tarfile
+    repo.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(repo / "plinius-local.db.tar.gz", "w:gz") as t:
+        for name, file in entries:
+            data = f"%FILENAME%\n{file}\n\n%NAME%\n{name}\n\n%VERSION%\n1-1\n\n".encode()
+            info = tarfile.TarInfo(f"{name}-1-1/desc")
+            info.size = len(data)
+            t.addfile(info, io.BytesIO(data))
+
+
+@pytest.fixture
+def kernel_tree(tmp_path):
+    root = tmp_path / "volla"
+    (root / "image").mkdir(parents=True)
+    repo = tmp_path / "repo"
+    kfile = "plinius-kernel-6.1.193-103-aarch64.pkg.tar.zst"
+    ofile = "plinius-kernel-6.1.192-23-aarch64.pkg.tar.zst"
+    local_repo(repo, [("plinius-kernel-tools", "other.pkg.tar.zst"), ("plinius-kernel", kfile)])
+    kernel_package(repo / kfile, KREL)
+    old = kernel_package(repo / ofile, OLDREL)
+    (root / "image" / "fallback-kernel.sha256").write_text(
+        f"# pin\n{hashlib.sha256(old.read_bytes()).hexdigest()}  {ofile}\n")
+    files = tmp_path / "boot-files"
+    files.mkdir()
+    ut = avb_partition(boot_img("6.1.145-g8bd3c12ba5c3"), UT_PART, 160 * 1024)
+    (files / "boot.img").write_bytes(ut)
+    (files / "zImage").write_bytes(b"UT kernel")
+    work = tmp_path / "work"
+    work.mkdir()
+    return root, repo, files, work, old
+
+
+def image_kernel(kernel_tree, fake_bin):
+    root, repo, files, work, _ = kernel_tree
+    script = (f'set -euo pipefail\n. "{TOOLS / "lib.sh"}"\n'
+              f'LOCALREPO="{repo}" VOLLA_DIR="{root}" PKGBUILDS="{REPO / "pkgbuilds"}"\n'
+              + bash_functions(MKIMAGE, "db_file", "fallback_kernel", "image_kernel")
+              + f'image_kernel "{files}" "{work}"\n')
+    # bsdtar (libarchive) is no basic tool of the isolated PATH
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=fake_bin.env())
+
+
+def test_image_kernel_puts_the_package_kernel_into_the_boot_files(kernel_tree, fake_bin):
+    _, _, files, work, old = kernel_tree
+    r = image_kernel(kernel_tree, fake_bin)
+    assert r.returncode == 0, r.stderr
+    part = (files / "boot.img").read_bytes()
+    img = boot_img(KREL)
+    # boot.img: the package's kernel inside UT's partition content, its AVB data valid
+    assert len(part) == UT_PART and part[:len(img)] == img
+    avb = read_avb(part)
+    assert avb["desc_size"] == len(img)
+    assert avb["digest"] == hashlib.sha256(avb["salt"] + img).digest()
+    assert (files / "zImage").read_bytes() == kernel_blob(KREL)
+    assert not (work / "boot.img.new").exists()
+    assert f"Kernel of the image: {KREL}" in r.stderr
+    assert (work / "fallback-kernel.pkg").resolve() == old.resolve()
+    assert f"Fallback kernel: {old.name}" in r.stderr
+
+
+def test_image_kernel_goes_without_the_fallback_package(kernel_tree, fake_bin):
+    _, _, files, work, old = kernel_tree
+    old.unlink()
+    r = image_kernel(kernel_tree, fake_bin)
+    assert r.returncode == 0, r.stderr
+    assert f"Note: no fallback kernel ({old.name} is not in" in r.stderr
+    assert not (work / "fallback-kernel.pkg").exists()
+    assert (files / "zImage").read_bytes() == kernel_blob(KREL)
+
+
+def test_image_kernel_refuses_a_fallback_that_differs(kernel_tree, fake_bin):
+    _, _, files, _, old = kernel_tree
+    old.write_bytes(b"from a server in other hands")
+    r = image_kernel(kernel_tree, fake_bin)
+    assert r.returncode != 0
+    assert "is not the fallback kernel pinned in image/fallback-kernel.sha256" in r.stderr
+
+
+def test_image_kernel_needs_the_kernel_package(kernel_tree, fake_bin):
+    _, repo, files, _, _ = kernel_tree
+    local_repo(repo, [("plinius-kernel-tools", "other.pkg.tar.zst")])
+    r = image_kernel(kernel_tree, fake_bin)
+    assert r.returncode != 0 and "plinius-kernel missing in" in r.stderr
+    assert (files / "zImage").read_bytes() == b"UT kernel"
+
+
+def test_image_kernel_stops_when_the_kernel_does_not_fit(kernel_tree, fake_bin):
+    _, _, files, _, _ = kernel_tree
+    # A boot partition far too small for the kernel and the vbmeta block
+    (files / "boot.img").write_bytes(avb_partition(b"x" * 100, 8 * 1024, 4 * 1024))
+    r = image_kernel(kernel_tree, fake_bin)
+    assert r.returncode != 0 and "does not fit into UT's boot.img" in r.stderr
+
+
+def test_the_build_keeps_the_fallback_as_plinius_kernel_install_does():
+    # What cannot run here: the namespace part that puts the fallback into the image
+    text = MKIMAGE.read_text()
+    part = text[text.index('if [[ -e $work/fallback-kernel.pkg ]]; then'):]
+    part = part[:part.index("\n\tfi\n")]
+    assert 'cp -r "$d" "$t/var/lib/plinius-kernel/kept/$rel"' in part
+    assert '"$t/var/lib/plinius-kernel/kept/$rel/modules"' in part
+    assert 'echo "$rel" > "$t/var/lib/plinius-kernel/previous"' in part
+    assert "'" not in part, "inside the single-quoted script of ns_run"

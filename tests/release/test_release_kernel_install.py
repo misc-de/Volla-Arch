@@ -18,6 +18,7 @@ from release_sim import (DEBUGFS, avb_partition, boot_img, card_list, copy_scrip
                          write_last_index)
 
 SRC = PKG / "plinius-kernel" / "plinius-kernel-install"
+AVB = PKG / "plinius-kernel" / "plinius-kernel-avb"
 
 ORIG = "6.1.145-g8bd3c12ba5c3"  # UT's kernel, in boot_b before the first update
 NEW = "6.1.192-plinius17"
@@ -60,6 +61,7 @@ class Phone:
                   self.root / "var/lib/lxc/android", self.root / "sys/fs/pstore"):
             d.mkdir(parents=True, exist_ok=True)
         self.script = copy_script(SRC, tmp_path / "plinius-kernel-install", MAPPING, self.root)
+        shutil.copy(AVB, self.lib / "plinius-kernel-avb")
         self.functions = copy_script(SRC, tmp_path / "kernel-functions.sh", MAPPING, self.root,
                                      cut="\ncase ${1:-} in")
         self.bootconfig('_b')
@@ -109,6 +111,18 @@ esac''')
         (d / "system_dlkm.img").write_bytes(b"erofs " + rel.encode())
         (self.kmods / rel).mkdir(parents=True, exist_ok=True)
         (self.kmods / rel / "plinius-backlight.ko").write_bytes(b"ko " + rel.encode())
+        return d
+
+    def kept(self, rel):
+        """A fallback as image/mkimage.sh puts it into a new system: the release's files kept,
+        named as previous."""
+        d = self.state / "kept" / rel
+        (d / "modules").mkdir(parents=True, exist_ok=True)
+        (d / "boot.img").write_bytes(boot_img(rel))
+        (d / "Image.gz").write_bytes(kernel_blob(rel))
+        (d / "system_dlkm.img").write_bytes(b"erofs " + rel.encode())
+        (d / "modules/plinius-backlight.ko").write_bytes(b"ko " + rel.encode())
+        (self.state / "previous").write_text(rel + "\n")
         return d
 
     def boot_menu(self, extra=()):
@@ -904,6 +918,170 @@ def test_first_start_does_nothing_once_a_kernel_is_installed_or_failed(phone):
     (phone.state / "installed").write_text(ORIG + "\n")
     ok(phone.run("boot"))
     assert phone.boot() == before
+
+
+# --- a new system from the image: the package's kernel runs, an older one is the fallback -------
+
+OLDER = "6.1.192-plinius23"
+
+
+def test_first_start_with_the_image_kernel_sets_up_the_kept_fallback(phone):
+    phone.package(NEW)
+    phone.kept(OLDER)
+    # Plinius Boot wrote the image's boot.img: the package's kernel inside UT's AVB data
+    (phone.parts / "boot_b").write_bytes(avb_partition(boot_img(NEW), PART_SIZE, VB_OFF))
+    before = phone.boot()
+    r = ok(phone.run("boot", uname=NEW))
+    assert phone.get("installed") == NEW and phone.get("previous") == OLDER
+    assert phone.boot() == before
+    assert (phone.state / "boot-orig.img").read_bytes() == before
+    # The fallback image: the older kernel inside this partition's AVB data, valid hash included
+    prev = (phone.state / "boot-previous.img").read_bytes()
+    old_img = boot_img(OLDER)
+    assert len(prev) == PART_SIZE and prev[:len(old_img)] == old_img
+    avb = read_avb(prev)
+    import hashlib
+    assert avb["desc_size"] == len(old_img)
+    assert avb["digest"] == hashlib.sha256(avb["salt"] + old_img).digest()
+    assert (phone.state / "boot-vbmeta.bin").read_bytes()[:4] == b"AVB0"
+    assert not (phone.state / "boot-previous.img.new").exists()
+    assert f"fallback: kernel {OLDER}" in r.stdout
+    # restore starts it, and its modules come from the kept copy
+    ok(phone.run("restore", uname=NEW))
+    assert phone.boot() == prev and phone.get("installed") == OLDER
+    ok(phone.run("dlkm", uname=OLDER))
+    assert str(phone.state / "kept" / OLDER / "system_dlkm.img") in phone.fake_bin.calls("mount")[0]
+    # keep leaves the fallback alone
+    ok(phone.run("keep", uname=OLDER))
+    assert (phone.state / "kept" / OLDER / "boot.img").read_bytes() == old_img
+
+
+def test_first_start_with_the_image_kernel_and_the_boot_menu(phone, tmp_path):
+    need_inode_order(tmp_path)
+    phone.package(NEW)
+    phone.kept(OLDER)
+    phone.boot_menu()
+    ok(phone.run("boot", uname=NEW))
+    assert card_list(phone.card) == ["real.conf", "plinius-previous.conf"]
+    assert last_index(phone.card) == 0
+    conf = entry(phone, "plinius-previous")
+    assert f"title Arch Linux (previous kernel {OLDER})" in conf
+    assert "plinius.kernel=previous" in conf
+    assert (phone.card / "plinius-previous/zImage").read_bytes() == kernel_blob(OLDER)
+    assert phone.accepted() == [["accept", "--written", "abm-entry:plinius-previous"]]
+    # A fallback entry already there stays as it is
+    (phone.card / "plinius-previous/zImage").write_bytes(b"other")
+    (phone.state / "installed").unlink()
+    ok(phone.run("boot", uname=NEW))
+    assert (phone.card / "plinius-previous/zImage").read_bytes() == b"other"
+    assert len(phone.accepted()) == 1
+
+
+def test_first_start_on_a_card_system_with_the_image_kernel(phone, tmp_path):
+    need_inode_order(tmp_path)
+    phone.package(NEW)
+    phone.kept(OLDER)
+    own = phone.card_system(kernel=NEW)
+    write_last_index(phone.card, 1)  # Plinius Boot starts the system's own entry
+    base = entry(phone, "plinius").split("options ", 1)[1].split("\n")[0]
+    r = ok(phone.run("boot", uname=NEW))
+    assert phone.get("installed") == NEW and phone.get("entry") == "plinius"
+    assert card_list(phone.card)[:2] == ["real.conf", "plinius.conf"]
+    assert "plinius-kernel-previous.conf" in card_list(phone.card)
+    assert card_list(phone.card)[last_index(phone.card)] == "plinius.conf"
+    conf = entry(phone, "plinius-kernel-previous")
+    assert f"title Arch Linux (SD) (previous kernel {OLDER})\n" in conf
+    assert "linux plinius-kernel-previous/zImage\n" in conf
+    assert f"options {base} plinius.kernel=previous\n" in conf
+    assert "initrd plinius/initrd.cpio.gz\n" in conf
+    assert (phone.card / "plinius-kernel-previous/zImage").read_bytes() == kernel_blob(OLDER)
+    assert (own / "zImage").read_bytes() == kernel_blob(NEW)
+    assert not (phone.state / "boot-previous.img").exists()
+    assert "plinius-kernel-previous" in r.stdout
+    # restore puts the fallback into the system's entry
+    ok(phone.run("restore", uname=NEW))
+    assert (own / "zImage").read_bytes() == kernel_blob(OLDER)
+    # Once there, the fallback entry is not written again
+    (phone.card / "plinius-kernel-previous/zImage").write_bytes(b"other")
+    ok(phone.call("first_fallback"))
+    assert (phone.card / "plinius-kernel-previous/zImage").read_bytes() == b"other"
+
+
+def test_first_start_on_a_card_system_without_the_boot_menu_stops(phone):
+    phone.package(NEW)
+    phone.kept(OLDER)
+    phone.cmdline("systempart=/dev/mmcblk0p2")
+    r = fails(phone.run("boot", uname=NEW))
+    assert "boot menu is missing" in r.stderr
+
+
+def test_first_start_without_a_kept_fallback_only_records_the_kernel(phone):
+    phone.package(NEW)
+    # Named as previous, but its files are not there
+    phone.state.mkdir(parents=True)
+    (phone.state / "previous").write_text(OLDER + "\n")
+    ok(phone.run("boot", uname=NEW))
+    assert phone.get("installed") == NEW
+    assert not (phone.state / "boot-previous.img").exists()
+
+
+def test_first_start_with_an_image_fallback_but_another_kernel_running(phone):
+    # A system that started with UT's kernel all the same: the package's kernel is set up as an
+    # update, the kernel that ran becomes the fallback
+    phone.package(NEW)
+    phone.kept(OLDER)
+    ok(phone.run("boot", uname=ORIG))
+    assert phone.get("installed") == NEW and phone.get("previous") == ORIG
+    assert (phone.state / "boot-previous.img").read_bytes() == avb_partition(
+        phone.orig_img, PART_SIZE, VB_OFF)
+
+
+def test_first_start_fallback_needs_the_boot_partition(phone):
+    phone.kept(OLDER)
+    (phone.parts / "boot_b").unlink()
+    r = fails(phone.call("first_fallback"))
+    assert "boot_b missing" in r.stderr
+
+
+def test_first_start_fallback_without_avb_data_to_keep_stops(phone):
+    phone.kept(OLDER)
+    part = phone.parts / "boot_b"
+    data = bytearray(part.read_bytes())
+    data[VB_OFF:VB_OFF + 4] = b"XXXX"  # the footer names a broken block, no copy kept
+    part.write_bytes(bytes(data))
+    r = fails(phone.call("first_fallback"))
+    assert "no fallback image" in r.stderr
+    assert not (phone.state / "boot-previous.img").exists()
+
+
+def test_first_start_off_the_phone_does_nothing(phone):
+    # The image's preview in QEMU: no boot partitions, no card system
+    phone.package(NEW)
+    phone.kept(OLDER)
+    for p in phone.parts.glob("boot_*"):
+        p.unlink()
+    r = ok(phone.run("boot", uname="6.17.0-qemu"))
+    assert r.stdout == "" and phone.get("installed") is None
+
+
+def test_avb_tool_usage_and_a_partition_without_footer(phone, tmp_path):
+    r = subprocess.run(["python3", str(AVB)], capture_output=True, text=True)
+    assert r.returncode != 0 and "Usage: plinius-kernel-avb" in r.stderr
+    part = tmp_path / "plain.img"
+    part.write_bytes(b"\xee" * PART_SIZE)
+    img = tmp_path / "k.img"
+    img.write_bytes(boot_img(NEW))
+    out = tmp_path / "out.img"
+    r = subprocess.run(["python3", str(AVB), str(img), str(part), str(out)], capture_output=True,
+                       text=True)
+    assert r.returncode == 0 and "no AVB footer" in r.stderr
+    assert out.read_bytes() == boot_img(NEW)
+    # Without a place to keep it, a valid block is used and nothing else is written
+    part.write_bytes(avb_partition(boot_img(ORIG), PART_SIZE, VB_OFF))
+    r = subprocess.run(["python3", str(AVB), str(img), str(part), str(out)], capture_output=True,
+                       text=True)
+    assert r.returncode == 0 and read_avb(out.read_bytes())["desc_size"] == len(boot_img(NEW))
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name.endswith(".new")) == []
 
 
 def test_card_order_keeps_the_autostart_on_the_same_entry(phone, tmp_path):

@@ -21,9 +21,11 @@
 # and fallback entries of an Arch on the phone's storage alone. plinius-bootcheck does not judge
 # entries of card systems, so nothing is reported to it there.
 #
-# A new system starts with the kernel of the installation (UT's 6.1.145): the package's kernel was
-# installed while the image was built, where nothing can be written. The first start sets it up as
-# an update would (boot, once: no kernel recorded as installed yet).
+# A new system from image/mkimage.sh starts with the package's kernel already: the image carries it
+# in place of UT's 6.1.145, and an older plinius-kernel as the fallback (kept, named as previous).
+# Its first start records the kernel and gives the fallback what a confirmed update would have
+# made: the boot image and card entry of the previous kernel (boot, once: no kernel recorded as
+# installed yet). A system that starts with another kernel sets the package's up as an update.
 #
 # The fallback is always the kernel that last started for sure: the one in boot<slot> when the new
 # one is confirmed, or, when the system runs on the fallback because the installed kernel does not
@@ -32,7 +34,7 @@
 # Each kernel has its own GKI modules (system_dlkm.img, mounted for the Android container by
 # "dlkm") and out-of-tree modules (/usr/lib/plinius/modules/<release>, loaded by plinius-kmod).
 # Before pacman removes a release that is still installed or the fallback, "keep" copies it to
-# /var/lib/plinius-kernel/kept/<release>. The kernel of the original installation (UT's 6.1.145)
+# /var/lib/plinius-kernel/kept/<release>, where the image also puts its fallback. UT's 6.1.145
 # needs nothing kept: its modules are the original system_dlkm.img and plinius-kmod's.
 #
 # The slot never changes: lk would then start the other system (Volla OS of the delivery).
@@ -50,6 +52,7 @@
 set -euo pipefail
 
 lib=/usr/lib/plinius/kernel
+avb=$lib/plinius-kernel-avb
 kmods=/usr/lib/plinius/modules
 state=/var/lib/plinius-kernel
 kept=$state/kept
@@ -116,73 +119,15 @@ write_part() {
 	cmp -n "$size" "$img" "$part" >/dev/null || die "$part does not hold $img after writing"
 }
 
-# Writes a boot image to boot<slot> with the partition's AVB data kept valid. lk reads the vbmeta
-# block named by the AVB footer (last 64 bytes of the partition) on every start, card entries
-# included, and loads nothing if it is gone: on 09.11.2026 6.1.192-5's boot.img (15,151,104 bytes)
-# reached over the block at 15,147,008, every start ended in "ASSERT g_boot_info.hdr_loaded".
-# So the block moves behind the image (4 KiB aligned), its hash descriptor gets the image's size
-# and digest, the footer points to it. A valid block is kept in $state/boot-vbmeta.bin; without
-# one, nothing is written. A partition without a footer gets the image alone, as before.
+# Writes a boot image to boot<slot> with the partition's AVB data kept valid (plinius-kernel-avb:
+# the vbmeta block moves behind the image, its hash descriptor gets the image's size and digest).
+# A valid block is kept in $state/boot-vbmeta.bin; without one, nothing is written. A partition
+# without a footer gets the image alone, as before.
 write_boot() {
 	local img=$1 part=$2 out=$state/boot-new.img
 	mkdir -p "$state"
-	python3 - "$img" "$part" "$out" "$state/boot-vbmeta.bin" <<-'EOF' || die "$img: the AVB data of $part could not be kept, nothing written"
-	import hashlib, os, struct, sys
-	img_path, part_path, out_path, keep_path = sys.argv[1:5]
-	img = open(img_path, 'rb').read()
-	with open(part_path, 'rb') as f:
-	    f.seek(0, os.SEEK_END)
-	    size = f.tell()
-	    f.seek(size - 64)
-	    footer = f.read(64)
-	    if footer[:4] != b'AVBf':
-	        open(out_path, 'wb').write(img)
-	        print(f'{part_path}: no AVB footer, the image goes in alone', file=sys.stderr)
-	        sys.exit(0)
-	    major, minor, _, voff, vsize = struct.unpack_from('>IIQQQ', footer, 4)
-	    f.seek(voff)
-	    vbmeta = bytearray(f.read(vsize))
-	if vbmeta[:4] == b'AVB0':
-	    open(keep_path + '.new', 'wb').write(vbmeta)
-	    os.replace(keep_path + '.new', keep_path)
-	elif os.path.exists(keep_path):
-	    vbmeta = bytearray(open(keep_path, 'rb').read())
-	    vsize = len(vbmeta)
-	    print(f'{part_path}: vbmeta at {voff} is broken, the kept copy is used', file=sys.stderr)
-	else:
-	    sys.exit(f'{part_path}: no valid vbmeta at {voff} and no kept copy')
-	# vbmeta header (big endian, avb_vbmeta_image.h): auth block, aux block with the descriptors
-	auth_size, aux_size = struct.unpack_from('>QQ', vbmeta, 12)
-	desc_off, desc_size = struct.unpack_from('>QQ', vbmeta, 96)
-	p = 256 + auth_size + desc_off
-	end = p + desc_size
-	hashes = 0
-	while p < end:
-	    tag, following = struct.unpack_from('>QQ', vbmeta, p)
-	    if tag == 2:  # hash descriptor
-	        algorithm = vbmeta[p + 24:p + 56].split(b'\0')[0].decode()
-	        name_len, salt_len, digest_len = struct.unpack_from('>III', vbmeta, p + 56)
-	        q = p + 132 + name_len
-	        salt = bytes(vbmeta[q:q + salt_len])
-	        digest = hashlib.new(algorithm, salt + img).digest()
-	        if len(digest) != digest_len:
-	            sys.exit(f'{part_path}: hash descriptor has an unexpected digest length')
-	        struct.pack_into('>Q', vbmeta, p + 16, len(img))
-	        vbmeta[q + salt_len:q + salt_len + digest_len] = digest
-	        hashes += 1
-	    p += 16 + following
-	if hashes != 1:
-	    sys.exit(f'{part_path}: vbmeta has {hashes} hash descriptors instead of one')
-	new_off = (len(img) + 4095) // 4096 * 4096
-	if new_off + vsize > size - 64:
-	    sys.exit(f'{img_path}: image and vbmeta do not fit into {part_path}')
-	out = bytearray(size)
-	out[:len(img)] = img
-	out[new_off:new_off + vsize] = vbmeta
-	out[-64:] = footer
-	struct.pack_into('>QQQ', out, size - 64 + 12, len(img), new_off, vsize)
-	open(out_path, 'wb').write(out)
-	EOF
+	python3 "$avb" "$img" "$part" "$out" "$state/boot-vbmeta.bin" ||
+		die "$img: the AVB data of $part could not be kept, nothing written"
 	write_part "$out" "$part"
 	rm -f "$out"
 }
@@ -628,18 +573,71 @@ system_up() {
 	systemctl -q is-active graphical.target
 }
 
-# The first start of a new system: the package's kernel (one release) is set up as an update
-# would, unless it runs already or its trial failed. Once: afterwards a kernel is recorded as
-# installed.
+# The fallback a new system brings (image/mkimage.sh): the release named as previous, kept with
+# its files, gets the boot image and card entry a confirmed update leaves for its fallback. On an
+# Arch from card partitions that is the entry "<entry>-kernel-previous", else boot-previous.img
+# (the image inside this boot partition's AVB data, for restore) and, with the boot menu on the
+# card, the entry "plinius-previous". What is there already stays.
+first_fallback() {
+	local prev dir root entry title part made
+	prev=$(get previous)
+	dir=$kept/$prev
+	[[ -n $prev && -f $dir/boot.img && -f $dir/Image.gz ]] || return 0
+	if on_card_system; then
+		have_card || die "this Arch runs from a memory card partition, but the boot menu is missing"
+		root=$(card_mount)
+		entry=$(own_entry "$root")
+		if [[ ! -e $root/db/entries/$entry-kernel-previous.conf ]]; then
+			title=$(entry_field "$root/db/entries/$entry.conf" title)
+			install -d -m 700 "$root/$entry-kernel-previous"
+			copy_to_card "$dir/Image.gz" "$root/$entry-kernel-previous/zImage"
+			own_entry_conf "$root" "$entry" "$entry-kernel-previous" "$title (previous kernel $prev)" \
+				plinius.kernel=previous
+			card_order "$root"
+			put entry "$entry"
+		fi
+		card_umount
+		say "fallback: kernel $prev, boot menu entry $entry-kernel-previous"
+		return 0
+	fi
+	part=$(boot_part)
+	[[ -e $part ]] || die "$part missing"
+	if [[ ! -e $state/boot-previous.img ]]; then
+		[[ -e $state/boot-orig.img ]] || dump_part "$part" "$state/boot-orig.img"
+		python3 "$avb" "$dir/boot.img" "$part" "$state/boot-previous.img.new" "$state/boot-vbmeta.bin" ||
+			die "$dir/boot.img: no fallback image for $part"
+		mv "$state/boot-previous.img.new" "$state/boot-previous.img"
+	fi
+	if have_card; then
+		root=$(card_mount)
+		made=
+		if [[ ! -e $root/db/entries/$previous.conf ]]; then
+			card_entry "$root" "$previous" "Arch Linux (previous kernel $prev)" \
+				"$state/boot-previous.img" previous
+			made=1
+		fi
+		card_umount
+		[[ -z $made ]] || bootcheck_accept "abm-entry:$previous"
+	fi
+	say "fallback: kernel $prev ('plinius-kernel-install restore' writes it back)"
+}
+
+# The first start of a new system: the package's kernel (one release) is recorded when it runs
+# already, with the image's fallback, else set up as an update would, unless its trial failed.
+# Once: afterwards a kernel is recorded as installed. Off the phone (the image's preview in QEMU:
+# no boot partitions, no card system) there is nothing to set up.
 first_install() {
 	local f rel=""
 	[[ -z $(get installed) ]] || return 0
+	on_card_system || [[ -e /dev/disk/by-partlabel/boot_a || -e /dev/disk/by-partlabel/boot_b ]] ||
+		return 0
 	for f in "$lib"/*; do
 		if [[ -f $f/boot.img ]]; then rel=${f##*/}; fi
 	done
 	[[ -n $rel && $rel != "$(get failed)" ]] || return 0
 	if [[ $(uname -r) == "$rel" ]]; then
 		put installed "$rel"
+		first_fallback
 		return 0
 	fi
 	say "first start with kernel $(uname -r); setting up kernel $rel"

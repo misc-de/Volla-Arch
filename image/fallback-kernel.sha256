@@ -1,0 +1,4 @@
+# The kernel a new system falls back to (image/mkimage.sh, plinius-kernel-install's first start):
+# an older plinius-kernel, taken from the local repo as "sha256  package file". It is no longer in
+# the repo's database, so it is pinned here; tools/image-check.sh checks it in the image.
+f84e10885287f371a4041f315a4baab7b8e1e3e80cc6eacfff9884acc4ef4928  plinius-kernel-6.1.192-23-aarch64.pkg.tar.zst

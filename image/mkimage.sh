@@ -13,6 +13,12 @@
 #       the Android container. boot.img, vendor_boot.img and init_boot.img one directory above
 #       go to /usr/share/plinius-boot (tools/boot-files.sh), from where Plinius Boot takes them:
 #       zImage and initrd.cpio.gz for a boot entry, the images for the phone's own storage. The
+#       kernel in zImage and boot.img is plinius-kernel's, not UT's 6.1.145 (it lacks Landlock
+#       and what the AppArmor profiles need): its boot.img inside UT's partition content with the
+#       AVB data moved behind it (plinius-kernel-avb). The fallback is the older plinius-kernel
+#       pinned in image/fallback-kernel.sha256, taken from the local repo and kept in
+#       /var/lib/plinius-kernel; the first start gives it its boot image and boot menu entry.
+#       Without that file the image has no fallback kernel. The
 #       ramdisks there carry the password prompt of the optional encryption
 #       (tools/crypt-ramdisk.sh; plain data partitions start as before). Its vibration needs the
 #       motor's firmware from vendor.img: dump.erofs (erofs-utils), or HAPTIC_FW=haptic_ram.bin.
@@ -95,6 +101,55 @@ read_pin() {
 	hashed=$(printf '%s' "$pin" | hash_pin) || die "the PIN could not be hashed"
 	[[ $hashed == '$y$'* ]] || die "the PIN could not be hashed with yescrypt"
 	echo "$hashed"
+}
+
+# db_file NAME: the package file the database of the local repo names for package NAME
+db_file() {
+	bsdtar -xOf "$LOCALREPO/plinius-local.db.tar.gz" 2>/dev/null | awk -v n="$1" '
+		/^%FILENAME%$/ { getline f; next }
+		/^%NAME%$/ { getline m; if (m == n) { print f; exit } }'
+}
+
+# fallback_kernel: the package file pinned in image/fallback-kernel.sha256, checked; nothing if it
+# is not in the local repo
+fallback_kernel() {
+	local want name f got
+	read -r want name < <(grep -v '^#' "$VOLLA_DIR/image/fallback-kernel.sha256")
+	f=$LOCALREPO/$name
+	[[ -f $f ]] || return 0
+	got=$(sha256sum < "$f")
+	[[ ${got%% *} == "$want" ]] || die "$f is not the fallback kernel pinned in image/fallback-kernel.sha256"
+	echo "$f"
+}
+
+# image_kernel BOOT_FILES WORK: the kernel a new system starts with is plinius-kernel's (the one
+# the image installs): its Image.gz becomes BOOT_FILES/zImage for a boot entry, its boot.img goes
+# into UT's partition content BOOT_FILES/boot.img, the way plinius-kernel-install writes
+# boot<slot>. The fallback package, when there, is linked as WORK/fallback-kernel.pkg.
+image_kernel() {
+	local files=$1 work=$2 kpkg fallback rel
+	local -a kimgs
+	kpkg=$(db_file plinius-kernel)
+	[[ -n $kpkg && -f $LOCALREPO/$kpkg ]] || die "plinius-kernel missing in $LOCALREPO"
+	mkdir -p "$work/kernel"
+	bsdtar -xf "$LOCALREPO/$kpkg" -C "$work/kernel" 'usr/lib/plinius/kernel/*/boot.img' \
+		'usr/lib/plinius/kernel/*/Image.gz'
+	kimgs=("$work"/kernel/usr/lib/plinius/kernel/*/boot.img)
+	[[ ${#kimgs[@]} == 1 && -f ${kimgs[0]} ]] || die "$kpkg holds no single kernel"
+	python3 -I "$PKGBUILDS/plinius-kernel/plinius-kernel-avb" "${kimgs[0]}" "$files/boot.img" \
+		"$work/boot.img.new" || die "the kernel of $kpkg does not fit into UT's boot.img"
+	mv "$work/boot.img.new" "$files/boot.img"
+	cp "${kimgs[0]%/*}/Image.gz" "$files/zImage"
+	rel=${kimgs[0]%/*}
+	msg "Kernel of the image: ${rel##*/}"
+	fallback=$(fallback_kernel)
+	if [[ -n $fallback ]]; then
+		ln -sf "$fallback" "$work/fallback-kernel.pkg"
+		msg "Fallback kernel: ${fallback##*/}"
+	else
+		msg "Note: no fallback kernel ($(grep -v '^#' "$VOLLA_DIR/image/fallback-kernel.sha256" |
+			awk '{ print $2 }') is not in $LOCALREPO)"
+	fi
 }
 
 android_img=
@@ -331,6 +386,7 @@ if [[ -n $android_img ]]; then
 	mkdir -p "$work/boot-files/ut"
 	cp "$work"/boot-files/{vendor_boot.img,init_boot.img} "$work/boot-files/ut/"
 	cp "$work"/crypt-files/{vendor_boot.img,init_boot.img,initrd.cpio.gz} "$work/boot-files/"
+	image_kernel "$work/boot-files" "$work"
 fi
 
 msg "Installing ${packages[*]}"
@@ -397,6 +453,22 @@ ns_run '
 		# The parts of the prompt in those ramdisks are the confirmed ones: they start, as the
 		# installation shows, and an update of plinius-crypt-ramdisk compares against them
 		install -Dm644 -t "$t/var/lib/plinius-crypt/halium/confirmed" "$work"/crypt-files/parts/*
+	fi
+	# The fallback kernel, kept as plinius-kernel-install keeps a release whose package is gone:
+	# its files with its modules, named as previous (its first start makes the rest)
+	if [[ -e $work/fallback-kernel.pkg ]]; then
+		mkdir -p "$work/fallback"
+		bsdtar -xf "$work/fallback-kernel.pkg" -C "$work/fallback" usr/lib/plinius
+		for d in "$work"/fallback/usr/lib/plinius/kernel/*/; do
+			rel=$(basename "$d")
+			install -d -m 700 "$t/var/lib/plinius-kernel" "$t/var/lib/plinius-kernel/kept"
+			cp -r "$d" "$t/var/lib/plinius-kernel/kept/$rel"
+			if [[ -d $work/fallback/usr/lib/plinius/modules/$rel ]]; then
+				cp -r "$work/fallback/usr/lib/plinius/modules/$rel" "$t/var/lib/plinius-kernel/kept/$rel/modules"
+			fi
+			echo "$rel" > "$t/var/lib/plinius-kernel/previous"
+		done
+		[[ -s $t/var/lib/plinius-kernel/previous ]] || { echo "Error: no kernel in the fallback package" >&2; exit 1; }
 	fi
 	in_chroot "$r" systemctl --root=/target enable sshd systemd-networkd NetworkManager \
 		bluebinder bluetooth vibrator-ff-bridge ofono ModemManager nfcd \

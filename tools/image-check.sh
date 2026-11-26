@@ -11,10 +11,10 @@
 # -V); vendor.sha256 names them as pinned, Plinius Boot copies them from Volla OS on the phone, and
 # the file system keeps room for them.
 # Everything a phone needs: [plinius] with signed packages only from an https server and
-# plinius-keyring to check them, android-rootfs.img and system_dlkm.img and UT's boot.img and
-# init_boot.img as pinned in tools/ut-build.sha256, the kernel as pinned in
-# tools/boot-files.sha256, and the boot images and ramdisk with the password prompt that Plinius
-# Boot writes.
+# plinius-keyring to check them, android-rootfs.img and system_dlkm.img and UT's init_boot.img as
+# pinned in tools/ut-build.sha256, plinius-kernel's kernel in zImage and boot.img (there inside
+# valid AVB data) with an older plinius-kernel kept as the fallback, and the boot images and
+# ramdisk with the password prompt that Plinius Boot writes.
 #
 # Usage: tools/image-check.sh IMAGE.img
 # Prints one line per check and exits 1 if any fails.
@@ -59,6 +59,59 @@ matches() {
 	exists "$1" || return 1
 	got=$(content "$1" | sha256sum)
 	[[ ${got%% *} == "$want" ]]
+}
+
+# same PATH OTHER: both files have the same content
+same() {
+	local a b
+	exists "$1" && exists "$2" || return 1
+	a=$(content "$1" | sha256sum)
+	b=$(content "$2" | sha256sum)
+	[[ $a == "$b" ]]
+}
+# boot_holds BOOT KERNEL: the partition content BOOT starts with the boot image KERNEL, and its AVB
+# footer names a vbmeta block whose hash descriptor has that image's size and digest
+boot_holds() {
+	local tmp ok=0
+	exists "$1" && exists "$2" || return 1
+	tmp=$(mktemp -d)
+	content "$1" > "$tmp/part"
+	content "$2" > "$tmp/kernel"
+	python3 -I - "$tmp/part" "$tmp/kernel" <<-'EOF' || ok=1
+	import hashlib, struct, sys
+	part, img = (open(p, 'rb').read() for p in sys.argv[1:3])
+	assert img and part[:len(img)] == img
+	footer = part[-64:]
+	assert footer[:4] == b'AVBf'
+	_, _, size, voff, vsize = struct.unpack_from('>IIQQQ', footer, 4)
+	assert size == len(img) and voff >= len(img)
+	vb = part[voff:voff + vsize]
+	assert vb[:4] == b'AVB0'
+	auth, _ = struct.unpack_from('>QQ', vb, 12)
+	doff, dsize = struct.unpack_from('>QQ', vb, 96)
+	p, end, found = 256 + auth + doff, 256 + auth + doff + dsize, 0
+	while p < end:
+	    tag, following = struct.unpack_from('>QQ', vb, p)
+	    if tag == 2:
+	        algorithm = vb[p + 24:p + 56].split(b'\0')[0].decode()
+	        name_len, salt_len, digest_len = struct.unpack_from('>III', vb, p + 56)
+	        q = p + 132 + name_len
+	        assert struct.unpack_from('>Q', vb, p + 16)[0] == len(img)
+	        want = hashlib.new(algorithm, vb[q:q + salt_len] + img).digest()
+	        assert vb[q + salt_len:q + salt_len + digest_len] == want
+	        found += 1
+	    p += 16 + following
+	assert found == 1
+	EOF
+	rm -rf "$tmp"
+	return "$ok"
+}
+# kept_fallback REL KERNEL: the release REL (not KERNEL) is kept with its files and modules, as
+# image/mkimage.sh puts the fallback of image/fallback-kernel.sha256 there
+kept_fallback() {
+	local d=/var/lib/plinius-kernel/kept/$1 f
+	[[ -n $1 && $1 != "$2" ]] || return 1
+	for f in boot.img Image.gz system_dlkm.img modules; do exists "$d/$f" || return 1; done
 }
 
 # --- nothing of the builder ---
@@ -112,8 +165,6 @@ for name in android-rootfs system_dlkm; do
 	check matches "/var/lib/lxc/android/$name.img" "$VOLLA_DIR/tools/ut-build.sha256" "android/$name.img" \
 		-- "$name.img as pinned in tools/ut-build.sha256"
 done
-check matches /usr/share/plinius-boot/boot.img "$VOLLA_DIR/tools/ut-build.sha256" boot.img \
-	-- "boot.img as pinned in tools/ut-build.sha256"
 check matches /usr/share/plinius-boot/ut/init_boot.img "$VOLLA_DIR/tools/ut-build.sha256" init_boot.img \
 	-- "UT's init_boot.img as pinned in tools/ut-build.sha256"
 # UT's vendor_boot.img without systempart= on its command line (tools/boot-files.sh), so no pin
@@ -122,8 +173,16 @@ for name in vendor_boot init_boot; do
 	# The ones with the password prompt of plinius-crypt, which Plinius Boot writes
 	check exists "/usr/share/plinius-boot/$name.img" -- "$name.img with the password prompt"
 done
-check matches /usr/share/plinius-boot/zImage "$VOLLA_DIR/tools/boot-files.sha256" zImage \
-	-- "zImage as pinned in tools/boot-files.sha256"
+# The kernel: plinius-kernel's, the one release installed (image/mkimage.sh, image_kernel)
+releases=$(entries /usr/lib/plinius/kernel | awk '$1 ~ /^04/ { print $2 }')
+nrel=$(grep -c . <<< "$releases" || true)
+check eval '[[ $nrel == 1 ]]' -- "one release of plinius-kernel installed"
+kdir=/usr/lib/plinius/kernel/$(head -1 <<< "$releases")
+check same /usr/share/plinius-boot/zImage "$kdir/Image.gz" -- "zImage is the kernel of plinius-kernel"
+check boot_holds /usr/share/plinius-boot/boot.img "$kdir/boot.img" \
+	-- "boot.img holds the kernel of plinius-kernel, its AVB data valid"
+previous=$(content /var/lib/plinius-kernel/previous)
+check kept_fallback "$previous" "${kdir##*/}" -- "an older plinius-kernel kept as the fallback"
 check exists /usr/share/plinius-boot/initrd.cpio.gz -- "initrd.cpio.gz for a boot entry"
 
 if ((failed)); then
