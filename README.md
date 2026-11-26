@@ -82,8 +82,8 @@ Running apps switch seamlessly between the phone and the desktop view with a tap
 
 ### ↩️ Updates you can undo
 
-A self-test runs after every boot and offers a way back from the last update. A new kernel first
-starts as a trial, and the previous one stays as a fallback.
+A self-test runs after every boot and offers a way back from the last update. A new kernel
+replaces the current one, and the previous one stays as a fallback.
 
 </td>
 </tr>
@@ -245,7 +245,7 @@ Updates**.
 
 After every start a self-test checks whether everything an update can break still works. If a check
 fails after an update, **Settings › System › Self-Test** offers to take the last update back. A new
-kernel first starts as a trial, and the previous one stays as a fallback.
+kernel replaces the current one, and the previous one stays as a fallback.
 
 </details>
 
