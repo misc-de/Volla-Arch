@@ -237,10 +237,11 @@ for Volla OS and the UBports Installer for Ubuntu Touch work as well.
 <details>
 <summary><b>How do updates work?</b></summary>
 
-The phone looks for updates once a day and reports them with a notification; you install them under
-**Settings › System › Updates**. The base system and the desktop come unchanged from Arch Linux ARM,
-but only in versions we have tested on the phone; our own packages come signed from our repository.
-If you want new versions earlier, switch on **Settings › Apps › Settings › Beta Updates**.
+The phone looks for updates every 4 hours and reports them with a notification; you install them
+under **Settings › System › Updates**. The base system and the desktop come unchanged from Arch
+Linux ARM, but only in versions we have tested on the phone; our own packages come signed from our
+repository. If you want new versions earlier, switch on **Settings › Apps › Settings › Beta
+Updates**.
 
 After every start a self-test checks whether everything an update can break still works. If a check
 fails after an update, **Settings › System › Self-Test** offers to take the last update back. A new
@@ -258,8 +259,8 @@ takes up to about a minute.
 
 MediaTek, the maker of the phone's chip, offers predicted orbits for download. With them the GPS
 finds the position within seconds. Each download shows MediaTek your IP address, so it is off on a
-new phone. Switch it on under **Settings › Privacy & Security › Location › Faster GPS Fix**: it
-loads about 80&nbsp;KB every 6 hours and sends no data.
+new phone. Switch it on under **Settings › Privacy › Location › Faster GPS Fix**: it loads about
+80&nbsp;KB every 6 hours and sends no data.
 
 </details>
 
@@ -291,10 +292,9 @@ charging with Qi works too.
 <summary><b>Why does my phone list security vulnerabilities?</b></summary>
 
 Most phones only show the date of their last security update. Arch Linux names every known
-vulnerability in the installed software and in the kernel, under **Settings › Privacy & Security ›
-Device Security › Known Vulnerabilities**, each with a link to its description. The list is updated
-every day, and each vulnerability we have looked into carries our assessment, such as “Fixed here”
-or “Mitigated”.
+vulnerability in the installed software and in the kernel, under **Settings › Security › Known
+Vulnerabilities**, each with a link to its description. The list is updated every day, and each
+vulnerability we have looked into carries our assessment, such as “Fixed here” or “Mitigated”.
 
 Once a vulnerability becomes known, a fix is usually under way and soon reaches the phone with the
 next updates. Until then you know what is open and can deal with it deliberately. This openness
@@ -305,7 +305,7 @@ takes you seriously: it is your phone, so you get to know its weak spots too.
 <details>
 <summary><b>Which connections does the phone make by itself?</b></summary>
 
-Once a day it looks for updates (our repository on plinius.cais.de and the servers of Arch Linux
+Every 4 hours it looks for updates (our repository on plinius.cais.de and the servers of Arch Linux
 ARM), several times a day it loads the list of known vulnerabilities (Arch Linux security tracker
 and plinius.cais.de), once a week the keys that sign Arch Linux's packages, and it sets its clock
 from the Arch Linux time servers of pool.ntp.org. NetworkManager regularly asks ping.archlinux.org
@@ -314,7 +314,7 @@ DNS filter loads its block lists from their authors.
 
 Only when you switch them on: the GPS orbit data from MediaTek, Flathub, the Widevine module for
 streaming services and contributions to beaconDB. The system itself sends no usage data and needs no
-account; apps connect to their own services when you use them.
+account.
 
 </details>
 
