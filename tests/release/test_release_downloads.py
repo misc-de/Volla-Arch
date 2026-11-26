@@ -5,7 +5,8 @@
 # The image is an ext4 made with mkfs.ext4 -d from a tree in tmp_path (sparse, room for the vendor
 # files of the pins included), read by the real
 # debugfs as the check reads a real one. The scripts run as copies in tmp_path/volla/tools, so
-# build/ lies in tmp_path; pins are written for the fake Android and boot files. rsync is a stub.
+# build/ lies in tmp_path; pins are written for the fake Android and boot files. rsync is a stub, and so
+# is ssh, which answers with the server's latest.json.
 
 import hashlib
 import io
@@ -121,6 +122,13 @@ def volla(tmp_path, fake_bin):
     (root / "tools" / "boot-files.sha256").write_text(f"{sha('kernel')}  zImage\n{sha('ut ramdisk')}  initrd.cpio.gz\n")
     (fake_bin.path / "debugfs").symlink_to(shutil.which("debugfs"))
     fake_bin.stub("rsync")
+    # The server's latest.json: the file server-latest.json in tmp_path, none if it is missing;
+    # ssh-code makes ssh fail
+    fake_bin.stub("ssh", f'''
+code=$(cat "{tmp_path}/ssh-code" 2>/dev/null || echo 0)
+[ "$code" = 0 ] || exit $code
+cat "{tmp_path}/server-latest.json" 2>/dev/null
+exit 0''')
     boot_test(root, 0)
     return root
 
@@ -634,6 +642,95 @@ def test_upload_images_first_latest_json_after_then_the_app(tmp_path, volla, fak
         OPTIONS + ["--delete-after"] + ONLY_OURS + images,
         OPTIONS + ["--delay-updates", f"{d}/downloads/", "u@h:/srv/www/downloads/"],
     ]
+
+
+def server_image(tmp_path, version):
+    (tmp_path / "server-latest.json").write_text(json.dumps(
+        {"version": version, "url": f"https://plinius.cais.de/images/plinius-arch-{version}.img.zst",
+         "size": 1, "sha256": "0" * 64}))
+
+
+def prepared(tmp_path, volla, fake_bin, version="2026.11.22"):
+    image = make_image(good_tree(tmp_path / "t"), tmp_path / "plinius-arch-22112026.img")
+    app = tmp_path / "org.plinius.Boot-x86_64.flatpak"
+    app.write_bytes(b"bundle")
+    assert run(volla, fake_bin, "downloads.sh", "image", image, version).returncode == 0
+    assert run(volla, fake_bin, "downloads.sh", "app", app).returncode == 0
+
+
+def test_upload_reads_the_servers_latest_json_first(tmp_path, volla, fake_bin):
+    prepared(tmp_path, volla, fake_bin)
+    server_image(tmp_path, "2026.11.21")
+    r = run(volla, fake_bin, "downloads.sh", "upload", DOWNLOAD_TARGET="u@h:/srv/my www", DOWNLOAD_SSH_PORT="2222")
+    assert r.returncode == 0, r.stderr
+    ssh = fake_bin.calls("ssh")
+    assert len(ssh) == 1 and ssh[0][:5] == ["-p", "2222", "-o", "BatchMode=yes", "u@h"]
+    # The path quoted for the remote shell, which reads the file only if it is there
+    assert ssh[0][5] == 'f=/srv/my\\ www/images/latest.json; [ ! -e "$f" ] || cat "$f"'
+    assert len(fake_bin.calls("rsync")) == 4
+
+
+@pytest.mark.parametrize("there", ["2026.11.26", "2026.11.22-2", "2026.12.01"])
+def test_a_newer_image_on_the_server_stops_the_upload(tmp_path, volla, fake_bin, there):
+    prepared(tmp_path, volla, fake_bin)
+    server_image(tmp_path, there)
+    r = run(volla, fake_bin, "downloads.sh", "upload", DOWNLOAD_TARGET="u@h:/srv/www")
+    assert r.returncode == 1
+    assert f"the server offers image {there}, newer than 2026.11.22" in r.stderr
+    assert "tools/downloads.sh upload app" in r.stderr
+    # Nothing at all was sent, the app neither
+    assert fake_bin.calls("rsync") == []
+
+
+@pytest.mark.parametrize("there", ["2026.11.22", "2026.11.21", "", "not json"])
+def test_the_same_an_older_or_no_readable_image_on_the_server_is_replaced(tmp_path, volla, fake_bin, there):
+    prepared(tmp_path, volla, fake_bin)
+    if there == "not json":
+        (tmp_path / "server-latest.json").write_text("<html>")
+    elif there:
+        server_image(tmp_path, there)
+    r = run(volla, fake_bin, "downloads.sh", "upload", DOWNLOAD_TARGET="u@h:/srv/www")
+    assert r.returncode == 0, r.stderr
+    assert len(fake_bin.calls("rsync")) == 4
+
+
+def test_an_unreachable_server_stops_the_upload(tmp_path, volla, fake_bin):
+    prepared(tmp_path, volla, fake_bin)
+    (tmp_path / "ssh-code").write_text("255")
+    r = run(volla, fake_bin, "downloads.sh", "upload", DOWNLOAD_TARGET="u@h:/srv/www")
+    assert r.returncode == 1
+    assert "cannot read u@h:/srv/www/images/latest.json (ssh exit 255), nothing was uploaded" in r.stderr
+    assert fake_bin.calls("rsync") == []
+
+
+def test_upload_app_sends_only_the_app_and_asks_the_server_nothing(tmp_path, volla, fake_bin):
+    prepared(tmp_path, volla, fake_bin)
+    server_image(tmp_path, "2026.11.26")
+    r = run(volla, fake_bin, "downloads.sh", "upload", "app", DOWNLOAD_TARGET="u@h:/srv/www")
+    assert r.returncode == 0, r.stderr
+    calls = fake_bin.calls("rsync")
+    assert len(calls) == 1 and calls[0][-1] == "u@h:/srv/www/downloads/"
+    assert fake_bin.calls("ssh") == []
+
+
+def test_upload_images_sends_only_the_images(tmp_path, volla, fake_bin):
+    prepared(tmp_path, volla, fake_bin)
+    r = run(volla, fake_bin, "downloads.sh", "upload", "images", DOWNLOAD_TARGET="u@h:/srv/www")
+    assert r.returncode == 0, r.stderr
+    assert [c[-1] for c in fake_bin.calls("rsync")] == ["u@h:/srv/www/images/"] * 3
+
+
+@pytest.mark.parametrize("part, prepare, msg", [
+    ("images", False, "no image in"),
+    ("app", False, "no app in"),
+    ("both", True, "usage: tools/downloads.sh upload [images|app]"),
+])
+def test_upload_part_errors(tmp_path, volla, fake_bin, part, prepare, msg):
+    if prepare:
+        prepared(tmp_path, volla, fake_bin)
+    r = run(volla, fake_bin, "downloads.sh", "upload", part, DOWNLOAD_TARGET="u@h:/srv/www")
+    assert r.returncode == 1 and msg in r.stderr
+    assert fake_bin.calls("rsync") == []
 
 
 def test_upload_of_the_app_alone_leaves_images_alone(tmp_path, volla, fake_bin):

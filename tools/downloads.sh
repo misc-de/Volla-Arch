@@ -19,10 +19,14 @@
 #       archive under the name with that version, plinius-boot-VERSION.tar.gz, which no later
 #       release overwrites: whoever read app.json before an upload still gets the archive its
 #       size and SHA-256 belong to, while plinius-boot.tar.gz already is the next one.
-#   DOWNLOAD_TARGET=user@host:/var/www/plinius [DOWNLOAD_SSH_PORT=22] tools/downloads.sh upload
+#   DOWNLOAD_TARGET=user@host:/var/www/plinius [DOWNLOAD_SSH_PORT=22] tools/downloads.sh upload [images|app]
 #       Images first, latest.json after them (a phone's PC never finds a latest.json whose image
 #       is not there yet), then the images latest.json no longer names leave; the screenshots
-#       in images/ are not touched. Then downloads/.
+#       in images/ are not touched. Then downloads/. "images" or "app" uploads only that part;
+#       without one, whatever build/downloads holds. Before the images it reads the server's
+#       latest.json: when that names a newer image than build/downloads (an image uploaded from
+#       elsewhere, or after this folder was prepared), it stops before anything is sent, since
+#       the upload would put the older image back and remove the newer one.
 #
 # DOWNLOAD_URL (default https://plinius.cais.de) is where the server is reached: Plinius Boot
 # takes only an image on the server of latest.json itself. ZSTD_LEVEL (default 15) is the
@@ -149,15 +153,52 @@ print()' "$version" "$base/downloads/$versioned" "$size" "$sha" > "$dir/app.json
 	msg "app.json names Plinius Boot $version"
 }
 
+# The version a latest.json on stdin names (empty for none or an unreadable one)
+json_version() {
+	python3 -I -c 'import json, sys
+try:
+    version = json.load(sys.stdin)["version"]
+except Exception:
+    version = ""
+print(version if isinstance(version, str) else "")'
+}
+
+# Stops when the server's latest.json names a newer image than the one in $out/images
+check_server_image() {
+	local host=${target%%:*} dir=${target#*:} remote status here there
+	set +e
+	remote=$($ssh_cmd "$host" "f=$(printf %q "$dir/images/latest.json"); [ ! -e \"\$f\" ] || cat \"\$f\"")
+	status=$?
+	set -e
+	((status == 0)) || die "cannot read $target/images/latest.json (ssh exit $status), nothing was uploaded"
+	[[ -n $remote ]] || return 0
+	here=$(json_version < "$out/images/latest.json")
+	there=$(json_version <<<"$remote")
+	[[ -n $there && $there != "$here" ]] || return 0
+	if [[ $(printf '%s\n%s\n' "$here" "$there" | sort -V | tail -n 1) == "$there" ]]; then
+		die "the server offers image $there, newer than $here in $out/images: uploading would put the older" \
+			"one back and remove the newer one. Nothing was uploaded. Prepare the newer image with" \
+			"tools/downloads.sh image, or upload only the app: tools/downloads.sh upload app"
+	fi
+}
+
 do_upload() {
-	local target=${DOWNLOAD_TARGET:?set DOWNLOAD_TARGET=user@host:/path/to/web/root} ssh_cmd options images
+	local part=${1:-} target=${DOWNLOAD_TARGET:?set DOWNLOAD_TARGET=user@host:/path/to/web/root} ssh_cmd options images
+	local up_images=0 up_app=0
+	case $part in
+		"") [[ -f $out/images/latest.json ]] && up_images=1; [[ -d $out/downloads ]] && up_app=1 ;;
+		images) [[ -f $out/images/latest.json ]] || die "no image in $out, run tools/downloads.sh image first"; up_images=1 ;;
+		app) [[ -d $out/downloads ]] || die "no app in $out, run tools/downloads.sh app first"; up_app=1 ;;
+		*) die "usage: tools/downloads.sh upload [images|app]" ;;
+	esac
 	ssh_cmd="ssh -p ${DOWNLOAD_SSH_PORT:-22} -o BatchMode=yes"
 	options=(-rltz --mkpath --no-owner --no-group --chmod=D755,F644 --partial-dir=.upload -e "$ssh_cmd")
 	# Only what this script makes; anything else in images/ (the screenshots) stays as it is
 	images=(--include='*.img.zst' --include='*.img.zst.sha256' --include=latest.json --exclude='*')
-	[[ -f $out/images/latest.json || -d $out/downloads ]] ||
-		die "nothing in $out, run tools/downloads.sh image or app first"
-	if [[ -f $out/images/latest.json ]]; then
+	((up_images || up_app)) || die "nothing in $out, run tools/downloads.sh image or app first"
+	# Checked before anything is sent: a refused image leaves the app unsent as well
+	((up_images)) && check_server_image
+	if ((up_images)); then
 		msg "Images to $target/images"
 		rsync "${options[@]}" --exclude=latest.json "${images[@]}" "$out/images/" "$target/images/"
 		msg "latest.json"
@@ -165,7 +206,7 @@ do_upload() {
 		msg "Removing images latest.json no longer names"
 		rsync "${options[@]}" --delete-after "${images[@]}" "$out/images/" "$target/images/"
 	fi
-	if [[ -d $out/downloads ]]; then
+	if ((up_app)); then
 		msg "Plinius Boot to $target/downloads"
 		# All files appear together, app.json never names an archive not there yet. No --delete:
 		# the archives of earlier versions stay for those who read an earlier app.json
@@ -179,6 +220,6 @@ ZSTD_LEVEL=${ZSTD_LEVEL:-15}
 case ${1:-} in
 	image) shift; do_image "$@" ;;
 	app) shift; do_app "$@" ;;
-	upload) shift; do_upload ;;
-	*) die "usage: tools/downloads.sh image IMAGE.img [VERSION] | app FILE... | upload" ;;
+	upload) shift; do_upload "$@" ;;
+	*) die "usage: tools/downloads.sh image IMAGE.img [VERSION] | app FILE... | upload [images|app]" ;;
 esac

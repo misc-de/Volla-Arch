@@ -240,7 +240,7 @@ the web server.
 tools/downloads.sh image build/plinius-arch-<date>.img   # check, boot test, pack, latest.json → build/downloads/images
 image/test-image.sh build/plinius-arch-<date>.img        # the boot test alone (about 6 to 10 minutes) → build/image-test/
 tools/downloads.sh app org.plinius.Boot-x86_64.flatpak plinius-boot.tar.gz   # Plinius Boot → build/downloads/downloads
-DOWNLOAD_TARGET=user@host:/path tools/downloads.sh upload # images, then latest.json, then the app
+DOWNLOAD_TARGET=user@host:/path tools/downloads.sh upload [images|app] # never an older image over a newer one
 ```
 
 ### Building packages
