@@ -458,6 +458,13 @@ def test_unlock_first_start_speaks_the_language_of_the_installation(crypt, unloc
     r = unlock()
     assert r.returncode == 0, r.stderr
     assert "Gerät verschlüsseln?" in crypt.progress_titles()
+    # The question in the look of the system's first PIN prompt (plinius-progress -F)
+    shown = crypt.calls("plinius-progress")
+    question = [c for c in shown if "Gerät verschlüsseln?" in c]
+    assert len(question) == 1 and question[0][0] == "-F"
+    assert question[0][question[0].index("-b") + 1] == "Set password"
+    # Only the question: progress and messages keep their look
+    assert all("-F" not in c for c in shown if "Gerät verschlüsseln?" not in c)
     assert (crypt.t / "unl0kr.conf.d/40-plinius-keyboard.conf").read_text() == "[keyboard]\nlayout=de\n"
     assert "language of the installation" in (crypt.t / "kmsg").read_text()
 

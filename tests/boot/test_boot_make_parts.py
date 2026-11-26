@@ -129,7 +129,7 @@ def test_programs_contents(parts):
     assert files["etc/unl0kr.conf.d/50-plinius.conf"][1] == \
         (PKG / "plinius-crypt/50-plinius.conf").read_bytes()
     assert files["etc/unl0kr.conf.d/10-plinius-drm.conf"][1] == b"[general]\nbackend=drm\n"
-    assert files["etc/unl0kr.conf.d/55-plinius-first-accent.conf"][1] == b"[theme]\naccent=#e66100\n"
+    assert files["etc/unl0kr.conf.d/55-plinius-first-accent.conf"][1] == b"[theme]\naccent=#1793d1\n"
     # The background at the ramdisk's small size
     bg = files["usr/share/plinius-crypt/glass-background.bin"][1]
     assert struct.unpack_from("<BBHHHHH", bg) == (0x19, 0x11, 0, 27, 60, 108, 0)

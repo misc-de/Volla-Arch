@@ -174,13 +174,14 @@ remove_request() {
     umount "$PLINIUS_CRYPT_MNT"
 }
 
-# Offer the choice between setting a password and continuing without encryption.
+# Offer the choice between setting a password and continuing without encryption, in the look of
+# the system's first PIN prompt (plinius-progress -F).
 # Returns 0 for "set password", 2 for "without encryption" (the request on $1 is then removed)
 # and 1 if the choice cannot be shown (no display: go on with the console prompt).
 choose_encryption() {
     local rc
     msg ":: plinius-crypt: Encrypt the device?"
-    plinius-progress -t "$(tr_msg "Encrypt the device?")"         -m "$(tr_msg "Encryption was requested for this device. You choose a password that is asked at every start and should differ from the screen lock PIN. Encrypting then takes a few minutes.")" \
+    plinius-progress -F -t "$(tr_msg "Encrypt the device?")" -m "$(tr_msg "Encryption was requested for this device. You choose a password that is asked at every start and should differ from the screen lock PIN. Encrypting then takes a few minutes.")" \
         -b "$(tr_msg "Set password")" -B "$(tr_msg "Continue without encryption")" 2>/dev/null
     rc=$?
     case $rc in

@@ -2,7 +2,8 @@
 
 pkgname=plinius-crypt
 pkgver=0.13
-pkgrel=15
+# 16 was built against cryptsetup 2.8.9 and held back (it would rebuild old card ramdisks)
+pkgrel=17
 pkgdesc="Optional full-disk encryption for Plinius: initramfs hook with unl0kr and plinius-progress, offline in-place encryption on request"
 # Native for pam_plinius_crypt.so (a new PIN must differ from the encryption password)
 arch=(aarch64 x86_64)
@@ -20,9 +21,10 @@ license=(MIT CC-BY-SA-3.0)
 # background of the password prompt); python, libxcrypt: login-password-check (encryption
 # password differs from the screen lock PIN); polkit also for GNOME Settings (plinius-encrypt)
 # buffybox 3.6.0-9: themes plinius-original and plinius-glass with an accent color
-# lz4: halium-rebuild packs the prompt's part of the phone's Halium ramdisk
-depends=(cryptsetup "buffybox>=3.6.0-9" "plinius-progress>=0.1-7" e2fsprogs mkinitcpio util-linux gettext
-	python python-gobject gdk-pixbuf2 polkit libxcrypt pam lz4)
+# lz4: halium-rebuild packs the prompt's part of the phone's Halium ramdisk; zstd: card-initrd packs
+# a card entry's ramdisk as one zstd archive
+depends=(cryptsetup "buffybox>=3.6.0-9" "plinius-progress>=0.1-18" e2fsprogs mkinitcpio util-linux gettext
+	python python-gobject gdk-pixbuf2 polkit libxcrypt pam lz4 zstd)
 # The glass background is made from Phosh's wallpaper when the package is built
 makedepends=(gettext gnome-backgrounds librsvg python-pillow)
 _langs=(de es fr it nl pl pt ru)
@@ -36,13 +38,13 @@ install=plinius-crypt.install
 source=(hook install mkinitcpio.conf 50-plinius.conf plinius-encrypt glass-background.py
 	background-sync background-install look-install org.plinius.crypt.background.policy
 	org.plinius.CryptBackground.desktop plinius-crypt-initramfs.service
-	rebuild-initramfs look-files halium-rebuild boot-image plinius-crypt-locale.path login-password-check org.plinius.crypt.manage.policy
+	rebuild-initramfs look-files halium-rebuild boot-image card-initrd plinius-crypt-locale.path login-password-check org.plinius.crypt.manage.policy
 	plinius-crypt-strength.service halium-unlock plinius-crypt-halium.service
 	pam_plinius_crypt.c
 	"${_langs[@]/%/.po}"
 	LICENSE
 	96-plinius-crypt-scripts.hook)
-sha256sums=('60925324f9058721c5124f9d9ab26ca73bd61811e605815fc892ff9a71b4bca3'
+sha256sums=('4ce62c24fb918bee0b1695dc672a6763996217d64ef755b1b38f85d96ded6846'
             '4cbee7a52fc6aa8385df6bfa4fbb08ab0580d08b2d79c717622cdc2bbc848805'
             'b6ec0041aa3d508b50416de60ca77eb83570703c4910fbe453d0eb3469d1fd72'
             'aeee93b0f413e23e96f4067294a979914c5892c80b98a52f363fa82f3a477818'
@@ -56,8 +58,9 @@ sha256sums=('60925324f9058721c5124f9d9ab26ca73bd61811e605815fc892ff9a71b4bca3'
             '189699c2073f8a08f6c5141e71b51cbb210b76da1b9589556f52db32f81b4636'
             '934a633c4add9e5dfa4453eb384d2812d1d9445be128435aa528221fdd382afb'
             '486a0e19da8bcfd40f5ec12da3ab8c190bdb3178256d61619011388f2b1b6a53'
-            '6c8dfc27aa40b821aa0079180f11bd7480485238ba0b247e3a3e54f6092d10fd'
-            '9a2dd966230574fa8691695848f39f01c9f693666882ce0a2e268b2c5fbbffea'
+            '58bbf38b1a9782129aead33529ef0262b5ec6442829e8d3691c7806bae95c66c'
+            'bcc3cf432998375ac43b8e0b9f18d86609733c16f927dab50847ea58742c54eb'
+            '889c028f166b27266690d8f1759103179ee520090d5ba8e5745bc8414bd11999'
             'bb75bb725311434ca6582fce8338e7d7598642d9661041a46d84171da3898ee4'
             '07e74df521d36563b411792151970060f24f33268b2253046f9ab19a2d96a14f'
             '8ef530b2d4361f0b509a32cd3de86790f015a9803180c8ccba2baad1c417fe68'
@@ -111,6 +114,8 @@ package() {
 	# halium-rebuild renews that part of the Halium ramdisk (configured in /var/lib/plinius-crypt/halium),
 	# on the card or in vendor_boot (boot-image takes that apart and puts it together)
 	install -Dm755 rebuild-initramfs look-files halium-rebuild boot-image -t "$pkgdir/usr/lib/plinius-crypt"
+	# card-initrd: tools/card-initrd.py of the Volla project, a card entry's ramdisk as one zstd archive
+	install -Dm755 card-initrd -t "$pkgdir/usr/lib/plinius-crypt"
 	# New ramdisk scripts (boot-image) go through a trial start like new programs
 	install -Dm644 96-plinius-crypt-scripts.hook -t "$pkgdir/usr/share/libalpm/hooks"
 	# The unlock script that scripts/halium calls in the phone's Halium ramdisk; plinius-crypt-ramdisk

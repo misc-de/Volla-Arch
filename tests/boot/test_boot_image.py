@@ -364,6 +364,24 @@ def test_contains(tmp_path):
     assert run_boot_image("contains", f, write(tmp_path / "q", PLATFORM + b"!")).returncode == 1
 
 
+def test_contains_in_a_card_ramdisk_packed_as_one_zstd_archive(tmp_path):
+    from compression import zstd
+    # card-initrd unpacks the programs (zstd) and the lz4 archives behind them and packs all in one
+    platform = lz4_legacy(newc([("platform", 0o100644, PLATFORM)]))
+    init = lz4_legacy(newc([("init", 0o100644, b"INIT" * 50)]))
+    raw = zstd.decompress(zstd_pipe(b"PROGRAMS" * 64)) + unlz4(platform) + unlz4(init)
+    card = write(tmp_path / "card", zstd.compress(raw))
+    p = write(tmp_path / "p", platform)
+    assert run_boot_image("contains", card, p).returncode == 0
+    other = write(tmp_path / "o", lz4_legacy(newc([("platform", 0o100644, PLATFORM + b"!")])))
+    assert run_boot_image("contains", card, other).returncode == 1
+    # The same entry before packing holds the part as it is
+    assert run_boot_image("contains", write(tmp_path / "old", zstd_pipe(b"P") + platform + init), p).returncode == 0
+    # A zstd frame cut off is no ramdisk
+    r = run_boot_image("contains", write(tmp_path / "cut", card.read_bytes()[:-20]), p)
+    assert r.returncode != 0 and b"cut off" in r.stderr
+
+
 # --- cpio ----------------------------------------------------------------------------------------
 
 def make_tree(root, mtime):

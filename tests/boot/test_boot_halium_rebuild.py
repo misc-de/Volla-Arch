@@ -24,7 +24,8 @@ MiB = 1 << 20
 # Small partitions: vendor_boot keeps 1 MiB at its end free, the images here are some 60 kB
 VENDOR_PART = MiB + 512 * 1024
 INIT_PART = 256 * 1024
-PLATFORM = random.Random(1).randbytes(20000)
+# UT's platform ramdisk: an lz4 legacy archive, as card-initrd unpacks it
+PLATFORM = lz4_legacy(newc([("platform", 0o100644, random.Random(1).randbytes(20000))]))
 RECOVERY = b"RECOVERY" * 200
 HOOK = b"#!/usr/bin/ash\n# a comment the ramdisk has no room for\nrun_hook() { :; }\n"
 UNLOCK = b"#!/bin/sh\ncat <<-EOF\n# kept: here-document\nEOF\n"
@@ -70,6 +71,8 @@ class Rig:
               b'printf "[theme]\\naccent=#123456\\n" > "$1/etc/unl0kr.conf.d/60-plinius-look.conf"\n'
               b'[[ -z ${FAKE_WALLPAPER:-} ]] || install -D -m644 "$FAKE_WALLPAPER" '
               b'"$1/usr/share/plinius-crypt/glass-background.bin"\n')
+        # card-initrd: tools/card-initrd.py, as the package installs it
+        shutil.copy(PKG / "plinius-crypt" / "card-initrd", self.lib / "card-initrd")
         for f in ("halium-rebuild", "boot-image", "look-files"):
             (self.lib / f).chmod(0o755)
         self.conf, self.boot, self.offered = t / "conf", t / "boot", t / "offered"
@@ -540,6 +543,72 @@ def test_bad_card_target_is_refused(rig):
         rig.run(check=False)
         assert text in rig.last.stderr
     assert rig.unchanged()
+
+
+# --- a boot entry on the card: one zstd archive, the card's room -------------------------------
+
+CARD_TARGET = b"card 01234567-89ab-cdef-0123-456789abcdef rom3\n"
+
+
+def card_rig(rig):
+    write(rig.conf / "target", CARD_TARGET)
+    shutil.copytree(rig.offered, rig.conf / "confirmed")
+
+
+def test_card_entry_is_one_zstd_archive_of_the_same_content(rig):
+    from compression import zstd
+    card_rig(rig)
+    out = rig.t / "card-initrd"
+    rig.run("--output", out, check=True)
+    packed = out.read_bytes()
+    assert packed[:4] == b"\x28\xb5\x2f\xfd"
+    d = zstd.ZstdDecompressor()
+    raw = d.decompress(packed)
+    assert d.eof and d.unused_data == b""
+    # The programs first, then the platform ramdisk, firmware, look and init_boot's archives unpacked
+    programs = zstd.decompress(rig.programs.read_bytes())
+    assert raw.startswith(programs)
+    assert unlz4(PLATFORM) in raw and unlz4(rig.ut_init_rd) in raw
+    assert b"60-plinius-look.conf" in raw
+    assert "one zstd archive for the card" in rig.last.stderr
+    assert rig.unchanged() and rig.writes() == []
+
+
+def test_card_entry_larger_than_the_cards_room_is_not_written(rig):
+    card_rig(rig)
+    out = rig.t / "card-initrd"
+    rig.run("--output", out, check=False, PLINIUS_CRYPT_MAX_RAMDISK=2000)
+    assert "the card's ramdisk" in rig.last.stderr and "it is not written" in rig.last.stderr
+    assert not out.exists()
+    # The update of new parts as well: nothing confirmed, nothing written
+    shutil.rmtree(rig.conf / "confirmed")
+    rig.run("--update", check=False, PLINIUS_CRYPT_MAX_RAMDISK=2000)
+    assert "it is not written" in rig.last.stderr
+    assert not (rig.conf / "confirmed").exists() and rig.unchanged()
+
+
+def test_card_entry_leaves_the_wallpaper_out_to_fit(rig):
+    card_rig(rig)
+    wallpaper = write(rig.t / "wallpaper.bin",
+                      lvgl_xrgb(108, 240, lambda x, y: tuple(random.Random(x * 7 + y).randbytes(3))))
+    out = rig.t / "card-initrd"
+    rig.run("--output", out, check=True, FAKE_WALLPAPER=wallpaper)
+    full = out.stat().st_size
+    rig.run("--output", out, check=True, FAKE_WALLPAPER=wallpaper, PLINIUS_CRYPT_MAX_RAMDISK=full + 1024 - 1)
+    assert "without it, the prompt shows the default one" in rig.last.stderr
+    assert out.stat().st_size < full
+
+
+def test_card_base_with_the_look_beyond_the_cards_room_is_not_written(rig):
+    # The earlier lz4 base of an image before 25.11.2026: base and look no longer fit on the card
+    write(rig.conf / "target", CARD_TARGET)
+    base = write(rig.conf / "base", lz4_legacy(newc([("old", 0o100644, random.Random(5).randbytes(4000))])))
+    out = rig.t / "card-initrd"
+    rig.run("--output", out, check=False, PLINIUS_CRYPT_MAX_RAMDISK=base.stat().st_size + 1024 + 10)
+    assert "it is not written" in rig.last.stderr and not out.exists()
+    # With room the look goes behind the base, which the entry has to start with
+    rig.run("--output", out, check=True)
+    assert out.read_bytes().startswith(base.read_bytes())
 
 
 # --- the earlier way: the look behind a base -----------------------------------------------------

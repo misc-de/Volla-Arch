@@ -2,7 +2,7 @@
 
 pkgname=plinius-crypt-ramdisk
 pkgver=0.1
-pkgrel=5
+pkgrel=6
 pkgdesc="Password prompt of plinius-crypt for the phone's Halium ramdisk: programs and scripts, put into vendor_boot and init_boot by the phone after a trial start"
 # The programs run on the phone only
 arch=(aarch64)
@@ -18,7 +18,7 @@ license=(MIT GPL-2.0-or-later GPL-3.0-or-later LGPL-2.1-or-later CC-BY-SA-3.0)
 # Everything the archives are made of. A new version of one of these, or of hook and halium-unlock
 # of plinius-crypt, needs a new build of this package: the archives hold copies, pacman does not
 # see them as files of those packages.
-makedepends=("buffybox>=3.6.0-15" "plinius-progress>=0.1-17" plinius-security
+makedepends=("buffybox>=3.6.0-15" "plinius-progress>=0.1-18" plinius-security
 	cryptsetup e2fsprogs util-linux glibc libgcc openssl device-mapper json-c popt zlib brotli zstd
 	libinih libinput systemd-libs libxkbcommon libdrm libevdev mtdev libcap xz lz4 libgudev glib2
 	pcre2 libffi libwacom lua54 xkeyboard-config
@@ -28,15 +28,15 @@ makedepends=("buffybox>=3.6.0-15" "plinius-progress>=0.1-17" plinius-security
 # copies what they point to
 source=(make-parts 95-plinius-crypt-ramdisk.hook boot-logo-mark.png boot-logo-wordmark.png
 	hook halium-unlock 50-plinius.conf glass-background.py boot-image)
-sha256sums=('5956b2e211679109225643215e6b439473e83b9ef0578aa4b8e14c1302ea3916'
+sha256sums=('75adc6d905d47a93b5e61a56956895bcbbec64edff5465fd6e37367d3f25e1ce'
             'f18cf16928f6b4649cee659484fb3147f2d83c628b2169ec68eb6798ea64dd8e'
             '34075e83a93029c4a3c1caf582a63bb55db96e177c37d107b3731ea646d66ba3'
             'b6c4b6de424d46cb7197e794429733476176a40da27a7d09821490b4822bea0c'
-            '60925324f9058721c5124f9d9ab26ca73bd61811e605815fc892ff9a71b4bca3'
+            '4ce62c24fb918bee0b1695dc672a6763996217d64ef755b1b38f85d96ded6846'
             '29f0083183461ac587dbca74da95ff7dd7719d24734e0239f0f0ad736ef5af09'
             'aeee93b0f413e23e96f4067294a979914c5892c80b98a52f363fa82f3a477818'
             'd6b25124f705780f5d7a8c60cec6f71bda78f933d8fecb6f02d286b5bfd79cee'
-            '9a2dd966230574fa8691695848f39f01c9f693666882ce0a2e268b2c5fbbffea')
+            'bcc3cf432998375ac43b8e0b9f18d86609733c16f927dab50847ea58742c54eb')
 # Nothing to strip or compress: the archives are packed already
 options=(!strip !debug)
 

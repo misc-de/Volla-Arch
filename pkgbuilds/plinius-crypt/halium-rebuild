@@ -90,6 +90,16 @@ fi
 # missing and Android's boot control service aborts again and again (the trial of 0.13-7 with a
 # ramdisk of 22,019,589 bytes). So the ramdisk keeps this much free.
 BOOTCONFIG_ROOM=1024
+# A boot entry on the card has less room: lk copies its ramdisk elsewhere than vendor_boot's, and the
+# room depends on the kernel. 21,981,472 bytes (the look behind the lz4 base of an image of
+# 25.11.2026, kernel 6.1.193) ended in lk's data fault, the same content as one zstd archive (16.4 MB)
+# starts. So the card's ramdisk is always packed that way (card-initrd, tools/card-initrd.py of the
+# Volla project) and has to stay below this, some 2 MB under the size that failed; a larger one is
+# not written: the old ramdisk keeps starting.
+CARD_MAX_RAMDISK=20000000
+if [[ -n ${PLINIUS_CRYPT_MAX_RAMDISK:-} ]] && ((PLINIUS_CRYPT_MAX_RAMDISK < CARD_MAX_RAMDISK)); then
+	CARD_MAX_RAMDISK=$PLINIUS_CRYPT_MAX_RAMDISK
+fi
 TRIAL=plinius-crypt-trial
 # The boot menu's entry of the system in the phone's own storage (Android Boot Manager)
 REAL=real
@@ -315,6 +325,16 @@ phone_archives() {
 
 # assemble PARTS_DIR: $tmp/vendor_boot.img, $tmp/init_boot.img and the same ramdisks in a row for a
 # boot entry on the card ($tmp/initrd), from UT's images, the parts, the phone's files and the look
+# card_initrd: $tmp/initrd, the ramdisk of a card entry from $tmp/vendor_boot.img and
+# $tmp/init_boot.img, packed as one zstd archive (CARD_MAX_RAMDISK); its size in size
+card_initrd() {
+	"$lib/boot-image" ramdisk "$tmp/vendor_boot.img" "$tmp/initrd.raw"
+	"$lib/boot-image" init-ramdisk "$tmp/init_boot.img" "$tmp/init-ramdisk"
+	cat "$tmp/init-ramdisk" >> "$tmp/initrd.raw"
+	python3 -I "$lib/card-initrd" "$tmp/initrd.raw" "$tmp/initrd" || die "the card's ramdisk could not be packed"
+	size=$(stat -c %s "$tmp/initrd")
+}
+
 assemble() {
 	local parts=$1 vsize isize archives
 	ut_files
@@ -327,6 +347,17 @@ assemble() {
 	"$lib/boot-image" slim "$parts/init.lz4" "$tmp/init.lz4"
 	isize=$("$lib/boot-image" build-init "$ut_init" "$tmp/init_boot.img" "$tmp/halium.lz4" "$tmp/init.lz4")
 	vsize=$("$lib/boot-image" build-vendor "$ut_vendor" "$tmp/vendor_boot.img" "$parts/programs.zst" "${archives[@]}")
+	if [[ $kind == card ]]; then
+		# A card entry: what counts is the packed archive and the card's room
+		card_initrd
+		if ((size + BOOTCONFIG_ROOM > CARD_MAX_RAMDISK)) && plain_look; then
+			"$lib/boot-image" build-vendor "$ut_vendor" "$tmp/vendor_boot.img" "$parts/programs.zst" "${archives[@]}" > /dev/null
+			card_initrd
+		fi
+		log "ramdisk $size bytes (look $(stat -c %s "$tmp/look.lz4"), parts $(parts_id "$parts"), one zstd archive for the card)"
+		((size + BOOTCONFIG_ROOM <= CARD_MAX_RAMDISK)) || die "the card's ramdisk ($size bytes) is larger than $((CARD_MAX_RAMDISK - BOOTCONFIG_ROOM)) bytes, it is not written"
+		return
+	fi
 	size=$((vsize + isize))
 	if ((size + BOOTCONFIG_ROOM > MAX_RAMDISK)) && plain_look; then
 		vsize=$("$lib/boot-image" build-vendor "$ut_vendor" "$tmp/vendor_boot.img" "$parts/programs.zst" "${archives[@]}")
@@ -470,6 +501,9 @@ write_card_entry() {
 	log "boot entry $2 rewritten ($(sha256sum "$dir/initrd.cpio.gz" | cut -c1-12)), the old ramdisk is $2/initrd.cpio.gz.prev"
 	umount "$mnt"; rmdir "$mnt"; mnt=""
 	flock -u 9
+	# The entry of an Arch on the card is judged by plinius-bootcheck: the new ramdisk is its new
+	# reference, so a change of language or look raises no alarm at the next start
+	bootcheck_accept "abm:/$2/initrd.cpio.gz"
 }
 
 # --- the boot menu on the card (as plinius-kernel-install does it) ---
@@ -806,12 +840,17 @@ look_base() {
 	esac
 
 	look_archive
+	# The room: a card entry has less (CARD_MAX_RAMDISK). The look stays behind the base there, as the
+	# entry has to start with it; a base too large for the card is the earlier lz4 one, which the
+	# programs of plinius-crypt-ramdisk replace with one zstd archive (--update).
+	local max=$MAX_RAMDISK
+	[[ $kind != card ]] || max=$CARD_MAX_RAMDISK
 	with_look
-	if ((size + BOOTCONFIG_ROOM > MAX_RAMDISK)) && plain_look; then
+	if ((size + BOOTCONFIG_ROOM > max)) && plain_look; then
 		with_look
 	fi
 	log "look archive $look bytes, ramdisk $size bytes"
-	((size + BOOTCONFIG_ROOM <= MAX_RAMDISK)) || die "the ramdisk ($size bytes) is larger than $((MAX_RAMDISK - BOOTCONFIG_ROOM)) bytes: lk loads $MAX_RAMDISK with the bootconfig"
+	((size + BOOTCONFIG_ROOM <= max)) || die "the ramdisk ($size bytes) is larger than $((max - BOOTCONFIG_ROOM)) bytes: lk loads $max with the bootconfig, it is not written"
 	if [[ -n $output ]]; then
 		cp "$tmp/new" "$output"
 		return

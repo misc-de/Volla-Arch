@@ -24,7 +24,9 @@
 #                                                    UT's vendor_boot with one entry: PROGRAMS, its
 #                                                    platform ramdisk and the archives behind it;
 #                                                    prints the ramdisk size
-#        boot-image contains FILE PART                exit status 0 if FILE holds the bytes of PART
+#        boot-image contains FILE PART                exit status 0 if FILE holds the bytes of PART, or
+#                                                    their unpacked content when FILE is a card's
+#                                                    ramdisk packed as one zstd archive (card-initrd)
 #        boot-image init-ramdisk INIT_BOOT OUT       init_boot's ramdisk into OUT
 #        boot-image build-init UT_INIT OUT ARCHIVE...
 #                                                    UT's init_boot with the archives behind its
@@ -393,9 +395,40 @@ def init_top(cpio_data, out_dir):
         os.chmod(os.path.join(d, name), 0o644 if name == "ORDER" else 0o755)
 
 
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+LZ4_LEGACY_MAGIC = b"\x02\x21\x4c\x18"
+
+
+def unpacked(data):
+    """The cpio bytes the kernel reads from a ramdisk of zstd frames and lz4 legacy archives (as
+    card-initrd packs and unpacks it); what is neither stays as it is."""
+    from compression import zstd
+    out, rest = b"", data
+    while rest:
+        rest = rest.lstrip(b"\0")
+        if rest[:4] == ZSTD_MAGIC:
+            d = zstd.ZstdDecompressor()
+            out += d.decompress(rest)
+            if not d.eof:
+                fail("a zstd frame is cut off")
+            rest = d.unused_data
+        elif rest[:4] == LZ4_LEGACY_MAGIC:
+            # lz4 takes everything behind an archive as more lz4, as the kernel does
+            r = subprocess.run(["lz4", "-q", "-dc"], input=rest, capture_output=True)
+            if r.returncode != 0:
+                fail("an lz4 archive does not unpack")
+            return out + r.stdout
+        else:
+            return out + rest
+    return out
+
+
 def contains(path, part_path):
-    data = open(path, "rb").read()
-    sys.exit(0 if open(part_path, "rb").read() in data else 1)
+    data, part = open(path, "rb").read(), open(part_path, "rb").read()
+    if part in data:
+        sys.exit(0)
+    # A card's ramdisk packed anew (card-initrd) holds the part only unpacked
+    sys.exit(0 if data[:4] == ZSTD_MAGIC and part and unpacked(part) in unpacked(data) else 1)
 
 
 def kernel(path, out_path):

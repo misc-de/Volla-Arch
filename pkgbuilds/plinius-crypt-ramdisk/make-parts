@@ -134,9 +134,10 @@ mv "$payload/bg" "$payload/usr/share/plinius-crypt/glass-background.bin"
 rm -f "$payload"/etc/unl0kr.conf.d/{40,60}-plinius-*.conf
 # The display in the ramdisk is DRM, unl0kr would otherwise try fbdev first
 printf '[general]\nbackend=drm\n' > "$payload/etc/unl0kr.conf.d/10-plinius-drm.conf"
-# Accent color until the system knows the user's own (60-plinius-look.conf comes later): the orange
-# of the wallpaper behind the prompt (GNOME "blobs", dark variant)
-printf '[theme]\naccent=#e66100\n' > "$payload/etc/unl0kr.conf.d/55-plinius-first-accent.conf"
+# Accent color until the system knows the user's own (60-plinius-look.conf comes later): that of a
+# new installation, Arch's blue (org.plinius.appearance in device-volla-ansuz), for the boot logo,
+# the keys and the questions of the first start
+printf '[theme]\naccent=#1793d1\n' > "$payload/etc/unl0kr.conf.d/55-plinius-first-accent.conf"
 
 # The boot logo shown from the unlock until the session takes over (plinius-progress -l): the
 # PNGs that phoc draws at its start, at the size phoc gives them on this phone
