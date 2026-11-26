@@ -1,6 +1,6 @@
 # At every start of the phone's Halium system: confirms a new password prompt on trial (written into
 # vendor_boot and init_boot once the system is up) or drops it, and starts the trial of one that
-# waited for a kernel trial (halium-rebuild --boot)
+# waited for a kernel trial of older plinius-kernel versions (halium-rebuild --boot)
 [Unit]
 Description=Confirm or drop a new password prompt on trial (plinius-crypt)
 ConditionPathExists=|/var/lib/plinius-crypt/halium/trial

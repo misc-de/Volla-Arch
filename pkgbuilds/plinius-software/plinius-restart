@@ -47,12 +47,8 @@ SESSION_CORE = re.compile(r"^(init\.scope|dbus-broker\.service|dbus\.service|gno
 # /usr/lib/plinius-crypt/ramdisk
 BOOT_FILES = re.compile(r"^/(boot/|usr/lib/modules/|usr/lib/firmware/|usr/lib/initcpio/|"
                         r"usr/lib/plinius/kernel/|usr/lib/plinius/modules/|usr/lib/plinius-crypt/ramdisk/)")
-# Set by plinius-kernel-install while a new kernel waits for its trial start
-KERNEL_TRIAL = "/var/lib/plinius-kernel/trial"
-# Set by halium-rebuild (plinius-crypt) while a new password prompt waits for its trial start, or
-# for the end of a kernel trial before its own
+# Set by halium-rebuild (plinius-crypt) while a new password prompt waits for its trial start
 RAMDISK_TRIAL = "/var/lib/plinius-crypt/halium/trial"
-RAMDISK_WAITING = "/var/lib/plinius-crypt/halium/waiting"
 # Interpreters whose script is a command line argument (the script itself is not mapped)
 INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|bash|sh|dash|ruby|lua[0-9.]*|gjs.*|node)$")
 APP_DIRS = ["/usr/share/applications", "/usr/local/share/applications",
@@ -286,10 +282,8 @@ def check(changed_file=None, units_before=None):
             if BOOT_FILES.match(path) and not path.endswith("/"):
                 reboot.append(f"boot file updated: {path}")
                 break
-    # A kernel that waits for its trial start runs only after a reboot, whatever was updated
-    if os.path.exists(KERNEL_TRIAL):
-        add(reboot, f"a new kernel waits for its trial start ({(read(KERNEL_TRIAL) or '').strip() or 'unknown'})")
-    if os.path.exists(RAMDISK_TRIAL) or os.path.exists(RAMDISK_WAITING):
+    # A password prompt that waits for its trial start runs only after a reboot, whatever was updated
+    if os.path.exists(RAMDISK_TRIAL):
         add(reboot, "a new password prompt for the startup waits for its trial start")
 
     # Units that changed (their file or a drop-in) while they ran: the change applies at their

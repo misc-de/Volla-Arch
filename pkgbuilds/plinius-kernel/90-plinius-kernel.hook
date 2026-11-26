@@ -1,5 +1,6 @@
-# A new kernel of plinius-kernel: as a trial entry in the boot menu on the memory card, or straight
-# into the boot partition of the active slot without the card (plinius-kernel-install).
+# A new kernel of plinius-kernel: straight into the boot partition of the active slot (or the boot
+# menu entry of an Arch on the memory card), the previous one kept as the fallback
+# (plinius-kernel-install).
 [Trigger]
 Type = Path
 Operation = Install

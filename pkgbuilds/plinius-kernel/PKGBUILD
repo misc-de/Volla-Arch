@@ -22,16 +22,16 @@
 # of this build for the Android container. Our out-of-tree modules (pkgbuilds/plinius-kmod) for this
 # kernel go to /usr/lib/plinius/modules/<release>, where plinius-kmod loads them; plinius-kmod keeps
 # those of UT's 6.1.145 for a system that still starts with it.
-# The pacman hook starts the new kernel as a trial from the boot menu on the memory card and writes
-# it to the boot partition once it came up, keeping the previous kernel as a menu entry
-# (plinius-kernel-install, like grub's previous entries); without the card it writes it at once.
+# The pacman hook writes the new kernel to the boot partition at once and keeps the previous kernel
+# as the fallback, with the boot menu on the memory card as its own menu entry
+# (plinius-kernel-install, like grub's previous entries).
 # plinius-kernel-avb puts a boot.img into the AVB data of a boot partition; image/mkimage.sh uses it
 # too, for the image's boot.img: a new system starts with this kernel, an older one as fallback.
 pkgname=plinius-kernel
 _kcommit=68ec656752b738e6c420def339c66b98e8c36792
 pkgver=6.1.193
 # 100: the check build of 6.1.193 ran as pkgrel 99 on a phone, which takes 99 for newer than 1
-pkgrel=104
+pkgrel=105
 _krelease=$pkgver-plinius$pkgrel
 pkgdesc="Kernel for Volla Phone Plinius: Halium kernel on android14-6.1 with the prebuilt MediaTek modules' interface"
 arch=(aarch64)
@@ -63,11 +63,11 @@ sha256sums=('9b196515e5ed38ddd6632d229c7483643ebc74ac4dd49e6d5aa099962be2ba5d'
             'df1e4652b80fd5c4704a64eea6294c7530d8e21ab99426740095d5c7fed028b4'
             '94dade8930576dbf267b40fa355fcf7068853f51ccc4f88b491a867cd98c07e3'
             'aa644341a1004b6558059faf2674a70fe8ade8b49f5d5c5074f8ff3de79cd54f'
-            'abd24dd10a9d5b460e5f553aeadab4e7a6d23f044ad26fe0a5d9883eb5052d40'
+            '21f8ed3e44d1dee4b3ac5141072f2e3520fb4413975abbe023189a8608fac381'
             '5697bf01731d1a2b78c3457f6388ad68ef130d78e4fb466fa3136a9501128c57'
-            '36ec058b4f86ed0cf29be04e19b33a38a541c2ac7af108bf6d392960c72f9330'
+            '24ce40f5507e0de8f34dbf4f32a581c2d1fe9c604cf00252bbbb2f81de4643a3'
             '265b4a8ff700dc57095c1ab0d27df2209bda064b5df05b14cea1a68b7acfd3f8'
-            '5ddb41f4bec8d5bf9f01ab0975d9da2d0e5fe0164f229bfe0c42e12f00bc4f87'
+            '9099abd201c4fad50e7a488dd6896194e460012a4df70ec7d0c5480558b933ce'
             '87797466637fe4f16f8bfa21be7fcdb2d1033731f0579474a199e5d03fd4a313'
             'fe99da3b4e6d5314c7c9d4afd375763c3f6d326eca55adcf4f828de9319178e1'
             '04ca4ad3d4acfd5ec0e7b4a3254aa34c352dd9ebabc5db15e6fed8a48ea4a313'

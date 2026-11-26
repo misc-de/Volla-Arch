@@ -16,11 +16,11 @@
 #    keyboard, layout, language). The kernel unpacks the archives in a row, so later files replace
 #    the defaults of the same names.
 # The parts last known to start are kept in /var/lib/plinius-crypt/halium/confirmed, and a change of
-# the look uses those. New parts from the package first start from the memory card as a trial,
-# like a new kernel (plinius-kernel): the entry "plinius-crypt-trial" in the boot menu runs the
-# installed kernel with the new ramdisk. Once the system is up, the same images go into vendor_boot
-# and init_boot; if it does not come up, choosing "Arch Linux" in the menu starts the old ramdisk,
-# and the next start drops the trial. Without the card the new parts are written at once.
+# the look uses those. New parts from the package first start from the memory card as a trial:
+# the entry "plinius-crypt-trial" in the boot menu runs the installed kernel with the new ramdisk.
+# Once the system is up, the same images go into vendor_boot and init_boot; if it does not come up,
+# choosing "Arch Linux" in the menu starts the old ramdisk, and the next start drops the trial.
+# Without the card the new parts are written at once.
 # A system with the base of the earlier versions (below) and no confirmed parts keeps using that base
 # for a change of the look until its first trial is confirmed.
 #
@@ -36,9 +36,10 @@
 #   base    the earlier way, without parts: what tools/crypt-ramdisk.sh made for that target
 #           (initrd.cpio.gz for the card, vendor_boot.img for vendor_boot), with the look appended.
 #           Without it: that file in /usr/share/plinius-boot.
-# State: confirmed/ (parts known to start), trial/ (parts and images on trial, the slot), failed (the
-# parts that did not come up: not tried again until new ones come, or --retry), waiting (new parts
-# wait for a kernel trial to end).
+# State: confirmed/ (parts known to start), trial/ (parts and images on trial, the slot, the kernel
+# in boot<slot>), failed (the parts that did not come up: not tried again until new ones come, or
+# --retry), waiting (new parts that waited for a kernel trial of older plinius-kernel versions: set
+# up at the next start).
 #
 # Only a ramdisk of the same UT build is replaced: vendor_boot (or the card's entry) must hold UT's
 # platform ramdisk (at its start up to plinius-crypt 0.12, behind the programs since), init_boot
@@ -61,8 +62,8 @@
 # the firmware file, PLINIUS_CRYPT_INIT_BOOT the init_boot image to measure instead of the active
 # slot's partition (base only), PLINIUS_CRYPT_PARTITIONS a directory of files that stand in for
 # /dev/disk/by-partlabel (no card then), PLINIUS_CRYPT_CMDLINE instead of /proc/cmdline,
-# PLINIUS_CRYPT_KERNEL_TRIAL instead of plinius-kernel's trial file, PLINIUS_CRYPT_UP=yes|no instead
-# of asking systemd whether the system is up, PLINIUS_CRYPT_MAX_RAMDISK a lower limit than lk's
+# PLINIUS_CRYPT_KERNEL_INSTALLED instead of plinius-kernel's note of its kernel,
+# PLINIUS_CRYPT_UP=yes|no instead of asking systemd whether the system is up, PLINIUS_CRYPT_MAX_RAMDISK a lower limit than lk's
 set -euo pipefail
 
 conf=${PLINIUS_CRYPT_HALIUM:-/var/lib/plinius-crypt/halium}
@@ -103,12 +104,9 @@ fi
 TRIAL=plinius-crypt-trial
 # The boot menu's entry of the system in the phone's own storage (Android Boot Manager)
 REAL=real
-KERNEL_TRIAL=${PLINIUS_CRYPT_KERNEL_TRIAL:-/var/lib/plinius-kernel/trial}
 # The kernel in boot<slot> as plinius-kernel-install notes it: a trial made with one kernel and
-# started after another one was confirmed is made again
-KERNEL_INSTALLED=$(dirname "$KERNEL_TRIAL")/installed
-# How long the start waits for a kernel trial to end before its own trial is set up (seconds)
-KERNEL_WAIT=${PLINIUS_CRYPT_KERNEL_WAIT:-900}
+# started after another one was installed is made again
+KERNEL_INSTALLED=${PLINIUS_CRYPT_KERNEL_INSTALLED:-/var/lib/plinius-kernel/installed}
 partitions=${PLINIUS_CRYPT_PARTITIONS:-/dev/disk/by-partlabel}
 cmdline=${PLINIUS_CRYPT_CMDLINE:-/proc/cmdline}
 lock=/run/plinius-crypt-halium.lock
@@ -165,8 +163,6 @@ copy_parts() {
 	rm -rf "$2"
 	mv "$2.new" "$2"
 }
-
-kernel_trial() { [[ -e $KERNEL_TRIAL ]]; }
 
 # The phone's Halium system: a target, or the data partition on /userdata (as rebuild-initramfs)
 halium_system() { [[ -f $conf/target ]] || findmnt -n /userdata > /dev/null; }
@@ -658,12 +654,6 @@ cmd_update() {
 		confirm_parts "$offered"
 		;;
 	vendor_boot)
-		if kernel_trial; then
-			# Its entry carries the ramdisk of the partitions; one trial at a time
-			touch "$conf/waiting"
-			log "a new kernel is on trial; the new password prompt follows at the next start"
-			return
-		fi
 		rm -f "$conf/waiting"
 		s=$(slot)
 		[[ -n $s ]] || die "the active slot is unknown"
@@ -711,24 +701,16 @@ system_up() {
 	systemctl -q is-active graphical.target
 }
 
-# boot: at every start, confirm or drop a trial; start the one that waited for a kernel trial
+# boot: at every start, confirm or drop a trial; set up parts that waited for a kernel trial of
+# older plinius-kernel versions
 cmd_boot() {
 	local id s
 	if [[ -e $conf/waiting && ! -d $conf/trial ]]; then
-		# plinius-kernel-boot.service confirms or drops its kernel once the system is up
-		local waited=0
-		while kernel_trial && ((waited < KERNEL_WAIT)); do
-			sleep 5
-			waited=$((waited + 5))
-		done
-		kernel_trial && { log "the kernel trial has not ended, the new password prompt waits on"; return 0; }
 		rm -f "$conf/waiting"
 		cmd_update
 		return
 	fi
 	[[ -d $conf/trial ]] || return 0
-	# A kernel on trial starts with the ramdisk of the partitions: says nothing about ours
-	grep -qw 'plinius\.kernel=trial' "$cmdline" && return 0
 	id=$(parts_id "$conf/trial")
 	if grep -qw 'plinius\.ramdisk=trial' "$cmdline"; then
 		if ! system_up; then
@@ -745,8 +727,8 @@ cmd_boot() {
 		# The look may have changed during the trial
 		cmd_look
 	elif [[ $(cat "$conf/trial/kernel" 2>/dev/null || true) != "$(cat "$KERNEL_INSTALLED" 2>/dev/null || true)" ]]; then
-		# A new kernel was confirmed meanwhile, and its last step pointed the menu back to "Arch
-		# Linux": the trial never ran. Again, with that kernel.
+		# A new kernel was installed meanwhile, which pointed the menu back to "Arch Linux": the
+		# trial never ran. Again, with that kernel.
 		log "the kernel changed while the password prompt $id waited for its trial; setting it up again"
 		card_drop_trial
 		rm -rf "$conf/trial"

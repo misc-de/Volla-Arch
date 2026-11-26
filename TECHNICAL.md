@@ -27,9 +27,9 @@ Goal: run a native **Arch Linux ARM** with **Phosh** as the user interface on th
 2. **Own rootfs and own kernel.** Firmware and the vendor modules come unchanged from the
    Ubuntu Touch port; `vendor_boot` loses `systempart=` from its command line. The Halium ramdisk is
    UT's with our LUKS step added (`plinius-crypt`). The kernel is our own (`plinius-kernel`): UT's
-   Halium kernel on the current 6.1 stable release, delivered as a normal package update that first
-   starts as a trial from the boot menu. What the kernel lacks (backlight device, userspace LEDs)
-   comes as out-of-tree modules (`plinius-kmod`).
+   Halium kernel on the current 6.1 stable release, delivered as a normal package update that
+   becomes the default at once and keeps the previous kernel as a fallback in the boot menu. What
+   the kernel lacks (backlight device, userspace LEDs) comes as out-of-tree modules (`plinius-kmod`).
 3. **SD card by default, internal storage as an option.** The installer Plinius Boot, a separate
    project, puts Arch on a microSD card next to the existing system, which the boot menu then
    offers. Optionally Arch replaces Volla OS on the internal storage: the system lives in
@@ -150,9 +150,9 @@ On an internal installation, kernel (`plinius-kernel`) and Halium ramdisk (UT's,
 `plinius-crypt` step added) lie in the active slot of the internal storage. The ramdisk asks for the password, opens `userdata` (LUKS2) as
 `plinius-data` and, without `systempart=` on the command line, finds the system in `rootfs.img`
 there; it mounts it, the data partition and the Android image, then hands over to systemd. With an
-SD card in the phone, the bootloader shows its boot menu first; it also carries trial starts of a
-new kernel or ramdisk and a rescue system. An installation on the SD card starts from this menu:
-kernel and ramdisk come from the card. The system lies as `rootfs.img` on the card's data partition,
+SD card in the phone, the bootloader shows its boot menu first; it also carries the previous kernel
+as a fallback, trial starts of a new ramdisk and a rescue system. An installation on the SD card
+starts from this menu: kernel and ramdisk come from the card. The system lies as `rootfs.img` on the card's data partition,
 as on the internal storage, so that the encryption covers it too; the entry names only that partition
 (`datapart=`), and plinius-bootcheck judges the entry. Installations from older images keep their
 system on a plain partition of its own (`systempart=`).
@@ -333,7 +333,7 @@ Settings, GPL-2.0-or-later). The licenses of each package are recorded in its `P
 | `onnxruntime-plinius` | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) | MIT and others, see below | none (own build for aarch64) |
 | `sherpa-onnx` | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | Apache-2.0 | none (speech recognition and VAD only, against `onnxruntime-plinius`) |
 | `plinius-tflite` | [tensorflow/tensorflow](https://github.com/tensorflow/tensorflow) (TensorFlow Lite) | Apache-2.0 and others, see below | patch: NNAPI delegate outside of Android; own C interface |
-| `plinius-kernel` | UT's Halium kernel [`android14-6.1-halium`](https://gitlab.com/ubports/porting/community-ports/android12/generic/kernel-android-common), merged with Google's [ACK `android14-6.1`](https://android.googlesource.com/kernel/common/) and [linux-6.1.y](https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git); source in [misc-de/plinius-kernel](https://github.com/misc-de/plinius-kernel) | GPL-2.0-only | the interface of the prebuilt MediaTek modules kept (KMI, every imported CRC checked at build), stable fixes ported where 6.1.y lacks them, a fix for a NULL folio in the ext4 buddy cache of 6.1.y, no f2fs; a pacman hook starts each new kernel as a trial from the boot menu and keeps the previous one |
+| `plinius-kernel` | UT's Halium kernel [`android14-6.1-halium`](https://gitlab.com/ubports/porting/community-ports/android12/generic/kernel-android-common), merged with Google's [ACK `android14-6.1`](https://android.googlesource.com/kernel/common/) and [linux-6.1.y](https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git); source in [misc-de/plinius-kernel](https://github.com/misc-de/plinius-kernel) | GPL-2.0-only | the interface of the prebuilt MediaTek modules kept (KMI, every imported CRC checked at build), stable fixes ported where 6.1.y lacks them, a fix for a NULL folio in the ext4 buddy cache of 6.1.y, no f2fs; a pacman hook writes each new kernel as the default and keeps the previous one as a fallback entry in the boot menu |
 | `plinius-kmod` | `uleds` from the [UBports kernel](https://gitlab.com/ubports/porting/community-ports/android12/generic/kernel-android-common) | GPL-2.0-only | none; next to our own modules `plinius-backlight`, `plinius-novt` and `plinius-btsuspend` |
 | `furios-gps-contribute` | [misc-de/furios_gps](https://github.com/misc-de/furios_gps), only the beaconDB contribution tool | MIT | patches: wait past geoclue's cached location for a fresh fix, time for a cold start |
 | `furios-audio-bt-reconnect` | [misc-de/furios_audio](https://github.com/misc-de/furios_audio), only the Bluetooth reconnect watcher | MIT | patch: also dials when the display comes on, when music starts and after a reboot; headphones only, no car kits |

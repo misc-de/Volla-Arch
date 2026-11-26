@@ -2,7 +2,7 @@
 
 pkgname=plinius-software
 pkgver=0.12
-pkgrel=28
+pkgrel=29
 pkgdesc="Install phone-ready apps and update the whole system, without partial upgrades"
 arch=(any)
 # The app icon is GNOME Software's (GPL-2.0-or-later), renamed so it does not clash with an
@@ -75,7 +75,7 @@ source=(plinius-software
 	LICENSE)
 sha256sums=('fe6f65a995f79f6360048e50813918d507e71e6ebe52037e6146ef4aff69cc3b'
 	'519d54ae57bece1a4480294bb84ed16a4ec876aa9b9b94250424625f73930c94'
-	'ecc866cadc4ae0ec246f310b2cc3544c5290c9b5a0d1f45204401adcefc274e9'
+	'771e3f481a9275a17070aab914c3d7b305c22752d3c27b71b74046d36223990c'
 	'b21ce8f0a11e405e21dc610dd656eaf85814a0447b57e3e5d3d619525b032a9e'
 	'0ae873d8546f1ab9d9d868f288a191c87a3c80f82420f24ae199cbfb4dc7df8f'
 	'8f76f9830e43efef8b330dc87b2d7479661c5d7563245b6066f26ec683f3de89'

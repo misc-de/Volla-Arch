@@ -39,7 +39,7 @@ def rewritten_script(t):
     for old, new in (("/var/lib/plinius-crypt/halium", t / "default-conf"),
                      ("/usr/share/plinius-boot", t / "default-boot"),
                      ("/usr/lib/plinius-crypt/ramdisk", t / "default-parts"),
-                     ("/var/lib/plinius-kernel/trial", t / "kernel/trial"),
+                     ("/var/lib/plinius-kernel/installed", t / "kernel/installed"),
                      ("/dev/disk/by-partlabel", t / "default-partitions"),
                      ("/dev/disk/by-partuuid/", f"{t}/by-partuuid/"),
                      ("/proc/cmdline", t / "default-cmdline"),
@@ -147,8 +147,8 @@ exec "{real_dd}" "$@"''')
         settings = dict(PLINIUS_CRYPT_HALIUM=self.conf, PLINIUS_CRYPT_BOOT_FILES=self.boot,
                         PLINIUS_CRYPT_PARTS=self.offered, PLINIUS_CRYPT_PARTITIONS=self.parts,
                         PLINIUS_CRYPT_CMDLINE=self.cmdline,
-                        PLINIUS_CRYPT_KERNEL_TRIAL=self.t / "kernel/trial",
-                        PLINIUS_CRYPT_UP="yes", PLINIUS_CRYPT_KERNEL_WAIT=0, TMPDIR=self.t / "tmp")
+                        PLINIUS_CRYPT_KERNEL_INSTALLED=self.t / "kernel/installed",
+                        PLINIUS_CRYPT_UP="yes", TMPDIR=self.t / "tmp")
         settings.update(env)
         e = self.fake_bin.env(isolated=True, **settings)
         r = subprocess.run(["bash", str(self.lib / "halium-rebuild"), *map(str, args)], env=e,
@@ -423,21 +423,20 @@ def test_failed_parts_are_not_tried_again_without_retry(rig):
     assert not (rig.conf / "failed").exists()
 
 
-def test_kernel_trial_makes_the_parts_wait_until_it_ended(rig, fake_bin):
-    write(rig.t / "kernel/trial", b"1")
-    rig.run("--update", check=True)
-    assert "a new kernel is on trial" in rig.last.stderr
-    assert (rig.conf / "waiting").exists()
-    assert rig.unchanged() and rig.writes() == []
-    # Still on trial at the next start: the start waits a while (no real sleep here), then gives up
-    fake_bin.stub("sleep")
-    rig.run("--boot", check=True, PLINIUS_CRYPT_KERNEL_WAIT=10)
-    assert "has not ended" in rig.last.stderr
-    assert len(fake_bin.calls("sleep")) == 2
-    assert rig.unchanged() and (rig.conf / "waiting").exists()
-    # Kernel trial over: the parts follow
-    (rig.t / "kernel/trial").unlink()
+def test_parts_that_waited_for_an_old_kernel_trial_are_set_up_at_the_next_start(rig):
+    # Older plinius-kernel versions tried a new kernel first, and new parts waited for its end
+    write(rig.conf / "waiting", b"")
     rig.run("--boot", check=True)
+    assert not (rig.conf / "waiting").exists()
+    assert rig.part("vendor_boot_b") != rig.before["vendor_boot_b"]
+
+
+def test_update_does_not_wait_for_a_new_kernel(rig):
+    # plinius-kernel writes a new kernel at once (its hook runs before this one): the parts follow
+    # in the same update
+    write(rig.t / "kernel/installed", b"6.1.193-plinius105\n")
+    rig.run("--update", check=True)
+    assert "written, it starts with the next restart" in rig.last.stderr
     assert not (rig.conf / "waiting").exists()
     assert rig.part("vendor_boot_b") != rig.before["vendor_boot_b"]
 
@@ -478,11 +477,6 @@ def test_boot_keeps_a_trial_while_the_system_is_not_up(rig):
     rig.run("--boot", check=True, PLINIUS_CRYPT_UP="no")
     assert "stays on trial" in rig.last.stderr
     assert (rig.conf / "trial").is_dir() and rig.unchanged()
-    # A kernel on trial starts with the partitions' ramdisk: that says nothing about this trial
-    write(rig.cmdline, b"plinius.kernel=trial plinius.ramdisk=trial\n")
-    rig.run("--boot", check=True)
-    assert (rig.conf / "trial").is_dir() and not (rig.conf / "failed").exists()
-    assert rig.unchanged()
     # Started without the trial entry: the trial failed
     write(rig.cmdline, b"androidboot.slot_suffix=_b\n")
     rig.run("--boot", check=True)
@@ -490,6 +484,18 @@ def test_boot_keeps_a_trial_while_the_system_is_not_up(rig):
     assert not (rig.conf / "trial").exists()
     assert (rig.conf / "failed").read_text().strip()
     assert rig.unchanged() and rig.writes() == []
+
+
+def test_boot_sets_a_trial_up_again_after_a_new_kernel(rig):
+    # The trial was made with the kernel then in boot<slot>; plinius-kernel wrote a new one since
+    # and pointed the menu back to "Arch Linux", so the trial never ran: it is made again, not failed
+    make_trial(rig)
+    write(rig.t / "kernel/installed", b"6.1.193-plinius105\n")
+    write(rig.cmdline, b"androidboot.slot_suffix=_b\n")
+    rig.run("--boot", check=True)
+    assert "setting it up again" in rig.last.stderr
+    assert not (rig.conf / "failed").exists()
+    assert rig.part("vendor_boot_b") != rig.before["vendor_boot_b"]
 
 
 def test_output_is_a_dry_run(rig):
@@ -519,18 +525,16 @@ def test_not_a_halium_system(rig):
 
 
 def test_target_from_the_disk_under_userdata(rig):
-    # No target file: the data partition in the phone's own storage (UFS, sdc) means vendor_boot;
-    # a kernel trial stops it right there, before anything is put together
     (rig.conf / "target").unlink()
-    write(rig.t / "kernel/trial", b"1")
-    rig.run("--update", check=True, FAKE_USERDATA="/dev/mapper/plinius-data",
-            FAKE_LSBLK="plinius-data\\n`-sdc32\\n  `-sdc\\n")
-    assert "a new kernel is on trial" in rig.last.stderr
     # On the card it is a search for the card's entry, which --update cannot try
     rig.run("--update", check=False, FAKE_USERDATA="/dev/mmcblk0p3",
             FAKE_LSBLK="mmcblk0p3\\n`-mmcblk0\\n")
     assert "no trial of new parts for the target card-search" in rig.last.stderr
     assert rig.unchanged()
+    # No target file: the data partition in the phone's own storage (UFS, sdc) means vendor_boot
+    rig.run("--update", check=True, FAKE_USERDATA="/dev/mapper/plinius-data",
+            FAKE_LSBLK="plinius-data\\n`-sdc32\\n  `-sdc\\n")
+    assert rig.part("vendor_boot_b") != rig.before["vendor_boot_b"]
 
 
 def test_bad_card_target_is_refused(rig):

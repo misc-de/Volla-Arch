@@ -3,7 +3,7 @@
 pkgname=plinius-crypt
 pkgver=0.13
 # 16 was built against cryptsetup 2.8.9 and held back (it would rebuild old card ramdisks)
-pkgrel=17
+pkgrel=18
 pkgdesc="Optional full-disk encryption for Plinius: initramfs hook with unl0kr and plinius-progress, offline in-place encryption on request"
 # Native for pam_plinius_crypt.so (a new PIN must differ from the encryption password)
 arch=(aarch64 x86_64)
@@ -58,7 +58,7 @@ sha256sums=('4ce62c24fb918bee0b1695dc672a6763996217d64ef755b1b38f85d96ded6846'
             '189699c2073f8a08f6c5141e71b51cbb210b76da1b9589556f52db32f81b4636'
             '934a633c4add9e5dfa4453eb384d2812d1d9445be128435aa528221fdd382afb'
             '486a0e19da8bcfd40f5ec12da3ab8c190bdb3178256d61619011388f2b1b6a53'
-            '58bbf38b1a9782129aead33529ef0262b5ec6442829e8d3691c7806bae95c66c'
+            '34e112471ee640c28ddbbbc08957421ab7c3a7fc2fa25881c4645e9c5a3295b2'
             'bcc3cf432998375ac43b8e0b9f18d86609733c16f927dab50847ea58742c54eb'
             '889c028f166b27266690d8f1759103179ee520090d5ba8e5745bc8414bd11999'
             'bb75bb725311434ca6582fce8338e7d7598642d9661041a46d84171da3898ee4'
@@ -66,7 +66,7 @@ sha256sums=('4ce62c24fb918bee0b1695dc672a6763996217d64ef755b1b38f85d96ded6846'
             '8ef530b2d4361f0b509a32cd3de86790f015a9803180c8ccba2baad1c417fe68'
             '29b3245472b82f063ad18e7efa35bf250993ce15fa66b5fae2c8a19924c9d6f0'
             '29f0083183461ac587dbca74da95ff7dd7719d24734e0239f0f0ad736ef5af09'
-            '7df50de7975f57e7eabecb43764a2de622a50b70389d2b11b3aedb09fe746a32'
+            '3e80bc6fd812a28272b161cbe9af766028b72246f85e4f760614a20186fdd9a7'
             '3593839829ec10105a6dddb7e753b0291852401d4aab92eb20eae4f99d9363b4'
             '42b729e5554bfa997f2a653437f429e2790ba48a6d6729f70664f54cf5ab2a3b'
             '71353037c38aa03c584ac01dcc619ee87f02d1fd1ffe0bdc4ed61510ad0bc950'

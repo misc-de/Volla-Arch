@@ -214,8 +214,7 @@ def system(mod, proc, desktop_dirs, tmp_path, monkeypatch):
     monkeypatch.setattr(mod.os, "listdir",
                         lambda path=".": [str(p) for p in pids] if path == "/proc" else real_listdir(path))
     monkeypatch.setattr(mod, "session_uids", lambda: [UID])
-    for name in ("KERNEL_TRIAL", "RAMDISK_TRIAL", "RAMDISK_WAITING"):
-        monkeypatch.setattr(mod, name, str(tmp_path / name.lower()))
+    monkeypatch.setattr(mod, "RAMDISK_TRIAL", str(tmp_path / "ramdisk_trial"))
 
     def add(pid, comm, cgroup, exe="/usr/bin/x (deleted)", ppid=1):
         pids.append(pid)
@@ -286,15 +285,11 @@ def test_check_ignores_ssh_sessions_and_its_own_callers(mod, system, proc):
 
 
 def test_check_trials_and_boot_files_need_a_reboot(mod, system, tmp_path, monkeypatch):
-    with open(tmp_path / "kernel_trial", "w") as f:
-        f.write("6.1.193-plinius1\n")
+    (tmp_path / "ramdisk_trial").mkdir()
     result = mod.check()
     assert result["level"] == "reboot"
-    assert result["reboot"] == ["a new kernel waits for its trial start (6.1.193-plinius1)"]
-    os.remove(tmp_path / "kernel_trial")
-    (tmp_path / "ramdisk_waiting").write_text("")
-    assert mod.check()["reboot"] == ["a new password prompt for the startup waits for its trial start"]
-    os.remove(tmp_path / "ramdisk_waiting")
+    assert result["reboot"] == ["a new password prompt for the startup waits for its trial start"]
+    os.rmdir(tmp_path / "ramdisk_trial")
 
     changed = tmp_path / "changed"
     changed.write_text("linux-firmware\nmesa\n")
