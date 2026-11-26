@@ -1,8 +1,10 @@
 # The "Web Apps" tab of Settings > Apps (cc-plinius-webapps.c): the list of the web apps in
 # ~/.local/share/plinius-webapps of the test's home, the page that adds or edits one (address,
 # name, icon from the website or a file, browser, Identify As, Frameless, deleting cache and
-# cookies), what saving writes (webapp.ini, the icon, the Firefox profile's user.js and
-# userChrome.css, Chromium's launch.sh, the desktop file), Reset Website Data and Delete.
+# cookies), Add's search in the catalog of plinius-webapps with Manually beside it, what saving
+# writes (webapp.ini, the icon, the Firefox profile's user.js and userChrome.css, Chromium's
+# launch.sh, the desktop file), Reset Website Data and Delete. The catalog's helper is a stand-in
+# (fake_programs.py) answering as plinius-webapps-catalog does.
 #
 # The browsers are stand-ins in fake_bin (firefox with an application.ini next to it, chromium
 # answering --version). The website is a web server on 127.0.0.1 (fake_http.py); requests of the
@@ -14,6 +16,7 @@
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -21,7 +24,7 @@ import pytest
 from fake_file_chooser import FileChooserPortal
 from fake_http import LocalWeb, png, png_header_only
 from fake_programs import Programs
-from gcc_harness import (build_panel, call, click, dump, enter, gcc_session, gcc_world,  # noqa: F401
+from gcc_harness import (back, build_panel, call, click, dump, enter, gcc_session, gcc_world,  # noqa: F401
                          push, select, set_active, set_text, settle, wait, wait_for)
 
 HEADER = r'''
@@ -171,6 +174,7 @@ def program(gcc_session, tmp_path_factory):
     header = out / "gcc_webapps.h"
     header.write_text(HEADER)
     reps = [('"/usr/lib/firefox', '"{root}/usr/lib/firefox'),
+            ('"/usr/lib/plinius-webapps/', '"{root}/usr/lib/plinius-webapps/'),
             ("soup_message_new_from_uri (SOUP_METHOD_GET, uri)",
              "gcc_soup_message_new_from_uri (SOUP_METHOD_GET, uri)"),
             ("address_is_public (g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (remote)))",
@@ -216,6 +220,9 @@ def pixbuf_facts(path):
         o = y * stride + x * n
         return tuple(pixels[o:o + n])
     return pb.get_width(), pb.get_height(), pb.get_has_alpha(), at(pb.get_width() // 2, pb.get_height() // 2), at(0, 0)
+
+
+CATALOG_HELPER = "/usr/lib/plinius-webapps/plinius-webapps-catalog"
 
 
 class Phone:
@@ -296,6 +303,18 @@ class Phone:
             lines.append(f"{k}={v}")
         (d / "webapp.ini").write_text("\n".join(lines) + "\n")
         return d
+
+    # The catalog's helper (plinius-webapps-catalog)
+    def catalog(self, offline=None, online=None, **rule):
+        """The helper answering --offline with offline and the run with the server with online
+        (each a JSON text or a dict of a rule's answer)."""
+        self.progs.program(self.path(CATALOG_HELPER), "catalog")
+        for args, answer in ((["--offline"], offline), ([], online)):
+            if answer is not None:
+                self.progs.rule("catalog", args, **(answer if isinstance(answer, dict) else {"out": answer}), **rule)
+
+    def catalog_calls(self):
+        return self.progs.calls("catalog")
 
     def config(self, app_id):
         return keyfile(self.data / app_id / "webapp.ini", "Web App")
@@ -1789,3 +1808,386 @@ def test_the_late_icon_that_cannot_be_stored(program, gcc_world, phone):
     assert "Icon" not in phone.config(app)
     warnings = [m["message"] for m in r.warnings()]
     assert len(warnings) == 1 and warnings[0].startswith(f"Could not store the icon of web app {app}: ")
+
+
+# ----- Adding from the catalog -----
+
+SEARCH = {"type": "AdwNavigationPage", "tag": "plinius-webapp-search"}
+CATEGORY = {"type": "AdwNavigationPage", "tag": "plinius-webapp-category"}
+SEARCH_ENTRY = {"type": "GtkSearchEntry"}
+
+
+def entry(id, name, url, category="shopping", keywords=(), **settings):
+    """An entry as the helper prints it."""
+    e = {"id": id, "name": name, "url": url, "category": category, "keywords": list(keywords),
+         "frameless": True, "clear_cache": False, "clear_cookies": False, "identify_as": "", "icon": ""}
+    e.update(settings)
+    return e
+
+
+def answer(*apps, updated=1):
+    return json.dumps({"updated": updated, "language": "de", "country": "DE", "apps": list(apps)})
+
+
+SHOPS = [entry("mail", "Mail", "https://mail.example/", "communication", ["email"]),
+         entry("amazon", "Amazon", "https://www.amazon.de/", keywords=["einkaufen"]),
+         entry("kleinanzeigen", "Kleinanzeigen", "https://www.kleinanzeigen.de/"),
+         entry("db", "Deutsche Bahn", "https://www.bahn.de/", "travel", ["zug"]),
+         entry("oeffi", "Öffi", "https://oeffi.example/", "travel")]
+
+
+def open_search():
+    return [click(type="GtkButton", text="Add"), wait_for(**SEARCH)]
+
+
+def open_category(title):
+    return [click(type="AdwActionRow", text=title, within=SEARCH), wait_for(**CATEGORY)]
+
+
+def rows(screen, page=SEARCH):
+    """[(title, subtitle)] of the rows of a page."""
+    return [(r["text"], r.get("subtitle")) for r in screen.within(**page).find(type="AdwActionRow")]
+
+
+def names(screen, page=SEARCH):
+    return [t for t, _ in rows(screen, page)]
+
+
+def row_icons(screen, page=SEARCH):
+    """{title: the icon name of its picture, None for an image from a file}"""
+    out = {}
+    for r in screen.within(**page).find(type="AdwActionRow"):
+        icons = [n["icon"] for n in Node_walk(r) if n.get("type") == "GtkImage" and n.get("icon")]
+        out[r["text"]] = icons[0] if icons else None
+    return out
+
+
+def test_add_opens_the_search_with_manually_beside_it(program, gcc_world, phone):
+    phone.firefox()
+    phone.catalog(answer(*SHOPS), answer(*SHOPS))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"), dump("search"),
+                                click(type="GtkButton", text="Manually", within=SEARCH), editor_open(), dump("editor"),
+                                set_text("https://shop.example/", **ADDRESS), *save(), wait_for(gone=True, **SEARCH),
+                                dump("list")])
+    search = r.dump("search")
+    # The first page after Add: the search field, the groups below it, Manually at the top right
+    assert search.one(**SEARCH)["text"] == "Add Web App"
+    assert search.within(**SEARCH).has(type="GtkButton", text="Manually")
+    assert entry_value(r.dump("editor"), "Address") == "" and entry_value(r.dump("editor"), "Name") == ""
+    # Saved: back to the list, past the search
+    assert app_rows(r.dump("list")) == [("shop.example", "shop.example", True)]
+    assert phone.catalog_calls() == [["--offline"], []]
+    assert not r.warnings()
+
+
+def test_without_the_catalog_add_opens_the_empty_page(program, gcc_world, phone):
+    phone.firefox()
+    r = gcc_world.run(program, [*open_add(), dump("editor")])
+    assert not r.dump("editor").has(**SEARCH)
+    assert r.dump("editor").one(**EDITOR)["text"] == "Add Web App"
+
+
+def test_nothing_typed_shows_the_groups_only(program, gcc_world, phone):
+    phone.firefox()
+    many = [*SHOPS, entry("otto", "Otto", "https://otto.example/"), entry("zalando", "Zalando", "https://z.example/")]
+    phone.catalog(answer(*many), answer(*many))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"), dump("search")])
+    s = r.dump("search")
+    # The groups that have web apps, in the helper's order, with the first three of each; no web app rows
+    assert rows(s) == [("Communication", "Mail"), ("Shopping", "Amazon, Kleinanzeigen, Otto, …"),
+                       ("Travel & Maps", "Deutsche Bahn, Öffi")]
+    assert row_icons(s) == {"Communication": "mail-unread-symbolic", "Shopping": "emoji-objects-symbolic",
+                            "Travel & Maps": "emoji-travel-symbolic"}
+    assert not s.within(**SEARCH).has(type="AdwPreferencesGroup", text="Shopping")
+    assert not r.warnings()
+
+
+def test_a_group_lists_its_web_apps_on_a_page_of_its_own(program, gcc_world, phone):
+    phone.firefox()
+    icon = gcc_world.home / "amazon.png"
+    icon.write_bytes(png(128, 128, RED))
+    apps = [entry("amazon", "Amazon", "https://www.amazon.de/", icon=str(icon)),
+            entry("ka", "Kleinanzeigen", "https://www.kleinanzeigen.de/"),
+            entry("broken", "Broken Icon", "https://b.example/", icon=str(gcc_world.home / "missing.png")),
+            entry("relative", "Relative Icon", "https://r.example/", icon="amazon.png"),
+            entry("db", "Deutsche Bahn", "https://www.bahn.de/", "travel")]
+    phone.catalog(answer(*apps), answer(*apps))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                *open_category("Shopping"), dump("group"), back(), wait_for(**SEARCH), dump("back")])
+    g = r.dump("group")
+    assert g.one(**CATEGORY)["text"] == "Shopping"
+    assert rows(g, CATEGORY) == [("Amazon", "www.amazon.de"), ("Kleinanzeigen", "www.kleinanzeigen.de"),
+                                 ("Broken Icon", "b.example"), ("Relative Icon", "r.example")]
+    # The catalog's icon in front of the name; without a usable one the generic icon
+    assert row_icons(g, CATEGORY) == {"Amazon": None, "Kleinanzeigen": "web-browser", "Broken Icon": "web-browser",
+                                      "Relative Icon": "web-browser"}
+    # Back (a swipe) to the groups
+    assert names(r.dump("back")) == ["Shopping", "Travel & Maps"]
+    assert not r.warnings()
+
+
+def test_typing_shows_the_web_apps_alone_by_name(program, gcc_world, phone):
+    phone.firefox()
+    phone.catalog(answer(*SHOPS), answer(*SHOPS))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                set_text("e", **SEARCH_ENTRY), wait(500), dump("found"),
+                                set_text("", **SEARCH_ENTRY), wait(500), dump("again")])
+    f = r.dump("found")
+    # Every web app with a word starting with "e" (email, einkaufen, example...), by name, no groups
+    assert rows(f) == [("Amazon", "www.amazon.de"), ("Mail", "mail.example"), ("Öffi", "oeffi.example")]
+    assert row_icons(f) == {"Amazon": "web-browser", "Mail": "web-browser", "Öffi": "web-browser"}
+    assert names(r.dump("again")) == ["Communication", "Shopping", "Travel & Maps"]
+
+
+@pytest.mark.parametrize("query, found", [
+    ("bahn", ["Deutsche Bahn"]),          # a word of the name
+    ("deutsche bah", ["Deutsche Bahn"]),  # every word, the last one begun
+    ("einkaufen", ["Amazon"]),            # a keyword
+    ("AMAZON.DE", ["Amazon"]),            # the host, in any case
+    ("kleinanz", ["Kleinanzeigen"]),
+    ("offi", ["Öffi"]),                   # without its accents
+    ("  zug ", ["Deutsche Bahn"]),
+])
+def test_search_finds_by_name_host_and_keywords(program, gcc_world, phone, query, found):
+    phone.firefox()
+    phone.catalog(answer(*SHOPS), answer(*SHOPS))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                set_text(query, **SEARCH_ENTRY), wait(500), dump("found")])
+    assert names(r.dump("found")) == found
+
+
+KINDS = [entry("bank", "Example Bank", "https://bank.example/", "finance"),
+         entry("pay", "PayExample", "https://pay.example/", "finance"),
+         entry("chess", "Chess Club", "https://chess.example/", "games"),
+         entry("quiz", "Quiz", "https://quiz.example/", "games"),
+         entry("shop", "Shop", "https://shop.example/")]
+
+
+@pytest.mark.parametrize("query, found", [
+    ("bank", ["Example Bank", "PayExample"]),   # a word of the group, and a name
+    ("banks", ["Example Bank", "PayExample"]),  # the group's title
+    ("payments", ["Example Bank", "PayExample"]),
+    ("games", ["Chess Club", "Quiz"]),
+    ("chess", ["Chess Club", "Quiz"]),          # the group's words count for every entry in it
+    ("quiz", ["Quiz"]),
+    ("games quiz", ["Quiz"]),
+    ("shop", ["Shop"]),
+])
+def test_search_finds_by_the_kind_of_website(program, gcc_world, phone, query, found):
+    phone.firefox()
+    phone.catalog(answer(*KINDS), answer(*KINDS))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Games"),
+                                set_text(query, **SEARCH_ENTRY), wait(500), dump("found")])
+    assert names(r.dump("found")) == found
+
+
+def test_nothing_found_offers_entering_manually(program, gcc_world, phone):
+    phone.firefox()
+    phone.catalog(answer(*SHOPS), answer(*SHOPS))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                set_text("nothing like it", **SEARCH_ENTRY), wait(500), dump("none"),
+                                click(type="GtkButton", text="Enter Manually"), editor_open(),
+                                set_text("https://own.example/", **ADDRESS), *save(), wait_for(gone=True, **SEARCH),
+                                dump("list")])
+    status = r.dump("none").within(**SEARCH).one(type="AdwStatusPage")
+    assert (status["text"], status["subtitle"]) == ("No Web Apps Found", "Add the website with its address instead.")
+    assert not rows(r.dump("none"))
+    assert app_rows(r.dump("list")) == [("own.example", "own.example", True)]
+
+
+def test_an_entry_fills_in_the_page_with_its_icon_and_adds_it(program, gcc_world, phone):
+    phone.firefox("159.0.1")
+    phone.web.route("/shop.example/start", page("The Website's Own Title"))
+    icon = gcc_world.home / "shop.png"
+    icon.write_bytes(png(128, 128, BLUE))
+    shop = entry("shop", "Shop", "https://shop.example/start", frameless=False, clear_cookies=True,
+                 identify_as="android", icon=str(icon))
+    phone.catalog(answer(shop), answer(shop))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                *open_category("Shopping"), click(type="AdwActionRow", text="Shop", within=CATEGORY),
+                                editor_open(), wait(1500), dump("editor"), set_text("https://shop.example/other", **ADDRESS),
+                                wait(1500), *save(), wait_for(gone=True, **CATEGORY), dump("list")])
+    ed = r.dump("editor")
+    assert ed.one(**EDITOR)["text"] == "Add Web App"
+    assert entry_value(ed, "Address") == "https://shop.example/start" and entry_value(ed, "Name") == "Shop"
+    e = ed.within(**EDITOR)
+    assert e.one(**IDENTITY)["selected_text"] == "Mobile (Android)"
+    assert [(n["text"], n["active"]) for n in e.find(type="AdwSwitchRow")] == [
+        ("Frameless", False), ("Delete Cache", False), ("Delete Cookies", True)]
+    assert status_text(ed) is None
+    # The catalog's icon: the website is not asked, also not for another address
+    assert phone.web.requests == []
+    app = only_id(phone)
+    conf = phone.config(app)
+    assert conf["Name"] == "Shop" and conf["URL"] == "https://shop.example/other"
+    assert conf["Frameless"] == "false" and conf["ClearCache"] == "false" and conf["ClearCookies"] == "true"
+    assert conf["IdentifyAs"] == "android" and conf["UserAgent"] == ANDROID_FF.format(159)
+    assert pixbuf_facts(phone.data / app / conf["Icon"])[3][:3] == BLUE[:3]
+    # Back to the list, past the group and the search
+    assert not r.dump("list").has(**SEARCH) and not r.dump("list").has(**CATEGORY)
+    assert app_rows(r.dump("list")) == [("Shop", "shop.example", True)]
+    assert not r.warnings()
+
+
+def test_an_entry_without_icon_looks_on_the_website(program, gcc_world, phone):
+    phone.firefox()
+    phone.web.route("/shop.example/", page("The Website's Own Title",
+                                           '<link rel="icon" href="/shop.example/i.png" sizes="64x64">'))
+    phone.web.route("/shop.example/i.png", png(64, 64, RED))
+    shop = entry("shop", "Shop", "https://shop.example/", icon=str(gcc_world.home / "missing.png"))
+    phone.catalog(answer(shop), answer(shop))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                set_text("shop", **SEARCH_ENTRY), wait(500),
+                                click(type="AdwActionRow", text="Shop", within=SEARCH), editor_open(),
+                                wait_for(gone=True, type="GtkLabel", text=LOOKING, timeout=20000), dump("editor"),
+                                *save(), wait_for(gone=True, **SEARCH)])
+    # The catalog's name stays, not the website's title
+    assert entry_value(r.dump("editor"), "Name") == "Shop"
+    app = only_id(phone)
+    assert pixbuf_facts(phone.data / app / phone.config(app)["Icon"])[3][:3] == RED[:3]
+    assert not r.warnings()
+
+
+def test_the_same_entry_twice_is_two_web_apps(program, gcc_world, phone):
+    phone.firefox()
+    shop = entry("shop", "Shop", "https://shop.example/")
+    phone.catalog(answer(shop), answer(shop))
+    steps = [*open_search(), wait_for(type="AdwActionRow", text="Shopping"), *open_category("Shopping"),
+             click(type="AdwActionRow", text="Shop", within=CATEGORY), editor_open(), *save(),
+             wait_for(gone=True, **SEARCH)]
+    gcc_world.run(program, [*steps, *steps])
+    assert len(phone.ids()) == 2
+
+
+@pytest.mark.parametrize("online, shown", [
+    ({"out": answer(entry("b", "Newer", "https://b.example/", "news"), updated=2)}, ["News"]),
+    ({"out": answer(entry("b", "Older", "https://b.example/", "news"), updated=0)}, ["Shopping"]),
+    ({"out": answer(entry("b", "Same Time", "https://b.example/", "news"), updated=1)}, ["Shopping"]),
+    ({"code": 1}, ["Shopping"]),
+])
+def test_a_newer_catalog_from_the_server_replaces_the_list(program, gcc_world, phone, online, shown):
+    phone.firefox()
+    phone.catalog(answer(entry("a", "Offline", "https://a.example/"), updated=1), dict(online, sleep=1))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"), wait(2000),
+                                dump("search")])
+    assert names(r.dump("search")) == shown
+    assert len(phone.catalog_calls()) == 2
+    assert [m["message"] for m in r.warnings()] == (
+        ["The catalog of web apps could not be listed"] if "code" in online else [])
+
+
+def test_the_newer_catalog_keeps_what_was_typed(program, gcc_world, phone):
+    phone.firefox()
+    phone.catalog(answer(entry("a", "Alpha", "https://a.example/"), updated=1),
+                  {"out": answer(entry("a", "Alpha", "https://a.example/"), entry("a2", "Alpha Two", "https://a2.example/"),
+                                 entry("z", "Zulu", "https://z.example/"), updated=2), "sleep": 1})
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                set_text("alpha", **SEARCH_ENTRY), wait_for(type="AdwActionRow", text="Alpha Two"),
+                                dump("search")])
+    assert names(r.dump("search")) == ["Alpha", "Alpha Two"]
+
+
+def test_an_open_group_keeps_its_web_apps_when_a_newer_catalog_comes(program, gcc_world, phone):
+    phone.firefox()
+    phone.catalog(answer(entry("a", "Alpha", "https://a.example/"), updated=1),
+                  {"out": answer(entry("z", "Zulu", "https://z.example/"), updated=2), "sleep": 1})
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                *open_category("Shopping"), wait(2000), click(type="AdwActionRow", text="Alpha"),
+                                editor_open(), dump("editor"), back(), wait_for(**CATEGORY), back(),
+                                wait_for(**SEARCH), *open_category("Shopping"), dump("group")])
+    # The page shows what it opened with; the next one the newer catalog
+    assert entry_value(r.dump("editor"), "Name") == "Alpha"
+    assert names(r.dump("group"), CATEGORY) == ["Zulu"]
+    assert not r.warnings()
+
+
+@pytest.mark.parametrize("out, warning", [
+    ({"code": 1}, "The catalog of web apps could not be listed"),
+    ("not json", "The catalog of web apps is not readable"),
+    ("[]", "The catalog of web apps is not readable"),
+    ('{"apps": 3}', "The catalog of web apps is not readable"),
+])
+def test_without_any_answer_the_list_is_not_available(program, gcc_world, phone, out, warning):
+    phone.firefox()
+    phone.catalog(out, out)
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwStatusPage", within=SEARCH), wait(500), dump("none")])
+    status = r.dump("none").within(**SEARCH).one(type="AdwStatusPage")
+    assert status["text"] == "The List Is Not Available"
+    assert [m["message"] for m in r.warnings()] == [warning, warning]
+
+
+def test_entries_the_page_cannot_use_are_left_out(program, gcc_world, phone):
+    phone.firefox()
+    good = entry("good", "Good", "https://good.example/")
+    text = json.dumps({"updated": "soon", "apps": [
+        3, entry("noname", "", "https://x.example/"), entry("ftp", "FTP", "ftp://x.example/"),
+        entry("nohost", "No Host", "https://"), entry("other", "Other", "https://o.example/", "weather"),
+        {"name": "No Address", "category": "shopping"}, {"name": 5, "url": "https://n.example/", "category": "news"},
+        dict(good, frameless="yes", identify_as="spaceship", keywords="not a list", icon=3),
+        entry("plain", "Plain Host", "plain.example", "news", [3, "word"])]})
+    phone.catalog(text, text)
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"), dump("groups"),
+                                *open_category("Shopping"), click(type="AdwActionRow", text="Good", within=CATEGORY),
+                                editor_open(), dump("editor"), back(), wait_for(**CATEGORY), back(),
+                                wait_for(**SEARCH), set_text("word", **SEARCH_ENTRY), wait(500), dump("search")])
+    assert names(r.dump("groups")) == ["News", "Shopping"]
+    e = r.dump("editor").within(**EDITOR)
+    # Settings the page does not know fall back to those of a new web app
+    assert e.one(**IDENTITY)["selected_text"] == "Browser Default"
+    assert [(n["text"], n["active"]) for n in e.find(type="AdwSwitchRow")][0] == ("Frameless", True)
+    assert rows(r.dump("search")) == [("Plain Host", "plain.example")]
+    assert not r.warnings()
+
+
+def test_a_helper_that_cannot_start(program, gcc_world, phone):
+    phone.firefox()
+    helper = phone.path(CATALOG_HELPER)
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_text("#!/nonexistent/interpreter\n")
+    helper.chmod(0o755)
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwStatusPage", within=SEARCH), dump("none")])
+    assert r.dump("none").within(**SEARCH).one(type="AdwStatusPage")["text"] == "The List Is Not Available"
+    warnings = [m["message"] for m in r.warnings()]
+    assert len(warnings) == 2 and all(w.startswith(f"Could not start {helper}: ") for w in warnings)
+
+
+def test_a_too_large_answer_is_not_used(program, gcc_world, phone):
+    phone.firefox()
+    big = answer(entry("a", "A" * 10, "https://a.example/", keywords=["x" * 1024] * 4200))
+    phone.catalog(big, big)
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwStatusPage", within=SEARCH), dump("none")])
+    assert r.dump("none").within(**SEARCH).one(type="AdwStatusPage")["text"] == "The List Is Not Available"
+    assert [m["message"] for m in r.warnings()] == ["The catalog of web apps is too large"] * 2
+
+
+def test_leaving_the_search_while_the_catalog_loads(program, gcc_world, phone):
+    # The run with the server still going (the spinner of the first run would keep the test's
+    # settling busy, so the slow one is the second): leaving ends it, its answer is never used
+    phone.firefox()
+    phone.catalog(answer(*SHOPS), {"out": answer(entry("late", "Late", "https://late.example/"), updated=9),
+                                   "sleep": 20})
+    start = time.monotonic()
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"), back(),
+                                wait(500), dump("list")])
+    # The helper did not hold up closing the window either
+    assert time.monotonic() - start < 15
+    assert phone.catalog_calls() == [["--offline"], []]
+    assert not r.dump("list").has(**SEARCH)
+    assert not r.warnings()
+
+
+def test_back_returns_page_by_page(program, gcc_world, phone):
+    phone.firefox()
+    phone.catalog(answer(*SHOPS), answer(*SHOPS))
+    r = gcc_world.run(program, [*open_search(), wait_for(type="AdwActionRow", text="Shopping"),
+                                set_text("bahn", **SEARCH_ENTRY), wait(500),
+                                click(type="GtkButton", text="Manually", within=SEARCH), editor_open(), back(),
+                                wait_for(**SEARCH), dump("typed"), set_text("", **SEARCH_ENTRY), wait(500),
+                                *open_category("Shopping"), click(type="AdwActionRow", text="Amazon", within=CATEGORY),
+                                editor_open(), back(), wait_for(**CATEGORY), dump("group"), back(), wait_for(**SEARCH),
+                                back(), wait_for(gone=True, **SEARCH), dump("list")])
+    # What was typed is still there; each back goes one page
+    assert names(r.dump("typed")) == ["Deutsche Bahn"]
+    assert names(r.dump("group"), CATEGORY) == ["Amazon", "Kleinanzeigen"]
+    assert not r.dump("list").has(**SEARCH)
+    assert phone.ids() == []

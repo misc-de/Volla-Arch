@@ -270,7 +270,9 @@ def program(gcc_session, tmp_path_factory):
     return build_panel(gcc_session, out, "software", ["cc-plinius-software.c", "cc-plinius-webapps.c"],
                        GLUE.replace("@ROOT@", str(root)),
                        replacements={"cc-plinius-software.c": reps,
-                                     "cc-plinius-webapps.c": [('"/usr/lib/firefox', '"{root}/usr/lib/firefox')]},
+                                     "cc-plinius-webapps.c": [('"/usr/lib/firefox', '"{root}/usr/lib/firefox'),
+                                                              ('"/usr/lib/plinius-webapps/',
+                                                               '"{root}/usr/lib/plinius-webapps/')]},
                        # Only in the file's header comment
                        allow=("/usr/lib/plinius-software/plinius-restart apply",),
                        pkgs=("appstream", "libsoup-3.0", "gdk-pixbuf-2.0"),

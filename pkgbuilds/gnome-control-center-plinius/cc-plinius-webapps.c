@@ -12,6 +12,22 @@
  * cookies when the web app is closed. The switch of a row puts the web app among the apps or
  * takes it away again; Delete removes it with its profile.
  *
+ * Add opens the search in the catalog of well-known websites (package plinius-webapps, published
+ * signed on plinius.cais.de), like an app store: a search field and Manually at the top right
+ * for the empty page; below the field the groups (communication, games, banks ...), a tap on one
+ * lists its web apps on a page of its own; once something is typed, the matching web apps
+ * alone, by name. Each web app shows its icon from the catalog (the helper names the file
+ * after checking it). The search looks in the name, the address, the
+ * entry's keywords and its group (its title and words such as "bank" or "games", in the phone's
+ * language and in English). The catalog's helper (CATALOG_HELPER) prints the entries for the
+ * phone's language and country with their starting settings (Frameless, Identify As, deleting
+ * cache and cookies); the search page runs it twice, without the network first so the list is
+ * there at once, then with the server, and shows a newer catalog when one came. Tapping an entry
+ * opens the page of a new web app filled in with it and the catalog's icon (without one, the
+ * icon is looked for on the website at once); adding it
+ * goes back to the list of web apps, past the search. Every page goes back with a swipe.
+ * Without the helper, Add opens the empty page directly.
+ *
  * Everything lives in the user's home, nothing needs root:
  * - ~/.local/share/plinius-webapps/<id>/webapp.ini: name, address, options, the icon's file
  * - ~/.local/share/plinius-webapps/<id>/icon-<time>.png: the icon (a new name for each new icon,
@@ -102,11 +118,18 @@
 /* Icon among the apps until the web app has one of its own */
 #define FALLBACK_ICON "web-browser"
 #define EDITOR_KEY "plinius-webapp-editor"
+#define SEARCH_KEY "plinius-webapp-search"
+/* The catalog of web apps (package plinius-webapps), JSON on stdout */
+#define CATALOG_HELPER "/usr/lib/plinius-webapps/plinius-webapps-catalog"
+/* What is read of its answer at most */
+#define MAX_CATALOG_BYTES (4 * 1024 * 1024)
 
 /* Icons are stored at most this large (pixels, square) */
 #define ICON_SIZE 256
 #define PREVIEW_SIZE 96
 #define ROW_ICON_SIZE 32
+/* Icons in the catalog, as the apps in Explore */
+#define CATALOG_ICON_SIZE 48
 /* What is read of a page, a manifest, an icon at most */
 #define MAX_PAGE_BYTES (1024 * 1024)
 #define MAX_MANIFEST_BYTES (256 * 1024)
@@ -1982,6 +2005,7 @@ typedef struct {
     char *auto_name;        /* what the website called itself and we filled in */
     guint fetch_timeout;
     GCancellable *fetch_cancellable;
+    AdwNavigationPage *origin; /* weak: the search it was opened from, saving goes back past it */
 } Editor;
 
 static void
@@ -1993,9 +2017,26 @@ editor_free (Editor *e)
     g_clear_object (&e->fetch_cancellable);
     g_clear_object (&e->icon);
     g_free (e->auto_name);
+    if (e->origin)
+        g_object_remove_weak_pointer (G_OBJECT (e->origin), (gpointer *) &e->origin);
     webapp_free (e->app);
     webapps_unref (e->w);
     g_free (e);
+}
+
+/* Back from the page: past the search to the list */
+static void
+editor_done (Editor *e)
+{
+    GtkWidget *nav = gtk_widget_get_ancestor (GTK_WIDGET (e->page), ADW_TYPE_NAVIGATION_VIEW);
+    AdwNavigationPage *before = NULL;
+
+    if (e->origin && nav)
+        before = adw_navigation_view_get_previous_page (ADW_NAVIGATION_VIEW (nav), e->origin);
+    if (before)
+        adw_navigation_view_pop_to_page (ADW_NAVIGATION_VIEW (nav), before);
+    else
+        gtk_widget_activate_action (GTK_WIDGET (e->page), "navigation.pop", NULL);
 }
 
 static void
@@ -2318,7 +2359,7 @@ save_clicked (Editor *e)
     }
     if (e->w->alive)
         webapps_refresh (e->w);
-    gtk_widget_activate_action (GTK_WIDGET (e->page), "navigation.pop", NULL);
+    editor_done (e);
 }
 
 /* --- Deleting --- */
@@ -2488,8 +2529,11 @@ add_identity_row (Editor *e, AdwPreferencesGroup *group)
     adw_preferences_group_add (group, GTK_WIDGET (e->identity_row));
 }
 
+/* The page of @app, or of a new web app: empty, or filled in from @template (a catalog entry,
+ * without id) with the icon file @icon. @origin: the search it was opened from when adding */
 static void
-open_editor (WebApps *w, const WebApp *app)
+open_editor_full (WebApps *w, const WebApp *app, const WebApp *template, const char *icon,
+                  AdwNavigationPage *origin)
 {
     Editor *e = g_new0 (Editor, 1);
     GtkWidget *toolbar, *header, *prefs, *box, *status, *buttons, *button;
@@ -2499,10 +2543,19 @@ open_editor (WebApps *w, const WebApp *app)
     e->is_new = app == NULL;
     if (app) {
         e->app = webapp_copy (app);
+    } else if (template) {
+        e->app = webapp_copy (template);
+        g_clear_pointer (&e->app->id, g_free);
+        g_free (e->app->browser);
+        e->app->browser = g_strdup (default_engine ()->id);
     } else {
         e->app = g_new0 (WebApp, 1);
         e->app->browser = g_strdup (default_engine ()->id);
         e->app->frameless = TRUE;
+    }
+    if (origin) {
+        e->origin = origin;
+        g_object_add_weak_pointer (G_OBJECT (origin), (gpointer *) &e->origin);
     }
 
     prefs = adw_preferences_page_new ();
@@ -2541,9 +2594,9 @@ open_editor (WebApps *w, const WebApp *app)
     group = add_group (prefs, NULL,
                        P_("Each web app has its own browser profile: logins and data stay apart from the "
                           "browser and from other web apps."));
-    e->url_row = entry_row (group, P_("Address"), app ? app->url : NULL);
+    e->url_row = entry_row (group, P_("Address"), e->app->url);
     adw_entry_row_set_input_purpose (e->url_row, GTK_INPUT_PURPOSE_URL);
-    e->name_row = entry_row (group, P_("Name"), app ? app->name : NULL);
+    e->name_row = entry_row (group, P_("Name"), e->app->name);
 
     /* What the web app runs in, above Frameless */
     group = add_group (prefs, NULL, NULL);
@@ -2587,6 +2640,503 @@ open_editor (WebApps *w, const WebApp *app)
     g_signal_connect_swapped (e->url_row, "entry-activated", G_CALLBACK (editor_fetch), e);
     editor_update (e);
     cc_panel_push_subpage (w->panel, e->page);
+    /* From the catalog: its icon, else the website's looked for at once */
+    if (template) {
+        g_autoptr(GdkPixbuf) pixbuf = icon && *icon ? gdk_pixbuf_new_from_file (icon, NULL) : NULL;
+
+        /* Kept like a chosen image: a changed address does not replace it, From Website does */
+        if (pixbuf) {
+            editor_set_icon (e, pixbuf);
+            e->icon_from_file = TRUE;
+        } else {
+            editor_fetch (e);
+        }
+    }
+}
+
+static void
+open_editor (WebApps *w, const WebApp *app)
+{
+    open_editor_full (w, app, NULL, NULL, NULL);
+}
+
+/* ----- Adding: the search in the catalog, or Manually ----- */
+
+typedef struct {
+    WebApp app;      /* name, address and starting settings; no id */
+    char *category;
+    char *icon;      /* the icon's file, checked by the helper; NULL = none */
+    char *haystack;  /* name, host and keywords: what the search looks in */
+} CatalogEntry;
+
+static void
+catalog_entry_free (CatalogEntry *c)
+{
+    g_free (c->app.name);
+    g_free (c->app.url);
+    g_free (c->app.identity);
+    g_free (c->category);
+    g_free (c->icon);
+    g_free (c->haystack);
+    g_free (c);
+}
+
+/* The groups in the order the helper sorts them; the search also finds an entry by its group's
+ * title and words, translated and in English */
+typedef struct {
+    const char *id;
+    const char *title; /* translated with P_() */
+    const char *words; /* translated with P_(): words one searches for the group by */
+    const char *icon;
+} Category;
+
+static const Category categories[] = {
+    { "communication", N_("Communication"), N_("mail email chat messenger calls"), "mail-unread-symbolic" },
+    { "social", N_("Social Networks"), N_("social network community friends photos"), "emoji-people-symbolic" },
+    { "news", N_("News"), N_("news newspaper magazine headlines"), "x-office-document-symbolic" },
+    { "media", N_("Video & Music"), N_("video music streaming tv films series podcasts radio"),
+      "applications-multimedia-symbolic" },
+    { "games", N_("Games"), N_("games gaming play chess puzzle"), "applications-games-symbolic" },
+    { "shopping", N_("Shopping"), N_("shopping shop store buy marketplace classifieds"), "emoji-objects-symbolic" },
+    { "travel", N_("Travel & Maps"), N_("travel maps train bus flight hotel tickets navigation"),
+      "emoji-travel-symbolic" },
+    { "office", N_("Knowledge & Tools"),
+      N_("tools office documents translate dictionary encyclopedia ai calendar cloud"),
+      "applications-utilities-symbolic" },
+    { "finance", N_("Banks & Payments"), N_("bank banking money payments account transfer finance"),
+      "auth-smartcard-symbolic" },
+};
+
+static const Category *
+category_by_id (const char *id)
+{
+    for (gsize i = 0; i < G_N_ELEMENTS (categories); i++)
+        if (g_strcmp0 (categories[i].id, id) == 0)
+            return &categories[i];
+    return NULL;
+}
+
+static const char *
+category_title (const char *id)
+{
+    const Category *category = category_by_id (id);
+
+    return category ? P_(category->title) : NULL;
+}
+
+static const char *
+member_string (JsonObject *o, const char *name)
+{
+    JsonNode *node = json_object_get_member (o, name);
+
+    return node && JSON_NODE_HOLDS_VALUE (node) && json_node_get_value_type (node) == G_TYPE_STRING
+        ? json_node_get_string (node) : NULL;
+}
+
+static gboolean
+member_bool (JsonObject *o, const char *name, gboolean fallback)
+{
+    JsonNode *node = json_object_get_member (o, name);
+
+    return node && JSON_NODE_HOLDS_VALUE (node) && json_node_get_value_type (node) == G_TYPE_BOOLEAN
+        ? json_node_get_boolean (node) : fallback;
+}
+
+/* The helper's answer: its entries (CatalogEntry) and the catalog's time; NULL if unusable.
+ * Entries without name, a web address or a known group are left out. */
+static GPtrArray *
+catalog_parse (const char *text, gint64 *updated)
+{
+    g_autoptr(JsonParser) parser = json_parser_new ();
+    g_autoptr(GPtrArray) entries = g_ptr_array_new_with_free_func ((GDestroyNotify) catalog_entry_free);
+    JsonNode *root;
+    JsonObject *top;
+    JsonNode *apps, *node;
+
+    if (!text || !json_parser_load_from_data (parser, text, -1, NULL))
+        return NULL;
+    root = json_parser_get_root (parser);
+    if (!root || !JSON_NODE_HOLDS_OBJECT (root))
+        return NULL;
+    top = json_node_get_object (root);
+    apps = json_object_get_member (top, "apps");
+    if (!apps || !JSON_NODE_HOLDS_ARRAY (apps))
+        return NULL;
+    node = json_object_get_member (top, "updated");
+    *updated = node && JSON_NODE_HOLDS_VALUE (node) && json_node_get_value_type (node) == G_TYPE_INT64
+        ? json_node_get_int (node) : 0;
+
+    for (guint i = 0; i < json_array_get_length (json_node_get_array (apps)); i++) {
+        JsonObject *o;
+        JsonNode *keywords;
+        const char *name, *url, *category, *identity, *icon;
+        g_autofree char *normalized = NULL, *host = NULL;
+        g_autoptr(GString) haystack = NULL;
+        CatalogEntry *c;
+
+        node = json_array_get_element (json_node_get_array (apps), i);
+        if (!JSON_NODE_HOLDS_OBJECT (node))
+            continue;
+        o = json_node_get_object (node);
+        name = member_string (o, "name");
+        url = member_string (o, "url");
+        category = member_string (o, "category");
+        normalized = url ? normalize_url (url) : NULL;
+        if (!name || !*name || !normalized || !category_title (category))
+            continue;
+        identity = member_string (o, "identify_as");
+        icon = member_string (o, "icon");
+        host = url_host (normalized);
+
+        c = g_new0 (CatalogEntry, 1);
+        c->app.name = g_strdup (name);
+        c->app.url = g_steal_pointer (&normalized);
+        c->app.frameless = member_bool (o, "frameless", TRUE);
+        c->app.clear_cache = member_bool (o, "clear_cache", FALSE);
+        c->app.clear_cookies = member_bool (o, "clear_cookies", FALSE);
+        c->app.identity = g_strdup (identity_by_id (identity)->id);
+        c->category = g_strdup (category);
+        c->icon = icon && g_path_is_absolute (icon) ? g_strdup (icon) : NULL;
+        haystack = g_string_new (name);
+        g_string_append_printf (haystack, " %s", host);
+        keywords = json_object_get_member (o, "keywords");
+        if (keywords && JSON_NODE_HOLDS_ARRAY (keywords)) {
+            JsonArray *list = json_node_get_array (keywords);
+
+            for (guint k = 0; k < json_array_get_length (list); k++) {
+                JsonNode *kw = json_array_get_element (list, k);
+
+                if (JSON_NODE_HOLDS_VALUE (kw) && json_node_get_value_type (kw) == G_TYPE_STRING)
+                    g_string_append_printf (haystack, " %s", json_node_get_string (kw));
+            }
+        }
+        {
+            const Category *group = category_by_id (category);
+
+            g_string_append_printf (haystack, " %s %s %s %s", P_(group->title), group->title, P_(group->words),
+                                    group->words);
+        }
+        c->haystack = g_string_free (g_steal_pointer (&haystack), FALSE);
+        g_ptr_array_add (entries, c);
+    }
+    return g_steal_pointer (&entries);
+}
+
+typedef struct {
+    WebApps *w;                 /* reference */
+    AdwNavigationPage *page;
+    GtkEditable *entry;
+    GtkStack *stack;            /* "loading", "results", "empty" */
+    AdwPreferencesPage *results;
+    AdwPreferencesGroup *group; /* the groups or the web apps found, now on the results page */
+    AdwStatusPage *empty;
+    GPtrArray *entries;         /* CatalogEntry, NULL until the first answer */
+    gint64 updated;
+    gboolean online;            /* the run with the server has been started */
+    GCancellable *cancellable;
+    GSubprocess *helper;
+} Search;
+
+static void
+search_free (Search *s)
+{
+    g_cancellable_cancel (s->cancellable);
+    if (s->helper)
+        g_subprocess_force_exit (s->helper);
+    g_clear_object (&s->helper);
+    g_clear_object (&s->cancellable);
+    g_clear_pointer (&s->entries, g_ptr_array_unref);
+    webapps_unref (s->w);
+    g_free (s);
+}
+
+static void
+catalog_row_activated (AdwActionRow *row, Search *s)
+{
+    CatalogEntry *c = g_object_get_data (G_OBJECT (row), "catalog-entry");
+
+    if (c)
+        open_editor_full (s->w, NULL, &c->app, c->icon, s->page);
+}
+
+static GtkWidget *
+catalog_icon (CatalogEntry *c)
+{
+    GtkWidget *image = NULL;
+
+    if (c->icon && g_file_test (c->icon, G_FILE_TEST_IS_REGULAR))
+        image = gtk_image_new_from_file (c->icon);
+    if (!image)
+        image = gtk_image_new_from_icon_name (FALLBACK_ICON);
+    gtk_image_set_pixel_size (GTK_IMAGE (image), CATALOG_ICON_SIZE);
+    gtk_widget_set_margin_top (image, 6);
+    gtk_widget_set_margin_bottom (image, 6);
+    return image;
+}
+
+/* A web app of the catalog: its icon, the name, the address */
+static GtkWidget *
+catalog_row (Search *s, CatalogEntry *c)
+{
+    GtkWidget *row = adw_action_row_new ();
+    g_autofree char *host = url_host (c->app.url);
+
+    adw_preferences_row_set_use_markup (ADW_PREFERENCES_ROW (row), FALSE);
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), c->app.name);
+    adw_action_row_set_subtitle (ADW_ACTION_ROW (row), host);
+    adw_action_row_add_prefix (ADW_ACTION_ROW (row), catalog_icon (c));
+    adw_action_row_add_suffix (ADW_ACTION_ROW (row), gtk_image_new_from_icon_name ("go-next-symbolic"));
+    gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
+    g_object_set_data (G_OBJECT (row), "catalog-entry", c);
+    g_signal_connect (row, "activated", G_CALLBACK (catalog_row_activated), s);
+    return row;
+}
+
+/* The page of a group: its web apps. It keeps the entries it shows, also when a newer catalog
+ * replaces them on the search page meanwhile. */
+static void
+category_activated (AdwActionRow *row, Search *s)
+{
+    const Category *category = g_object_get_data (G_OBJECT (row), "category");
+    GtkWidget *toolbar, *prefs;
+    AdwPreferencesGroup *group;
+    AdwNavigationPage *page;
+
+    if (!category || !s->entries)
+        return;
+    prefs = adw_preferences_page_new ();
+    group = ADW_PREFERENCES_GROUP (adw_preferences_group_new ());
+    adw_preferences_page_add (ADW_PREFERENCES_PAGE (prefs), group);
+    for (guint i = 0; i < s->entries->len; i++) {
+        CatalogEntry *c = g_ptr_array_index (s->entries, i);
+
+        if (g_strcmp0 (c->category, category->id) == 0)
+            adw_preferences_group_add (group, catalog_row (s, c));
+    }
+    toolbar = adw_toolbar_view_new ();
+    adw_toolbar_view_add_top_bar (ADW_TOOLBAR_VIEW (toolbar), adw_header_bar_new ());
+    adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (toolbar), prefs);
+    page = adw_navigation_page_new_with_tag (toolbar, P_(category->title), "plinius-webapp-category");
+    g_object_set_data_full (G_OBJECT (page), "catalog-entries", g_ptr_array_ref (s->entries),
+                            (GDestroyNotify) g_ptr_array_unref);
+    cc_panel_push_subpage (s->w->panel, page);
+}
+
+/* A group: its symbol, its title and the first of its web apps */
+static GtkWidget *
+category_row (Search *s, const Category *category, const char *examples)
+{
+    GtkWidget *row = adw_action_row_new ();
+    GtkWidget *image = gtk_image_new_from_icon_name (category->icon);
+
+    adw_preferences_row_set_use_markup (ADW_PREFERENCES_ROW (row), FALSE);
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), P_(category->title));
+    adw_action_row_set_subtitle (ADW_ACTION_ROW (row), examples);
+    adw_action_row_set_subtitle_lines (ADW_ACTION_ROW (row), 1);
+    adw_action_row_add_prefix (ADW_ACTION_ROW (row), image);
+    adw_action_row_add_suffix (ADW_ACTION_ROW (row), gtk_image_new_from_icon_name ("go-next-symbolic"));
+    gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
+    g_object_set_data (G_OBJECT (row), "category", (gpointer) category);
+    g_signal_connect (row, "activated", G_CALLBACK (category_activated), s);
+    return row;
+}
+
+static int
+compare_entry_names (gconstpointer a, gconstpointer b)
+{
+    const CatalogEntry *x = *(CatalogEntry *const *) a, *y = *(CatalogEntry *const *) b;
+
+    return g_utf8_collate (x->app.name, y->app.name);
+}
+
+/* Nothing typed: the groups that have web apps. Something typed: the matching web apps alone,
+ * by name. */
+static void
+search_show (Search *s)
+{
+    g_autofree char *query = g_strstrip (g_strdup (gtk_editable_get_text (s->entry)));
+    AdwPreferencesGroup *group;
+    guint shown = 0;
+
+    if (!s->entries) {
+        gtk_stack_set_visible_child_name (s->stack, "loading");
+        return;
+    }
+    if (s->group)
+        adw_preferences_page_remove (s->results, s->group);
+    group = s->group = ADW_PREFERENCES_GROUP (adw_preferences_group_new ());
+    adw_preferences_page_add (s->results, group);
+    /* The rows point into these entries */
+    g_object_set_data_full (G_OBJECT (group), "catalog-entries", g_ptr_array_ref (s->entries),
+                            (GDestroyNotify) g_ptr_array_unref);
+
+    if (!*query) {
+        for (gsize k = 0; k < G_N_ELEMENTS (categories); k++) {
+            g_autoptr(GString) examples = g_string_new (NULL);
+            guint n = 0;
+
+            for (guint i = 0; i < s->entries->len; i++) {
+                CatalogEntry *c = g_ptr_array_index (s->entries, i);
+
+                if (g_strcmp0 (c->category, categories[k].id) != 0)
+                    continue;
+                if (n < 3)
+                    g_string_append_printf (examples, "%s%s", n ? ", " : "", c->app.name);
+                n++;
+            }
+            if (!n)
+                continue;
+            if (n > 3)
+                g_string_append (examples, ", …");
+            adw_preferences_group_add (group, category_row (s, &categories[k], examples->str));
+            shown++;
+        }
+    } else {
+        g_autoptr(GPtrArray) found = g_ptr_array_new ();
+
+        for (guint i = 0; i < s->entries->len; i++) {
+            CatalogEntry *c = g_ptr_array_index (s->entries, i);
+
+            if (g_str_match_string (query, c->haystack, TRUE))
+                g_ptr_array_add (found, c);
+        }
+        g_ptr_array_sort (found, compare_entry_names);
+        for (guint i = 0; i < found->len; i++)
+            adw_preferences_group_add (group, catalog_row (s, g_ptr_array_index (found, i)));
+        shown = found->len;
+    }
+    if (shown) {
+        gtk_stack_set_visible_child_name (s->stack, "results");
+        return;
+    }
+    adw_status_page_set_title (s->empty, s->entries->len ? P_("No Web Apps Found") : P_("The List Is Not Available"));
+    gtk_stack_set_visible_child_name (s->stack, "empty");
+}
+
+static void search_run (Search *s, gboolean online);
+
+/* An answer of the helper (@entries NULL: none); after the first one, ask with the server */
+static void
+search_answer (Search *s, GPtrArray *answer, gint64 updated)
+{
+    g_autoptr(GPtrArray) entries = answer; /* taken over */
+
+    /* The first answer, or a newer catalog from the server */
+    if (entries && (!s->entries || updated > s->updated)) {
+        g_clear_pointer (&s->entries, g_ptr_array_unref);
+        s->entries = g_steal_pointer (&entries);
+        s->updated = updated;
+        search_show (s);
+    }
+    if (!s->online) {
+        search_run (s, TRUE);
+    } else if (!s->entries) {
+        s->entries = g_ptr_array_new_with_free_func ((GDestroyNotify) catalog_entry_free);
+        search_show (s);
+    }
+}
+
+static void
+helper_answered (GObject *source, GAsyncResult *result, gpointer data)
+{
+    Search *s = data;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *out = NULL;
+    g_autoptr(GPtrArray) entries = NULL;
+    gint64 updated = 0;
+
+    if (!g_subprocess_communicate_utf8_finish (G_SUBPROCESS (source), result, &out, NULL, &error)) {
+        /* The page went: s is gone */
+        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+            return;
+        g_warning ("Could not read the catalog of web apps: %s", error->message);
+    } else if (!g_subprocess_get_successful (G_SUBPROCESS (source))) {
+        g_warning ("The catalog of web apps could not be listed");
+    } else if (out && strlen (out) > MAX_CATALOG_BYTES) {
+        g_warning ("The catalog of web apps is too large");
+    } else if (!(entries = catalog_parse (out, &updated))) {
+        g_warning ("The catalog of web apps is not readable");
+    }
+    g_clear_object (&s->helper);
+    search_answer (s, g_steal_pointer (&entries), updated);
+}
+
+static void
+search_run (Search *s, gboolean online)
+{
+    g_autoptr(GError) error = NULL;
+    const char *argv[] = { CATALOG_HELPER, online ? NULL : "--offline", NULL };
+
+    s->online = online;
+    s->helper = g_subprocess_newv (argv, G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error);
+    if (!s->helper) {
+        g_warning ("Could not start %s: %s", CATALOG_HELPER, error->message);
+        search_answer (s, NULL, 0);
+        return;
+    }
+    g_subprocess_communicate_utf8_async (s->helper, NULL, s->cancellable, helper_answered, s);
+}
+
+static void
+manually_clicked (Search *s)
+{
+    open_editor_full (s->w, NULL, NULL, NULL, s->page);
+}
+
+/* Add: the search field, the entries right below it, Manually at the top right */
+static void
+open_search (WebApps *w)
+{
+    Search *s = g_new0 (Search, 1);
+    GtkWidget *toolbar, *header, *clamp, *entry, *spinner, *button;
+
+    s->w = webapps_ref (w);
+    s->cancellable = g_cancellable_new ();
+
+    entry = gtk_search_entry_new ();
+    s->entry = GTK_EDITABLE (entry);
+    gtk_search_entry_set_placeholder_text (GTK_SEARCH_ENTRY (entry), P_("Name, address or kind, e.g. bank"));
+    gtk_accessible_update_property (GTK_ACCESSIBLE (entry), GTK_ACCESSIBLE_PROPERTY_LABEL, P_("Search Web Apps"), -1);
+    clamp = adw_clamp_new ();
+    gtk_widget_set_margin_start (clamp, 12);
+    gtk_widget_set_margin_end (clamp, 12);
+    gtk_widget_set_margin_bottom (clamp, 6);
+    adw_clamp_set_child (ADW_CLAMP (clamp), entry);
+
+    s->stack = GTK_STACK (gtk_stack_new ());
+    spinner = adw_spinner_new ();
+    gtk_widget_set_size_request (spinner, 32, 32);
+    gtk_widget_set_halign (spinner, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign (spinner, GTK_ALIGN_CENTER);
+    gtk_stack_add_named (s->stack, spinner, "loading");
+    s->results = ADW_PREFERENCES_PAGE (adw_preferences_page_new ());
+    gtk_stack_add_named (s->stack, GTK_WIDGET (s->results), "results");
+    s->empty = ADW_STATUS_PAGE (adw_status_page_new ());
+    adw_status_page_set_icon_name (s->empty, "system-search-symbolic");
+    adw_status_page_set_description (s->empty, P_("Add the website with its address instead."));
+    button = pill_button (P_("Enter Manually"), NULL);
+    g_signal_connect_swapped (button, "clicked", G_CALLBACK (manually_clicked), s);
+    adw_status_page_set_child (s->empty, button);
+    gtk_stack_add_named (s->stack, GTK_WIDGET (s->empty), "empty");
+    gtk_stack_set_visible_child_name (s->stack, "loading");
+
+    /* Manually at the top right, where the page of a web app has Add */
+    header = adw_header_bar_new ();
+    button = gtk_button_new_with_label (P_("Manually"));
+    g_signal_connect_swapped (button, "clicked", G_CALLBACK (manually_clicked), s);
+    adw_header_bar_pack_end (ADW_HEADER_BAR (header), button);
+
+    toolbar = adw_toolbar_view_new ();
+    adw_toolbar_view_add_top_bar (ADW_TOOLBAR_VIEW (toolbar), header);
+    adw_toolbar_view_add_top_bar (ADW_TOOLBAR_VIEW (toolbar), clamp);
+    adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (toolbar), GTK_WIDGET (s->stack));
+    /* The tag of the empty page's predecessor: Add leads here, a swipe goes back to the list */
+    s->page = adw_navigation_page_new_with_tag (toolbar, P_("Add Web App"), "plinius-webapp-search");
+    g_object_set_data_full (G_OBJECT (s->page), SEARCH_KEY, s, (GDestroyNotify) search_free);
+    g_signal_connect_swapped (entry, "search-changed", G_CALLBACK (search_show), s);
+
+    cc_panel_push_subpage (w->panel, s->page);
+    search_run (s, FALSE);
 }
 
 static void
@@ -2594,7 +3144,11 @@ add_clicked (GtkWidget *tab)
 {
     WebApps *w = g_object_get_data (G_OBJECT (tab), "plinius-webapps");
 
-    if (w)
+    if (!w)
+        return;
+    if (g_file_test (CATALOG_HELPER, G_FILE_TEST_IS_EXECUTABLE))
+        open_search (w);
+    else
         open_editor (w, NULL);
 }
 
@@ -2602,7 +3156,7 @@ add_clicked (GtkWidget *tab)
  * cc_plinius_webapps_new_add_button:
  * @tab: the tab from cc_plinius_webapps_new_tab()
  *
- * Returns: "Add" for the panel's header bar, opens the editor for a new web app
+ * Returns: "Add" for the panel's header bar: the search in the catalog, Manually beside it
  */
 GtkWidget *
 cc_plinius_webapps_new_add_button (GtkWidget *tab)
