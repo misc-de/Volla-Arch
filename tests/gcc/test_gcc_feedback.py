@@ -742,8 +742,10 @@ def test_leaving_the_page_ends_the_test(program, gcc_world, fb):
 def test_test_ends_by_itself_when_feedbackd_never_says(program, gcc_world, fb):
     fb.feedbackd(TriggerFeedback="(uint32 3,)")
     r = gcc_world.run(program, [*open_channel("Calls"), click(type="AdwButtonRow", text="Test"), settle(),
-                                wait(10500), dump("still"), wait(1000), settle(), dump("over")])
-    # Eight seconds of ringing and three to spare
+                                wait(9500), dump("still"),
+                                wait_for(type="AdwButtonRow", text="Test", timeout=5000), dump("over")])
+    # Eight seconds of ringing and three to spare. g_timeout_add_seconds () ends it between 11 and
+    # 12 s, so the end is waited for rather than looked at a fixed moment
     assert r.dump("still").has(type="AdwButtonRow", text="Stop")
     assert r.dump("over").has(type="AdwButtonRow", text="Test")
     assert not gcc_world.calls(FBD, "EndFeedback")

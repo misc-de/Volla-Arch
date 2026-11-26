@@ -1759,7 +1759,12 @@ def test_choosing_an_image_cancels_the_search(program, gcc_world, phone):
                                 click(type="GtkButton", text="Choose Image…"), wait(2000), *save()])
     app = only_id(phone)
     assert pixbuf_facts(phone.data / app / phone.config(app)["Icon"])[3][:3] == GREEN[:3]
-    assert not r.warnings()
+    # GTK's own bug, not the panel's (gtkpathbar.c up to GTK main, 4.24.1 and 4.22.5 alike):
+    # GtkFileDialog keeps a hidden GtkFileChooserWidget even when the portal answers. When it goes
+    # away while its path bar still walks up the folders, the cancelled query ends in
+    # gtk_path_bar_set_file_finish (FALSE), which calls gtk_box_remove () on the disposed
+    # buttons box. Here the search running alongside slows that walk down enough to hit it.
+    assert not r.warnings(ignore=[r"^gtk_box_remove: assertion 'GTK_IS_BOX \(box\)' failed$"])
 
 
 @pytest.mark.parametrize("width, height", [(4097, 1), (1, 4097)])
