@@ -27,13 +27,24 @@ class Health:
             "'/sys/class/bluetooth/hci*'": f"'{self.sys}/class/bluetooth/hci*'",
         }, check_left=("/proc/", "/sys/", "RUN=/run"))
         fake_bin.stub("id", 'case $# in 1) echo "${FAKE_UID:-0}" ;; *) echo 1000 ;; esac')
-        fake_bin.stub("loginctl", '''
+        # sleep only counts; the stubs below look at how often it was called, so that the
+        # session, the greeter and audio can come up "after a while"
+        fake_bin.stub("sleep")
+        slept = f'slept() {{ [ -e "{fake_bin.path}/sleep.log" ] && tr -cd "\\036" < "{fake_bin.path}/sleep.log" | wc -c || echo 0; }}\n'
+        # c1: the user's Phosh session, there after SESSION_AFTER sleeps (never with NO_SESSION);
+        # g1: greetd's greeter (GREETER=1) until then; 3: an SSH login
+        fake_bin.stub("loginctl", slept + '''
+user_up() { [ -z "${NO_SESSION:-}" ] && [ "$(slept)" -ge "${SESSION_AFTER:-0}" ]; }
 case $1 in
-list-sessions) [ -n "${NO_SESSION:-}" ] || printf "c1 1000 plinius seat0 tty7\\n" ;
+list-sessions) if [ -n "${GREETER:-}" ] && ! user_up; then printf "g1 958 greeter seat0 tty1\\n"; fi
+    if user_up; then printf "c1 1000 plinius seat0 tty7\\n"; fi
     printf "3 0 root - pts/0\\n" ;;
 show-session) case "$2 $4" in
-    "c1 Seat") echo seat0 ;; "c1 Type") echo wayland ;; "c1 Name") echo plinius ;;
-    "3 Seat") echo ;; "3 Type") echo tty ;; esac ;;
+    "c1 Seat") echo seat0 ;; "c1 Type") echo wayland ;; "c1 Class") echo user ;;
+    "c1 Name") echo plinius ;;
+    "g1 Seat") echo seat0 ;; "g1 Type") echo wayland ;; "g1 Class") echo "${GREETER_CLASS:-greeter}" ;;
+    "g1 Name") echo greeter ;;
+    "3 Seat") echo ;; "3 Type") echo tty ;; "3 Class") echo user ;; "3 Name") echo root ;; esac ;;
 esac''')
         # runuser -u USER -- CMD...: run CMD (here: env XDG_RUNTIME_DIR=... systemctl/pw-cli)
         fake_bin.stub("runuser", 'while [ "$1" != -- ]; do shift; done; shift; exec "$@"')
@@ -42,7 +53,10 @@ esac''')
         fake_bin.stub("lxc-info", 'echo "${CONTAINER:-RUNNING}"')
         fake_bin.stub("pgrep", 'case "$*" in *phoc*) [ -n "${NO_PHOC:-}" ] || echo 4242 ;; '
                       '*phosh*) [ -z "${NO_PHOSH:-}" ] ;; esac')
-        fake_bin.stub("pw-cli", 'echo "  node.name = \\"${HAL_NODE:-hal_output}\\""')
+        # The HAL sink after HAL_AFTER sleeps (audio-hal-bridge a little after the session)
+        fake_bin.stub("pw-cli", slept + 'node=${HAL_NODE:-hal_output}; '
+                      '[ "$(slept)" -ge "${HAL_AFTER:-0}" ] || node=other; '
+                      'echo "  node.name = \\"$node\\""')
         fake_bin.stub("mmcli", '[ -n "${NO_MODEM:-}" ] || '
                       'echo "/org/freedesktop/ModemManager1/Modem/0 [MediaTek] ril_0"')
 
@@ -52,6 +66,9 @@ esac''')
 
     def result(self):
         return (self.run_dir / "result").read_text().splitlines()
+
+    def sleeps(self):
+        return self.bin.calls("sleep")
 
 
 @pytest.fixture
@@ -112,6 +129,80 @@ def test_without_session(health):
     assert result[1] == "skip user_units: no graphical session"
     assert result[3].startswith("fail display: no graphical session")
     assert result[4] == "skip audio: no graphical session"
+
+
+def test_the_greeter_is_no_session(health):
+    # First start: greetd's greeter on seat0 runs phoc, but it is not the user's Phosh session
+    r = health.run("check", GREETER="1", NO_SESSION="1")
+    assert r.returncode == 2
+    assert health.result()[3].startswith("fail display: no graphical session")
+    assert health.sleeps() == []  # Check Again does not wait
+
+
+def test_a_greeter_session_without_class_is_known_by_its_user(health):
+    r = health.run("check", GREETER="1", GREETER_CLASS="user", NO_SESSION="1")
+    assert r.returncode == 2
+    assert health.result()[1] == "skip user_units: no graphical session"
+
+
+def test_boot_check_waits_while_the_greeter_is_up(health):
+    # The PIN of a first start can take as long as it takes: no limit while the greeter is there,
+    # far beyond SESSION_WAIT (30 looks)
+    r = health.run("check", "--boot", GREETER="1", SESSION_AFTER="45")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert all(line.startswith("ok ") for line in health.result())
+    assert health.sleeps() == [["10"]] * 45
+
+
+def test_boot_check_without_any_session_gives_up_and_reports(health):
+    r = health.run("check", "--boot", NO_SESSION="1")
+    assert r.returncode == 2
+    assert health.result()[3].startswith("fail display: no graphical session")
+    # 300 s for a session, then the failure checked again for 180 s
+    assert len(health.sleeps()) == 30 + 18
+
+
+def test_boot_check_waits_for_a_late_session_without_greeter(health):
+    assert health.run("check", "--boot", SESSION_AFTER="3").returncode == 0
+    assert len(health.sleeps()) == 3
+
+
+def test_boot_check_takes_a_failure_back_that_goes_away(health):
+    # audio-hal-bridge's sink comes a little after the session: not a failure after boot
+    r = health.run("check", "--boot", HAL_AFTER="2")
+    assert r.returncode == 0, r.stdout
+    assert "ok audio: PipeWire has the speaker of the audio HAL" in health.result()
+    assert len(health.sleeps()) == 2
+    assert not (health.run_dir / "result.new").exists()
+
+
+def test_boot_check_reports_a_failure_that_stays(health):
+    (health.sys / "class/bluetooth/hci0").rmdir()
+    r = health.run("check", "--boot")
+    assert r.returncode == 2
+    assert health.result()[-1] == "fail bluetooth: no Bluetooth adapter (bluebinder)"
+    assert len(health.sleeps()) == 18
+
+
+def test_check_again_reports_at_once(health):
+    # Settings' Check Again runs "check" alone: no waiting, no second look
+    assert health.run("check", HAL_AFTER="2").returncode == 2
+    assert health.sleeps() == []
+
+
+def test_check_with_an_unknown_option(health):
+    r = health.run("check", "--later")
+    assert r.returncode == 1 and "usage" in r.stderr
+    assert not health.run_dir.exists()
+
+
+def test_the_service_runs_the_boot_check_without_holding_up_the_boot():
+    unit = (SRC / "plinius-health.service").read_text().splitlines()
+    assert "ExecStart=/usr/bin/plinius-health check --boot" in unit
+    # The check waits for the first PIN: as a oneshot its start job (stopped after 90 s, or with
+    # no limit kept open) left the boot unfinished until then
+    assert "Type=exec" in unit and "Type=oneshot" not in unit
+    assert not any(line.startswith("TimeoutStartSec=") for line in unit)
 
 
 def test_missing_wifi_and_bluetooth(health):

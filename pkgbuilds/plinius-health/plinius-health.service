@@ -3,8 +3,11 @@ Description=Phone self-test (display, audio, modem, Wi-Fi, Bluetooth)
 After=multi-user.target
 
 [Service]
-Type=oneshot
-ExecStart=/usr/bin/plinius-health check
+# --boot waits while the greeter is up (the first start sets the PIN there) and checks a failure
+# again for a few minutes. exec, not oneshot: a oneshot's start job lasts as long as the check, and
+# systemd counted the boot as unfinished ("starting") until the first PIN was set
+Type=exec
+ExecStart=/usr/bin/plinius-health check --boot
 # 2 = a check failed: not a unit failure, the notification comes via plinius-health-notify
 SuccessExitStatus=2
 RuntimeDirectory=plinius-health

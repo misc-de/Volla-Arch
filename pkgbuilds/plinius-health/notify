@@ -12,7 +12,8 @@ RUN=/run/plinius-health
 NOTIFICATIONS=org.freedesktop.Notifications
 export TEXTDOMAIN=plinius-health
 
-# The check runs a few minutes after boot (plinius-health.timer); the session is up before
+# The check after boot (plinius-health.timer, check --boot) waits for this session and ends at
+# most a few minutes after it came
 for _ in $(seq 900); do
 	[[ -e $RUN/done ]] && break
 	sleep 1

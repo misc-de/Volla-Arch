@@ -2,7 +2,7 @@
 
 pkgname=plinius-health
 pkgver=0.2
-pkgrel=3
+pkgrel=5
 pkgdesc="Phone self-test after boot: container, display on the GPU, audio, modem, Wi-Fi, Bluetooth"
 arch=(any)
 license=(MIT)
@@ -21,9 +21,9 @@ source=(plinius-health
 	org.plinius.health.policy
 	"${_langs[@]/%/.po}"
 	LICENSE)
-sha256sums=('6fa0ae501cf7b7e877ef957234fce60e22dbd6e17310fc9c34c4e0f3d7178d08'
-	'678117954f9ce824d65c22cb5b0282db7c8ce3e1a7bbc66bd8290361208577cb'
-	'1b3a85e7e0d194a818924e9ff8887a5621a3f82f6c2e4adbd9d747a082eaea36'
+sha256sums=('51a333437005566a9b5931f7e3a814773f1b9e42e6b369f617493a51f7bd6f6e'
+	'80d4958182778e1052e7673f376a96af5e4df9e520295efadf71daa32f88100c'
+	'af8d1b302cf9262fee21d8a0dd190acad5a3ca51e8651182ff89a0fb3db4cd9d'
 	'6000275f636c382067f5f62fc9d8d44ec2ed25cdeafaf3258165591242b87e5e'
 	'53387a0cf7f924e571fb6044bf94218b0e9577f5da244f187cd1bc375613f75b'
 	'afaee7de3bd4a6b49f746915843e07e79173b740b56ce399fa1d233cc13bd805'

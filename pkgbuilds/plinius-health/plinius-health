@@ -3,8 +3,12 @@
 # does each layer that an update can break still work? Checks what the system must have, not
 # what the user may switch off: the Wi-Fi interface must exist, being connected is not required.
 #
-# Usage: plinius-health check | status
-#   check   run all checks (plinius-health.service, a few minutes after boot), as root
+# Usage: plinius-health check [--boot] | status
+#   check   run all checks as root (Settings → Self-Test, "Check Again")
+#   --boot  the check after boot (plinius-health.service): waits while the greeter is on screen
+#           (the first start sets the PIN there, or an account is picked) and checks a failure
+#           again for a while, since a session that has just started still brings up Phosh and
+#           audio. Without it a first start reported the greeter's own session as broken.
 #   status  result of the last check
 # Exit status: 0 all ok, 1 error, 2 at least one check failed
 #
@@ -13,19 +17,64 @@
 set -uo pipefail
 
 RUN=/run/plinius-health
+# check --boot: seconds between two looks, how long to wait for a session when no greeter is up,
+# and how long a failure is checked again after the session came
+POLL=10
+SESSION_WAIT=300
+SETTLE=180
 
 die() { echo "plinius-health: $*" >&2; exit 1; }
 
-# The user of the graphical session on seat0 (empty if nobody is logged in)
+# The user of the graphical session on seat0 (empty if nobody is logged in). The greeter's own
+# session (greetd, class "greeter", user greeter) is not one: it runs phoc but no Phosh.
 session_user() {
+	local id name
+	for id in $(loginctl list-sessions --no-legend | awk '{ print $1 }'); do
+		[[ $(loginctl show-session "$id" -p Seat --value) == seat0 &&
+			$(loginctl show-session "$id" -p Type --value) == wayland &&
+			$(loginctl show-session "$id" -p Class --value) == user ]] || continue
+		name=$(loginctl show-session "$id" -p Name --value)
+		[[ $name == greeter ]] && continue
+		echo "$name"
+		return
+	done
+}
+
+# Whether the greeter is on seat0: the first start waits there until the PIN is set
+greeter_on_seat0() {
 	local id
 	for id in $(loginctl list-sessions --no-legend | awk '{ print $1 }'); do
-		if [[ $(loginctl show-session "$id" -p Seat --value) == seat0 &&
-			$(loginctl show-session "$id" -p Type --value) == wayland ]]; then
-			loginctl show-session "$id" -p Name --value
-			return
-		fi
+		[[ $(loginctl show-session "$id" -p Seat --value) == seat0 ]] || continue
+		[[ $(loginctl show-session "$id" -p Class --value) == greeter ||
+			$(loginctl show-session "$id" -p Name --value) == greeter ]] && return 0
 	done
+	return 1
+}
+
+# check --boot: until a session is there. As long as the greeter is up there is no limit (a first
+# start waits for its PIN), without one SESSION_WAIT seconds, then the checks report it.
+wait_for_session() {
+	local waited=0
+	while [[ -z $(session_user) ]]; do
+		if ! greeter_on_seat0; then
+			((waited >= SESSION_WAIT)) && return
+			waited=$((waited + POLL))
+		fi
+		sleep "$POLL"
+	done
+}
+
+# All checks, one line each, into $RUN/result.new; status 2 if one failed
+run_checks() {
+	local user c line state failed=0
+	user=$(session_user)
+	for c in "${CHECKS[@]}"; do
+		line=$("check_$c" "$user")
+		state=${line%%:*}
+		[[ $state == fail ]] && failed=$((failed + 1))
+		echo "$state $c:${line#*:}"
+	done > "$RUN/result.new"
+	((failed == 0)) || return 2
 }
 
 # Runs a command as the session user, with their runtime directory (PipeWire, D-Bus)
@@ -110,17 +159,27 @@ CHECKS=(units user_units container display audio modem wifi bluetooth)
 cmd=${1:-}
 case $cmd in
 check)
+	boot=0
+	case ${2:-} in
+	"") ;;
+	--boot) boot=1 ;;
+	*) die "usage: plinius-health check [--boot] | status" ;;
+	esac
 	[[ $(id -u) -eq 0 ]] || die "must run as root"
 	mkdir -p "$RUN"
 	rm -f "$RUN/done"
-	user=$(session_user)
+	((boot)) && wait_for_session
 	failed=0
-	for c in "${CHECKS[@]}"; do
-		line=$("check_$c" "$user")
-		state=${line%%:*}
-		[[ $state == fail ]] && failed=$((failed + 1))
-		echo "$state $c:${line#*:}"
-	done > "$RUN/result.new"
+	run_checks || failed=1
+	# After boot a failure counts only if it stays: a service restarting once, audio and Phosh
+	# a little after the session are not broken
+	tries=$((SETTLE / POLL))
+	while ((boot && failed && tries > 0)); do
+		sleep "$POLL"
+		tries=$((tries - 1))
+		failed=0
+		run_checks || failed=1
+	done
 	mv -f "$RUN/result.new" "$RUN/result"
 	touch "$RUN/done"
 	# Under systemd failures go to the journal as warnings (journalctl -p warning shows them)
@@ -137,6 +196,6 @@ status)
 	! grep -q '^fail ' "$RUN/result" || exit 2
 	;;
 *)
-	die "usage: plinius-health check | status"
+	die "usage: plinius-health check [--boot] | status"
 	;;
 esac
