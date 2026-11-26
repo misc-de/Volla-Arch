@@ -209,6 +209,45 @@ own icon, without the browser's bars and with a profile of its own. That closes 
 </details>
 
 <details>
+<summary><b>Do WhatsApp, Telegram and Signal work?</b></summary>
+
+Yes, as an additional device of an existing account, the way they also run on a computer: you link
+Plinius to your account, usually by scanning a QR code with the phone the account is on.
+
+Depending on the service this works through an app from the catalog or from Flathub, or as a web app
+under **Settings › Apps › Web Apps**. Calls and SMS over your own number go through the phone's
+Phone and Messages apps.
+
+</details>
+
+<details>
+<summary><b>Can I go back to Volla OS or Ubuntu Touch?</b></summary>
+
+Yes, at any time. By default Plinius goes onto a microSD card and the system inside the phone stays
+as it is: without the card, or picked in the boot menu, the phone starts Volla OS or Ubuntu Touch as
+before.
+
+If Plinius has replaced Volla OS inside the phone, Plinius Boot first saved a backup of Volla OS on
+your computer, and under Advanced it writes that backup back. Volla's own installation packages for
+Volla OS and the UBports Installer for Ubuntu Touch work as well.
+
+</details>
+
+<details>
+<summary><b>How do updates work?</b></summary>
+
+The phone looks for updates once a day and reports them with a notification; you install them under
+**Settings › System › Updates**. The base system and the desktop come unchanged from Arch Linux ARM,
+but only in versions we have tested on the phone; our own packages come signed from our repository.
+If you want new versions earlier, switch on **Settings › Apps › Settings › Beta Updates**.
+
+After every start a self-test checks whether everything an update can break still works. If a check
+fails after an update, **Settings › System › Self-Test** offers to take the last update back. A new
+kernel first starts as a trial, and the previous one stays as a fallback.
+
+</details>
+
+<details>
 <summary><b>Why does the GPS take a while to find my position?</b></summary>
 
 Plinius finds your position by satellite alone; it never asks a server about the Wi-Fi networks and
@@ -224,6 +263,30 @@ loads about 80&nbsp;KB every 6 hours and sends nothing about the phone.
 </details>
 
 <details>
+<summary><b>What works in the mobile network?</b></summary>
+
+Calls over VoLTE, SMS, mobile data, the hotspot and cell broadcast warnings work, and eSIM profiles
+can be managed in Settings. Wi-Fi calling (VoWiFi) does not work yet.
+
+MMS is built in but untested: German networks no longer offer MMS, so it could not be tried here.
+
+</details>
+
+<details>
+<summary><b>How long does the battery last?</b></summary>
+
+In standby with the display off the phone sleeps most of the time and uses about 2 to 3&nbsp;% of
+the battery per hour. How long a charge lasts in active use has not been measured systematically
+yet; the processor takes only a small share of the energy, most of it goes to the display and the
+radios.
+
+**Settings › Battery** shows how much energy each app used and how healthy the battery is, and
+offers a charging limit that spares the battery when the phone is often on the charger. Wireless
+charging with Qi works too.
+
+</details>
+
+<details>
 <summary><b>Why does my phone list security vulnerabilities?</b></summary>
 
 Most phones only show the date of their last security update. Plinius names every known
@@ -235,6 +298,63 @@ or “Mitigated”.
 Once a vulnerability becomes known, a fix is usually under way and soon reaches the phone with the
 next updates. Until then you know what is open and can deal with it deliberately. This openness
 takes you seriously: it is your phone, so you get to know its weak spots too.
+
+</details>
+
+<details>
+<summary><b>Which connections does the phone make by itself?</b></summary>
+
+Once a day it looks for updates (our repository on plinius.cais.de and the servers of Arch Linux
+ARM), several times a day it loads the list of known vulnerabilities (Arch Linux security tracker
+and plinius.cais.de), once a week the keys that sign Arch Linux's packages, and it sets its clock
+from the Arch Linux time servers of pool.ntp.org. NetworkManager regularly asks ping.archlinux.org
+whether the internet is reachable; that is how it recognises Wi-Fi networks with a login page. The
+DNS filter loads its block lists from their authors.
+
+Only when you switch them on: the GPS orbit data from MediaTek, Flathub, the Widevine module for
+streaming services and contributions to beaconDB. The system itself sends no usage data and needs no
+account; apps connect to their own services when you use them.
+
+</details>
+
+<details>
+<summary><b>The bootloader stays unlocked. Is that a risk?</b></summary>
+
+An unlocked bootloader starts any system without checking who made it. Plinius needs that: the boot
+menu, the rescue system and Plinius itself are not signed by the phone's maker. It applies to every
+system on the phone, Volla OS inside it included. Your data stays protected all the same: the data
+partition with the system on it is fully encrypted, and whoever takes the phone reads nothing
+without the encryption password.
+
+What remains is a calculable scenario: someone who has the phone in hand unnoticed could swap its
+start files to capture the password the next time you type it. Plinius cannot prevent that, but it
+checks its start files at every start and reports any change it did not make itself. If it reports a
+manipulation you did not cause, treat the encryption password as known.
+
+</details>
+
+<details>
+<summary><b>What happens if I forget the encryption password?</b></summary>
+
+Then nobody can open the data any more: not you, not us, not Plinius Boot. There is no master key
+and no back door; that is exactly what makes the encryption safe. Only a new installation helps, and
+everything on the phone is lost.
+
+So write the password down and keep it in a safe place away from the phone. The phone asks for it at
+every start; it is not the PIN of the lock screen, the two are different on purpose.
+
+</details>
+
+<details>
+<summary><b>Why are there Android drivers inside?</b></summary>
+
+The phone's chip comes from MediaTek, and its drivers for graphics, camera, modem, sound and sensors
+exist only for Android, without source code. Plain Linux (mainline) does not reach this chip yet:
+there would be no graphics, no Wi-Fi, no modem and no sound.
+
+Halium solves this: the Android drivers run in a small container of their own, and Linux uses them
+through libhybris and libgbinder. Everything you see and use above that is ordinary Arch Linux.
+Ubuntu Touch and Droidian work the same way.
 
 </details>
 
