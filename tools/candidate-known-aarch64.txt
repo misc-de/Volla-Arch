@@ -1,9 +1,14 @@
+abi gl4es /usr/lib/gl4es/libEGL.so.1: undefined symbol: egl
+abi gl4es /usr/lib/gl4es/libEGL.so.1: undefined symbol: gl4es_GetProcAddress
+abi gl4es /usr/lib/gl4es/libEGL.so.1: undefined symbol: gl4es_glXGetProcAddress
+abi gl4es /usr/lib/gl4es/libEGL.so.1: undefined symbol: hardext
+abi gl4es /usr/lib/gl4es/libEGL.so.1: undefined symbol: LogPrintf
+abi gl4es /usr/lib/gl4es/libEGL.so.1: undefined symbol: proc_address
 abi libhybris /usr/lib/libhybris-platformcommon.so.1.0.0: undefined symbol: hybris_gralloc_allocate
 abi libhybris /usr/lib/libhybris-platformcommon.so.1.0.0: undefined symbol: hybris_gralloc_import_buffer
 abi libhybris /usr/lib/libhybris-platformcommon.so.1.0.0: undefined symbol: hybris_gralloc_lock
 abi libhybris /usr/lib/libhybris-platformcommon.so.1.0.0: undefined symbol: hybris_gralloc_release
 abi libhybris /usr/lib/libhybris-platformcommon.so.1.0.0: undefined symbol: hybris_gralloc_unlock
-unit android-set-boot-completion-property.service: Failed to create android-set-boot-completion-property.service/start: Unit display-manager.service not found.
 abi vkmark-plinius /usr/lib/vkmark/display.so: undefined symbol: _ZN3Log4infoEPKcz
 abi vkmark-plinius /usr/lib/vkmark/display.so: undefined symbol: _ZN3Log5debugEPKcz
 abi vkmark-plinius /usr/lib/vkmark/display.so: undefined symbol: _ZN7Options22add_window_system_helpERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE
@@ -15,3 +20,6 @@ abi vkmark-plinius /usr/lib/vkmark/wayland.so: undefined symbol: _ZN7Options22ad
 abi vkmark-plinius /usr/lib/vkmark/xcb.so: undefined symbol: _ZN3Log4infoEPKcz
 abi vkmark-plinius /usr/lib/vkmark/xcb.so: undefined symbol: _ZN3Log5debugEPKcz
 abi vkmark-plinius /usr/lib/vkmark/xcb.so: undefined symbol: _ZN7Options22add_window_system_helpERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE
+conflict plinius-apps: usr/lib/systemd/user/gnome-session.target.wants/calls-daemon.service
+conflict plinius-apps: usr/lib/systemd/user/gnome-session.target.wants/sm.puri.Chatty-daemon.service
+unit android-set-boot-completion-property.service: Failed to create android-set-boot-completion-property.service/start: Unit display-manager.service not found.

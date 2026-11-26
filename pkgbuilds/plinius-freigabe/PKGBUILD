@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=plinius-freigabe
-pkgver=20261125.1921
+pkgver=20261126.0721
 pkgrel=1
 pkgdesc="Approved versions of the packages the Plinius adaptations depend on"
 arch=(aarch64 x86_64)
@@ -57,7 +57,7 @@ conflicts_aarch64=(
 	"gst-plugins-base-libs>1.28.9-3"  # linked by plinius-ambient
 	"gstreamer>1.28.9-3"  # linked by biomd-session
 	"gtk3>1:3.24.52-2"  # linked by libhandy-plinius
-	"gtk4>1:4.24.1-1"  # linked by chatty-plinius
+	"gtk4>1:4.24.2-1"  # linked by chatty-plinius
 	"gtksourceview5>5.22.0-1"  # linked by chatty-plinius
 	"harfbuzz>15.2.0-1"  # linked by gtk3-plinius
 	"hunspell>1.7.6-1"  # linked by stevia-plinius
@@ -91,7 +91,7 @@ conflicts_aarch64=(
 	"libibus>1.5.35-1"  # linked by gnome-control-center-plinius
 	"libical>4.0.8-1"  # linked by phosh-plinius
 	"libinih>62-2"  # linked by buffybox
-	"libinput>1.32.0-1"  # linked by buffybox
+	"libinput>1.32.0-2"  # linked by buffybox
 	"liblc3>1.1.3-2"  # linked by pipewire-audio-plinius
 	"libldac>2.0.2.6-1"  # linked by pipewire-audio-plinius
 	"libliftoff>0.5.0-1"  # linked by phoc-plinius
