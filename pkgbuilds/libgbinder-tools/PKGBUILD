@@ -4,15 +4,15 @@
 # Sailfish OS packages them; Arch's libgbinder ships the library only. Same version as that one.
 # For checking from the host which Android binder services answer (docs/ROADMAP.md, phase 3).
 pkgname=libgbinder-tools
-pkgver=1.1.55
-pkgrel=2
+pkgver=1.1.56
+pkgrel=1
 pkgdesc="Command line tools for Android binder (binder-list, binder-ping, binder-call)"
 arch=(aarch64 x86_64)
 url="https://github.com/mer-hybris/libgbinder"
 license=(BSD-3-Clause)
 # Linked against libgbinder.so.1 of the same version (Arch's libgbinder)
 depends=(glib2 libglibutil "libgbinder=$pkgver")
-_commit=84a423f5cff57abac5f39403619bc1e9faa28ccc
+_commit=75bb35c210f705a8ecd767f341d6dfae5ed529b9
 source=("git+$url.git#commit=$_commit")
 sha256sums=('SKIP')
 
