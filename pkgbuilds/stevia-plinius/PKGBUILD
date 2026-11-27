@@ -2,7 +2,7 @@
 
 pkgname=stevia-plinius
 pkgver=0.59.0
-pkgrel=3
+pkgrel=4
 pkgdesc="On-screen keyboard for Phosh, in its original look or the glass look of the password prompt at startup"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 url="https://gitlab.gnome.org/World/Phosh/stevia"
@@ -11,6 +11,20 @@ license=(GPL-3.0-or-later)
 depends=(
 	cairo dconf feedbackd gdk-pixbuf2 glib2 glibc gnome-desktop gst-plugins-base-libs gstreamer
 	gtk3 hunspell json-glib libgcc libhandy libsoup3 pango systemd-libs wayland
+	# The word suggestions' default completer is hunspell in en_US: without that dictionary
+	# Stevia has no completer at all ("Failed to find dictionary for en-us"), also with
+	# completion-mode on
+	hunspell-en_us
+)
+# Suggestions for the other layouts, found by language and region (de_DE.dic, fr_FR.dic, …)
+optdepends=(
+	'hunspell-de: word suggestions in German'
+	'hunspell-es_es: word suggestions in Spanish'
+	'hunspell-fr-comprehensive: word suggestions in French'
+	'hunspell-it: word suggestions in Italian'
+	'hunspell-nl: word suggestions in Dutch'
+	'hunspell-pl: word suggestions in Polish'
+	'hunspell-ru: word suggestions in Russian'
 )
 makedepends=(git glib2-devel meson wayland-protocols)
 provides=("stevia=$pkgver" phosh-osk-provider)
