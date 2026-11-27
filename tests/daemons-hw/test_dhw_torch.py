@@ -3,8 +3,10 @@
 # the change uevent for Phosh. V4L2 ioctls are faked; subdevices and sysfs are files in tmp. The
 # daemon runs with uleds as a FIFO, logind's PrepareForSleep from a fake on a private bus.
 
+import fnmatch
 import functools
 import os
+import re
 import struct
 
 import pytest
@@ -442,3 +444,23 @@ def test_daemon_without_a_bus_still_runs(torch, tmp_path):
     assert "uleds name=white:torch max=4" in out
     assert "led0 intensity=49450" in out
     assert out.splitlines()[-1] == "ctrl led0 mode=0none"
+
+
+# ---- Wiring ----
+
+def test_feedbackd_does_not_take_the_torch_as_notification_led():
+    # feedbackd's rule claims every "*:torch" LED (a pattern trigger, then blinks it for
+    # messages); 73-plinius-torch.rules comes after it and takes that back for our LED
+    name = re.search(r'^#define LED_NAME "([^"]+)"$', SRC.read_text(), re.M).group(1)
+    assert fnmatch.fnmatchcase(f"/devices/virtual/misc/uleds/{name}", "*/*:torch")
+    rules_name = "73-plinius-torch.rules"
+    assert rules_name > "72-feedbackd.rules"
+    rules = (PKG / "plinius-torch" / rules_name).read_text()
+    rule = [line for line in rules.splitlines() if line and not line.startswith("#")]
+    assert rule == [
+        'ACTION=="remove", GOTO="plinius_torch_end"',
+        f'SUBSYSTEM=="leds", KERNEL=="{name}", ENV{{FEEDBACKD_TYPE}}="", RUN="/usr/bin/true"',
+        'LABEL="plinius_torch_end"']
+    pkgbuild = (PKG / "plinius-torch" / "PKGBUILD").read_text()
+    assert re.search(rf"^\s+{re.escape(rules_name)}$", pkgbuild, re.M)
+    assert f'install -Dm644 {rules_name} -t "$pkgdir/usr/lib/udev/rules.d"' in pkgbuild

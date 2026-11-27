@@ -1,0 +1,9 @@
+# The torch is no notification LED. feedbackd's 72-feedbackd.rules takes every "*:torch" LED as
+# one (FEEDBACKD_TYPE=led, pattern trigger through fbd-ledctrl): feedbackd would then blink the
+# torch for messages, and the trigger would fight this daemon over the brightness. ALARM's
+# feedbackd 0.8.9-2 installs fbd-ledctrl to /usr/lib while the rule calls /usr/libexec, and only
+# that has kept it away so far ("Failed to find and pin callout binary" at every boot).
+# RUN= with "=" drops the commands queued before; an empty value is refused by udev, hence true.
+ACTION=="remove", GOTO="plinius_torch_end"
+SUBSYSTEM=="leds", KERNEL=="white:torch", ENV{FEEDBACKD_TYPE}="", RUN="/usr/bin/true"
+LABEL="plinius_torch_end"

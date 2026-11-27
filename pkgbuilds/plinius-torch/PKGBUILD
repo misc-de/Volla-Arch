@@ -2,7 +2,7 @@
 
 pkgname=plinius-torch
 pkgver=0.5
-pkgrel=4
+pkgrel=5
 pkgdesc="Flash LEDs (V4L2 flash subdevices) as LED class torch for Phosh, with current cap and timeout"
 arch=(aarch64 x86_64)
 license=(MIT)
@@ -10,10 +10,12 @@ depends=(systemd-libs)
 makedepends=(systemd linux-api-headers)
 source=(plinius-torch.c
         plinius-torch.service
+        73-plinius-torch.rules
         org.plinius.torch.gschema.xml
         LICENSE)
 sha256sums=('4cd38f35cb5d3a42996520386d32c44543c8884795dc5751fc23b62a4c8a1a50'
             '1b0fc22f1dce48f7918d4d3bca2e468acfb334f38d09b18b4b3ee8da1e5997f8'
+            '098c25c4d1134e5a0d6a72992ece876b6aba860470e27ba6887307ed168db40e'
             '69b4f1a45f7e74ff84063ee77efcd272e8686beff9bcd869a13f0281502ec71f'
             '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
@@ -28,6 +30,8 @@ package() {
 	install -Dm644 plinius-torch.service -t "$pkgdir/usr/lib/systemd/system"
 	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
 	ln -s ../plinius-torch.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"
+	# Keeps feedbackd away from the torch
+	install -Dm644 73-plinius-torch.rules -t "$pkgdir/usr/lib/udev/rules.d"
 	# The torch's own brightness, kept by Phosh (patch 0029) and used by plinius-assist
 	install -Dm644 org.plinius.torch.gschema.xml -t "$pkgdir/usr/share/glib-2.0/schemas"
 }
