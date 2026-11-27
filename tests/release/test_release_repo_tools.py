@@ -629,3 +629,14 @@ def test_candidate_accept_without_a_run(repo):
     repo.local_repo({"foo": "1-1"})
     (repo.local / "plinius-local.db").symlink_to("plinius-local.db.tar.gz")
     fails(repo.run("candidate.sh", "--accept"), "no run to accept yet")
+
+
+def test_in_chroot_gives_pacman_our_user_agent(repo):
+    """pacman in the build chroots (build.sh, chroot-init.sh, mkimage.sh) says who asks: in_chroot
+    clears the environment but passes HTTP_USER_AGENT, which libalpm sends as User-Agent."""
+    # unshare and chroot without namespaces: the script runs here, chroot drops its root path
+    repo.fake_bin.stub("unshare", 'while [[ $1 != -- ]]; do shift; done; shift; exec "$@"')
+    repo.fake_bin.stub("chroot", 'shift; exec "$@"')
+    r = ok(repo.lib("ns_run 'in_chroot /r printenv HTTP_USER_AGENT HOME; in_chroot /r printenv SECRET || echo gone'",
+                    SECRET="from the host"))
+    assert r.stdout.splitlines() == ["Plinius Arch Linux", "/root", "gone"]

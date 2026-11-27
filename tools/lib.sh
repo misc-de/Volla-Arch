@@ -14,7 +14,8 @@ SRCCACHE=$BUILD/cache/sources
 SIGN_GNUPG=${SIGN_GNUPG:-$HOME/.local/share/plinius/gnupg}
 # Published repo [plinius], one subdirectory per architecture (tools/publish.sh)
 PUBREPO=$BUILD/repo/plinius
-# What every download from these scripts says it is (curl -A)
+# What every download from these scripts says it is (curl -A; pacman in the chroots through
+# HTTP_USER_AGENT, see in_chroot)
 USER_AGENT="Plinius Arch Linux"
 
 # Channels of [plinius] (docs/PAKETIERUNG.md, hosting): beta gets every published state,
@@ -191,7 +192,7 @@ ns_run() {
 			# Runs a command in chroot \$1 with a clean environment
 			in_chroot() {
 				local r=\$1; shift
-				chroot \"\$r\" /usr/bin/env -i HOME=/root LANG=C.UTF-8 TERM=dumb \
+				chroot \"\$r\" /usr/bin/env -i HOME=/root LANG=C.UTF-8 TERM=dumb HTTP_USER_AGENT=\"$USER_AGENT\" \
 					PATH=/usr/local/sbin:/usr/local/bin:/usr/bin \"\$@\"
 			}
 			$script" ns_run "$@"

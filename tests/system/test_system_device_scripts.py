@@ -3,6 +3,7 @@
 # /android paths point into tmp_path; programs that change state are stubs.
 
 import os
+import shutil
 import socket
 import stat
 
@@ -492,6 +493,28 @@ def test_aliases(fake_bin, vim):
     assert ("alias vi='vim'" in r.stdout) == vim
 
 
+
+# --- pacman's User-Agent in a terminal ---
+
+def test_user_agent_for_pacman_in_a_terminal(fake_bin):
+    """Login shells export HTTP_USER_AGENT (libalpm sends it as User-Agent), sudo keeps it."""
+    # exported: a program started from the shell (here a second bash) sees it
+    code = f". '{DEV / 'plinius-user-agent.sh'}'; " + """bash -c 'echo "$HTTP_USER_AGENT"'"""
+    r = run_bash(code, fake_bin.env(isolated=True))
+    assert r.returncode == 0 and r.stdout == "Plinius Arch Linux\n"
+    sudoers = DEV / "plinius-user-agent.sudoers"
+    rules = [line for line in sudoers.read_text().splitlines() if line and not line.startswith("#")]
+    assert rules == ['Defaults env_keep += "HTTP_USER_AGENT"']
+    # sudo reads only files in sudoers.d without a dot in the name, and refuses writable ones
+    pkgbuild = (DEV / "PKGBUILD").read_text()
+    assert 'install -Dm440 plinius-user-agent.sudoers "$pkgdir/etc/sudoers.d/plinius-user-agent"' in pkgbuild
+    assert 'install -Dm644 plinius-user-agent.sh -t "$pkgdir/etc/profile.d"' in pkgbuild
+    visudo = shutil.which("visudo") or ("/usr/sbin/visudo" if os.path.exists("/usr/sbin/visudo") else None)
+    if visudo:
+        r = run([visudo, "-c", "-f", str(sudoers)], fake_bin.env())
+        assert r.returncode == 0, r.stdout + r.stderr
+
+
 # --- device-volla-ansuz.install ---
 
 class DeviceInstall:
@@ -619,6 +642,7 @@ def test_all_device_shell_scripts_are_covered():
                "plinius-nfc-power", "plinius-polkit-helper", "plinius-udev-reload",
                "plinius-user-sessions-generator", "plinius-wlan", "plinius-prompt.sh",
                "plinius-aliases.sh", "plinius-mobile-firewall", "plinius-hardware-info",
+               "plinius-user-agent.sh",
                # tested in test_system_connectivity.py
                "plinius-connectivity-set",
                # Only exports of constant variables

@@ -277,6 +277,8 @@ def test_find_updates_parses_checkupdates(mod, sw, checkupdates):
     assert packages == [("glibc", "2.44-1", "2.45-1"), ("mesa", "26.0-1", "26.0-2")]
     # checkupdates works on its own database copy in the user's runtime directory
     assert checkupdates["env"]["CHECKUPDATES_DB"] == str(sw / "run" / "plinius-software" / "db")
+    # and pacman says who asks (libalpm reads HTTP_USER_AGENT)
+    assert checkupdates["env"]["HTTP_USER_AGENT"] == "Plinius Arch Linux"
     assert os.path.exists(mod.LAST_CHECK)
 
 

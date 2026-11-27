@@ -255,6 +255,9 @@ PACMAN_INSTALL = """
 [ "$1" = -Qqu ] && { printf '%s' "${QQU:-}"; exit 0; }
 for a; do
 	case "$a" in
+		-Sw|-S) [ "$HTTP_USER_AGENT" = "Plinius Arch Linux" ] || exit 98 ;;
+	esac
+	case "$a" in
 		-Sw) printf '%s\\n' "${SW_OUT:-}"; exit "${SW_RC:-0}" ;;
 		-S) printf '%s\\n' "${S_OUT:-}"; exit "${S_RC:-0}" ;;
 	esac

@@ -1,0 +1,2 @@
+# "sudo pacman" keeps the User-Agent of /etc/profile.d/plinius-user-agent.sh
+Defaults env_keep += "HTTP_USER_AGENT"

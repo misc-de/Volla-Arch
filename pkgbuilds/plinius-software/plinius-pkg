@@ -30,6 +30,7 @@
 # This invocation starts the unit, relays its output and exits with its exit code.
 #
 # pacman runs with LC_ALL=C: plinius-software derives its progress display from the output.
+# Its downloads say who asks: User-Agent "Plinius Arch Linux" (libalpm reads HTTP_USER_AGENT).
 # Sections of our own are announced by a line "::plinius:: NAME".
 set -euo pipefail
 
@@ -123,7 +124,7 @@ SANDBOX=()
 grep -qw landlock /sys/kernel/security/lsm 2>/dev/null || SANDBOX=(--disable-sandbox-filesystem)
 # Output goes to the app and is copied for evaluation (classify)
 OUT=$RUN/pacman.out
-run() { inhibit env LC_ALL=C pacman --noconfirm --noprogressbar "${SANDBOX[@]}" "$@" 2>&1 | tee "$OUT"; }
+run() { inhibit env LC_ALL=C HTTP_USER_AGENT="Plinius Arch Linux" pacman --noconfirm --noprogressbar "${SANDBOX[@]}" "$@" 2>&1 | tee "$OUT"; }
 # --system and --noninteractive are per-subcommand options, so they go after the subcommand
 flatpak_run() { inhibit flatpak "$1" --system --noninteractive "${@:2}"; }
 

@@ -2,7 +2,7 @@
 
 pkgname=device-volla-ansuz
 pkgver=0.5
-pkgrel=96
+pkgrel=97
 pkgdesc="Device configuration for Volla Phone Plinius (ansuz): binder, Android container, boot chain check, SSH over USB"
 arch=(any)
 license=(MIT)
@@ -132,7 +132,9 @@ source=(
 	plinius-dev-acl.service
 	50-plinius-log-level.conf
 	plinius-connectivity-set
-	org.plinius.connectivity.policy)
+	org.plinius.connectivity.policy
+	plinius-user-agent.sh
+	plinius-user-agent.sudoers)
 sha256sums=(
 	'ba5e6fb7d0b0fa1b4d69cb3aff66f8a416da2da0948a4b59e8304631d0e6753d'
 	'bb7dbfc5506b9eb4340a4fe8de04443ecf02954a75da7c03cf25faac7e89787f'
@@ -236,7 +238,9 @@ sha256sums=(
 	'a8dd8c7420c0f1ee953fa478b97d54c2be5e05f3db16a9240395e9380cd0c406'
 	'5f77ea3a6e55fb686e68119602ebe855da2026e1cdefcdad1010c322f56c2839'
 	'59dd097679ba927c89832c2e43b81f495f917aaa8103c4632fcd8f1371a58b74'
-	'a26c066cf7290c1a4fdf37e01c5a43062d74610680b4a27f7c28657c0146f196')
+	'a26c066cf7290c1a4fdf37e01c5a43062d74610680b4a27f7c28657c0146f196'
+	'3dedbaff673d1f5f0bd218e00f9fe62f1cb65ddae232350636a4332bce930674'
+	'2a24700bc7e6c6968cbd5146aac1f198cee6c213b7d7ba219b7d339282ceb39c')
 
 package() {
 	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
@@ -398,6 +402,9 @@ package() {
 	# libhybris environment: user sessions, login shells, system services
 	install -Dm644 50-plinius-hybris.conf -t "$pkgdir/usr/lib/environment.d"
 	install -Dm644 plinius-hybris.sh -t "$pkgdir/etc/profile.d"
+	# pacman in a terminal, also under sudo, sends User-Agent "Plinius Arch Linux"
+	install -Dm644 plinius-user-agent.sh -t "$pkgdir/etc/profile.d"
+	install -Dm440 plinius-user-agent.sudoers "$pkgdir/etc/sudoers.d/plinius-user-agent"
 	# Bash prompt: the user name in the accent color, sourced by /etc/bash.bashrc (see .install)
 	install -Dm644 plinius-prompt.sh "$pkgdir/usr/lib/plinius/bash-prompt.sh"
 	# Default aliases (ll, l, .., rm -i ...), sourced by /etc/bash.bashrc the same way

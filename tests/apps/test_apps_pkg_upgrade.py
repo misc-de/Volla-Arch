@@ -24,6 +24,8 @@ SYSTEM_PATH = re.compile(r"(?<![\w.$}/@-])/(dev|proc|sys|usr|var|run|etc|boot)(/
 PACMAN = r'''
 mode=$1
 for a; do case $a in -Sy|-Su|-Slq|-Qqo) mode=$a ;; esac; done
+# Downloads without our User-Agent fail
+case $mode in -Sy|-Su) [[ ${HTTP_USER_AGENT:-} == "Plinius Arch Linux" ]] || { echo "no User-Agent"; exit 98; } ;; esac
 nth() { local n=$(( $(cat "$STATE/$1" 2>/dev/null || echo 0) + 1 )); echo $n > "$STATE/$1"; echo $n; }
 case $mode in
 -Q) [[ -e $STATE/upgraded ]] && echo "glibc 2" || echo "glibc 1"; echo "zlib 1" ;;

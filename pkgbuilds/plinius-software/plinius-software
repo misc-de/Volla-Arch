@@ -112,6 +112,8 @@ CATEGORIES = [
 
 # Sources: the system's package repositories (pacman) and, on request, Flathub (menu at the top right)
 PACMAN, FLATPAK = "pacman", "flatpak"
+# What our downloads say they are (Soup, and pacman through checkupdates: HTTP_USER_AGENT)
+USER_AGENT = "Plinius Arch Linux"
 
 # Exit codes of plinius-pkg (see its header) and pkexec
 STALE_DB, STALE_FILE, FLATHUB_IN_USE, NOTHING_TO_DO, ONLY_FLATPAK = 3, 4, 5, 6, 7
@@ -368,7 +370,7 @@ def load_url(url):
     if not url.startswith("https://"):
         return None
     if not hasattr(_session, "soup"):
-        _session.soup = Soup.Session(timeout=30, user_agent="Plinius Arch Linux")
+        _session.soup = Soup.Session(timeout=30, user_agent=USER_AGENT)
     message = Soup.Message.new("GET", url)
     if message is None:
         return None
@@ -598,7 +600,7 @@ def find_updates():
         with open(os.path.join(db, "..", "check.lock"), "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             r = subprocess.run(["checkupdates"], capture_output=True, text=True,
-                               env=dict(os.environ, CHECKUPDATES_DB=db))
+                               env=dict(os.environ, CHECKUPDATES_DB=db, HTTP_USER_AGENT=USER_AGENT))
         code, output = r.returncode, r.stdout
     except OSError:
         code, output = 1, ""
