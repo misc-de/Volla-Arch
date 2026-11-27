@@ -638,6 +638,16 @@ def test_veil_carries_the_beam_around_the_sensor(mod, monkeypatch, glib):
     assert on_beam[3] > off_beam[3] and on_beam[2] > off_beam[2]
 
 
+def test_beam_shows_beside_the_finger_and_fades_out(mod, monkeypatch, glib):
+    # Halfway through the sweep, at the centre's height, well beside the glow
+    g = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
+    pixel = draw_glow(mod, g)
+    near, far = pixel(160, 260), pixel(185, 260)
+    assert near[2] > near[0] and near[3] > 128
+    assert 0 < far[3] < near[3]  # fading out towards the end
+    assert pixel(199, 260)[3] == 0 and pixel(160, 200) == (0, 0, 0, 0)  # beyond: nothing
+
+
 def test_veil_before_the_target_was_placed(mod, monkeypatch, glib):
     g = glow(mod, monkeypatch, disc=None, alpha=0.25, glib=glib)
     pixel = draw_glow(mod, g)
@@ -649,8 +659,9 @@ def test_veil_before_the_target_was_placed(mod, monkeypatch, glib):
 def test_veil_redraws_only_around_the_sensor(mod, monkeypatch, glib):
     g = glow(mod, monkeypatch, glib=glib)
     g.queue_beam()
-    # Centre (100, 260), radius 40, reach 52 and 2 to spare
-    assert g.area.areas == [(46, 206, 108, 108)]
+    # Centre (100, 260), radius 40: the beam 88 to the sides, glow and trail 80 up and down,
+    # 2 to spare
+    assert g.area.areas == [(10, 178, 180, 164)]
 
 
 # ----- following biomd -----

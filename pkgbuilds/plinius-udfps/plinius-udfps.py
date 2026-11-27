@@ -54,10 +54,14 @@ PANEL_GAMMA = 1.9
 DISPLAY_GAMMA = 2.2
 
 ACCENT = (0.21, 0.52, 0.89)
-# Glow and scan beam reach this far out, in sensor radii (clear of "Slide up to unlock" above)
-GLOW_REACH = 1.3
-# One sweep of the beam from the top of the glow to its bottom
-SCAN_PERIOD_US = 1_100_000
+# Glow and the beam's sweep reach this far up and down, in sensor radii (clear of "Slide up to
+# unlock" above)
+GLOW_REACH = 1.4
+# The beam reaches this far to the sides, fading out, so it shows beside the finger
+BEAM_REACH = 2.2
+# One sweep of the beam from the top of the glow to its bottom: the sensor often knows the
+# finger after about 0.4 s
+SCAN_PERIOD_US = 400_000
 # On the sensor itself the beam stays faint: the finger needs the white light
 BEAM_ON_SENSOR = (0.62, 0.82, 1.0)
 BEAM_ON_SENSOR_ALPHA = 0.35
@@ -153,18 +157,30 @@ def beam_offset(phase, reach):
     return reach * (2 * ease - 1)
 
 
-def draw_beam(cr, left, right, y, trail, rgb, alpha):
-    """A line at y with a trail fading out upwards, from left to right (clipped by the caller)."""
+def draw_beam(cr, left, right, y, trail, rgb, alpha, fade=False):
+    """A line at y with a trail fading out upwards, from left to right (clipped by the caller);
+    with fade it also fades out towards both ends."""
+    if fade:
+        cr.push_group()
     gradient = cairo.LinearGradient(0, y - trail, 0, y)
     gradient.add_color_stop_rgba(0, *rgb, 0)
     gradient.add_color_stop_rgba(1, *rgb, alpha * 0.6)
     cr.rectangle(left, y - trail, right - left, trail)
     cr.set_source(gradient)
     cr.fill()
-    width = max(1.5, trail / 10)
+    width = max(2.5, trail / 6)
     cr.rectangle(left, y - width / 2, right - left, width)
     cr.set_source_rgba(*rgb, alpha)
     cr.fill()
+    if fade:
+        cr.pop_group_to_source()
+        ends = cairo.LinearGradient(left, 0, right, 0)
+        # Full light beside the finger, out only in the outer part
+        ends.add_color_stop_rgba(0, 0, 0, 0, 0)
+        ends.add_color_stop_rgba(0.15, 0, 0, 0, 1)
+        ends.add_color_stop_rgba(0.85, 0, 0, 0, 1)
+        ends.add_color_stop_rgba(1, 0, 0, 0, 0)
+        cr.mask(ends)
 
 
 class Glow(Gtk.Window):
@@ -207,8 +223,10 @@ class Glow(Gtk.Window):
         if self.target.disc is None:
             return
         cx, cy, r = self.sensor(self.area.get_allocated_height())
-        reach = math.ceil(GLOW_REACH * r) + 2
-        self.area.queue_draw_area(int(cx - reach), int(cy - reach), 2 * reach, 2 * reach)
+        # The beam's trail reaches above the glow's top by up to 0.6 r
+        wide = math.ceil(BEAM_REACH * r) + 2
+        high = math.ceil((GLOW_REACH + 0.6) * r) + 2
+        self.area.queue_draw_area(int(cx - wide), int(cy - high), 2 * wide, 2 * high)
 
     def on_draw(self, widget, cr):
         cr.set_operator(cairo.OPERATOR_CLEAR)
@@ -220,27 +238,29 @@ class Glow(Gtk.Window):
             return False
         cx, cy, r = self.sensor(widget.get_allocated_height())
         reach = GLOW_REACH * r
+        wide = BEAM_REACH * r
         # The sensor shows through: the target draws it, above or below the veil (its white
         # circle ends a pixel inside its edge)
-        r -= 1
+        hole = r - 1
         cr.set_operator(cairo.OPERATOR_CLEAR)
-        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.arc(cx, cy, hole, 0, 2 * math.pi)
         cr.fill()
         cr.set_operator(cairo.OPERATOR_OVER)
-        # Glow and beam only in the ring around the sensor
+        # Glow and beam everywhere but on the sensor
         cr.save()
         cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
-        cr.arc(cx, cy, reach, 0, 2 * math.pi)
+        cr.rectangle(cx - wide, cy - 2 * reach, 2 * wide, 4 * reach)
         cr.new_sub_path()
-        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.arc(cx, cy, hole, 0, 2 * math.pi)
         cr.clip()
-        glow = cairo.RadialGradient(cx, cy, r, cx, cy, reach)
+        glow = cairo.RadialGradient(cx, cy, hole, cx, cy, reach)
         glow.add_color_stop_rgba(0, *ACCENT, 0.7)
         glow.add_color_stop_rgba(1, *ACCENT, 0)
+        cr.arc(cx, cy, reach, 0, 2 * math.pi)
         cr.set_source(glow)
-        cr.paint()
-        draw_beam(cr, cx - reach, cx + reach, cy + beam_offset(self.target.scan_phase(), reach),
-                  r * 0.6, ACCENT, BEAM_AROUND_ALPHA)
+        cr.fill()
+        draw_beam(cr, cx - wide, cx + wide, cy + beam_offset(self.target.scan_phase(), reach),
+                  r * 0.6, ACCENT, BEAM_AROUND_ALPHA, fade=True)
         cr.restore()
         return False
 
