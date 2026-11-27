@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=plinius-freigabe
-pkgver=20261127.1111
+pkgver=20261127.1726
 pkgrel=1
 pkgdesc="Approved versions of the packages the Plinius adaptations depend on"
 arch=(aarch64 x86_64)
@@ -32,7 +32,7 @@ conflicts_aarch64=(
 	"dconf>51.0-1"  # linked by phosh-plinius
 	"espeak-ng>1.52.0-1"  # linked by plinius-speech
 	"evince>1:48.5-1"  # linked by phosh-plinius
-	"evolution-data-server>3.62.1-1"  # linked by bluez-obex-plinius
+	"evolution-data-server>3.62.2-1"  # linked by bluez-obex-plinius
 	"feedbackd>0.8.9-2"  # linked by gnome-calls-plinius
 	"fftw>3.3.11-1"  # linked by pipewire-audio-plinius
 	"file>5.48-1"  # linked by nfcd
