@@ -66,10 +66,9 @@ BEAM_REACH = 2.2
 # One sweep of the beam from the top of the glow to its bottom: the sensor often knows the
 # finger after about 0.4 s
 SCAN_PERIOD_US = 400_000
-# On the sensor itself the beam stays faint: the finger needs the white light
-BEAM_ON_SENSOR = (0.62, 0.82, 1.0)
-BEAM_ON_SENSOR_ALPHA = 0.35
-BEAM_AROUND_ALPHA = 0.95
+# A white beam: on the white sensor itself it does not show, and the finger keeps all the light
+BEAM = (1.0, 1.0, 1.0)
+BEAM_ALPHA = 0.95
 
 
 def display_mode():
@@ -272,7 +271,7 @@ class Glow(Gtk.Window):
         cr.set_source(glow)
         cr.fill()
         draw_beam(cr, cx - wide, cx + wide, cy + beam_offset(self.target.scan_phase(), reach),
-                  r * 0.6, ACCENT, BEAM_AROUND_ALPHA, full=full)
+                  r * 0.6, BEAM, BEAM_ALPHA, full=full)
         cr.restore()
         return False
 
@@ -474,7 +473,6 @@ class Target(Gtk.Window):
         return (elapsed % SCAN_PERIOD_US) / SCAN_PERIOD_US
 
     def on_tick(self, widget, clock):
-        self.area.queue_draw()
         self.glow.queue_beam()
         return GLib.SOURCE_CONTINUE
 
@@ -489,14 +487,9 @@ class Target(Gtk.Window):
         cr.set_operator(cairo.OPERATOR_OVER)
         cr.arc(r, r, r - 1, 0, 2 * math.pi)
         if self.pressed:
-            # The light for the optical sensor: white, full circle, the beam passing faintly
+            # The light for the optical sensor: plain white, full circle
             cr.set_source_rgb(1, 1, 1)
-            cr.fill_preserve()
-            cr.save()
-            cr.clip()
-            draw_beam(cr, 0, w, r + beam_offset(self.scan_phase(), GLOW_REACH * r), r * 0.6,
-                      BEAM_ON_SENSOR, BEAM_ON_SENSOR_ALPHA)
-            cr.restore()
+            cr.fill()
             return False
         cr.set_source_rgba(0, 0, 0, 0.55)
         cr.fill_preserve()

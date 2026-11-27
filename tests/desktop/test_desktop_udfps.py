@@ -481,7 +481,8 @@ def test_scan_phase_and_tick(mod, monkeypatch, glib):
     assert t.scan_phase() == pytest.approx(0.25)
     draws = t.area.draws
     assert t.on_tick(None, None) is True
-    assert t.area.draws == draws + 1 and t.glow.beams == 1
+    # The sensor is plain white: only the veil's beam moves
+    assert t.area.draws == draws and t.glow.beams == 1
 
 
 def test_beam_offset_sweeps_top_to_bottom(mod):
@@ -561,15 +562,13 @@ def test_pressed_circle_is_plain_white(mod, monkeypatch, glib):
     assert pixel(1, 1) == (0, 0, 0, 0)  # transparent around it
 
 
-def test_scan_beam_passes_faintly_over_the_sensor(mod, monkeypatch, glib):
+def test_sensor_stays_plain_white_while_the_beam_passes(mod, monkeypatch, glib):
     t = bind(mod, target(mod, monkeypatch))
     t.pressed = True
     t.scan_start = glib.now_us
-    glib.advance_ms(mod.SCAN_PERIOD_US / 2000)  # halfway: the beam through the centre
+    glib.advance_ms(mod.SCAN_PERIOD_US / 2000)  # halfway: the beam at the centre's height
     pixel = draw(mod, t)
-    r, g, b, a = pixel(50, 50)
-    assert a == 255 and b == 255 and 180 < r < 255  # light blue, still bright
-    assert pixel(50, 85) == (255, 255, 255, 255)  # below the beam: white
+    assert pixel(50, 50) == pixel(50, 85) == (255, 255, 255, 255)
     assert pixel(1, 1) == (0, 0, 0, 0)
 
 
@@ -640,7 +639,7 @@ def test_veil_carries_the_beam_around_the_sensor(mod, monkeypatch, glib):
     on_beam = draw_glow(mod, g)(149, 260)
     g = glow(mod, monkeypatch, phase_ms=0, glib=glib)
     off_beam = draw_glow(mod, g)(149, 260)
-    assert on_beam[3] > off_beam[3] and on_beam[2] > off_beam[2]
+    assert on_beam[3] > off_beam[3] and on_beam[0] > off_beam[0]  # white over the blue glow
 
 
 def test_beam_shows_beside_the_finger_and_fades_out(mod, monkeypatch, glib):
@@ -649,7 +648,7 @@ def test_beam_shows_beside_the_finger_and_fades_out(mod, monkeypatch, glib):
     pixel = draw_glow(mod, g)
     # 4 px per mm: the beam reaches 40 beyond the ring (radius 40), full light up to 64
     near, far = pixel(160, 260), pixel(175, 260)
-    assert near[2] > near[0] and near[3] > 200
+    assert near[0] == near[1] == near[2] and near[3] > 200  # white
     assert 0 < far[3] < near[3]  # fading out towards the end
     assert pixel(183, 260)[3] == 0 and pixel(160, 200) == (0, 0, 0, 0)  # beyond: nothing
 
