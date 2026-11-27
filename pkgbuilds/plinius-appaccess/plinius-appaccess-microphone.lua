@@ -20,6 +20,9 @@ local M = {}
 -- user.slice/user-<uid>.slice/user@<uid>.service/app.slice/…: where the apps of a session run
 M.APP_SLICE = "^/user%.slice/user%-%d+%.slice/user@%d+%.service/app%.slice/"
 
+-- The FM tuner's source (audio-hal-bridge): a broadcast, no microphone
+M.FM_SOURCE = "hal_fm_input"
+
 -- The table of the published file (Conf's section), nil for none: then nothing is refused (the
 -- daemon is not running, as for its other resources)
 function M.parse (t)
@@ -98,9 +101,11 @@ end
 
 -- What to tell the agent about a new capture stream (properties @props) of a client with
 -- @verdict: "used", "refused" or nil (a service, a verdict still pending, no verdicts, a level
--- meter, a recording of what plays)
+-- meter, a recording of what plays, the radio: target.object is the source a Pulse client asked
+-- for by name)
 function M.report (verdict, props)
-  if props["stream.monitor"] == "true" or props["stream.capture.sink"] == "true" then
+  if props["stream.monitor"] == "true" or props["stream.capture.sink"] == "true" or
+      props["target.object"] == M.FM_SOURCE then
     return nil
   end
   if verdict == "allow" then

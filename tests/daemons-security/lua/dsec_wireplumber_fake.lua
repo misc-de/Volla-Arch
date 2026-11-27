@@ -92,6 +92,8 @@ local function matches (interest, o)
       return false
     elseif verb == "#" and not glob (value, have) then
       return false
+    elseif verb == "!" and (have == nil or have == value) then
+      return false
     end
   end
   return true

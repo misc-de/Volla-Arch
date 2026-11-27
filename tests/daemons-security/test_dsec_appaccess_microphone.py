@@ -124,6 +124,7 @@ def test_the_published_file_parsed(t, parsed):
     ("pending", {}, None, False),
     ("ask", {"stream.monitor": "true"}, None, False),        # a level meter
     ("ask", {"stream.capture.sink": "true"}, None, False),   # what plays
+    ("ask", {"target.object": "hal_fm_input"}, None, False),  # the radio
 ])
 def test_what_a_new_recording_reports(verdict, props, report, allowed):
     assert lua(f'print (W.json ({{ mic.report ("{verdict}", {lua_table(props)}) or "none",'
@@ -316,6 +317,30 @@ W.run_idle ()
 print (W.json ({{ W.destroyed, perms (recorder, default_pm).mic }}))''', rescan=False)
     # Only the microphone's link of the app that lost it; a recording of what plays stays
     assert out == [[300], 0]
+
+
+def test_the_radio_is_no_microphone():
+    out = hook(WORLD + f'''
+fm_node = W.object ("nodes", 80, {{ ["media.class"] = "Audio/Source", ["node.name"] = "hal_fm_input" }})
+s1 = stream (150, recorder)
+W.object ("links", 300, {{ ["link.output.node"] = "79", ["link.input.node"] = "150" }})
+W.object ("links", 301, {{ ["link.output.node"] = "80", ["link.input.node"] = "150" }})
+''', f'''
+W.select_access (snap, default_pm)
+W.select_access (flat, flatpak_pm)
+W.select_access (recorder, default_pm)
+W.node_added (stream (151, snap, {{ ["target.object"] = "hal_fm_input" }}))
+W.files["{FILE}"].cgroups["{RECORDER}"] = "deny"
+fm.handlers.changed (fm, "{FILE}", nil, "created")
+W.run_idle ()
+print (W.json ({{ snap = {{ default_pm:permissions (snap, fm_node), default_pm:permissions (snap, mic_node) }},
+                 flat = flatpak_pm:permissions (flat, fm_node),
+                 recorder = default_pm:permissions (recorder, fm_node),
+                 destroyed = W.destroyed, saved = W.saved }}))''', rescan=False)
+    # Every app sees the tuner, listening is no recording (only the microphone's recording of the
+    # app that lost it is reported), and losing the microphone ends only the microphone's link
+    assert out == {"snap": [510, 0], "flat": 500, "recorder": 510, "destroyed": [300],
+                   "saved": {"plinius-appaccess-microphone": {"110": "refused 5001 -"}}}
 
 
 def test_a_client_whose_properties_change_is_decided_anew():

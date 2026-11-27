@@ -15,6 +15,10 @@
 -- adds the microphone's rule to the one chosen, after every other script of the "select-access"
 -- event and before apply-access attaches it.
 --
+-- The FM tuner's source (hal_fm_input of audio-hal-bridge) is no microphone: it carries a broadcast,
+-- never the room, so every app sees it, its recordings are not reported and not ended (a radio
+-- app finds out at start whether the source is there, without recording).
+--
 -- Each new capture stream is reported to plinius-appaccess-agent through the state file
 -- plinius-appaccess-microphone (~/.local/state/wireplumber): refused ones bring its question,
 -- allowed ones are counted as uses. Not reported: level meters and recordings of what plays.
@@ -24,7 +28,8 @@ log = Log.open_topic ("s-client")
 
 uid = mic.uid_of (os.getenv ("XDG_RUNTIME_DIR"))
 path = uid and ("/run/plinius-appaccess/microphone-" .. uid .. ".conf") or nil
-SOURCES = Interest { type = "node", Constraint { "media.class", "#", "Audio/Source*" } }
+SOURCES = Interest { type = "node", Constraint { "media.class", "#", "Audio/Source*" },
+                     Constraint { "node.name", "!", mic.FM_SOURCE } }
 CAPTURE = "Stream/Input/Audio*"
 -- So many reports stay in the state file: the agent reads the new ones
 REPORTS_KEPT = 8
@@ -153,7 +158,7 @@ function revoke ()
     local client = input and by_id (clients_om, input.properties["client.id"])
 
     if out and client and (out.properties["media.class"] or ""):find ("^Audio/Source") and
-        not mic.allowed (decide (client).verdict) then
+        out.properties["node.name"] ~= mic.FM_SOURCE and not mic.allowed (decide (client).verdict) then
       log:info (client, "microphone taken back: link " .. tostring (link["bound-id"]) .. " destroyed")
       link:request_destroy ()
     end

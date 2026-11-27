@@ -2,7 +2,7 @@
 
 pkgname=plinius-appaccess
 pkgver=0.2
-pkgrel=7
+pkgrel=8
 pkgdesc="Per app: cameras, security keys, network and microphone allowed, refused or asked for, with the attempts counted (cgroup BPF, WirePlumber), for GNOME Settings"
 arch=(aarch64 x86_64)
 # The daemon and the agent are MIT; the BPF programs are GPL-2.0-only (the kernel's helpers ask for it)
@@ -39,8 +39,8 @@ sha256sums=('032858997d14510200c52add27e5d065c08342a3ee83d587e316f347c4af451a'
 	'27be798178a0f4cd90e8a988e2c33e3e559d3697d1344c6e78d0f34baa8edd0f'
 	'038c19e571cf9dfbf045a4d9ec0bb81c1dd2ce0a4d3d0848c9160ea2627021be'
 	'd70007d74bf1885397cb1e4994fd5a07ce70996045f7db79825b7ad5cd8e3e41'
-	'e4788fc7152d3450fb5da53650e4eaa1b2a3f1213d020d825f8b9c7d698a4ed1'
-	'75f55466adfceefead77f46c93f771756275b46ff5617f44890b6bf12a5df98b'
+	'58855929be624638c902525bf43db85ac24e5936db6a911d49764a15596a0cc2'
+	'1dce14f6df3cc02910005dac984523d3a7a30d853cf550f0c50ea07895e6b86b'
 	'92afd5acca56fdbeb243da3b6a0cb48480039cc3c5c9232391cb4895e608ad27'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076'
 	'fa4e639f10c3fabb21bb8ae422033faad01ac9b15fa35e163003422692e7f7a2'
