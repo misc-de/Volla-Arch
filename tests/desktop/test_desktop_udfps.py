@@ -387,7 +387,7 @@ def test_place_tiny_sensor_keeps_a_pixel(mod, monkeypatch):
 def bind(mod, t):
     """The Target methods on the fake object, so they call each other."""
     for name in ("place", "set_state", "set_progress", "press", "boost", "release", "ui_ready",
-                 "lift_veil", "call", "on_touch", "on_button", "scan_phase", "on_tick"):
+                 "lift_veil", "call", "on_touch", "on_button", "scan_phase", "scan_up", "on_tick"):
         setattr(t, name, getattr(mod.Target, name).__get__(t))
     return t
 
@@ -478,18 +478,24 @@ def test_scan_phase_and_tick(mod, monkeypatch, glib):
     assert t.scan_phase() == 0
     glib.advance_ms(mod.SCAN_PERIOD_US / 4000)
     assert t.scan_phase() == pytest.approx(0.25)
-    glib.advance_ms(mod.SCAN_PERIOD_US / 1000)  # the next sweep
-    assert t.scan_phase() == pytest.approx(0.25)
+    assert t.scan_up()  # the first sweep goes up
+    glib.advance_ms(mod.SCAN_PERIOD_US / 1000)  # the next sweep goes down
+    assert t.scan_phase() == pytest.approx(0.25) and not t.scan_up()
+    glib.advance_ms(mod.SCAN_PERIOD_US / 1000)
+    assert t.scan_up()
     draws = t.area.draws
     assert t.on_tick(None, None) is True
     # The sensor is plain white: only the veil's beam moves
     assert t.area.draws == draws and t.glow.beams == 1
 
 
-def test_beam_offset_sweeps_top_to_bottom(mod):
+def test_beam_offset_sweeps_down_and_up(mod):
     assert mod.beam_offset(0, 30) == pytest.approx(-30)
     assert mod.beam_offset(0.5, 30) == pytest.approx(0)
     assert mod.beam_offset(1, 30) == pytest.approx(30)
+    # Upwards: from the bottom to the top
+    assert mod.beam_offset(0, 30, up=True) == pytest.approx(30)
+    assert mod.beam_offset(1, 30, up=True) == pytest.approx(-30)
     # Slower at the ends than in the middle
     assert mod.beam_offset(0.1, 30) + 30 < mod.beam_offset(0.55, 30) - mod.beam_offset(0.45, 30)
 
@@ -659,7 +665,10 @@ def test_beam_is_narrower_above_the_centre(mod, monkeypatch, glib):
     # the beam reaches 80 * sqrt(1 - (40 / 58.8)²) = 58.6 to each side; the sweep is 40 above the
     # centre at about a quarter of its period
     phase = math.acos(1 - 2 * (1 - 40 / 56) / 2) / math.pi
-    g = glow(mod, monkeypatch, alpha=0, phase_ms=phase * mod.SCAN_PERIOD_US / 1000, glib=glib)
+    # in the second sweep, the one downwards
+    g = glow(mod, monkeypatch, alpha=0, phase_ms=(1 + phase) * mod.SCAN_PERIOD_US / 1000,
+             glib=glib)
+    assert not g.target.scan_up()
     assert 260 + mod.beam_offset(g.target.scan_phase(), 56) == pytest.approx(220, abs=0.5)
     pixel = draw_glow(mod, g)
     assert pixel(145, 220)[3] > 128  # 45 beside: on the beam
@@ -667,10 +676,23 @@ def test_beam_is_narrower_above_the_centre(mod, monkeypatch, glib):
     # Through the centre it reaches further
     g = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
     assert draw_glow(mod, g)(162, 260)[3] > 128
-    # At the top of the sweep it is narrow, but still there
+    # At the start, at the bottom of its way, it is narrow, but there
     g = glow(mod, monkeypatch, alpha=0, glib=glib)
     pixel = draw_glow(mod, g)
-    assert pixel(100, 204)[3] > 0 and pixel(130, 204)[3] == 0
+    assert pixel(100, 316)[3] > 0 and pixel(130, 316)[3] == 0
+
+
+def test_the_trail_follows_the_beam(mod, monkeypatch, glib):
+    # Halfway through a sweep the line crosses the centre's height (260); 70 beside the sensor,
+    # beyond the glow, the trail shows below the line going up (first sweep), above it going down
+    up = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
+    assert up.target.scan_up()
+    pixel = draw_glow(mod, up)
+    assert pixel(170, 266)[3] > 0 and pixel(170, 254)[3] == 0
+    down = glow(mod, monkeypatch, alpha=0, phase_ms=3 * mod.SCAN_PERIOD_US / 2000, glib=glib)
+    assert not down.target.scan_up()
+    pixel = draw_glow(mod, down)
+    assert pixel(170, 254)[3] > 0 and pixel(170, 266)[3] == 0
 
 
 def test_beam_reach_from_the_panel_size(mod, monkeypatch, glib):

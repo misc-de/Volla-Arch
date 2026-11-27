@@ -66,8 +66,8 @@ BEAM_FADE = 0.4
 BEAM_OUTLINE_HEIGHT = 1.05
 # Without the panel's physical size: this far, in sensor radii
 BEAM_REACH = 2.2
-# One sweep of the beam from the top of the glow to its bottom: the sensor often knows the
-# finger after about 0.4 s
+# One sweep of the beam, from the bottom of the glow to its top or back: the sensor often knows
+# the finger after about 0.4 s
 SCAN_PERIOD_US = 400_000
 # A white beam: on the white sensor itself it does not show, and the finger keeps all the light
 BEAM = (1.0, 1.0, 1.0)
@@ -156,26 +156,27 @@ class Backlight:
         self.saved = None
 
 
-def beam_offset(phase, reach):
-    """Height of the scan beam over the sensor centre for a phase 0..1 of the sweep: from the
-    top of the glow to its bottom, slower at both ends."""
+def beam_offset(phase, reach, up=False):
+    """Height of the scan beam over the sensor centre for a phase 0..1 of a sweep: from the top
+    of the glow to its bottom, or with up from the bottom to the top; slower at both ends."""
     ease = (1 - math.cos(math.pi * phase)) / 2
-    return reach * (2 * ease - 1)
+    offset = reach * (2 * ease - 1)
+    return -offset if up else offset
 
 
 def draw_beam(cr, left, right, y, trail, rgb, alpha, full=None):
-    """A line at y with a trail fading out upwards, from left to right (clipped by the caller);
-    with full (half a width around the middle) it is at full light only there and fades out
-    towards both ends."""
+    """A line at y with a trail fading out upwards (a negative trail: downwards), from left to
+    right (clipped by the caller); with full (half a width around the middle) it is at full light
+    only there and fades out towards both ends."""
     if full is not None:
         cr.push_group()
     gradient = cairo.LinearGradient(0, y - trail, 0, y)
     gradient.add_color_stop_rgba(0, *rgb, 0)
     gradient.add_color_stop_rgba(1, *rgb, alpha * 0.6)
-    cr.rectangle(left, y - trail, right - left, trail)
+    cr.rectangle(left, min(y, y - trail), right - left, abs(trail))
     cr.set_source(gradient)
     cr.fill()
-    width = max(2.5, trail / 6)
+    width = max(2.5, abs(trail) / 6)
     cr.rectangle(left, y - width / 2, right - left, width)
     cr.set_source_rgba(*rgb, alpha)
     cr.fill()
@@ -278,10 +279,12 @@ class Glow(Gtk.Window):
         cr.arc(cx, cy, reach, 0, 2 * math.pi)
         cr.set_source(glow)
         cr.fill()
-        # The beam is as wide as the outline at its height: widest through the centre
-        y = beam_offset(self.target.scan_phase(), reach)
+        # Up and down in turn, the trail behind it; as wide as the outline at its height
+        up = self.target.scan_up()
+        y = beam_offset(self.target.scan_phase(), reach, up)
         half = max(1.0, wide * math.sqrt(max(0.0, 1 - (y / high) ** 2)))
-        draw_beam(cr, cx - half, cx + half, cy + y, r * 0.6, BEAM, BEAM_ALPHA,
+        trail = -r * 0.6 if up else r * 0.6
+        draw_beam(cr, cx - half, cx + half, cy + y, trail, BEAM, BEAM_ALPHA,
                   full=full * half / wide)
         cr.restore()
         return False
@@ -482,6 +485,11 @@ class Target(Gtk.Window):
         """Where the sweep of the beam is, 0..1."""
         elapsed = GLib.get_monotonic_time() - self.scan_start
         return (elapsed % SCAN_PERIOD_US) / SCAN_PERIOD_US
+
+    def scan_up(self):
+        """Whether the beam goes up in this sweep: it starts at the bottom, then turns."""
+        elapsed = GLib.get_monotonic_time() - self.scan_start
+        return (elapsed // SCAN_PERIOD_US) % 2 == 0
 
     def on_tick(self, widget, clock):
         self.glow.queue_beam()
