@@ -61,6 +61,9 @@ GLOW_REACH = 1.4
 # fades out over the outer part of that
 BEAM_BEYOND_MM = 10
 BEAM_FADE = 0.4
+# The beam's outline: an ellipse that wide and a little higher than the sweep, so the beam is
+# widest through the centre and narrows towards the top and the bottom of its way
+BEAM_OUTLINE_HEIGHT = 1.05
 # Without the panel's physical size: this far, in sensor radii
 BEAM_REACH = 2.2
 # One sweep of the beam from the top of the glow to its bottom: the sensor often knows the
@@ -223,8 +226,8 @@ class Glow(Gtk.Window):
         return left + r, height - bottom - r, r
 
     def beam_reach(self, r):
-        """How far the beam reaches to each side of the sensor centre and how far of that at
-        full light: BEAM_BEYOND_MM beyond the ring on the panel."""
+        """How far the beam reaches to each side of the sensor centre at the centre's height and
+        how far of that at full light: BEAM_BEYOND_MM beyond the ring on the panel."""
         mm = self.target.px_per_mm
         wide = r + BEAM_BEYOND_MM * mm if mm else BEAM_REACH * r
         return wide, r + (1 - BEAM_FADE) * (wide - r)
@@ -257,10 +260,15 @@ class Glow(Gtk.Window):
         cr.arc(cx, cy, hole, 0, 2 * math.pi)
         cr.fill()
         cr.set_operator(cairo.OPERATOR_OVER)
-        # Glow and beam everywhere but on the sensor
+        # Glow and beam everywhere but on the sensor, the beam within its outline
+        high = BEAM_OUTLINE_HEIGHT * reach
         cr.save()
         cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
-        cr.rectangle(cx - wide, cy - 2 * reach, 2 * wide, 4 * reach)
+        cr.save()
+        cr.translate(cx, cy)
+        cr.scale(wide, high)
+        cr.arc(0, 0, 1, 0, 2 * math.pi)
+        cr.restore()
         cr.new_sub_path()
         cr.arc(cx, cy, hole, 0, 2 * math.pi)
         cr.clip()
@@ -270,8 +278,11 @@ class Glow(Gtk.Window):
         cr.arc(cx, cy, reach, 0, 2 * math.pi)
         cr.set_source(glow)
         cr.fill()
-        draw_beam(cr, cx - wide, cx + wide, cy + beam_offset(self.target.scan_phase(), reach),
-                  r * 0.6, BEAM, BEAM_ALPHA, full=full)
+        # The beam is as wide as the outline at its height: widest through the centre
+        y = beam_offset(self.target.scan_phase(), reach)
+        half = max(1.0, wide * math.sqrt(max(0.0, 1 - (y / high) ** 2)))
+        draw_beam(cr, cx - half, cx + half, cy + y, r * 0.6, BEAM, BEAM_ALPHA,
+                  full=full * half / wide)
         cr.restore()
         return False
 

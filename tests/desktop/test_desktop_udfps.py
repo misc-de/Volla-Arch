@@ -3,6 +3,7 @@
 # press/release protocol towards biomd, the scan beam, the drawing, and following biomd. GTK is
 # faked; drawing goes to a real cairo image surface.
 
+import math
 import types
 
 import cairo
@@ -651,6 +652,25 @@ def test_beam_shows_beside_the_finger_and_fades_out(mod, monkeypatch, glib):
     assert near[0] == near[1] == near[2] and near[3] > 200  # white
     assert 0 < far[3] < near[3]  # fading out towards the end
     assert pixel(183, 260)[3] == 0 and pixel(160, 200) == (0, 0, 0, 0)  # beyond: nothing
+
+
+def test_beam_is_narrower_above_the_centre(mod, monkeypatch, glib):
+    # Radius 40: the outline 80 wide to each side and 1.05 * 56 = 58.8 high. 40 above the centre
+    # the beam reaches 80 * sqrt(1 - (40 / 58.8)²) = 58.6 to each side; the sweep is 40 above the
+    # centre at about a quarter of its period
+    phase = math.acos(1 - 2 * (1 - 40 / 56) / 2) / math.pi
+    g = glow(mod, monkeypatch, alpha=0, phase_ms=phase * mod.SCAN_PERIOD_US / 1000, glib=glib)
+    assert 260 + mod.beam_offset(g.target.scan_phase(), 56) == pytest.approx(220, abs=0.5)
+    pixel = draw_glow(mod, g)
+    assert pixel(145, 220)[3] > 128  # 45 beside: on the beam
+    assert pixel(162, 220)[3] == 0  # 62 beside: beyond the outline at this height
+    # Through the centre it reaches further
+    g = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
+    assert draw_glow(mod, g)(162, 260)[3] > 128
+    # At the top of the sweep it is narrow, but still there
+    g = glow(mod, monkeypatch, alpha=0, glib=glib)
+    pixel = draw_glow(mod, g)
+    assert pixel(100, 204)[3] > 0 and pixel(130, 204)[3] == 0
 
 
 def test_beam_reach_from_the_panel_size(mod, monkeypatch, glib):
