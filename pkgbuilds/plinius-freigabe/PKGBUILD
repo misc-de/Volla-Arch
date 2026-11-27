@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=plinius-freigabe
-pkgver=20261126.0721
+pkgver=20261127.1111
 pkgrel=1
 pkgdesc="Approved versions of the packages the Plinius adaptations depend on"
 arch=(aarch64 x86_64)
@@ -42,7 +42,7 @@ conflicts_aarch64=(
 	"gcr>3.41.2-2"  # linked by phosh-plinius
 	"gcr-4>4.4.1-1"  # linked by gnome-control-center-plinius
 	"gdk-pixbuf2>2.44.8-1"  # linked by chatty-plinius
-	"glib2>2.90.1-1"  # linked by audio-hal-bridge
+	"glib2>2.90.2-1"  # linked by audio-hal-bridge
 	"glibc>2.43+r22+g8362e8ce10b2-2"  # linked by audio-hal-bridge
 	"glycin>2.2.6-2"  # linked by snapshot-plinius
 	"glycin-gtk4>2.2.6-2"  # linked by snapshot-plinius
@@ -71,14 +71,14 @@ conflicts_aarch64=(
 	"libcloudproviders>0.4.2-1"  # linked by gtk3-plinius
 	"libcmatrix>0.0.4-2"  # linked by chatty-plinius
 	"libcolord>1.4.8-2"  # linked by gtk3-plinius
-	"libcups>2:2.4.20-1"  # linked by cups-plinius
+	"libcups>2:2.4.20-2"  # linked by cups-plinius
 	"libdisplay-info>0.3.0-1"  # linked by phoc-plinius
 	"libdrm>2.4.134-1"  # linked by buffybox
 	"libebur128>1.2.6-2"  # linked by pipewire-audio-plinius
 	"libepoxy>1.5.10-3"  # linked by gnome-control-center-plinius
 	"libfdk-aac>3.0.0-1"  # linked by pipewire-audio-plinius
 	"libfreeaptx>0.2.2-1"  # linked by pipewire-audio-plinius
-	"libgbinder>1.1.55-1"  # linked by biomd
+	"libgbinder>1.1.56-1"  # linked by biomd
 	"libgcc>16.1.1+r12+g301eb08fa2c5-1"  # linked by audio-hal-bridge
 	"libgee>0.20.8-1"  # linked by gnome-calls-plinius
 	"libglibutil>1.0.83-1"  # linked by libdbusaccess
@@ -104,7 +104,7 @@ conflicts_aarch64=(
 	"libpaper>2.2.8-1"  # linked by cups-plinius
 	"libpeas-2>2.2.1-1"  # linked by gnome-calls-plinius
 	"libphonenumber>1:9.0.44-1"  # linked by chatty-plinius
-	"libpipewire>1:1.6.11-2"  # linked by audio-hal-bridge
+	"libpipewire>1:1.6.12-1"  # linked by audio-hal-bridge
 	"libpulse>17.0+r134+g77d25a1e6-2"  # linked by gnome-control-center-plinius
 	"libpwquality>1.4.5-7"  # linked by gnome-control-center-plinius
 	"librest>0.10.2-2"  # linked by gnome-online-accounts-plinius
@@ -141,7 +141,7 @@ conflicts_aarch64=(
 	"pango>1:1.58.2-1"  # linked by chatty-plinius
 	"pcsclite>2.5.4-1"  # linked by wpa_supplicant-plinius
 	"phosh>0.59.0-1"  # core list
-	"pipewire>1:1.6.11-2"  # core list
+	"pipewire>1:1.6.12-1"  # core list
 	"pixman>0.46.4-1.1"  # linked by phoc-plinius
 	"polkit>128-1"  # linked by gnome-control-center-plinius
 	"qrcodegen-cmake>1.8.0-5"  # linked by phosh-plinius
