@@ -2,8 +2,8 @@
 
 pkgname=gnome-usage-plinius
 pkgver=48.0
-pkgrel=8
-pkgdesc="GNOME Usage with system services kept out of the app list and launchers of the same name told apart, storage counted once per file system"
+pkgrel=9
+pkgdesc="GNOME Usage with system services kept out of the app list and launchers of the same name told apart, storage counted once per file system, Android apps can be quit"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 url="https://apps.gnome.org/Usage"
 license=(GPL-3.0-or-later)
@@ -16,6 +16,7 @@ makedepends=(git meson vala)
 optdepends=(
 	'accountsservice: show user tags for processes'
 	'gamemode: show processes requesting game mode'
+	'waydroid-plinius: quit Android apps'
 )
 provides=("gnome-usage=$pkgver")
 conflicts=(gnome-usage)
@@ -27,11 +28,13 @@ source=(
 	0001-app-item-Don-t-match-system-services-to-applications.patch
 	0002-app-item-Tell-launchers-of-the-same-name-apart.patch
 	0003-storage-view-Count-every-file-system-once.patch
+	0004-app-item-Let-Android-apps-be-quit.patch
 )
 sha256sums=('SKIP'
             '2c51379a85c84cb7579cf98a067bc65ce570a2d9489888407f1e25295a67e1a0'
             '100b649b5130929312818230ce07126168934d31532adfd009547bd9f2e0ff46'
-            '432b05df1bca554cb7020417745891a8492f241b74e7c1918890c57afea411d3')
+            '432b05df1bca554cb7020417745891a8492f241b74e7c1918890c57afea411d3'
+            '2cc9b639b6ca8dc376804d6a1c50612a11f30812ed398dee9e8cfee21e4bcdb1')
 
 prepare() {
 	# Usage takes an app ID from a process's systemd unit. System services are named the
@@ -46,6 +49,10 @@ prepare() {
 	# container and /userdata 11 times showed 223 GB as 4.5 TB. Each file system counts
 	# once now, file-backed loop devices (rootfs.img, Android images) not at all
 	patch -d gnome-usage -Np1 -i "$srcdir/0003-storage-view-Count-every-file-system-once.patch"
+	# Android apps run under Android's user IDs, the quit button stayed grey. They are stopped
+	# with am force-stop through waydroid-plinius-stop-app (pkexec), Android itself by ending
+	# the Waydroid session. Waydroid's launcher ("X-WayDroid-App;Utility;") is recognised too
+	patch -d gnome-usage -Np1 -i "$srcdir/0004-app-item-Let-Android-apps-be-quit.patch"
 }
 
 build() {

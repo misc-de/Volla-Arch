@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""waydroid-plinius-stop-app PACKAGE: stops an Android app in the Waydroid container.
+
+Android apps run under Android's own user IDs (10000 and up), so the phone's user cannot signal
+them, and a signal is not how Android ends an app anyway: its services would be started again.
+This helper runs `am force-stop PACKAGE` inside the container, as Android's settings do with
+"Force stop". GNOME Usage calls it through pkexec (org.plinius.waydroid.stop-app).
+
+It gives the active user nothing they could not do already: Waydroid's container manager stops
+all of Android for any caller, this stops one app of it. A frozen container is thawed first
+(Android freezes it while idle; it freezes again by itself).
+
+Exit status: 0 stopped (or Android not running, so nothing runs), 1 failed, 2 bad argument.
+"""
+
+import re
+import subprocess
+import sys
+
+# An Android package name: two or more parts of letters, digits and underscores, each starting
+# with a letter (com.android.chrome). Nothing that could pass for an option of am.
+PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+")
+TIMEOUT = 30
+
+
+def container_state():
+    """RUNNING, FROZEN, STOPPED (waydroid status), or None if Waydroid does not answer."""
+    try:
+        r = subprocess.run(["waydroid", "status"], capture_output=True, text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in r.stdout.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "Container":
+            return value.strip()
+    return None
+
+
+def run(command):
+    try:
+        return subprocess.run(command, capture_output=True, timeout=TIMEOUT).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def stop(package):
+    state = container_state()
+    if state is None:
+        print("waydroid-plinius-stop-app: Waydroid does not answer", file=sys.stderr)
+        return 1
+    if state not in ("RUNNING", "FROZEN"):
+        return 0
+    if state == "FROZEN" and not run(["waydroid", "container", "unfreeze"]):
+        print("waydroid-plinius-stop-app: cannot thaw the container", file=sys.stderr)
+        return 1
+    if not run(["waydroid", "shell", "--", "am", "force-stop", package]):
+        print(f"waydroid-plinius-stop-app: {package} was not stopped", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv):
+    if len(argv) != 2 or len(argv[1]) > 255 or not PACKAGE.fullmatch(argv[1]):
+        print("usage: waydroid-plinius-stop-app PACKAGE", file=sys.stderr)
+        return 2
+    return stop(argv[1])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

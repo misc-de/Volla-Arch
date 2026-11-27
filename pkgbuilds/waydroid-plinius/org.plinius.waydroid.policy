@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- GNOME Usage quits an Android app with
+     pkexec /usr/lib/waydroid-plinius/waydroid-plinius-stop-app PACKAGE -->
+<policyconfig>
+  <vendor>Plinius</vendor>
+
+  <!-- Quitting an app is like closing its window: no PIN for the active session. Waydroid's
+       container manager already stops all of Android for any caller; this stops one app. -->
+  <action id="org.plinius.waydroid.stop-app">
+    <description>Quit an Android app</description>
+    <message>Authentication is required to quit an Android app</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/waydroid-plinius/waydroid-plinius-stop-app</annotate>
+  </action>
+</policyconfig>

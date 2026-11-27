@@ -4,7 +4,7 @@
 pkgname=waydroid-plinius
 _pkgname=waydroid
 pkgver=1.6.3
-pkgrel=7
+pkgrel=8
 pkgdesc="A container-based approach to boot a full Android system on a regular Linux system (Plinius: the phone's devices and NFC stay as they are, Android gets the phone's hardware through the HAL bridges)"
 arch=('any')
 url="https://waydro.id/"
@@ -36,6 +36,8 @@ source=("$_pkgname::git+https://github.com/waydroid/waydroid.git#commit=$_commit
 	waydroid-plinius-setup
 	waydroid-plinius-screen
 	waydroid-plinius-screen.service
+	waydroid-plinius-stop-app
+	org.plinius.waydroid.policy
 	50-plinius.conf
 	display_settings.xml
 	plinius-sensors.xml
@@ -50,6 +52,8 @@ sha256sums=('SKIP'
 	'66057faa6b4a8017461921f135916c51487075d21f41e9c27a08924f544338cc'
 	'cf101b66a70ba8b8e1c8b7ef36ab1969b7f97473d53ab396c81e179aa1209e2e'
 	'1d436c8a47f8891a4f3496fb94ca269143bbac910e0f34ebd7a4aa9aace98ccd'
+	'89fa3599e3d56b8264f0e3a81347d2dd6fc1bed322dec47bf2039fdfed81433d'
+	'e36c402c66d8ed4357493e7c7123c872c45e7e2813b63ff3d4d9f52257285304'
 	'a616fa53ed9ce2a6cd783e96d96d0564fe048d342c9050a9aeea2a0479bd0f6d'
 	'5eee68d553baf9f2f4c2214c6d1a146f38c4a5a376d8b64dbc894f0e783797a1'
 	'a34c61ca80fe9ac73ffaac0ca95c9fbe0fce1665d8f32554aef60d3b1899593d'
@@ -74,7 +78,10 @@ package() {
 	# Byte-compile Python files during the packaging process instead of at runtime
 	python -m compileall -o 0 -o 1 -p / -s "$pkgdir" "$pkgdir/usr/lib/waydroid/tools/"
 
-	install -Dm755 waydroid-plinius-setup waydroid-plinius-screen -t "$pkgdir/usr/lib/waydroid-plinius"
+	install -Dm755 waydroid-plinius-setup waydroid-plinius-screen waydroid-plinius-stop-app \
+		-t "$pkgdir/usr/lib/waydroid-plinius"
+	# GNOME Usage quits an Android app through it (pkexec, no PIN for the active session)
+	install -Dm644 org.plinius.waydroid.policy -t "$pkgdir/usr/share/polkit-1/actions"
 	install -Dm644 waydroid-plinius-screen.service -t "$pkgdir/usr/lib/systemd/system"
 	install -Dm644 50-plinius.conf -t "$pkgdir/usr/lib/systemd/system/waydroid-container.service.d"
 	install -Dm644 display_settings.xml -t "$pkgdir/usr/share/waydroid-plinius"

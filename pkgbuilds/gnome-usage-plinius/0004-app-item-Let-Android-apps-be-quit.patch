@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 22:50:00 +0100
+Subject: [PATCH] app-item: Let Android apps be quit
+
+Processes in the Waydroid container run under Android's own user IDs
+(10000 and up for apps), so the quit button was always insensitive for
+them, and signalling them would not work for the user nor be how Android
+ends an app: its services would just be started again.
+
+An Android app (launcher waydroid.PACKAGE.desktop) is now stopped the
+Android way, by "am force-stop", through a helper that may enter the
+container (pkexec waydroid-plinius-stop-app PACKAGE). Android itself,
+the processes without a launcher of their own, is stopped by ending the
+Waydroid session, as the launcher's "Stop session" action does.
+
+Waydroid's own launcher was not recognised either: its categories are
+"X-WayDroid-App;Utility;", not just "X-WayDroid-App;", so Android's
+system processes were listed under the name of the first of them,
+without Waydroid's icon.
+---
+ src/app-item.vala | 73 ++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 66 insertions(+), 7 deletions(-)
+
+diff --git a/src/app-item.vala b/src/app-item.vala
+index 31b3635..50bf784 100644
+--- a/src/app-item.vala
++++ b/src/app-item.vala
+@@ -22,6 +22,7 @@
+ 
+ public class Usage.AppItem : Object {
+     private static Icon default_icon = new GLib.ThemedIcon ("system-run-symbolic");
++    private const string ANDROID_STOP_HELPER = "/usr/lib/waydroid-plinius/waydroid-plinius-stop-app";
+ 
+     public HashTable<Pid?, Process>? processes { get; set; }
+     public string display_name { get; private set; }
+@@ -47,7 +48,7 @@ public class Usage.AppItem : Object {
+     }
+     public virtual string? container {
+         get {
+-            if ((this.app_info as DesktopAppInfo)?.get_categories () == "X-WayDroid-App;") {
++            if (is_waydroid_launcher (this.app_info as DesktopAppInfo)) {
+                 return "Waydroid";
+             }
+             return null;
+@@ -88,7 +89,7 @@ public class Usage.AppItem : Object {
+                 if (id?.has_suffix (".desktop") ?? false) {
+                     id = id?.substring (0, id?.length - 8);
+                 }
+-                if (dai?.get_categories () == "X-WayDroid-App;") {
++                if (is_waydroid_launcher (dai)) {
+                     if (id == "Waydroid") {
+                         apps_info.insert ("waydroid", info);
+                         id = "system_waydroid";
+@@ -298,18 +299,76 @@ public class Usage.AppItem : Object {
+         this.notify_property ("running");
+     }
+ 
++    /* Waydroid's own launcher has more categories than its apps' launchers
++     * ("X-WayDroid-App;Utility;"): look for the one that marks them all. */
++    private static bool is_waydroid_launcher (DesktopAppInfo? dai) {
++        string? categories = dai?.get_categories ();
++        return categories != null && "X-WayDroid-App" in ((!) categories).split (";");
++    }
++
++    private bool in_waydroid () {
++        if (this.container == "Waydroid")
++            return true;
++        foreach (var process in processes.get_values ()) {
++            if (process.cgroup == "/lxc.payload.waydroid")
++                return true;
++        }
++        return false;
++    }
++
++    /* The package of an Android app (waydroid.PACKAGE.desktop), null for
++     * Android itself (Waydroid.desktop and the processes without a launcher) */
++    private string? android_package () {
++        string? id = app_info?.get_id ();
++        if (id == null || !((!) id).has_prefix ("waydroid.") || !((!) id).has_suffix (".desktop"))
++            return null;
++        string package = ((!) id).substring (9, ((!) id).length - 17);
++        return package != "" ? package : null;
++    }
++
+     public bool is_killable () {
++        /* Android's processes run under Android's user IDs, which the user
++         * cannot signal, and a signal is not how Android ends an app: an app
++         * is stopped the Android way (am force-stop, by a helper that may
++         * enter the container), Android itself by ending the Waydroid session */
++        if (this.in_waydroid ()) {
++            if (this.android_package () != null)
++                return FileUtils.test (ANDROID_STOP_HELPER, FileTest.IS_EXECUTABLE);
++            return Environment.find_program_in_path ("waydroid") != null;
++        }
++
+         bool blocked = this.representative_cmdline in Settings.get_default ().get_strv ("unkillable-processes");
+         bool by_current_user = this.user?.Uid == Posix.geteuid ();
+         return !blocked && by_current_user;
+     }
+ 
+     public void kill (Posix.Signal? sig = Posix.Signal.TERM) {
+-        if (this.is_killable ()) {
+-            foreach (var process in processes.get_values ()) {
+-                debug ("Terminating %d", (int) process.pid);
+-                Posix.kill (process.pid, sig ?? Posix.Signal.TERM);
+-            }
++        if (!this.is_killable ())
++            return;
++
++        if (this.in_waydroid ()) {
++            this.stop_android.begin ();
++            return;
++        }
++        foreach (var process in processes.get_values ()) {
++            debug ("Terminating %d", (int) process.pid);
++            Posix.kill (process.pid, sig ?? Posix.Signal.TERM);
++        }
++    }
++
++    private async void stop_android () {
++        string? package = this.android_package ();
++        string[] argv;
++        if (package != null)
++            argv = { "pkexec", ANDROID_STOP_HELPER, (!) package };
++        else
++            argv = { "waydroid", "session", "stop" };
++
++        try {
++            var stopper = new Subprocess.newv (argv, SubprocessFlags.STDOUT_SILENCE);
++            yield stopper.wait_check_async ();
++        } catch (Error e) {
++            warning ("Unable to stop %s: %s", this.display_name, e.message);
+         }
+     }
+ 
+-- 
+2.56.1
+
