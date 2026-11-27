@@ -1,0 +1,257 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 06:51:37 +0100
+Subject: [PATCH] aod: Half the light in the dark
+
+At night the always-on display was as bright as in a lit room. While it
+is shown it now claims the light sensor itself: Phosh's own claim ends
+when the screen blanks, and the sensor proxy counts claims per D-Bus
+connection, so it opens a system bus connection of its own and the
+claim ends with it.
+
+Below 5 lux the content gets an opacity of 0.73; over black an OLED
+pixel then gives 0.73^2.2, half of its light, the clock, the text and
+the icons alike. From 15 lux on it is light again. The last decision
+carries over to the always-on display made anew when the phone locks
+and to the next one, so neither starts bright in a dark room; the
+value the sensor measured last comes before the claim's first one.
+---
+ src/aod.c | 190 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 190 insertions(+)
+
+diff --git a/src/aod.c b/src/aod.c
+index 276d7ca1..0bebd9ad 100644
+--- a/src/aod.c
++++ b/src/aod.c
+@@ -16,6 +16,10 @@
+  *
+  * While it is shown, $XDG_RUNTIME_DIR/plinius-aod exists: plinius-suspend then wakes the
+  * phone at each full minute for the clock.
++ *
++ * In the dark the content has half its light. The always-on display claims the light sensor
++ * itself while it is shown: Phosh's own claim (PhoshAmbient) ends when the screen blanks, and
++ * the sensor proxy counts claims per D-Bus connection, so this one has a connection of its own.
+  */
+ 
+ #define G_LOG_DOMAIN "phosh-aod"
+@@ -42,6 +46,22 @@
+ /* Where the content starts, as fraction of the height */
+ #define AOD_TOP 0.22
+ 
++/*
++ * Dark below AOD_DARK_LUX, light again from AOD_BRIGHT_LUX on: the gap keeps a flickering lamp or
++ * a hand passing over the sensor from switching to and fro
++ */
++#define AOD_DARK_LUX   5.0
++#define AOD_BRIGHT_LUX 15.0
++/* Over black an OLED pixel at this opacity gives 0.73^2.2, half of its light */
++#define AOD_DARK_OPACITY 0.73
++
++#define SENSOR_PROXY_NAME  "net.hadess.SensorProxy"
++#define SENSOR_PROXY_PATH  "/net/hadess/SensorProxy"
++#define SENSOR_PROXY_IFACE "net.hadess.SensorProxy"
++
++/* The last decision: the always-on display made anew when the phone locks, and the next one, start with it */
++static gboolean aod_dark;
++
+ enum {
+   PROP_0,
+   PROP_MONITOR,
+@@ -61,6 +81,11 @@ struct _PhoshAod {
+   PhoshNotificationList *notifications;
+   guint                  update_icons_id;
+   char                  *flag_file;
++
++  /* The light sensor, on a system bus connection of its own */
++  GCancellable          *light_cancel;
++  GDBusConnection       *light_bus;
++  guint                  light_signal_id;
+ };
+ 
+ G_DEFINE_TYPE (PhoshAod, phosh_aod, PHOSH_TYPE_LAYER_SURFACE)
+@@ -195,6 +220,169 @@ on_notifications_changed (PhoshAod *self)
+ }
+ 
+ 
++/* Light: dark is below AOD_DARK_LUX, or below AOD_BRIGHT_LUX for a display that is dark already */
++static gboolean
++aod_dark_for_light (gboolean dark, double lux)
++{
++  return lux < (dark ? AOD_BRIGHT_LUX : AOD_DARK_LUX);
++}
++
++
++static void
++set_dark (PhoshAod *self, gboolean dark)
++{
++  aod_dark = dark;
++  gtk_widget_set_opacity (self->box, dark ? AOD_DARK_OPACITY : 1.0);
++}
++
++
++static void
++on_light_level (PhoshAod *self, double lux)
++{
++  gboolean dark = aod_dark_for_light (aod_dark, lux);
++
++  g_debug ("Ambient light %.1f lux: %s", lux, dark ? "dark" : "light");
++  /* Only a change draws a new frame */
++  if (dark != aod_dark)
++    set_dark (self, dark);
++}
++
++
++static void
++on_sensor_properties_changed (GDBusConnection *connection,
++                              const char      *sender,
++                              const char      *path,
++                              const char      *iface,
++                              const char      *signal,
++                              GVariant        *params,
++                              gpointer         data)
++{
++  PhoshAod *self = PHOSH_AOD (data);
++  g_autoptr (GVariant) changed = NULL;
++  double lux;
++
++  g_variant_get (params, "(&s@a{sv}@as)", NULL, &changed, NULL);
++  if (g_variant_lookup (changed, "LightLevel", "d", &lux))
++    on_light_level (self, lux);
++}
++
++
++/* The light the sensor measured last, until the claim brings a new value */
++static void
++on_sensor_properties (GObject *source, GAsyncResult *res, gpointer data)
++{
++  g_autoptr (PhoshAod) self = data;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) ret = NULL;
++  g_autoptr (GVariant) values = NULL;
++  gboolean has_light;
++  double lux;
++
++  ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  /* Gone already: nothing to show it on */
++  if (!self->light_cancel)
++    return;
++  if (!ret) {
++    g_debug ("No light sensor: %s", err->message);
++    return;
++  }
++
++  g_variant_get (ret, "(@a{sv})", &values);
++  if (g_variant_lookup (values, "HasAmbientLight", "b", &has_light) && has_light &&
++      g_variant_lookup (values, "LightLevel", "d", &lux))
++    on_light_level (self, lux);
++}
++
++
++static void
++on_light_claimed (GObject *source, GAsyncResult *res, gpointer data)
++{
++  g_autoptr (PhoshAod) self = data;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) ret = NULL;
++
++  ret = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (!ret && self->light_cancel)
++    g_warning ("Failed to claim the light sensor: %s", err->message);
++}
++
++
++static void
++on_light_bus_ready (GObject *source, GAsyncResult *res, gpointer data)
++{
++  g_autoptr (PhoshAod) self = data;
++  g_autoptr (GError) err = NULL;
++  GDBusConnection *bus;
++
++  bus = g_dbus_connection_new_for_address_finish (res, &err);
++  if (!bus) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("No system bus for the light sensor: %s", err->message);
++    return;
++  }
++  /* Gone in the meantime */
++  if (!self->light_cancel) {
++    g_dbus_connection_close (bus, NULL, NULL, NULL);
++    g_object_unref (bus);
++    return;
++  }
++  self->light_bus = bus;
++
++  self->light_signal_id =
++    g_dbus_connection_signal_subscribe (bus, SENSOR_PROXY_NAME, "org.freedesktop.DBus.Properties",
++                                        "PropertiesChanged", SENSOR_PROXY_PATH, SENSOR_PROXY_IFACE,
++                                        G_DBUS_SIGNAL_FLAGS_NONE, on_sensor_properties_changed,
++                                        self, NULL);
++  /* Sent in this order, the old value comes before any the claim brings */
++  g_dbus_connection_call (bus, SENSOR_PROXY_NAME, SENSOR_PROXY_PATH, "org.freedesktop.DBus.Properties",
++                          "GetAll", g_variant_new ("(s)", SENSOR_PROXY_IFACE),
++                          G_VARIANT_TYPE ("(a{sv})"), G_DBUS_CALL_FLAGS_NO_AUTO_START, -1,
++                          NULL, on_sensor_properties, g_object_ref (self));
++  g_dbus_connection_call (bus, SENSOR_PROXY_NAME, SENSOR_PROXY_PATH, SENSOR_PROXY_IFACE,
++                          "ClaimLight", NULL, NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START, -1,
++                          NULL, on_light_claimed, g_object_ref (self));
++}
++
++
++static void
++claim_light (PhoshAod *self)
++{
++  g_autoptr (GError) err = NULL;
++  g_autofree char *address = NULL;
++
++  set_dark (self, aod_dark);
++
++  address = g_dbus_address_get_for_bus_sync (G_BUS_TYPE_SYSTEM, NULL, &err);
++  if (!address) {
++    g_warning ("No system bus for the light sensor: %s", err->message);
++    return;
++  }
++  self->light_cancel = g_cancellable_new ();
++  g_dbus_connection_new_for_address (address,
++                                     G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT |
++                                     G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
++                                     NULL, self->light_cancel, on_light_bus_ready,
++                                     g_object_ref (self));
++}
++
++
++/* The sensor proxy drops the claim with the connection */
++static void
++release_light (PhoshAod *self)
++{
++  g_cancellable_cancel (self->light_cancel);
++  g_clear_object (&self->light_cancel);
++  if (!self->light_bus)
++    return;
++  if (self->light_signal_id)
++    g_dbus_connection_signal_unsubscribe (self->light_bus, self->light_signal_id);
++  self->light_signal_id = 0;
++  g_dbus_connection_close (self->light_bus, NULL, NULL, NULL);
++  g_clear_object (&self->light_bus);
++}
++/* Light end */
++
++
+ static void
+ phosh_aod_set_property (GObject      *obj,
+                         guint         prop_id,
+@@ -242,6 +430,7 @@ phosh_aod_dispose (GObject *object)
+     g_unlink (self->flag_file);
+     g_clear_pointer (&self->flag_file, g_free);
+   }
++  release_light (self);
+   g_clear_handle_id (&self->update_icons_id, g_source_remove);
+   g_clear_object (&self->notifications);
+   g_clear_object (&self->monitor);
+@@ -312,6 +501,7 @@ phosh_aod_constructed (GObject *object)
+ 
+   gtk_widget_show_all (self->box);
+   gtk_container_add (GTK_CONTAINER (self), self->box);
++  claim_light (self);
+ 
+   g_signal_connect_object (wall_clock, "notify::time",
+                            G_CALLBACK (on_wall_clock_changed), self, G_CONNECT_SWAPPED);
