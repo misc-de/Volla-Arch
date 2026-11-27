@@ -489,3 +489,88 @@ def test_input_lost_after_a_call(audio):
     r = audio("setup", f"fail:open_in:{MIC:#x}:0xc,open_in:{MIC:#x}:0x10", "reopen-input", check=False)
     assert r.returncode == 134
     assert r.stdout.splitlines()[-2:] == ["audio-hal-bridge: cannot reopen the HAL input after the call", "aborted"]
+
+
+# ---- Ringing in-band: a ringing call takes hands-free on headsets and headphones ----
+
+WEARABLE = "dev-props:50:device.form-factor=headset"
+# feedbackd's ringtone as Arch builds it: the role "event", the event id tells it apart
+RINGTONE = ["global:85:Node:media.class=Stream/Output/Audio;client.id=7",
+            "node-info:85:application.process.binary=feedbackd;media.role=event;media.name=phone-incoming-call"]
+RINGING = [WEARABLE, *RINGTONE, "idle"]
+# The ringtone reaches the headset over SCO
+RING_TO_SCO = [*RINGING, sink_info("headset-head-unit", ""), "idle", sink_info("headset-head-unit", "msbc"), "idle",
+               "state:audio-hal-bridge.sco-hold:streaming", "idle"]
+
+
+@pytest.mark.parametrize("ff", ["headset", "headphone"])
+def test_ringing_goes_to_the_headset_in_hands_free(audio, ff):
+    out = audio(*HEADSET, WEARABLE.replace("headset", ff), *RING_TO_SCO[1:], "bt",
+                # The call stops ringing: a moment later ringing is over, then hands-free
+                "remove:85", "idle", "timeouts", "fire:2000", "idle", "fire:1500", "bt")
+    lines = out.splitlines()
+    assert "audio-hal-bridge: bluetooth hands-free on for bluez_output.AA.1 (ringing)" in lines
+    assert "set-profile 50 Profile index=2 save=0" in lines
+    assert "hal BT_SCO=on" in lines and "out routing=16" in lines
+    states = bt(out)
+    assert states[0]["sco_state"] == "2" and states[0]["ringing"] == "1"
+    assert "timeout pending 2000" in lines
+    assert after_all(lines, lines.index("timeout pending 2000"),
+                     ["audio-hal-bridge: bluetooth hands-free off: no call or recording any more", "hal BT_SCO=off",
+                      "set-profile 50 Profile index=1 save=0"])
+    assert states[1]["sco_state"] == "0" and states[1]["ringing"] == "0"
+
+
+def test_ringtone_known_by_its_event_id(audio):
+    out = audio(*HEADSET, WEARABLE, RINGTONE[0],
+                "node-info:85:application.process.binary=feedbackd;event.id=phone-incoming-call", "idle", "bt",
+                "node-info:85:application.process.binary=feedbackd", "idle", "bt")
+    # Learned once, it stays a ringtone
+    assert [s["ringing"] for s in bt(out)] == ["1", "1"]
+    assert "(ringing)" in out
+
+
+@pytest.mark.parametrize("cmds", [
+    [WEARABLE.replace("headset", "car"), *RINGTONE],          # a car kit rings itself
+    [WEARABLE.replace("headset", "hands-free"), *RINGTONE],
+    ["dev-info:50", *RINGTONE],                                 # no form factor known
+    [WEARABLE, RINGTONE[0], RINGTONE[1].replace("phone-incoming-call", "message-new-instant")],
+    [WEARABLE, RINGTONE[0], RINGTONE[1].replace("feedbackd", "gnome-control-center")],  # a preview
+    [WEARABLE, RINGTONE[0].replace("Output", "Input"), RINGTONE[1]],                   # not playback
+    [WEARABLE, *RINGTONE, 'meta:70:0:default.audio.sink:{"name":"hal_output"}'],         # rings on the phone
+    [WEARABLE, "call:1:1", *RINGTONE],                          # a call runs (on the speaker): it waits
+])
+def test_no_hands_free_for_ringing(audio, cmds):
+    out = audio(*HEADSET, *cmds, "idle", "bt")
+    assert "set-profile" not in out and bt(out)[-1]["sco_state"] == "0"
+
+
+def test_the_next_ring_keeps_hands_free(audio):
+    # feedbackd plays the ringtone anew for every ring: a new stream within the gap
+    out = audio(*HEADSET, *RING_TO_SCO, "remove:85", "idle", "global:86:Node:media.class=Stream/Output/Audio;client.id=7",
+                RINGTONE[1].replace("85", "86"), "idle", "timeouts", "bt")
+    assert "timeout-add 2000" in out and "timeout-remove 2000" in out
+    assert "timeout pending" not in out and "hands-free off" not in out
+    assert bt(out)[-1]["sco_state"] == "2" and bt(out)[-1]["ringing"] == "1"
+
+
+def test_answered_while_ringing(audio):
+    out = audio(*HEADSET, *RING_TO_SCO, "call:1:0", "idle", "remove:85", "idle", "fire:2000", "idle", "bt")
+    # The call goes on over the same link: nothing switches back
+    assert "hands-free off" not in out and out.count("set-profile") == 1
+    assert bt(out)[-1]["sco_state"] == "2" and bt(out)[-1]["ringing"] == "0"
+
+
+def test_ringing_survives_the_nodes_being_replaced(audio):
+    out = audio(*HEADSET, *RINGING, "remove:60", "idle", "bt", SINK.replace("60", "61"),
+                sink_info("headset-head-unit", "msbc", node=61), "idle", "state:audio-hal-bridge.sco-hold:streaming",
+                "idle", "bt")
+    states = bt(out)
+    assert states[0]["sco_state"] == "1" and states[1]["sco_state"] == "2"
+    assert "hands-free off" not in out
+
+
+def test_ringing_stops_during_the_switch(audio):
+    out = audio(*HEADSET, *RINGING, "remove:85", "idle", "fire:2000", "idle", "bt")
+    assert "audio-hal-bridge: bluetooth hands-free off: not needed any more" in out
+    assert "BT_SCO" not in out and bt(out)[-1]["sco_state"] == "0"

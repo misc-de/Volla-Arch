@@ -94,9 +94,15 @@ def test_headset_address(mod, monkeypatch):
     assert mod.headset_address() == "aa:bb"
     pactl(mod, monkeypatch, default="hal_output\n")
     assert mod.headset_address() is None
-    # In hands-free (a call already runs), or the sink is not listed
-    hfp = [{"name": "bluez_output.AA_BB.1", "properties": {"api.bluez5.profile": "headset-head-unit"}}]
-    pactl(mod, monkeypatch, sinks=hfp)
+    # In hands-free: audio-hal-bridge rings in-band over SCO
+    for profile in ("headset-head-unit", "headset-head-unit-cvsd"):
+        hfp = [{"name": "bluez_output.AA_BB.1", "properties": {"api.bluez5.profile": profile,
+                                                               "api.bluez5.address": "aa:bb"}}]
+        pactl(mod, monkeypatch, sinks=hfp)
+        assert mod.headset_address() == "aa:bb"
+    # Another profile (switching), or the sink is not listed
+    off = [{"name": "bluez_output.AA_BB.1", "properties": {"api.bluez5.profile": "off"}}]
+    pactl(mod, monkeypatch, sinks=off)
     assert mod.headset_address() is None
     pactl(mod, monkeypatch, sinks=[])
     assert mod.headset_address() is None
@@ -116,7 +122,45 @@ def test_pactl_failures(mod, monkeypatch, capsys):
 
 def test_ringtone_inputs(mod, monkeypatch):
     pactl(mod, monkeypatch)
-    assert mod.ringtone_inputs() == [7]       # feedbackd's ringtone only, with an index
+    assert mod.ringtone_inputs() == [(7, None)]   # feedbackd's ringtone only, with an index
+
+
+# As measured on the phone (2026-11-27): Arch's feedbackd has no media roles, every sound of it
+# has the role "event" and plays into the notification sink; the ringtone has its event id
+ARCH_INPUTS = [
+    {"index": 46, "sink": 71, "properties": {"media.role": "Loopback"}},
+    {"index": 696, "sink": 50, "properties": {"application.process.binary": "feedbackd",
+                                              "media.role": "event", "media.name": "phone-incoming-call"}},
+    {"index": 697, "sink": 50, "properties": {"application.process.binary": "feedbackd",
+                                              "media.role": "event", "event.id": "phone-incoming-call"}},
+    {"index": 698, "sink": 50, "properties": {"application.process.binary": "feedbackd",
+                                              "media.role": "event", "media.name": "message-new-instant"}},
+]
+ROLE_SINKS = [{"index": 50, "name": "input.loopback.sink.role.notification", "mute": False},
+              {"index": 59, "name": "input.loopback.sink.role.ringtone", "mute": False},
+              {"index": 71, "name": "hal_output", "mute": False}] + SINKS
+
+
+def test_ringtone_without_media_roles(mod, monkeypatch):
+    pactl(mod, monkeypatch, inputs=ARCH_INPUTS)
+    assert mod.ringtone_inputs() == [(696, 50), (697, 50)]
+
+
+@pytest.mark.parametrize("ringtones,targets", [
+    ([(696, 50), (697, 50)], [("sink", "input.loopback.sink.role.notification")]),  # once
+    ([(7, 59)], [("input", "7")]),      # the announcement's own sink: only the stream
+    ([(7, 71)], [("input", "7")]),      # no role sinks: never the real output
+    ([(7, None)], [("input", "7")]),
+])
+def test_mute_targets(mod, monkeypatch, ringtones, targets):
+    pactl(mod, monkeypatch, sinks=ROLE_SINKS)
+    assert mod.mute_targets(ringtones) == targets
+
+
+def test_mute_targets_leaves_a_muted_sink(mod, monkeypatch):
+    muted = [dict(ROLE_SINKS[0], mute=True)] + ROLE_SINKS[1:]
+    pactl(mod, monkeypatch, sinks=muted)
+    assert mod.mute_targets([(696, 50)]) == []
 
 
 class Bus:
@@ -213,7 +257,7 @@ def speaks(a):
     return [c[1] for c in a.bus_.calls if c[0] == "Speak"]
 
 
-def test_rings_once_then_announces_and_repeats(ann):
+def test_rings_once_then_announces_once(ann):
     ring(ann)
     assert ann.bus_.calls == [("Prepare", None, "async")]   # the voice loads during the first ring
     assert fire_timer(ann) == 3000
@@ -224,8 +268,21 @@ def test_rings_once_then_announces_and_repeats(ann):
     assert ["set-sink-input-mute", "7", "0"] not in ann.run.calls
     ann.bus_.finished(42)
     assert ["set-sink-input-mute", "7", "0"] in ann.run.calls
-    assert fire_timer(ann) == 4000                                # rings again, then again
-    assert len(speaks(ann)) == 2
+    assert not ann.glib.of_kind("timeout")                        # said once, it goes on ringing
+    assert len(speaks(ann)) == 1
+
+
+def test_ringtone_sink_muted_for_every_ring(ann, monkeypatch, mod):
+    # feedbackd starts a new stream for each ring: its role sink stays muted while it is said
+    ann.run = pactl(mod, monkeypatch, sinks=ROLE_SINKS, inputs=ARCH_INPUTS)
+    ring(ann)
+    fire_timer(ann)
+    assert len(speaks(ann)) == 1
+    mute = ["set-sink-mute", "input.loopback.sink.role.notification"]
+    assert mute + ["1"] in ann.run.calls
+    assert not [c for c in ann.run.calls if c[0] == "set-sink-input-mute"]
+    ann.bus_.finished(42)
+    assert mute + ["0"] in ann.run.calls and ann.muted == []
 
 
 def test_answering_stops_at_once(ann):
@@ -292,14 +349,25 @@ def test_no_ringtone_no_announcement(ann, monkeypatch, mod, capsys):
     assert "silenced" not in capsys.readouterr().err
 
 
-def test_silenced_after_ringing(ann, monkeypatch, mod, capsys):
+def test_silenced_before_the_headset_was_ready(ann, monkeypatch, mod, capsys):
+    ann.run = pactl(mod, monkeypatch, default="hal_output\n")   # the headset not the output yet
+    ring(ann)
+    assert fire_timer(ann) == 3000
+    pactl(mod, monkeypatch, inputs=[])         # the ringing was silenced (power key)
+    assert fire_timer(ann) == 4000
+    assert speaks(ann) == [] and not ann.glib.of_kind("timeout")
+    assert "ringing silenced before the headset was ready" in capsys.readouterr().err
+
+
+def test_said_at_a_later_ring(ann, monkeypatch, mod):
+    ann.run = pactl(mod, monkeypatch, default="hal_output\n")
     ring(ann)
     fire_timer(ann)
-    ann.bus_.finished(42)
-    pactl(mod, monkeypatch, inputs=[])         # the ringing was silenced (power key)
+    ann.run = pactl(mod, monkeypatch)          # the headset took over
     fire_timer(ann)
-    assert len(speaks(ann)) == 1 and not ann.glib.of_kind("timeout")
-    assert "ringing silenced" in capsys.readouterr().err
+    assert len(speaks(ann)) == 1
+    ann.bus_.finished(42)
+    assert not ann.glib.of_kind("timeout")
 
 
 @pytest.mark.parametrize("devices,default", [

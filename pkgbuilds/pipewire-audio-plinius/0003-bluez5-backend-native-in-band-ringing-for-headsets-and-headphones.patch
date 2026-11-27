@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 19:15:17 +0100
+Subject: [PATCH] bluez5: backend-native: in-band ringing for headsets and
+ headphones
+
+The hands-free gateway never set the in-band ring tone feature, so a
+headset plays a ring tone of its own on every RING. The phone's ringtone
+reaches it in A2DP at the same time: two different ring tones at once,
+and a spoken announcement of the caller is drowned by the headset's.
+
+Set the feature for devices whose class says headset or headphones, so
+they leave the ringing to the phone, which sends its ringtone over SCO.
+Car kits and other hands-free units keep ringing themselves.
+
+A RING before the audio connection stands still makes such a headset
+play its own tone for a moment. So for them the first RING waits until
+the SCO transport is active, at most three rings: when the phone does
+not ring aloud no audio connection comes, and the headset rings itself.
+---
+ spa/plugins/bluez5/backend-native.c | 36 +++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/spa/plugins/bluez5/backend-native.c b/spa/plugins/bluez5/backend-native.c
+index 648cc5b..61ce8d7 100644
+--- a/spa/plugins/bluez5/backend-native.c
++++ b/spa/plugins/bluez5/backend-native.c
+@@ -129,6 +129,7 @@ struct impl {
+ 
+ 	void *modemmanager;
+ 	struct spa_source *ring_timer;
++	unsigned int rings;
+ 	void *upower;
+ 	struct spa_bt_telephony *telephony;
+ 	bool pts;
+@@ -208,6 +209,7 @@ struct rfcomm {
+ 	bool has_volume;
+ 	struct rfcomm_volume volumes[SPA_BT_VOLUME_ID_TERM];
+ 	unsigned int broken_mic_hw_volume:1;
++	unsigned int in_band_ring:1;
+ 
+ 	unsigned int hfp_cmd_in_progress:1;
+ 	union {
+@@ -1097,6 +1099,23 @@ static void rfcomm_hfp_ag_set_cind(struct rfcomm *rfcomm, bool call_active)
+ 	rfcomm_send_reply(rfcomm, "+CIEV: 2,%d", rfcomm->cind_call_active);
+ }
+ 
++/*
++ * In-band ringing for headsets and headphones: without it they play a ring
++ * tone of their own on every RING, on top of the phone's ringtone, which
++ * reaches them in A2DP while the call rings. With it they leave the ringing
++ * to the phone, which sends its ringtone over SCO then. Not for car kits and
++ * other hands-free units: they ring themselves.
++ */
++static bool rfcomm_in_band_ring(struct rfcomm *rfcomm)
++{
++	enum spa_bt_form_factor ff;
++
++	if (rfcomm->device == NULL)
++		return false;
++	ff = spa_bt_form_factor_from_class(rfcomm->device->bluetooth_class);
++	return ff == SPA_BT_FORM_FACTOR_HEADSET || ff == SPA_BT_FORM_FACTOR_HEADPHONE;
++}
++
+ static bool rfcomm_hfp_ag(struct rfcomm *rfcomm, char* buf)
+ {
+ 	struct impl *backend = rfcomm->backend;
+@@ -1149,6 +1168,9 @@ static bool rfcomm_hfp_ag(struct rfcomm *rfcomm, char* buf)
+ 		/* send reply to HF with the features supported by Audio Gateway (=computer) */
+ 		ag_features |= mm_supported_features();
+ 		ag_features |= SPA_BT_HFP_AG_FEATURE_HF_INDICATORS | SPA_BT_HFP_AG_FEATURE_ESCO_S4;
++		rfcomm->in_band_ring = rfcomm_in_band_ring(rfcomm);
++		if (rfcomm->in_band_ring)
++			ag_features |= SPA_BT_HFP_AG_FEATURE_IN_BAND_RING_TONE;
+ 		rfcomm_send_reply(rfcomm, "+BRSF: %u", ag_features);
+ 		rfcomm_send_reply(rfcomm, "OK");
+ 	} else if (spa_strstartswith(buf, "AT+BAC=")) {
+@@ -3956,6 +3978,9 @@ static void send_ciev_for_each_rfcomm(struct impl *backend, int indicator, int v
+ 	}
+ }
+ 
++/* Rings (one a second) a headset ringing in-band waits for the audio connection */
++#define IN_BAND_RING_WAIT 3
++
+ static void ring_timer_event(void *data, uint64_t expirations)
+ {
+ 	struct impl *backend = data;
+@@ -3977,8 +4002,18 @@ static void ring_timer_event(void *data, uint64_t expirations)
+ 	ts.tv_nsec = timeout % SPA_NSEC_PER_SEC;
+ 	spa_loop_utils_update_timer(backend->loop_utils, backend->ring_timer, &ts, NULL, false);
+ 
++	backend->rings++;
++
+ 	spa_list_for_each(rfcomm, &backend->rfcomm_list, link) {
+ 		if (rfcomm->profile == SPA_BT_PROFILE_HFP_HF  && rfcomm->slc_configured) {
++			/* Ringing in-band, a RING before the audio connection stands makes
++			 * the headset play its own ring tone until the phone's comes: wait
++			 * for it, at most IN_BAND_RING_WAIT rings (it never comes when the
++			 * phone does not ring aloud) */
++			if (rfcomm->in_band_ring && backend->rings <= IN_BAND_RING_WAIT &&
++			    (rfcomm->transport == NULL ||
++			     rfcomm->transport->state != SPA_BT_TRANSPORT_STATE_ACTIVE))
++				continue;
+ 			rfcomm_send_reply(rfcomm, "RING");
+ 			if (rfcomm->clip_notify && number)
+ 				rfcomm_send_reply(rfcomm, "+CLIP: \"%s\",%u", number, type);
+@@ -4015,6 +4050,7 @@ static void set_call_setup(enum call_setup value, void *user_data)
+ 			return;
+ 		}
+ 
++		backend->rings = 0;
+ 		ring_timer_event(backend, 0);
+ 	} else if (old == CIND_CALLSETUP_INCOMING) {
+ 		spa_loop_utils_update_timer(backend->loop_utils, backend->ring_timer, NULL, NULL, false);

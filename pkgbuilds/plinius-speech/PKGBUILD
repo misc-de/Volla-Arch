@@ -2,7 +2,7 @@
 
 pkgname=plinius-speech
 pkgver=0.1
-pkgrel=2
+pkgrel=5
 pkgdesc="Speech output for the Plinius: one voice and rate for every speech output, and the caller announcement in a Bluetooth headset"
 arch=(aarch64 x86_64)  # x86_64 for the KVM preview
 # The service links libespeak-ng (GPL-3.0-or-later)
@@ -30,7 +30,7 @@ source=(plinius-speechd.c
 	"${_langs[@]/%/.po}")
 sha256sums=('da647ff3eb5797f58d91fa3ab33ad348f67761de0bb232f9ba2b9a8afa6ddc21'
 	'ee3404c58abf739b223cbdbbeb12ad3ec041df8fe6d66231d9e51568b4149000'
-	'9a1d1185fcdb9a1ecc8c9824a450e5c6f876b637f1820885ae4c45c465c003c0'
+	'70c4edb4d4104b2f8321243e4e2317a808560d51cb4c397f1ff66536b5a2d767'
 	'b4c51715817cfa357f825c07129aed6b34e532f35e038513a75c4ea9b205fb77'
 	'2987370b2e9c8b0615cf3b61f47276a5f85b21d7b2ec9c35b4eebacc2c93cf4d'
 	'995fd2f4c44e323a79c3383514f35e43b89cbe6532b45de98dc2f51b2346e5bc'

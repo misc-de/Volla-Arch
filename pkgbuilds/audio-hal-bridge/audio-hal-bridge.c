@@ -54,8 +54,11 @@
 // codes it. PipeWire's headset microphone (bluez_input.*) records digital silence. So the bridge
 // offers the headset's microphone as a source of its own, named like the headset (the user sees
 // one output and one input per device, never its profiles). While an app records from it, or a
-// call runs (not on the speaker) while the headset is the default output, the bridge puts the
-// headset into hands-free and carries the voice itself:
+// call runs (not on the speaker) while the headset is the default output, or a call rings
+// (feedbackd's ringtone plays) while headphones or a headset - no car kit - are the default
+// output, the bridge puts the headset into hands-free and carries the voice itself. Ringing so
+// is in-band, as on Android: the ringtone and the caller's announcement reach the headset over
+// SCO, and it plays no ring tone of its own besides them:
 //   1. headset profile to hands-free (headset-head-unit), so an SCO link can exist;
 //   2. a silent stream to the headset's hands-free sink holds the link (no stream, no link);
 //   3. the HAL learns the codec (bt_wbs=on for mSBC) and BT_SCO=on, then both HAL streams are
@@ -117,6 +120,10 @@
 #define BT_MAX 8               /* Bluetooth audio devices followed (nodes: twice as many) */
 #define SCO_SWITCH_MS 8000     /* the headset has this long to take hands-free */
 #define SCO_RELEASE_MS 1500    /* hands-free stays this long after the last use (apps reopen) */
+/* feedbackd plays the ringtone anew for every ring, one stream after the other: ringing lasts
+ * this long past the last one */
+#define RINGTONE_GAP_MS 2000
+#define RINGTONE_EVENT "phone-incoming-call" /* feedbackd's event of a ringing call */
 /* Leaving standby the HAL takes its writes at once, but the amplifiers sound only about 0.45 s
  * later (measured 2026-11-15 with the microphone: the start of a beep train was missing, its end
  * on time); sounds shorter than that (dialog-information, audio-volume-change: 60 ms) were never
@@ -258,6 +265,7 @@ struct bridge {
 		uint32_t id, client;
 		bool playback;  /* else capture */
 		bool voice;     /* role of a call */
+		bool ringtone;  /* feedbackd's ringtone of a ringing call */
 		char pid[16];   /* application.process.id, "" until known */
 		struct pw_proxy *proxy;
 		struct spa_hook listener;
@@ -278,6 +286,7 @@ struct bridge {
 		uint32_t id;
 		int hfp, hfp_cvsd, a2dp; /* profile indices, -1: not offered */
 		int current;             /* active profile index, -1: not known yet */
+		bool wearable;           /* a headset or headphones (device.form-factor), no car kit */
 		struct pw_proxy *proxy;
 		struct spa_hook listener;
 	} bt_devices[BT_MAX];
@@ -304,6 +313,8 @@ struct bridge {
 	bool sco_blocked;      /* the headset refused: no new attempt until nothing needs it */
 	char sco_codec[16];    /* codec the HAL was told */
 	guint sco_timeout, sco_release;
+	bool ringing;          /* feedbackd's ringtone plays, or did RINGTONE_GAP_MS ago */
+	guint ring_gap;        /* the ringtone stopped: ringing ends unless another one comes */
 	struct pw_stream *sco_hold; /* holds the SCO link */
 	struct spa_hook sco_hold_listener;
 	bool sco_hold_streaming;    /* PipeWire thread */
@@ -1422,6 +1433,8 @@ static void *jack_thread(void *data)
 
 /* ---- Voice streams on the microphone: echo cancellation on or off ---- */
 
+static void bt_schedule(struct bridge *b);
+
 /* Roles of voice calls: "Communication" (PipeWire; pipewire-pulse maps PulseAudio's "phone",
  * e.g. GNOME Calls over SIP) and "Phone" */
 static bool voice_role(const char *role)
@@ -1477,6 +1490,16 @@ static void on_stream_info(void *data, const struct pw_node_info *info)
 	snprintf(s->pid, sizeof(s->pid), "%s", pid ? pid : "");
 	s->voice = s->voice || voice_role(spa_dict_lookup(info->props, PW_KEY_MEDIA_ROLE));
 	voice_update(s->bridge);
+	/* Arch builds feedbackd without media roles: its ringtone has the role "event" of all its
+	 * sounds, the event id tells it apart (pipewire-pulse has it as media.name, too) */
+	const char *binary = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_BINARY);
+	const char *event = spa_dict_lookup(info->props, "event.id");
+	const char *media = spa_dict_lookup(info->props, PW_KEY_MEDIA_NAME);
+	if (!s->ringtone && s->playback && binary && !strcmp(binary, "feedbackd") &&
+	    ((event && !strcmp(event, RINGTONE_EVENT)) || (media && !strcmp(media, RINGTONE_EVENT)))) {
+		s->ringtone = true;
+		bt_schedule(s->bridge);
+	}
 }
 
 static const struct pw_node_events stream_watch_events = {
@@ -1558,6 +1581,13 @@ static void on_bt_device_param(void *data, int seq, uint32_t id, uint32_t index,
 static void on_bt_device_info(void *data, const struct pw_device_info *info)
 {
 	struct bt_device *d = data;
+	/* A ringing call goes to headsets and headphones in hands-free, never to a car kit: it rings
+	 * itself (pipewire-audio-plinius tells only those two that the phone rings in-band) */
+	if ((info->change_mask & PW_DEVICE_CHANGE_MASK_PROPS) && info->props) {
+		const char *ff = spa_dict_lookup(info->props, PW_KEY_DEVICE_FORM_FACTOR);
+		d->wearable = ff && (!strcmp(ff, "headset") || !strcmp(ff, "headphone"));
+		bt_schedule(d->bridge);
+	}
 	if (!(info->change_mask & PW_DEVICE_CHANGE_MASK_PARAMS) || !d->proxy)
 		return;
 	for (uint32_t i = 0; i < info->n_params; i++) {
@@ -1937,6 +1967,16 @@ static gboolean on_sco_release(gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
+/* No ringtone came for RINGTONE_GAP_MS: the call stopped ringing (answered, declined, silenced) */
+static gboolean on_ring_gap(gpointer data)
+{
+	struct bridge *b = data;
+	b->ring_gap = 0;
+	b->ringing = false;
+	bt_schedule(b);
+	return G_SOURCE_REMOVE;
+}
+
 /* A device that can do hands-free */
 static bool bt_can_hfp(const struct bt_device *d)
 {
@@ -1990,9 +2030,26 @@ static gboolean bt_update(gpointer data)
 	atomic_store(&b->bt_scheduled, false);
 	pthread_mutex_lock(&b->route_lock);
 	bool call = b->call && !b->call_speaker;
+	bool in_call = b->call;
 	pthread_mutex_unlock(&b->route_lock);
 
 	pw_thread_loop_lock(b->loop);
+	/* A call rings (feedbackd's ringtone, see RINGTONE_GAP_MS) and no call runs: a headset or
+	 * headphones take hands-free already, so that the ringtone and the caller's announcement
+	 * (plinius-callannounce) reach them over SCO. Told the phone rings in-band, they play no ring
+	 * tone of their own then; in A2DP they did, on top of the phone's (2026-11-27). */
+	bool ringtone = false;
+	for (size_t i = 0; i < VOICE_MAX && !ringtone; i++)
+		ringtone = b->streams[i].used && b->streams[i].ringtone;
+	if (ringtone) {
+		if (b->ring_gap)
+			g_source_remove(b->ring_gap);
+		b->ring_gap = 0;
+		b->ringing = true;
+	} else if (b->ringing && !b->ring_gap) {
+		b->ring_gap = g_timeout_add(RINGTONE_GAP_MS, on_ring_gap, b);
+	}
+	bool ringing = b->ringing && !in_call;
 	/* The headset of the default sink: a call goes there */
 	struct bt_device *output = NULL;
 	for (size_t i = 0; i < SPA_N_ELEMENTS(b->bt_nodes) && !output; i++) {
@@ -2001,6 +2058,7 @@ static gboolean bt_update(gpointer data)
 			output = bt_device_by_id(b, n->device);
 	}
 	headset_source_update(b, output);
+	bool ring = ringing && output && output->wearable;
 	/* An app records from the headset's source: a stream of an app, not the inner stream of a
 	 * filter or loopback (WirePlumber's own headset loopback links to it in hands-free) */
 	bool recording = false;
@@ -2012,13 +2070,16 @@ static gboolean bt_update(gpointer data)
 	struct bt_device *d = NULL;
 	if (b->sco_state != SCO_OFF)
 		d = bt_device_by_id(b, b->sco_device);
-	else if (call && bt_can_hfp(output))
+	else if ((call || ring) && bt_can_hfp(output))
 		d = output;
 	else if (recording)
 		d = bt_device_by_id(b, b->headset_device);
-	bool want = bt_can_hfp(d) && ((call && d == output) || (recording && d->id == b->headset_device));
-	if (want)
-		call = call && d == output; /* for the log: what it is for */
+	bool want = bt_can_hfp(d) && (((call || ring) && d == output) || (recording && d->id == b->headset_device));
+	if (want) {
+		/* for the log: what it is for */
+		call = call && d == output;
+		ring = ring && d == output;
+	}
 	if (!want)
 		b->sco_blocked = false;
 	struct bt_node *sink = d ? bt_sink_of(b, d->id) : NULL;
@@ -2028,11 +2089,11 @@ static gboolean bt_update(gpointer data)
 		char now[512];
 		snprintf(now, sizeof(now),
 			 "bt state: call %d, default %s, output %d (hfp %d/%d current %d), recording %d, device %d, want %d, "
-			 "blocked %d, sink %s (%s, %s), hold %d/%d, sco %d",
+			 "blocked %d, sink %s (%s, %s), hold %d/%d, sco %d, ringing %d",
 			 call, b->default_sink, output ? (int)output->id : -1, output ? output->hfp : -1,
 			 output ? output->hfp_cvsd : -1, output ? output->current : -1, recording, d ? (int)d->id : -1, want,
 			 b->sco_blocked, sink ? sink->name : "-", sink ? sink->profile : "-", sink ? sink->codec : "-",
-			 b->sco_hold != NULL, b->sco_hold_streaming, b->sco_state);
+			 b->sco_hold != NULL, b->sco_hold_streaming, b->sco_state, ringing);
 		if (strcmp(now, last)) {
 			bt_log("%s\n", now);
 			snprintf(last, sizeof(last), "%s", now);
@@ -2043,7 +2104,8 @@ static gboolean bt_update(gpointer data)
 	case SCO_OFF:
 		if (!want || b->sco_blocked || !sink)
 			break;
-		bt_log("bluetooth hands-free on for %s (%s)\n", sink->name, call ? "call" : "recording");
+		bt_log("bluetooth hands-free on for %s (%s)\n", sink->name,
+		       call ? "call" : ring ? "ringing" : "recording");
 		b->sco_device = d->id;
 		b->sco_restore = hfp_profile_index(d, d->current) ? -1 : d->current >= 0 ? d->current : d->a2dp;
 		/* By the device's profile, not the node's: a node may still show hands-free while the
@@ -2061,7 +2123,7 @@ static gboolean bt_update(gpointer data)
 		/* While the profile changes PipeWire replaces the headset's nodes, and for a moment the
 		 * default sink has no device: in a call that is no reason to give up (that ended every
 		 * call on a headset, 2026-11-02); the timeout ends a switch that does not come */
-		if (!want && call && d && !output)
+		if (!want && (call || ringing) && d && !output)
 			break;
 		if (!want) {
 			sco_stop(b, d ? "not needed any more" : "the headset went away");

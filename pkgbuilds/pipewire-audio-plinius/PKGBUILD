@@ -3,7 +3,7 @@
 pkgname=pipewire-audio-plinius
 pkgver=1.6.12
 _archrel=1
-pkgrel=1
+pkgrel=3
 epoch=1
 pkgdesc="Arch's pipewire-audio, with a Bluetooth plugin whose hands-free gateway knows the modem"
 arch=(aarch64)
@@ -16,7 +16,8 @@ license=(MIT)
 # not support the function, and an incoming call stayed silent. This package is Arch's
 # pipewire-audio unchanged, except libspa-bluez5.so, built from the same PipeWire release with
 # ModemManager, patch 0001 (call index from 1 in +CLCC; a car drops a call with index 0,
-# found by furios_audio) and patch 0002 (an AT+CHUP is answered when the call ends first).
+# found by furios_audio), patch 0002 (an AT+CHUP is answered when the call ends first) and
+# patch 0003 (in-band ringing for headsets and headphones: no second ring tone of their own).
 # Only the plugin is built: the rest of PipeWire stays Arch's.
 # The Arch package comes from the ALARM mirror, which keeps only the current release: when
 # PipeWire is updated there, pkgver/_archrel/_commit and the checksums follow.
@@ -33,12 +34,14 @@ _archpkg=pipewire-audio-$pkgver-$_archrel-aarch64.pkg.tar.xz
 source=("pipewire::git+https://gitlab.freedesktop.org/pipewire/pipewire.git#commit=$_commit"
         "$_archpkg::https://de3.mirror.archlinuxarm.org/aarch64/extra/pipewire-audio-1%3A$pkgver-$_archrel-aarch64.pkg.tar.xz"
         0001-bluez5-modemmanager-number-calls-from-1-in-CLCC.patch
-        0002-bluez5-modemmanager-answer-the-AT-command-when-its-call-goes-away.patch)
+        0002-bluez5-modemmanager-answer-the-AT-command-when-its-call-goes-away.patch
+        0003-bluez5-backend-native-in-band-ringing-for-headsets-and-headphones.patch)
 noextract=("$_archpkg")
 sha256sums=('SKIP'
             '0c0108e7ec05458223d960c2a53b574a8c1607f00a472eaefaf81d24dbfdec47'
             '05b15068574060136ee9ecabd27fd05ad4235dd4c7da07cbbe5f0cbcaaa78407'
-            '09c67dd766b53fc1e393fa6bb11a20dff97b8948d7158f9ba96c2a3c2fb5f158')
+            '09c67dd766b53fc1e393fa6bb11a20dff97b8948d7158f9ba96c2a3c2fb5f158'
+            '1afc45dd504165482e32dcc9707e6ad5999463d084ff8c080d0f1d638a4a6745')
 
 prepare() {
 	cd pipewire
@@ -46,6 +49,9 @@ prepare() {
 	# A car's AT+CHUP got no answer when the call ended before ofono2mm returned from Hangup:
 	# the car kept showing the call
 	patch -Np1 -i ../0002-bluez5-modemmanager-answer-the-AT-command-when-its-call-goes-away.patch
+	# A headset played its own ring tone on every RING besides the phone's ringtone in A2DP:
+	# in-band ringing for headsets and headphones (not car kits), the first RING once SCO stands
+	patch -Np1 -i ../0003-bluez5-backend-native-in-band-ringing-for-headsets-and-headphones.patch
 }
 
 build() {

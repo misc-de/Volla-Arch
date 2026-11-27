@@ -52,7 +52,8 @@ image to download yet.
 
 - **Display and graphics:** Phosh and apps on the GPU with OpenGL ES 3.2 and EGL 1.5, Vulkan 1.3 for apps and games, desktop OpenGL 2.1 for programs that need it (`gl4es <program>`), WebGL in Firefox, display at 60/90/120 Hz, night light, brightness, always-on display
 - **Calls and messages:** outgoing and incoming calls over VoLTE through the earpiece, the speaker,
-  a Bluetooth headset or a car kit; SMS; cell broadcast warnings
+  a Bluetooth headset or a car kit (a headset hears the phone's ringtone and who is calling); SMS;
+  cell broadcast warnings
 - **Mobile network:** mobile data
 - **Connections:** Wi-Fi; hotspot, also sharing mobile data; NFC tags and cards; USB file sharing
   and network; printing
@@ -325,7 +326,7 @@ Settings, GPL-2.0-or-later). The licenses of each package are recorded in its `P
 | `chatty-plinius` | [World/Chatty](https://gitlab.gnome.org/World/Chatty) | GPL-3.0-or-later | patches: upstream's vCard fix for evolution-data-server 3.60, follows address books that appear later |
 | `gnome-online-accounts-plinius` | [GNOME/gnome-online-accounts](https://gitlab.gnome.org/GNOME/gnome-online-accounts) | LGPL-2.0-or-later | patch: Refresh button; own helper so that apps get an account's data after a start |
 | `libhandy-plinius` | [GNOME/libhandy](https://gitlab.gnome.org/GNOME/libhandy) | LGPL-2.1-or-later | patch: a slow swipe no longer makes the page jump |
-| `pipewire-audio-plinius` | [PipeWire](https://gitlab.freedesktop.org/pipewire/pipewire) (in place of Arch's `pipewire-audio`), PKGBUILD based on Arch's | MIT | patches: calls numbered from 1 for car kits, AT commands answered when their call goes away |
+| `pipewire-audio-plinius` | [PipeWire](https://gitlab.freedesktop.org/pipewire/pipewire) (in place of Arch's `pipewire-audio`), PKGBUILD based on Arch's | MIT | patches: calls numbered from 1 for car kits, AT commands answered when their call goes away, in-band ringing for headsets and headphones |
 | `wayvnc-plinius` | [any1/wayvnc](https://github.com/any1/wayvnc) | ISC | patch: a resize keeps the output where it is; own PAM service |
 | `lpac` | [estkme-group/lpac](https://github.com/estkme-group/lpac) | AGPL-3.0-only, LGPL-2.1-only | patch: APDU backend for oFono |
 | `umtp-responder` | [viveris/uMTP-Responder](https://github.com/viveris/uMTP-Responder) | GPL-3.0-or-later | none (master after 1.8.1, for its path traversal fixes) |

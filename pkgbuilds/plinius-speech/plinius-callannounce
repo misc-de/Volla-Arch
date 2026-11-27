@@ -4,17 +4,20 @@
 
 While a call rings and a Bluetooth headset or headphones are the output, the phone first rings
 once, then says "Daniel Müller is calling" (the name from the address book) or "Unknown caller"
-(no contact, unknown or withheld number), then rings again and repeats, until the call is
-answered, declined or ends. Answering stops the announcement at once, mid-word.
+(no contact, unknown or withheld number), once, and goes on ringing until the call is answered,
+declined or ends. Answering stops the announcement at once, mid-word. If the headset is not the
+output yet at the first ring, it is said at a later ring.
 
 - Only headsets and headphones, never a car kit or a loudspeaker: the device's Bluetooth class
   must be a wearable headset, hands-free or headphones (Audio/Video, minor 1, 2 or 6), and a
   device that offers phonebook or message access as a client (PBAP PCE, MAP MCE: car kits read
   the phone book) is a car. Without a class (LE Audio) BlueZ's icon decides.
-- Only while the headset plays in A2DP (it is the default output), as the ringtone does.
+- Only while the headset is the default output, as the ringtone is: in A2DP, or in hands-free, where
+  audio-hal-bridge puts headsets and headphones while a call rings (in-band ringing over SCO).
 - Only while the ringtone sounds: in the silent or vibration profile, or after the ringing was
   silenced (the ringtone stream ends), nothing is said.
-- During the announcement the ringtone is muted, so the two never overlap.
+- During the announcement the ringtone is muted, so the two never overlap: the role sink it plays
+  into (the notification sink, feedbackd has no media roles in Arch), else its streams.
 - Only one ringing call and no other call in progress.
 - Off with Settings > Sound > Speech Output > Announce Callers (org.plinius.speech
   announce-callers). Voice, rate and language are the system's speech output (plinius-speechd).
@@ -45,7 +48,7 @@ STATE_ACTIVE, STATE_HELD, STATE_DIALING, STATE_ALERTING, STATE_INCOMING = 1, 2, 
 BUSY_STATES = {STATE_ACTIVE, STATE_HELD, STATE_DIALING, STATE_ALERTING}
 
 FIRST_RING_MS = 3000   # the ringtone is heard once before the first announcement
-REPEAT_RING_MS = 4000  # ringing between two announcements
+RETRY_RING_MS = 4000   # no headset yet: looked for again after this much ringing
 
 # Bluetooth: class of device (Audio/Video major class 0x04) and the client roles of car kits
 MAJOR_AUDIO_VIDEO = 0x04
@@ -53,6 +56,12 @@ HEADSET_MINORS = {0x01, 0x02, 0x06}   # wearable headset, hands-free, headphones
 CAR_UUIDS = {"0000112e-0000-1000-8000-00805f9b34fb",   # PBAP client (PCE)
              "00001133-0000-1000-8000-00805f9b34fb"}   # MAP client (MCE)
 HEADSET_ICONS = {"audio-headset", "audio-headphones"}
+# The default output's profiles: A2DP, or hands-free for ringing in-band
+AUDIO_PROFILES = {"a2dp-sink", "headset-head-unit", "headset-head-unit-cvsd"}
+
+RINGTONE_EVENT = "phone-incoming-call"      # feedbackd's event of a ringing call
+ROLE_SINK = "input.loopback.sink.role."      # the sinks of role based volumes
+SPEECH_ROLE = "Ringtone"                     # the announcement's role
 
 NUMBER = re.compile(r"[\d\s+()\-/.*#]+")
 
@@ -102,7 +111,11 @@ def pactl(*args):
 
 
 def headset_address():
-    """Bluetooth address of the default output if it is a device in A2DP, else None."""
+    """Bluetooth address of the default output if it is a device in A2DP or hands-free, else None.
+
+    Hands-free while the call rings: audio-hal-bridge rings in-band over SCO. A call already in
+    progress is ruled out by Announcer.ringing_call().
+    """
     try:
         default = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True,
                                  timeout=5, check=True).stdout.strip()
@@ -115,21 +128,56 @@ def headset_address():
         if sink.get("name") != default:
             continue
         props = sink.get("properties", {})
-        if props.get("api.bluez5.profile") != "a2dp-sink":
+        if props.get("api.bluez5.profile") not in AUDIO_PROFILES:
             return None
         return props.get("api.bluez5.address")
     return None
 
 
 def ringtone_inputs():
-    """Indices of feedbackd's ringtone streams."""
+    """feedbackd's ringtone streams as (index, sink index).
+
+    Arch builds feedbackd without media roles: every sound of it has the role "event", also the
+    ringtone, whose event id tells it apart. Built with them, the theme's "Ringtone" is the role.
+    """
     found = []
     for si in pactl_json("list", "sink-inputs") or ():
         props = si.get("properties", {})
-        if (props.get("application.process.binary") == "feedbackd" and
-                str(props.get("media.role", "")).lower() == "ringtone"):
-            found.append(si.get("index"))
-    return [i for i in found if i is not None]
+        if props.get("application.process.binary") != "feedbackd" or si.get("index") is None:
+            continue
+        if (str(props.get("media.role", "")).lower() == "ringtone" or
+                RINGTONE_EVENT in (props.get("event.id"), props.get("media.name"))):
+            found.append((si["index"], si.get("sink")))
+    return found
+
+
+def mute_targets(ringtones):
+    """What to mute so that the ringtone is not heard during the announcement.
+
+    feedbackd plays the ringtone anew for every ring, each time a new stream: muting the stream
+    alone lets the next ring through. So the role sink it plays into is muted (with role based
+    volumes, device-volla-ansuz 55-plinius-media-roles.conf), as long as the announcement does not
+    play into the same one. Otherwise, and without role sinks, the streams themselves.
+    """
+    sinks = {s.get("index"): s for s in pactl_json("list", "sinks") or ()}
+    targets = []
+    for index, sink in ringtones:
+        name = sinks.get(sink, {}).get("name", "")
+        if name.startswith(ROLE_SINK) and name != ROLE_SINK + SPEECH_ROLE.lower():
+            if sinks[sink].get("mute"):
+                continue          # muted already: left as it is, also afterwards
+            target = ("sink", name)
+        else:
+            target = ("input", str(index))
+        if target not in targets:
+            targets.append(target)
+    return targets
+
+
+def set_mute(target, mute):
+    kind, name = target
+    return pactl("set-sink-mute" if kind == "sink" else "set-sink-input-mute", name,
+                 "1" if mute else "0")
 
 
 class Announcer:
@@ -141,7 +189,7 @@ class Announcer:
         self.current = None      # path of the call being announced
         self.timer = 0
         self.speech_id = None    # id of the announcement being said
-        self.muted = []          # ringtone streams muted for it
+        self.muted = []          # ("sink" | "input", name) muted for it
         self.rang = False        # a ringtone stream of this call was seen
         self.manager = None
         self.bus.signal_subscribe(SPEECH, SPEECH_IFACE, "Finished", SPEECH_PATH, None,
@@ -263,17 +311,17 @@ class Announcer:
         if not ringtones:
             # Silent or vibration profile, or the ringing was silenced: nothing is said
             if self.rang:
-                log("ringing silenced, no more announcements")
+                log("ringing silenced before the headset was ready")
             return GLib.SOURCE_REMOVE
         self.rang = True
         if not self.headset():
-            self.timer = GLib.timeout_add(REPEAT_RING_MS, self.announce)
+            self.timer = GLib.timeout_add(RETRY_RING_MS, self.announce)
             return GLib.SOURCE_REMOVE
         text = caller_text(call["name"], call["number"])
-        self.muted = [i for i in ringtones if pactl("set-sink-input-mute", str(i), "1")]
+        self.muted = [t for t in mute_targets(ringtones) if set_mute(t, True)]
         try:
             reply = self.bus.call_sync(SPEECH, SPEECH_PATH, SPEECH_IFACE, "Speak",
-                                       GLib.Variant("(sa{sv})", (text, {"role": GLib.Variant("s", "Ringtone")})),
+                                       GLib.Variant("(sa{sv})", (text, {"role": GLib.Variant("s", SPEECH_ROLE)})),
                                        GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 5000, None)
         except GLib.Error as e:
             log("cannot speak:", e.message)
@@ -287,13 +335,11 @@ class Announcer:
         if sid != self.speech_id:
             return
         self.speech_id = None
-        self.unmute()
-        if self.current and not self.timer:
-            self.timer = GLib.timeout_add(REPEAT_RING_MS, self.announce)
+        self.unmute()   # said once: the call goes on ringing
 
     def unmute(self):
-        for i in self.muted:
-            pactl("set-sink-input-mute", str(i), "0")
+        for target in self.muted:
+            set_mute(target, False)
         self.muted = []
 
     def stop(self):

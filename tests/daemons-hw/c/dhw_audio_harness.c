@@ -1367,7 +1367,7 @@ static void exec_cmd(const char *line)
 	static const struct {
 		const char *name;
 		int fields;
-	} split[] = {{"at", 5}, {"async", 2}, {"delay", 3}, {"fail", 2}, {"meta", 5}, {"global", 4}, {"node-info", 3}, {"dbus", 3},
+	} split[] = {{"at", 5}, {"async", 2}, {"delay", 3}, {"fail", 2}, {"meta", 5}, {"global", 4}, {"node-info", 3}, {"dev-props", 3}, {"dbus", 3},
 		     {"state", 4}, {"globals", 5}};
 	int fields = -1;
 	for (size_t i = 0; i < G_N_ELEMENTS(split); i++)
@@ -1394,9 +1394,10 @@ static void *thread_of(void *(*fn)(void *))
 static void print_bt(void)
 {
 	say("bt sco_state=%d sco_device=%u restore=%d blocked=%d codec=%s sco=%d headset=%s/%u source=%d links=%zu "
-	    "default=%s hold=%d",
+	    "default=%s hold=%d ringing=%d",
 	    B->sco_state, B->sco_device, B->sco_restore, B->sco_blocked, B->sco_codec, atomic_load(&B->sco), B->headset_name,
-	    B->headset_device, B->bt_mic.stream != NULL, B->n_headset_links, B->default_sink, B->sco_hold != NULL);
+	    B->headset_device, B->bt_mic.stream != NULL, B->n_headset_links, B->default_sink, B->sco_hold != NULL,
+	    B->ringing);
 }
 
 static void exec_locked(char **a, const char *line)
@@ -1792,6 +1793,15 @@ static void exec_locked(char **a, const char *line)
 		}
 		if (o)
 			spa_hook_list_call(&o->hooks, struct pw_device_events, info, 0, &info);
+	} else if (!strcmp(cmd, "dev-props")) {
+		/* dev-props:<id>:<k=v;k=v>: the device's properties */
+		struct pw_proxy *o = object_by_id(atoi(a[1]));
+		GStrv keep = NULL;
+		struct pw_device_info info = {.id = atoi(a[1]), .change_mask = PW_DEVICE_CHANGE_MASK_PROPS,
+					      .props = parse_dict(ARG(2), &keep)};
+		if (o)
+			spa_hook_list_call(&o->hooks, struct pw_device_events, info, 0, &info);
+		g_strfreev(keep);
 	} else if (!strcmp(cmd, "dev-param")) {
 		/* dev-param:<id>:<EnumProfile|Profile>:<index>:<name, missing: none> */
 		struct pw_proxy *o = object_by_id(atoi(a[1]));
