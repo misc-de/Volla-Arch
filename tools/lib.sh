@@ -14,6 +14,8 @@ SRCCACHE=$BUILD/cache/sources
 SIGN_GNUPG=${SIGN_GNUPG:-$HOME/.local/share/plinius/gnupg}
 # Published repo [plinius], one subdirectory per architecture (tools/publish.sh)
 PUBREPO=$BUILD/repo/plinius
+# What every download from these scripts says it is (curl -A)
+USER_AGENT="Plinius Arch Linux"
 
 # Channels of [plinius] (docs/PAKETIERUNG.md, hosting): beta gets every published state,
 # stable only what tools/release.sh takes over from beta after testing. Both carry the repo

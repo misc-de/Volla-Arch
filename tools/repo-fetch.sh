@@ -62,8 +62,8 @@ sha256() {
 
 # fetch NAME DIR: NAME and NAME.sig from the channel into DIR
 fetch() {
-	curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$2/$1" "$url/$1" &&
-		curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$2/$1.sig" "$url/$1.sig"
+	curl -fsSL -A "$USER_AGENT" --retry 5 --retry-all-errors --retry-delay 2 -o "$2/$1" "$url/$1" &&
+		curl -fsSL -A "$USER_AGENT" --retry 5 --retry-all-errors --retry-delay 2 -o "$2/$1.sig" "$url/$1.sig"
 }
 
 # stamp KEY: the value of KEY in the fetched stamp (the last one, as plinius-repo-stamp reads it)

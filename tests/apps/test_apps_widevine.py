@@ -255,8 +255,9 @@ class FakeNet:
         self.answers, self.calls = {}, []
 
     def __call__(self, req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        self.calls.append((url, None if isinstance(req, str) else req.data))
+        assert req.get_header("User-agent") == "Plinius Arch Linux"
+        url = req.full_url
+        self.calls.append((url, req.data))
         answer = self.answers.get(url, urllib.error.URLError("unreachable"))
         if isinstance(answer, BaseException):
             raise answer
@@ -458,7 +459,8 @@ def cros(mod, state, monkeypatch):
     monkeypatch.setattr(mod, "LACROS_SIZE", 1000)
     monkeypatch.setattr(mod, "FIXED_FILES", {k: hashlib.sha256(v).hexdigest() for k, v in CROS.items()})
     monkeypatch.setattr(mod.urllib.request, "urlopen",
-                        lambda url, timeout=None: Stream(setup["image"]))
+                        lambda req, timeout=None: Stream(setup["image"]) if req.full_url == mod.LACROS_URL
+                        and req.get_header("User-agent") == "Plinius Arch Linux" else None)
 
     def run(cmd, **kwargs):
         setup["calls"].append(cmd)

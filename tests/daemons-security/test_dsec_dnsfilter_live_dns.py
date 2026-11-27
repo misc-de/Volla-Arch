@@ -599,6 +599,7 @@ def test_dns_over_https(live, dns, tls):
         # RFC 8484: ID 0, the DNS message as the body
         assert (method, path, headers["Accept"], headers["Content-Type"], body[:2]) == \
             ("POST", "/dns-query", "application/dns-message", "application/dns-message", b"\0\0")
+        assert headers["User-Agent"] == "Plinius Arch Linux"
         # An empty answer, a 500 and an answer longer than DNS allows: on to the plain server
         assert Msg(r[1]).addrs == ["192.0.2.2"]
         assert r[2] == f"{base}/dns-query=1,{base}/fail=1,{base}/long=1,{dns.addr}=0,{dns.addr}=0"

@@ -80,7 +80,7 @@ main() {
 	radio_log >"$ACTLOG" &
 	RADIO=$!
 	# Endless rate-limited upload over the mobile interface (restarted if curl ends)
-	( while :; do head -c 50M /dev/urandom | curl -s -o /dev/null --interface $IFACE \
+	( while :; do head -c 50M /dev/urandom | curl -s -A "Plinius Arch Linux" -o /dev/null --interface $IFACE \
 		--limit-rate "$RATE" -X POST --data-binary @- $URL; done ) &
 	UP=$!
 

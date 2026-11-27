@@ -487,7 +487,9 @@ def test_release_compares_with_the_server(repo, tmp_path):
           "differs from")
     assert not repo.stable.exists()
     ok(repo.run("release.sh", REPO_URL="https://h/repo/", FAKE_REMOTE=repo.beta / "plinius.db.tar.gz"))
-    assert repo.fake_bin.calls("curl")[-1][-1] == "https://h/repo/beta/aarch64/plinius.db.tar.gz"
+    curl = repo.fake_bin.calls("curl")[-1]
+    assert curl[-1] == "https://h/repo/beta/aarch64/plinius.db.tar.gz"
+    assert curl[curl.index("-A") + 1] == "Plinius Arch Linux"
     assert (repo.stable / "plinius.db").exists()
 
 

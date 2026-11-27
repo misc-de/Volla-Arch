@@ -2908,7 +2908,7 @@ static void on_https_answer(GObject *source, GAsyncResult *res, gpointer user_da
 static SoupSession *soup(void)
 {
 	if (!self.soup)
-		self.soup = soup_session_new_with_options("timeout", 15, "user-agent", "plinius-dnsfilter/0.1", NULL);
+		self.soup = soup_session_new_with_options("timeout", 15, "user-agent", "Plinius Arch Linux", NULL);
 	return self.soup;
 }
 

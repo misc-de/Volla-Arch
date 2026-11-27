@@ -32,17 +32,20 @@ BOOT_FILES = REPO / "tools" / "boot-files.sh"
 ANDROID = ["android-rootfs.img", "vendor.img", "vendor_dlkm.img", "system_dlkm.img"]
 BOOT = ["boot.img", "vendor_boot.img", "init_boot.img"]
 
-# Serves $SRV/<last path part of the URL> for -o, like curl -f (exit 22 when missing)
+# Serves $SRV/<last path part of the URL> for -o, like curl -f (exit 22 when missing); a call
+# without our User-Agent fails with 98
 CURL = r"""
-out= url=
+out= url= ua=
 while [ $# -gt 0 ]; do
 	case $1 in
 		-o) out=$2; shift 2 ;;
+		-A) ua=$2; shift 2 ;;
 		-C|--retry|--retry-delay) shift 2 ;;
 		-*) shift ;;
 		*) url=$1; shift ;;
 	esac
 done
+[ "$ua" = "Plinius Arch Linux" ] || exit 98
 f="$SRV/${url##*/}"
 [ -f "$f" ] || exit 22
 cp "$f" "$out"

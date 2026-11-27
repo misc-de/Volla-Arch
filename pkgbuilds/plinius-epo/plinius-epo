@@ -146,7 +146,7 @@ md5_of_file() {
 # Download one file and its checksum into $tmp and check them; on failure print why
 get_one() {
 	local url=$1 remote=$2 md5=$3 sum
-	if ! curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 20 --max-time 60 \
+	if ! curl --proto '=https' --tlsv1.2 -fsS -A 'Plinius Arch Linux' --connect-timeout 20 --max-time 60 \
 		-o "$tmp/$remote" "$url/$remote" -o "$tmp/$md5" "$url/$md5" 2>/dev/null; then
 		echo download
 		return 1

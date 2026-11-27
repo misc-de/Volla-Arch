@@ -1019,7 +1019,7 @@ ccp_catalog_init (CcpCatalog *catalog)
     catalog->icon_pool = g_thread_pool_new (icon_work, NULL, 1, FALSE, NULL);
     catalog->icons = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
     catalog->waiting = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, (GDestroyNotify) g_ptr_array_unref);
-    catalog->soup = soup_session_new_with_options ("timeout", 30, "user-agent", "plinius-software", NULL);
+    catalog->soup = soup_session_new_with_options ("timeout", 30, "user-agent", "Plinius Arch Linux", NULL);
 }
 
 /* The catalog all pages share (new reference); created on first use */

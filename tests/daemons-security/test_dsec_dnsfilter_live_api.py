@@ -294,6 +294,7 @@ def test_a_list_is_downloaded_compiled_and_used(live, dns, lists, tls):
     r = live.run("call :1.5 UpdateLists -", "until lists-idle 20000", "get :1.5 Lists",
                  f"uq {query('x.ads.test')}")
     assert lists.requests[-1][2].get("If-None-Match", "").startswith('"ads.txt-')
+    assert {r[2].get("User-Agent") for r in lists.requests} == {"Plinius Arch Linux"}
     assert unpack(r[2])[0]["rules"] == 1
     assert Msg(r[3]).addrs == ["0.0.0.0"]
     # 304 while the compiled file is gone: downloaded again without the cache headers

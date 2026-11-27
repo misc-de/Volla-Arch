@@ -79,8 +79,10 @@ def stamp(mod, gpg_keys, tmp_path, monkeypatch, capsys):
     (sync / "plinius.db.sig").write_bytes(b"its signature")
     server = {"files": {}, "calls": []}
 
-    def urlopen(url, timeout=None):
+    def urlopen(req, timeout=None):
         assert timeout == mod.TIMEOUT
+        assert req.get_header("User-agent") == "Plinius Arch Linux"
+        url = req.full_url
         server["calls"].append(url)
         answer = server["files"].get(url.rsplit("/", 1)[-1])
         if callable(answer):

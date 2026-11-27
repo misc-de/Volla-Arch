@@ -288,6 +288,7 @@ def test_nothing_is_switched_or_sent(pc, phone):
     curls = phone.commands("curl")
     assert sorted(c[c.index("--interface") + 1] for c in curls) == ["ccmni1", "wlan0"]
     assert all(c[-1] == "http://check.example/nm.txt" for c in curls)
+    assert all(c[c.index("-A") + 1] == "Plinius Arch Linux" for c in curls)
 
 
 def test_no_scan_leaves_the_scans_out(pc, phone):

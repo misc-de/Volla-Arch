@@ -522,6 +522,9 @@ def test_add_finds_icon_and_name_and_writes_everything(program, gcc_world, phone
     assert save_button(found).get("sensitive") is not False
     # The guess /apple-touch-icon.png (120 px) first, then the page's 64 px icon
     assert web.requests == ["/site/", "/apple-touch-icon.png", "/site/icon.png"]
+    # Websites get a browser's User-Agent here, not "Plinius Arch Linux": unknown clients
+    # sometimes get a block page instead of the real one
+    assert {a.split(" ", 1)[0] for a in web.agents} == {"Mozilla/5.0"}
 
     app_id = only_id(phone)
     assert len(app_id) == 16 and all(c in "0123456789abcdef" for c in app_id)

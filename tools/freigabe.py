@@ -22,6 +22,7 @@ Usage (after building and testing): [ARCH=x86_64] tools/freigabe.py [--check | -
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -63,6 +64,7 @@ def db_entries(path, wanted):
 
 
 CACHE = f"{BUILD}/cache/files-{ARCH}"
+USER_AGENT = "Plinius Arch Linux"  # every request says who asks
 
 
 def fetch(repo, kind, max_age):
@@ -71,7 +73,10 @@ def fetch(repo, kind, max_age):
     suffix = ".db" if kind == "db" else ".files.tar.gz"
     path = f"{CACHE}/{repo}{suffix}"
     if not os.path.exists(path) or time.time() - os.path.getmtime(path) > max_age:
-        urllib.request.urlretrieve(MIRROR.format(repo=repo) + suffix, path)
+        request = urllib.request.Request(MIRROR.format(repo=repo) + suffix, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request, timeout=120) as response, open(path + ".part", "wb") as out:
+            shutil.copyfileobj(response, out)
+        os.replace(path + ".part", path)
     return path
 
 

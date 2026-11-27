@@ -239,7 +239,9 @@ def check_bundled(pkg, sources):
 
 def pypi(path):
     """JSON of a PyPI project or release (path: 'name' or 'name/version')."""
-    with urllib.request.urlopen(f"https://pypi.org/pypi/{path}/json", timeout=30) as response:
+    with urllib.request.urlopen(urllib.request.Request(f"https://pypi.org/pypi/{path}/json",
+                                                       headers={"User-Agent": freigabe.USER_AGENT}),
+                                timeout=30) as response:
         return json.load(response)
 
 

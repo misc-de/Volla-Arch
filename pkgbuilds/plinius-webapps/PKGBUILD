@@ -2,7 +2,7 @@
 
 pkgname=plinius-webapps
 pkgver=0.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Catalog of web apps with their starting settings, by country and language, for Settings > Apps > Web Apps"
 arch=(any)
 license=(MIT)
@@ -19,7 +19,7 @@ source=(plinius-webapps-catalog
 	catalog.json
 	webapps-icons.tar
 	LICENSE)
-sha256sums=('2a9edbfa4aea4ed1188e982d212810f0cb1783837a83a51794d340734cbfb288'
+sha256sums=('6ed6c46a86b904150bfd298ff78c070c748becae8d2e28965ab28a60efe29cf9'
 	'68d323052bfef4842a8dec7bd605b571b8687bf955f517455793143faf6924b0'
 	'ae1e947ca42db986d1403d3f7e704cc83433cd0f6009044489f448e55779414e'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')

@@ -36,7 +36,7 @@ for model in "${models[@]}"; do
 	onnx=$work/$name.onnx
 	if ! echo "$sum  $onnx" | sha256sum -c --status 2>/dev/null; then
 		msg "Downloading $name"
-		curl -fL -o "$onnx.part" "$zoo/$dir/$name.onnx"
+		curl -fL -A "$USER_AGENT" -o "$onnx.part" "$zoo/$dir/$name.onnx"
 		echo "$sum  $onnx.part" | sha256sum -c --status || die "$name: checksum mismatch"
 		mv "$onnx.part" "$onnx"
 	fi

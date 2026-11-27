@@ -49,6 +49,7 @@ MAX_AGE_DAYS = 30
 # accepted until a stamp with it has been seen on that channel. Both channels are stamped with
 # the database since plinius-software 0.12-23 (tools/lib.sh write_stamp).
 HASH_REQUIRED_FROM = 1796083200
+USER_AGENT = "Plinius Arch Linux"  # every request says who asks
 TIMEOUT = 30
 # A stamp that could not be fetched is fetched once more after this many seconds
 RETRY_DELAY = 5
@@ -152,7 +153,9 @@ def fetch(server):
     """(stamp, signature); raises urllib.error.HTTPError, OSError or ValueError."""
     files = []
     for name in ("plinius.stamp", "plinius.stamp.sig"):
-        with urllib.request.urlopen(server.rstrip("/") + "/" + name, timeout=TIMEOUT) as response:
+        with urllib.request.urlopen(urllib.request.Request(server.rstrip("/") + "/" + name,
+                                                           headers={"User-Agent": USER_AGENT}),
+                                    timeout=TIMEOUT) as response:
             files.append(response.read(MAX_SIZE))
     return files
 

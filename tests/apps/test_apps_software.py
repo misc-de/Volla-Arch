@@ -1234,7 +1234,7 @@ def test_load_url_only_https_and_only_a_good_answer(mod, monkeypatch):
     assert texture.get_width() == 1
     assert mod.load_url("https://invalid url") is None
     # One session for the thread, with a timeout
-    assert soup.sessions == [{"timeout": 30, "user_agent": "plinius-software"}]
+    assert soup.sessions == [{"timeout": 30, "user_agent": "Plinius Arch Linux"}]
     assert soup.sent == [("GET", "https://shots/gone.png"), ("GET", "https://shots/ok.png")]
 
 

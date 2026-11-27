@@ -65,15 +65,17 @@ class Epo:
         b.stub("md5sum", 'exec /usr/bin/md5sum "$@"')
         b.stub("date", 'echo "${FAKE_NOW}"')
         # curl: each URL is served from server/<host>/<path> into the -o before it; CURL_FAIL
-        # names files that fail (ALL: no network)
+        # names files that fail (ALL: no network); without our User-Agent it fails with 98
         b.stub("curl", f'''
-out=; rc=0
+out=; rc=0; ua=
 while [ $# -gt 0 ]; do
 	case $1 in
 		--proto|--connect-timeout|--max-time) shift 2 ;;
 		-o) out=$2; shift 2 ;;
+		-A) ua=$2; shift 2 ;;
 		-*) shift ;;
 		*)
+			[ "$ua" = "Plinius Arch Linux" ] || exit 98
 			url=$1; shift
 			case " ${{CURL_FAIL:-}} " in *" ALL "*) exit 6 ;; *" ${{url##*/}} "*) rc=22; continue ;; esac
 			f="{self.server}/${{url#https://}}"

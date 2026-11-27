@@ -25,7 +25,7 @@ out=$(channel_dir stable "$PUBREPO")
 
 if [[ -n ${REPO_URL:-} ]]; then
 	url=$(channel_dir beta "${REPO_URL%/}")/plinius.db.tar.gz
-	remote=$(curl -fsS --max-time 60 "$url" | sha256sum | cut -d' ' -f1) || die "cannot fetch $url"
+	remote=$(curl -fsS -A "$USER_AGENT" --max-time 60 "$url" | sha256sum | cut -d' ' -f1) || die "cannot fetch $url"
 	[[ $remote == $(sha256sum < "$src/plinius.db.tar.gz" | cut -d' ' -f1) ]] ||
 		die "the beta database on the server differs from $src: release only what was tested"
 fi

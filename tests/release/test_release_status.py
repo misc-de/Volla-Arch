@@ -357,12 +357,12 @@ def test_pypi_reads_the_json_api(st, monkeypatch):
         def __exit__(self, *exc):
             self.close()
 
-    def urlopen(url, timeout):
-        opened.append((url, timeout))
+    def urlopen(req, timeout):
+        opened.append((req.full_url, req.get_header("User-agent"), timeout))
         return Response(jsonlib.dumps({"info": {"version": "2.0"}}).encode())
     monkeypatch.setattr(st.urllib.request, "urlopen", urlopen)
     assert st.pypi("jeepney/0.8.0") == {"info": {"version": "2.0"}}
-    assert opened == [("https://pypi.org/pypi/jeepney/0.8.0/json", 30)]
+    assert opened == [("https://pypi.org/pypi/jeepney/0.8.0/json", "Plinius Arch Linux", 30)]
 
 
 def test_pypi_current_and_without_vulnerabilities(st, monkeypatch):

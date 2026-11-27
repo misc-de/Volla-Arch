@@ -2,7 +2,7 @@
 
 pkgname=plinius-widevine
 pkgver=0.3
-pkgrel=1
+pkgrel=2
 pkgdesc="Protected content (Widevine DRM) for Firefox: fetches Google's CDM onto the device when switched on"
 arch=(any)  # scripts; arm64: the CDM of ChromeOS, x64 (the KVM preview): Google's Linux one
 license=(MIT)
@@ -28,7 +28,7 @@ source=(plinius-widevine-update
 	plinius-widevine.sh
 	LICENSE
 	"widevine_fixup-$_fixup.py::https://raw.githubusercontent.com/AsahiLinux/widevine-installer/$_fixup/widevine_fixup.py")
-sha256sums=('cdebdcac8d23262ea10f8098ab712ff9a11703ac5a05d1e79ec7703f4d7d970d'
+sha256sums=('56b4a9d9071c7952f5441bff7f63cb009234ad92fbd9632aa8d22332070da492'
 	'afb09b990ea9105ab92d1ef337890c78c66a0748651da574ab0db8eb3438b699'
 	'9cb9a3edd7b1df6c9c7ee3ed7cbe37494d4a4be5107224dc89d872f4ac8fe7ba'
 	'3139c13226f76a62aff53824403cadfd59c228dc2c384771d5e3a55d0423e915'

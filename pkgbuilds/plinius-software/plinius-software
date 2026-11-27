@@ -368,7 +368,7 @@ def load_url(url):
     if not url.startswith("https://"):
         return None
     if not hasattr(_session, "soup"):
-        _session.soup = Soup.Session(timeout=30, user_agent="plinius-software")
+        _session.soup = Soup.Session(timeout=30, user_agent="Plinius Arch Linux")
     message = Soup.Message.new("GET", url)
     if message is None:
         return None

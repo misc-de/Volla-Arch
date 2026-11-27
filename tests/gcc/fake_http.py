@@ -3,7 +3,8 @@
 # and icons). Nothing leaves the machine: the panels only ever get addresses of this server.
 #
 # server = LocalWeb(); server.route("/x", body, status=200, headers={...}, delay=0.0)
-# server.requests: the paths asked for, in order; server.url("/x") is the full address.
+# server.requests: the paths asked for, in order; server.agents: the User-Agent of each;
+# server.url("/x") is the full address.
 
 import http.server
 import struct
@@ -22,6 +23,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         web = self.server.web
         with web.lock:
             web.requests.append(self.path)
+            web.agents.append(self.headers.get("User-Agent"))
             route = web.routes.get(self.path, web.routes.get(self.path.split("?")[0]))
         if route is None:
             route = (404, b"not found", {"Content-Type": "text/plain"}, 0.0)
@@ -45,6 +47,7 @@ class LocalWeb:
         self.host = host
         self.routes = {}
         self.requests = []
+        self.agents = []
         self.lock = threading.Lock()
         self.httpd = http.server.ThreadingHTTPServer((host, 0), _Handler)
         self.httpd.daemon_threads = True

@@ -36,7 +36,8 @@ class FakeNet:
         self.calls = []
 
     def __call__(self, req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
+        assert req.get_header("User-agent") == "Plinius Arch Linux"
+        url = req.full_url
         self.calls.append(url)
         answer = self.answers.get(url, urllib.error.URLError("no route to host"))
         if callable(answer):

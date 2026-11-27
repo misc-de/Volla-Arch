@@ -1,7 +1,7 @@
 # tools/freigabe.py, the release gate: which packages get coupled (linked libraries, kern.list),
 # at which version, and when --check or the approval refuses.
 #
-# The mirror is a directory of synthetic databases (urlretrieve is replaced), the local repo and
+# The mirror is a directory of synthetic databases (urlopen is replaced), the local repo and
 # PKGBUILD lie in tmp_path, readelf is a stub that reads "NEEDED" lines from the fake ELF files.
 
 import os
@@ -48,10 +48,11 @@ class World:
                             ("KERN", str(self.kern)), ("CACHE", str(tmp_path / "cache"))):
             monkeypatch.setattr(self.fg, name, value)
 
-        def urlretrieve(url, path):
-            self.downloads.append(url)
-            shutil.copy(self.mirror / url.rsplit("/", 1)[1], path)
-        monkeypatch.setattr(self.fg.urllib.request, "urlretrieve", urlretrieve)
+        def urlopen(req, timeout):
+            assert req.get_header("User-agent") == "Plinius Arch Linux" and timeout == 120
+            self.downloads.append(req.full_url)
+            return open(self.mirror / req.full_url.rsplit("/", 1)[1], "rb")
+        monkeypatch.setattr(self.fg.urllib.request, "urlopen", urlopen)
         fake_bin.stub("readelf", '''[[ $1 == -d ]] || exit 1
 grep -a '^NEEDED ' "$2" | while read -r _ lib; do
 	echo " 0x0000000000000001 (NEEDED)             Shared library: [$lib]"

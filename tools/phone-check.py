@@ -289,7 +289,7 @@ def connectivity_uri(phone):
 
 def reaches_internet(phone, iface):
     """(True, seconds) if an HTTP request through iface gets an answer, (False, reason)."""
-    rc, out = phone.run(["curl", "-s", "-o", "/dev/null", "-m", "10", "-w",
+    rc, out = phone.run(["curl", "-s", "-A", "Plinius Arch Linux", "-o", "/dev/null", "-m", "10", "-w",
                          "%{http_code} %{time_total}", "--interface", iface,
                          connectivity_uri(phone)], timeout=15)
     if rc == 127:

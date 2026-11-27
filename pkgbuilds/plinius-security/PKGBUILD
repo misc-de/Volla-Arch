@@ -2,7 +2,7 @@
 
 pkgname=plinius-security
 pkgver=0.1
-pkgrel=19
+pkgrel=20
 pkgdesc="Data for the Device Security page: password ratings, known vulnerabilities of the installed packages and the kernel"
 arch=(aarch64 x86_64)
 license=(MIT)
@@ -28,7 +28,7 @@ source=(pwrate.h
 sha256sums=('00900985a8ed31beefe348a09dd5114a4e59a343f9e5f05ed532500321a76d1a'
 	'899daeb730c4e1743e01b5f7f232838037873c8c41801a30929a4885fe27a47d'
 	'f8cf7b5319e425b1c1eda93452aa40e80af046582024f489876e2eb7228801c3'
-	'e8c299d8fbb181c159e3a3dad5d41db3284a3d4c40b3ce138e88541dd4189c4b'
+	'ee82825916c100f20f53d8d6278279c90118cc3731bd4c1afb9d3d5acf76426a'
 	'05d07034eacbf3a87993d0ad34610f69183920dc401f75417b4cb8ec645de2a6'
 	'8c6e0ea542407cbd9e3ab69d16d7cf74eb5789e9045b206bdf2a6f6454e987c6'
 	'724d713dcbb66fc0f40b65bb70968d10bd573d7784e79ca36138e1262b51c473'

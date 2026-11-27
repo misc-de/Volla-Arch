@@ -2,7 +2,7 @@
 
 pkgname=plinius-dnsfilter
 pkgver=0.1
-pkgrel=14
+pkgrel=15
 pkgdesc="DNS filter of the Volla Phone Plinius: blocklists, own rules, own DNS servers (also DoT/DoH), statistics and a query log, for the phone, its hotspot and USB clients"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 license=(MIT)
@@ -23,7 +23,7 @@ source=(plinius-dnsfilter.c
 	org.plinius.DnsFilter.service
 	plinius-dnsfilter.tmpfiles
 	LICENSE)
-sha256sums=('d13870242647c7339e83f193d5035ecd88da4441b0230022be136febbeb0a44a'
+sha256sums=('092d2caffec5a57c4ed266dc4bb97f0a8bb45614f09cb10bff240945295cde21'
 	'7a32877b6a6f03dfd2b9b0cba38639c44e8073e1ee14938ee9d51153fbc187d2'
 	'9d5d757bcb5925653368fc4e34c6c3895362d06a1ee8605fa56140a54df6f699'
 	'0303b319de18a778ad8070fd9639410d61aa702fb13a86439aa0f316f7a9a7f0'

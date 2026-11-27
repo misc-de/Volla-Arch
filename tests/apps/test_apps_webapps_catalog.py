@@ -345,7 +345,9 @@ class Server:
         self.error = error
         self.reads = []
 
-    def __call__(self, url, timeout=None):
+    def __call__(self, req, timeout=None):
+        assert req.get_header("User-agent") == "Plinius Arch Linux"
+        url = req.full_url
         if self.error:
             raise self.error
         server = self
@@ -525,10 +527,10 @@ def test_resolve_names_the_icon(c, home):
 def icon_server(c, monkeypatch, files):
     server = Server({c.ICON_URL.format(id=k): v for k, v in files.items()})
 
-    def urlopen(url, timeout=None):
-        if url not in server.files:
-            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
-        return server(url, timeout)
+    def urlopen(req, timeout=None):
+        if req.full_url not in server.files:
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", None, None)
+        return server(req, timeout)
     monkeypatch.setattr(c.urllib.request, "urlopen", urlopen)
     return server
 

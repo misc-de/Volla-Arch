@@ -78,7 +78,7 @@ have() {
 fetch() {
 	local url=$1 dest=$2 name=${3:-}
 	msg "Downloading $url"
-	curl -fL --retry 5 --retry-all-errors --retry-delay 2 -C - -o "$dest.part" "$url"
+	curl -fL -A "$USER_AGENT" --retry 5 --retry-all-errors --retry-delay 2 -C - -o "$dest.part" "$url"
 	if [[ -n $name ]] && ! ut_pinned "$dest.part" "$name"; then
 		command rm -f "$dest.part"
 		die "$url is not $name of UT build $build (SHA-256 differs from tools/ut-build.sha256)"

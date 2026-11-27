@@ -26,11 +26,11 @@ if [[ ! -d $CHROOT/usr ]]; then
 	esac
 	if [[ ! -f $DOWNLOADS/$tarball ]]; then
 		msg "Downloading $tarball"
-		curl -fL -o "$DOWNLOADS/$tarball.part" "$url"
-		curl -fsL -o "$DOWNLOADS/$sumfile" "${url%/*}/$sumfile"
+		curl -fL -A "$USER_AGENT" -o "$DOWNLOADS/$tarball.part" "$url"
+		curl -fsL -A "$USER_AGENT" -o "$DOWNLOADS/$sumfile" "${url%/*}/$sumfile"
 		mv "$DOWNLOADS/$tarball.part" "$DOWNLOADS/$tarball"
 	fi
-	[[ -f $DOWNLOADS/$tarball.sig ]] || curl -fsL -o "$DOWNLOADS/$tarball.sig" "$url.sig"
+	[[ -f $DOWNLOADS/$tarball.sig ]] || curl -fsL -A "$USER_AGENT" -o "$DOWNLOADS/$tarball.sig" "$url.sig"
 	(cd "$DOWNLOADS" && grep " $tarball\$" "$sumfile" | $sumtool -c --quiet) ||
 		die "checksum of $tarball does not match"
 	# The checksum comes from the same server and only verifies the transfer. The tarball is

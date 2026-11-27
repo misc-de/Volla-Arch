@@ -2,7 +2,7 @@
 
 pkgname=plinius-epo
 pkgver=0.1
-pkgrel=4
+pkgrel=5
 pkgdesc="Orbit predictions (EPO) for MediaTek's GNSS daemon: a GPS fix in seconds, not a minute"
 arch=(any)
 license=(MIT)
@@ -19,7 +19,7 @@ source=(plinius-epo
 	plinius-epo.conf
 	org.plinius.epo.policy
 	LICENSE)
-sha256sums=('aecd7ecb1ed855b30824594ee738e924fc121a687a8fcd001da25a58060c3618'
+sha256sums=('0ea2b29e0d13091e4be0625ff38e3b6d93b66e131ce90a05ce005324fcd36da6'
 	'cf8f742dd3b95595c4025a453e4298e4c220361c5e347817114a55197bc5bdb2'
 	'8129cdc2c04845b9294173c10cf68fde064775972d410d89e3ca55469b646baa'
 	'fabaff78fc1430859d0a84b813404af866aa3b45a83a38b7e8e1b48cd20930f6'

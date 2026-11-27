@@ -148,6 +148,7 @@ def test_upload_goes_over_the_mobile_interface(tmp_path, fake_bin, route, iface)
     assert run(["bash", script], env, timeout=60).returncode == 0
     uploads = fake_bin.calls("curl")
     assert uploads and all(c[c.index("--interface") + 1] == iface for c in uploads)
+    assert all(c[c.index("-A") + 1] == "Plinius Arch Linux" for c in uploads)
 
 
 # ---- sar-analyse.py ----

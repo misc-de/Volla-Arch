@@ -711,6 +711,7 @@ def test_category_page_and_an_apps_details(program, gcc_world, phone):
     # video, no other language, nothing over plain http
     assert sorted(web.requests) == ["/shots.example.org/missing.png", "/shots.example.org/one-large.png",
                                     "/shots.example.org/two.png"]
+    assert set(web.agents) == {"Plinius Arch Linux"}
     assert [n["text"] for n in page.find(type="GtkLabel", text="Image not available")] == \
         ["Image not available"] * 2
     assert [c["args"][1] for c in gcc_world.calls(PORTAL, "OpenURI")] == ["https://apps.gnome.org/Maps?a=1&b=2"]
