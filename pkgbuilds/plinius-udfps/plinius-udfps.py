@@ -9,7 +9,7 @@ identifies, a circle sits over the sensor on top of everything (lock screen incl
 A finger on it turns the circle white and reports PointerDown. Only the sensor is to light up,
 yet the light comes from the backlight, which lights the whole panel. So, as Android does, the
 rest of the screen gets a black veil first, exactly as dark as the backlight is about to get
-brighter, with a glow and a scan beam around the sensor; then the backlight goes to full and
+brighter, with a glow around the sensor; then the backlight goes to full and
 UiReady follows once the light is on screen. Lifting reports PointerUp, puts the brightness back
 and then takes the veil away.
 
@@ -54,24 +54,8 @@ PANEL_GAMMA = 1.9
 DISPLAY_GAMMA = 2.2
 
 ACCENT = (0.21, 0.52, 0.89)
-# Glow and the beam's sweep reach this far up and down, in sensor radii (clear of "Slide up to
-# unlock" above)
+# The glow reaches this far, in sensor radii (clear of "Slide up to unlock" above)
 GLOW_REACH = 1.4
-# The beam reaches this far beyond the ring to the sides, so it shows beside the finger; it
-# fades out over the outer part of that
-BEAM_BEYOND_MM = 10
-BEAM_FADE = 0.4
-# The beam's outline: an ellipse that wide and a little higher than the sweep, so the beam is
-# widest through the centre and narrows towards the top and the bottom of its way
-BEAM_OUTLINE_HEIGHT = 1.05
-# Without the panel's physical size: this far, in sensor radii
-BEAM_REACH = 2.2
-# One sweep of the beam, from the bottom of the glow to its top or back: the sensor often knows
-# the finger after about 0.4 s
-SCAN_PERIOD_US = 400_000
-# A white beam: on the white sensor itself it does not show, and the finger keeps all the light
-BEAM = (1.0, 1.0, 1.0)
-BEAM_ALPHA = 0.95
 
 
 def display_mode():
@@ -156,44 +140,9 @@ class Backlight:
         self.saved = None
 
 
-def beam_offset(phase, reach, up=False):
-    """Height of the scan beam over the sensor centre for a phase 0..1 of a sweep: from the top
-    of the glow to its bottom, or with up from the bottom to the top; slower at both ends."""
-    ease = (1 - math.cos(math.pi * phase)) / 2
-    offset = reach * (2 * ease - 1)
-    return -offset if up else offset
-
-
-def draw_beam(cr, left, right, y, trail, rgb, alpha, full=None):
-    """A line at y with a trail fading out upwards (a negative trail: downwards), from left to
-    right (clipped by the caller); with full (half a width around the middle) it is at full light
-    only there and fades out towards both ends."""
-    if full is not None:
-        cr.push_group()
-    gradient = cairo.LinearGradient(0, y - trail, 0, y)
-    gradient.add_color_stop_rgba(0, *rgb, 0)
-    gradient.add_color_stop_rgba(1, *rgb, alpha * 0.6)
-    cr.rectangle(left, min(y, y - trail), right - left, abs(trail))
-    cr.set_source(gradient)
-    cr.fill()
-    width = max(2.5, abs(trail) / 6)
-    cr.rectangle(left, y - width / 2, right - left, width)
-    cr.set_source_rgba(*rgb, alpha)
-    cr.fill()
-    if full is not None:
-        cr.pop_group_to_source()
-        edge = max(0.0, min(0.5, 0.5 - full / (right - left)))
-        ends = cairo.LinearGradient(left, 0, right, 0)
-        ends.add_color_stop_rgba(0, 0, 0, 0, 0)
-        ends.add_color_stop_rgba(edge, 0, 0, 0, 1)
-        ends.add_color_stop_rgba(1 - edge, 0, 0, 0, 1)
-        ends.add_color_stop_rgba(1, 0, 0, 0, 0)
-        cr.mask(ends)
-
-
 class Glow(Gtk.Window):
     """The whole screen while a finger is on the sensor: dimmed by as much as the backlight goes
-    up, the sensor left out, a glow and the scan beam around it. Never takes a touch."""
+    up, the sensor left out, a glow around it. Never takes a touch."""
 
     def __init__(self, target):
         super().__init__()
@@ -226,23 +175,6 @@ class Glow(Gtk.Window):
         r = size / 2
         return left + r, height - bottom - r, r
 
-    def beam_reach(self, r):
-        """How far the beam reaches to each side of the sensor centre at the centre's height and
-        how far of that at full light: BEAM_BEYOND_MM beyond the ring on the panel."""
-        mm = self.target.px_per_mm
-        wide = r + BEAM_BEYOND_MM * mm if mm else BEAM_REACH * r
-        return wide, r + (1 - BEAM_FADE) * (wide - r)
-
-    def queue_beam(self):
-        """Redraw only around the sensor, where the beam moves."""
-        if self.target.disc is None:
-            return
-        cx, cy, r = self.sensor(self.area.get_allocated_height())
-        # The beam's trail reaches above the glow's top by up to 0.6 r
-        wide = math.ceil(self.beam_reach(r)[0]) + 2
-        high = math.ceil((GLOW_REACH + 0.6) * r) + 2
-        self.area.queue_draw_area(int(cx - wide), int(cy - high), 2 * wide, 2 * high)
-
     def on_draw(self, widget, cr):
         cr.set_operator(cairo.OPERATOR_CLEAR)
         cr.paint()
@@ -253,7 +185,6 @@ class Glow(Gtk.Window):
             return False
         cx, cy, r = self.sensor(widget.get_allocated_height())
         reach = GLOW_REACH * r
-        wide, full = self.beam_reach(r)
         # The sensor shows through: the target draws it, above or below the veil (its white
         # circle ends a pixel inside its edge)
         hole = r - 1
@@ -261,32 +192,16 @@ class Glow(Gtk.Window):
         cr.arc(cx, cy, hole, 0, 2 * math.pi)
         cr.fill()
         cr.set_operator(cairo.OPERATOR_OVER)
-        # Glow and beam everywhere but on the sensor, the beam within its outline
-        high = BEAM_OUTLINE_HEIGHT * reach
-        cr.save()
+        # The glow in the ring around the sensor
         cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
-        cr.save()
-        cr.translate(cx, cy)
-        cr.scale(wide, high)
-        cr.arc(0, 0, 1, 0, 2 * math.pi)
-        cr.restore()
+        cr.arc(cx, cy, reach, 0, 2 * math.pi)
         cr.new_sub_path()
         cr.arc(cx, cy, hole, 0, 2 * math.pi)
-        cr.clip()
         glow = cairo.RadialGradient(cx, cy, hole, cx, cy, reach)
         glow.add_color_stop_rgba(0, *ACCENT, 0.7)
         glow.add_color_stop_rgba(1, *ACCENT, 0)
-        cr.arc(cx, cy, reach, 0, 2 * math.pi)
         cr.set_source(glow)
         cr.fill()
-        # Up and down in turn, the trail behind it; as wide as the outline at its height
-        up = self.target.scan_up()
-        y = beam_offset(self.target.scan_phase(), reach, up)
-        half = max(1.0, wide * math.sqrt(max(0.0, 1 - (y / high) ** 2)))
-        trail = -r * 0.6 if up else r * 0.6
-        draw_beam(cr, cx - half, cx + half, cy + y, trail, BEAM, BEAM_ALPHA,
-                  full=full * half / wide)
-        cr.restore()
         return False
 
 
@@ -303,12 +218,8 @@ class Target(Gtk.Window):
         self.pressed = False
         # The boost and then UiReady wait on this source
         self.ui_ready_source = 0
-        self.tick = 0
-        self.scan_start = 0
         # Left and bottom margin and size of the circle in logical pixels, set by place()
         self.disc = None
-        # Logical pixels per millimetre on the panel, None if it has no physical size
-        self.px_per_mm = None
 
         GtkLayerShell.init_for_window(self)
         GtkLayerShell.set_namespace(self, "plinius-udfps")
@@ -369,8 +280,6 @@ class Target(Gtk.Window):
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, left)
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.BOTTOM, bottom)
         self.disc = (left, bottom, size)
-        width_mm = monitor.get_width_mm()
-        self.px_per_mm = geometry.width / width_mm if width_mm > 0 else None
         return True
 
     # ---- biomd state ----
@@ -414,10 +323,8 @@ class Target(Gtk.Window):
         if self.pressed or self.state == STATE_IDLE:
             return
         self.pressed = True
-        self.scan_start = GLib.get_monotonic_time()
         self.call("PointerDown", GLib.Variant("(ii)", (self.sx, self.sy)))
         self.area.queue_draw()
-        self.tick = self.area.add_tick_callback(self.on_tick)
         # The veil first, as dark as the backlight will get brighter
         self.glow.alpha = self.backlight.dim_alpha()
         self.glow.show_all()
@@ -457,9 +364,6 @@ class Target(Gtk.Window):
         if self.ui_ready_source:
             GLib.source_remove(self.ui_ready_source)
             self.ui_ready_source = 0
-        if self.tick:
-            self.area.remove_tick_callback(self.tick)
-            self.tick = 0
         self.call("PointerUp", None)
         # The veil goes once the brightness is back, else the screen flashes bright
         self.backlight.restore(self.lift_veil)
@@ -478,22 +382,6 @@ class Target(Gtk.Window):
                 print(f"plinius-udfps: {method}: {e.message}", file=sys.stderr)
 
         self.fp.call(method, params, Gio.DBusCallFlags.NONE, -1, None, done)
-
-    # ---- Scan beam ----
-
-    def scan_phase(self):
-        """Where the sweep of the beam is, 0..1."""
-        elapsed = GLib.get_monotonic_time() - self.scan_start
-        return (elapsed % SCAN_PERIOD_US) / SCAN_PERIOD_US
-
-    def scan_up(self):
-        """Whether the beam goes up in this sweep: it starts at the bottom, then turns."""
-        elapsed = GLib.get_monotonic_time() - self.scan_start
-        return (elapsed // SCAN_PERIOD_US) % 2 == 0
-
-    def on_tick(self, widget, clock):
-        self.glow.queue_beam()
-        return GLib.SOURCE_CONTINUE
 
     # ---- Drawing ----
 

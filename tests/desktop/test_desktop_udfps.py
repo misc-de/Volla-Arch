@@ -1,9 +1,8 @@
 # plinius-udfps: panel size from DRM, the brightness boost through logind and the veil that
 # keeps the rest of the screen as bright as before, where the circle goes, the finger's
-# press/release protocol towards biomd, the scan beam, the drawing, and following biomd. GTK is
+# press/release protocol towards biomd, the drawing, and following biomd. GTK is
 # faked; drawing goes to a real cairo image surface.
 
-import math
 import types
 
 import cairo
@@ -227,15 +226,6 @@ class Area:
         self.areas = []
         self.width, self.height = width, height
         self.clock = None
-        self.ticks = []
-
-    def add_tick_callback(self, func):
-        self.ticks.append(func)
-        return 11
-
-    def remove_tick_callback(self, tick):
-        assert tick == 11
-        self.ticks.pop()
 
     def queue_draw_area(self, x, y, w, h):
         self.areas.append((x, y, w, h))
@@ -285,7 +275,6 @@ class GlowFake:
         self.alpha = None
         self.clock = None
         self.area = Area()
-        self.beams = 0
 
     def show_all(self):
         self.visible = True
@@ -296,8 +285,6 @@ class GlowFake:
     def get_frame_clock(self):
         return self.clock
 
-    def queue_beam(self):
-        self.beams += 1
 
 
 class BacklightFake:
@@ -334,10 +321,7 @@ def target(mod, monkeypatch, monitors=None, x=540, y=2100, r=90, panel=(1080, 24
     t.progress = 0
     t.pressed = False
     t.ui_ready_source = 0
-    t.tick = 0
-    t.scan_start = 0
     t.disc = None
-    t.px_per_mm = None
     t.area = Area()
     t.visible = None
     t.hide = lambda: setattr(t, "visible", False)
@@ -357,7 +341,6 @@ def test_place_in_logical_pixels_on_the_phones_panel(mod, monkeypatch):
     assert t.area.size == (90, 90)
     assert t.shell.margins == {"left": 225, "bottom": 105}
     assert t.disc == (225, 105, 90)
-    assert t.px_per_mm == pytest.approx(540 / 68)  # from the panel's physical width
     assert t.shell.monitor is t.get_display().monitors[1]
     # The veil goes on the same screen
     assert t.shell.monitors[t.glow] is t.get_display().monitors[1]
@@ -375,7 +358,6 @@ def test_place_falls_back_to_the_primary_monitor(mod, monkeypatch):
     t.get_display().primary = primary
     assert mod.Target.place(t) is True
     assert t.shell.monitor is primary and t.area.size == (60, 60)
-    assert t.px_per_mm is None  # no physical size
 
 
 def test_place_tiny_sensor_keeps_a_pixel(mod, monkeypatch):
@@ -387,7 +369,7 @@ def test_place_tiny_sensor_keeps_a_pixel(mod, monkeypatch):
 def bind(mod, t):
     """The Target methods on the fake object, so they call each other."""
     for name in ("place", "set_state", "set_progress", "press", "boost", "release", "ui_ready",
-                 "lift_veil", "call", "on_touch", "on_button", "scan_phase", "scan_up", "on_tick"):
+                 "lift_veil", "call", "on_touch", "on_button"):
         setattr(t, name, getattr(mod.Target, name).__get__(t))
     return t
 
@@ -399,9 +381,8 @@ def test_press_reports_down_then_ui_ready(mod, monkeypatch, glib):
     t.press()
     t.press()  # a second touch point changes nothing
     assert t.fp.calls == [("PointerDown", (540, 2100))]
-    # The veil with the alpha for the brightness of now, the scan beam running
-    assert t.glow.visible is True and t.glow.alpha == 0.4 and t.area.ticks == [t.on_tick]
-    assert t.scan_start == glib.now_us
+    # The veil with the alpha for the brightness of now
+    assert t.glow.visible is True and t.glow.alpha == 0.4
     # No frame clock on the veil: the boost follows right away
     assert t.backlight.boosts == 1
     (sid,) = glib.of_kind("timeout")
@@ -411,7 +392,7 @@ def test_press_reports_down_then_ui_ready(mod, monkeypatch, glib):
     t.release()
     t.release()
     assert t.fp.calls[-1] == ("PointerUp", None) and len(t.fp.calls) == 3
-    assert t.backlight.restores == 1 and t.glow.visible is False and t.area.ticks == []
+    assert t.backlight.restores == 1 and t.glow.visible is False
 
 
 def test_lift_before_ui_ready_cancels_it(mod, monkeypatch, glib):
@@ -469,35 +450,6 @@ def test_the_veil_goes_once_the_brightness_is_back(mod, monkeypatch, glib):
     t.press()
     t.backlight.pending.pop()()
     assert t.glow.visible is True
-
-
-def test_scan_phase_and_tick(mod, monkeypatch, glib):
-    t = bind(mod, target(mod, monkeypatch))
-    t.set_state(mod.STATE_IDENTIFYING)
-    t.press()
-    assert t.scan_phase() == 0
-    glib.advance_ms(mod.SCAN_PERIOD_US / 4000)
-    assert t.scan_phase() == pytest.approx(0.25)
-    assert t.scan_up()  # the first sweep goes up
-    glib.advance_ms(mod.SCAN_PERIOD_US / 1000)  # the next sweep goes down
-    assert t.scan_phase() == pytest.approx(0.25) and not t.scan_up()
-    glib.advance_ms(mod.SCAN_PERIOD_US / 1000)
-    assert t.scan_up()
-    draws = t.area.draws
-    assert t.on_tick(None, None) is True
-    # The sensor is plain white: only the veil's beam moves
-    assert t.area.draws == draws and t.glow.beams == 1
-
-
-def test_beam_offset_sweeps_down_and_up(mod):
-    assert mod.beam_offset(0, 30) == pytest.approx(-30)
-    assert mod.beam_offset(0.5, 30) == pytest.approx(0)
-    assert mod.beam_offset(1, 30) == pytest.approx(30)
-    # Upwards: from the bottom to the top
-    assert mod.beam_offset(0, 30, up=True) == pytest.approx(30)
-    assert mod.beam_offset(1, 30, up=True) == pytest.approx(-30)
-    # Slower at the ends than in the middle
-    assert mod.beam_offset(0.1, 30) + 30 < mod.beam_offset(0.55, 30) - mod.beam_offset(0.45, 30)
 
 
 def test_no_press_while_idle(mod, monkeypatch, glib):
@@ -562,21 +514,10 @@ def draw(mod, t, size=100):
 def test_pressed_circle_is_plain_white(mod, monkeypatch, glib):
     t = bind(mod, target(mod, monkeypatch))
     t.pressed = True
-    t.scan_start = glib.now_us  # the beam above the circle, at the start of its sweep
     pixel = draw(mod, t)
     assert pixel(50, 50) == (255, 255, 255, 255)
     assert pixel(50, 95) == (255, 255, 255, 255)
     assert pixel(1, 1) == (0, 0, 0, 0)  # transparent around it
-
-
-def test_sensor_stays_plain_white_while_the_beam_passes(mod, monkeypatch, glib):
-    t = bind(mod, target(mod, monkeypatch))
-    t.pressed = True
-    t.scan_start = glib.now_us
-    glib.advance_ms(mod.SCAN_PERIOD_US / 2000)  # halfway: the beam at the centre's height
-    pixel = draw(mod, t)
-    assert pixel(50, 50) == pixel(50, 85) == (255, 255, 255, 255)
-    assert pixel(1, 1) == (0, 0, 0, 0)
 
 
 def test_idle_circle_is_dim_with_a_ring(mod, monkeypatch):
@@ -601,16 +542,12 @@ def test_enrollment_progress_is_drawn(mod, monkeypatch):
 
 # ----- the veil -----
 
-def glow(mod, monkeypatch, disc=(60, 100, 80), alpha=0.5, phase_ms=0, glib=None, mm=4.0):
+def glow(mod, monkeypatch, disc=(60, 100, 80), alpha=0.5):
     g = mod.Glow.__new__(mod.Glow)
     t = bind(mod, target(mod, monkeypatch))
     t.disc = disc
-    t.px_per_mm = mm
-    t.scan_start = glib.now_us
-    glib.advance_ms(phase_ms)
     g.target, g.alpha = t, alpha
     g.area = Area(200, 400)
-    g.beam_reach = mod.Glow.beam_reach.__get__(g)
     return g
 
 
@@ -629,9 +566,9 @@ def draw_glow(mod, g):
     return pixel
 
 
-def test_veil_dims_everything_but_the_sensor(mod, monkeypatch, glib):
+def test_veil_dims_everything_but_the_sensor(mod, monkeypatch):
     # The circle sits 60 from the left, 100 above the bottom, 80 wide: centre (100, 260)
-    g = glow(mod, monkeypatch, glib=glib)
+    g = glow(mod, monkeypatch)
     pixel = draw_glow(mod, g)
     assert pixel(10, 10) == (0, 0, 0, 128)  # far away: black at the alpha
     assert pixel(100, 260) == (0, 0, 0, 0)  # the sensor stays clear for the target
@@ -640,85 +577,18 @@ def test_veil_dims_everything_but_the_sensor(mod, monkeypatch, glib):
     assert b > r and a > 128
 
 
-def test_veil_carries_the_beam_around_the_sensor(mod, monkeypatch, glib):
-    # Halfway through the sweep the beam crosses at the height of the centre
-    g = glow(mod, monkeypatch, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
-    on_beam = draw_glow(mod, g)(149, 260)
-    g = glow(mod, monkeypatch, phase_ms=0, glib=glib)
-    off_beam = draw_glow(mod, g)(149, 260)
-    assert on_beam[3] > off_beam[3] and on_beam[0] > off_beam[0]  # white over the blue glow
-
-
-def test_beam_shows_beside_the_finger_and_fades_out(mod, monkeypatch, glib):
-    # Halfway through the sweep, at the centre's height, well beside the glow
-    g = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
-    pixel = draw_glow(mod, g)
-    # 4 px per mm: the beam reaches 40 beyond the ring (radius 40), full light up to 64
-    near, far = pixel(160, 260), pixel(175, 260)
-    assert near[0] == near[1] == near[2] and near[3] > 200  # white
-    assert 0 < far[3] < near[3]  # fading out towards the end
-    assert pixel(183, 260)[3] == 0 and pixel(160, 200) == (0, 0, 0, 0)  # beyond: nothing
-
-
-def test_beam_is_narrower_above_the_centre(mod, monkeypatch, glib):
-    # Radius 40: the outline 80 wide to each side and 1.05 * 56 = 58.8 high. 40 above the centre
-    # the beam reaches 80 * sqrt(1 - (40 / 58.8)²) = 58.6 to each side; the sweep is 40 above the
-    # centre at about a quarter of its period
-    phase = math.acos(1 - 2 * (1 - 40 / 56) / 2) / math.pi
-    # in the second sweep, the one downwards
-    g = glow(mod, monkeypatch, alpha=0, phase_ms=(1 + phase) * mod.SCAN_PERIOD_US / 1000,
-             glib=glib)
-    assert not g.target.scan_up()
-    assert 260 + mod.beam_offset(g.target.scan_phase(), 56) == pytest.approx(220, abs=0.5)
-    pixel = draw_glow(mod, g)
-    assert pixel(145, 220)[3] > 128  # 45 beside: on the beam
-    assert pixel(162, 220)[3] == 0  # 62 beside: beyond the outline at this height
-    # Through the centre it reaches further
-    g = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
-    assert draw_glow(mod, g)(162, 260)[3] > 128
-    # At the start, at the bottom of its way, it is narrow, but there
-    g = glow(mod, monkeypatch, alpha=0, glib=glib)
-    pixel = draw_glow(mod, g)
-    assert pixel(100, 316)[3] > 0 and pixel(130, 316)[3] == 0
-
-
-def test_the_trail_follows_the_beam(mod, monkeypatch, glib):
-    # Halfway through a sweep the line crosses the centre's height (260); 70 beside the sensor,
-    # beyond the glow, the trail shows below the line going up (first sweep), above it going down
-    up = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
-    assert up.target.scan_up()
-    pixel = draw_glow(mod, up)
-    assert pixel(170, 266)[3] > 0 and pixel(170, 254)[3] == 0
-    down = glow(mod, monkeypatch, alpha=0, phase_ms=3 * mod.SCAN_PERIOD_US / 2000, glib=glib)
-    assert not down.target.scan_up()
-    pixel = draw_glow(mod, down)
-    assert pixel(170, 254)[3] > 0 and pixel(170, 266)[3] == 0
-
-
-def test_beam_reach_from_the_panel_size(mod, monkeypatch, glib):
-    g = glow(mod, monkeypatch, glib=glib, mm=5.6)
-    wide, full = g.beam_reach(30)
-    assert wide == pytest.approx(30 + 10 * 5.6)
-    assert full == pytest.approx(30 + 0.6 * 56)
-    # Without a physical size: in sensor radii
-    g.target.px_per_mm = None
-    assert g.beam_reach(30)[0] == pytest.approx(30 * mod.BEAM_REACH)
-
-
-def test_veil_before_the_target_was_placed(mod, monkeypatch, glib):
-    g = glow(mod, monkeypatch, disc=None, alpha=0.25, glib=glib)
+def test_veil_before_the_target_was_placed(mod, monkeypatch):
+    g = glow(mod, monkeypatch, disc=None, alpha=0.25)
     pixel = draw_glow(mod, g)
     assert pixel(100, 260) == pixel(10, 10) == (0, 0, 0, 64)
-    g.queue_beam()
-    assert g.area.areas == []
 
 
-def test_veil_redraws_only_around_the_sensor(mod, monkeypatch, glib):
-    g = glow(mod, monkeypatch, glib=glib)
-    g.queue_beam()
-    # Centre (100, 260), radius 40: the beam 80 to the sides, glow and trail 80 up and down,
-    # 2 to spare
-    assert g.area.areas == [(18, 178, 164, 164)]
+def test_veil_glow_ends_in_its_reach(mod, monkeypatch):
+    # Radius 40, the glow 1.4 * 40 = 56 from the centre: beside that only the veil
+    g = glow(mod, monkeypatch, alpha=0)
+    pixel = draw_glow(mod, g)
+    assert pixel(150, 260)[3] > 0  # 50 beside: still some glow
+    assert pixel(160, 260) == pixel(100, 200) == (0, 0, 0, 0)  # 60 beside or above: nothing
 
 
 # ----- following biomd -----
@@ -880,7 +750,7 @@ def test_target_window_sits_over_everything(mod, monkeypatch, tmp_path, rgba):
     t = mod.Target(fp, SystemBus(), 540, 2100, 90, (1080, 2400))
     assert (t.fp, t.sx, t.sy, t.sr, t.panel_w, t.panel_h) == (fp, 540, 2100, 90, 1080, 2400)
     assert t.state == mod.STATE_IDLE and not t.pressed and t.backlight.name is None
-    assert t.glow == ("glow", t) and t.disc is None and t.tick == 0
+    assert t.glow == ("glow", t) and t.disc is None
     assert shell.calls == [("init_for_window",), ("set_namespace", "plinius-udfps"),
                            ("set_layer", "overlay"), ("set_anchor", "left", True),
                            ("set_anchor", "bottom", True), ("set_exclusive_zone", -1),
