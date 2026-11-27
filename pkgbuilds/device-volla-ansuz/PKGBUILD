@@ -2,7 +2,7 @@
 
 pkgname=device-volla-ansuz
 pkgver=0.5
-pkgrel=97
+pkgrel=98
 pkgdesc="Device configuration for Volla Phone Plinius (ansuz): binder, Android container, boot chain check, SSH over USB"
 arch=(any)
 license=(MIT)
@@ -466,7 +466,8 @@ package() {
 	# What our services write to stdout and stderr stays in the journal (stored at notice)
 	install -Dm644 50-plinius-log-level.conf -t "$pkgdir/usr/lib/systemd/system/plinius-.service.d"
 	install -Dm644 50-plinius-log-level.conf -t "$pkgdir/usr/lib/systemd/user/plinius-.service.d"
-	for _unit in gnss-nmea-bridge sensor-proxy-bridge vibrator-ff-bridge; do
+	for _unit in gnss-nmea-bridge sensor-proxy-bridge vibrator-ff-bridge health-hal-bridge nfc-hal-bridge \
+		waydroid-plinius-screen; do
 		install -Dm644 50-plinius-log-level.conf -t "$pkgdir/usr/lib/systemd/system/$_unit.service.d"
 	done
 	for _unit in audio-hal-bridge camera-hal-bridge mmsd-sim-gate firefox-preload; do
