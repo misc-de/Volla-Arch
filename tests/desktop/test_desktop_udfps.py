@@ -1,5 +1,6 @@
-# plinius-udfps: panel size from DRM, the brightness boost through logind, where the circle goes,
-# the finger's press/release protocol towards biomd, the drawing, and following biomd. GTK is
+# plinius-udfps: panel size from DRM, the brightness boost through logind and the veil that
+# keeps the rest of the screen as bright as before, where the circle goes, the finger's
+# press/release protocol towards biomd, the scan beam, the drawing, and following biomd. GTK is
 # faked; drawing goes to a real cairo image surface.
 
 import types
@@ -70,9 +71,18 @@ def test_display_mode_none(mod, tmp_path, monkeypatch):
 class SystemBus:
     def __init__(self):
         self.calls = []
+        self.callbacks = []
 
     def call(self, name, path, iface, method, params, *rest):
         self.calls.append((name, path, iface, method, params.unpack()))
+        self.callbacks.append(rest[-1])
+
+    def call_finish(self, result):
+        if result == "bad":
+            raise GLib.Error("logind says no")
+
+    def answer(self, result="ok"):
+        self.callbacks.pop(0)(self, result)
 
 
 @pytest.fixture
@@ -99,6 +109,43 @@ def test_boost_and_restore(mod, backlight_dir):
                          target + (("backlight", "panel0-backlight", 812),)]
 
 
+def test_restore_tells_when_the_brightness_is_back(mod, backlight_dir, capsys):
+    bus = SystemBus()
+    light = mod.Backlight(bus)
+    done = []
+    light.restore(lambda: done.append("unboosted"))  # nothing to put back: right away
+    assert done == ["unboosted"] and bus.calls == []
+    light.boost()
+    light.restore(lambda: done.append("back"))
+    bus.answer()  # the boost
+    assert done == ["unboosted"]
+    bus.answer("bad")  # the restore, even when logind refuses
+    assert done == ["unboosted", "back"]
+    assert capsys.readouterr().err == "plinius-udfps: SetBrightness: logind says no\n"
+
+
+def test_dim_alpha_keeps_the_rest_of_the_screen_as_bright(mod, backlight_dir):
+    light = mod.Backlight(SystemBus())
+    expected = 1 - (812 / 2047) ** (mod.PANEL_GAMMA / mod.DISPLAY_GAMMA)
+    assert light.dim_alpha() == pytest.approx(expected)
+    # While boosted it is the level from before that counts, not the full one now
+    light.boost()
+    (backlight_dir / "brightness").write_text("2047\n")
+    assert light.dim_alpha() == pytest.approx(expected)
+    light.restore()
+    assert light.dim_alpha() == 0  # at full brightness nothing to dim
+    # Level 0 is still lit: dark, but not black
+    (backlight_dir / "brightness").write_text("0\n")
+    assert 0.9 < light.dim_alpha() < 1
+
+
+@pytest.mark.parametrize("brightness, top", [("n/a", "2047"), ("100", "0")])
+def test_dim_alpha_without_a_usable_level(mod, backlight_dir, brightness, top):
+    (backlight_dir / "brightness").write_text(brightness)
+    (backlight_dir / "max_brightness").write_text(top)
+    assert mod.Backlight(SystemBus()).dim_alpha() == 0
+
+
 def test_boost_without_a_readable_level(mod, backlight_dir):
     (backlight_dir / "brightness").write_text("n/a\n")
     bus = SystemBus()
@@ -113,7 +160,7 @@ def test_no_backlight(mod, tmp_path, monkeypatch):
     bus = SystemBus()
     light = mod.Backlight(bus)
     light.boost()
-    assert light.name is None and bus.calls == []
+    assert light.name is None and bus.calls == [] and light.dim_alpha() == 0
 
 
 # ----- the target -----
@@ -127,9 +174,12 @@ class Shell:
     def __init__(self):
         self.margins = {}
         self.monitor = None
+        self.monitors = {}
 
     def set_monitor(self, window, monitor):
-        self.monitor = monitor
+        self.monitors[window] = monitor
+        if not isinstance(window, GlowFake):
+            self.monitor = monitor
 
     def set_margin(self, window, edge, value):
         self.margins[edge] = value
@@ -170,11 +220,27 @@ class Display:
 
 
 class Area:
-    def __init__(self, width=0):
+    def __init__(self, width=0, height=0):
         self.size = None
         self.draws = 0
-        self.width = width
+        self.areas = []
+        self.width, self.height = width, height
         self.clock = None
+        self.ticks = []
+
+    def add_tick_callback(self, func):
+        self.ticks.append(func)
+        return 11
+
+    def remove_tick_callback(self, tick):
+        assert tick == 11
+        self.ticks.pop()
+
+    def queue_draw_area(self, x, y, w, h):
+        self.areas.append((x, y, w, h))
+
+    def get_allocated_height(self):
+        return self.height
 
     def set_size_request(self, w, h):
         self.size = (w, h)
@@ -197,20 +263,79 @@ class Proxy:
         self.calls.append((method, params.unpack() if params is not None else None))
 
 
+class Clock:
+    def __init__(self):
+        self.handlers = {}
+        self.disconnected = None
+
+    def connect(self, signal, func):
+        self.handlers[signal] = func
+        return 7
+
+    def disconnect(self, handler):
+        self.disconnected = handler
+
+
+class GlowFake:
+    """The veil as the target uses it."""
+
+    def __init__(self):
+        self.visible = None
+        self.alpha = None
+        self.clock = None
+        self.area = Area()
+        self.beams = 0
+
+    def show_all(self):
+        self.visible = True
+
+    def hide(self):
+        self.visible = False
+
+    def get_frame_clock(self):
+        return self.clock
+
+    def queue_beam(self):
+        self.beams += 1
+
+
+class BacklightFake:
+    def __init__(self, alpha=0.4, answer_now=True):
+        self.boosts = self.restores = 0
+        self.alpha = alpha
+        self.answer_now = answer_now
+        self.pending = []
+
+    def boost(self):
+        self.boosts += 1
+
+    def restore(self, done=None):
+        self.restores += 1
+        if self.answer_now:
+            done()
+        else:
+            self.pending.append(done)
+
+    def dim_alpha(self):
+        return self.alpha
+
+
 def target(mod, monkeypatch, monitors=None, x=540, y=2100, r=90, panel=(1080, 2400)):
     shell = Shell()
     monkeypatch.setattr(mod, "GtkLayerShell", shell)
     t = mod.Target.__new__(mod.Target)
     t.fp = Proxy()
-    t.backlight = types.SimpleNamespace(boosts=0, restores=0)
-    t.backlight.boost = lambda: setattr(t.backlight, "boosts", t.backlight.boosts + 1)
-    t.backlight.restore = lambda: setattr(t.backlight, "restores", t.backlight.restores + 1)
+    t.backlight = BacklightFake()
+    t.glow = GlowFake()
     t.sx, t.sy, t.sr = x, y, r
     t.panel_w, t.panel_h = panel
     t.state = mod.STATE_IDLE
     t.progress = 0
     t.pressed = False
     t.ui_ready_source = 0
+    t.tick = 0
+    t.scan_start = 0
+    t.disc = None
     t.area = Area()
     t.visible = None
     t.hide = lambda: setattr(t, "visible", False)
@@ -229,7 +354,10 @@ def test_place_in_logical_pixels_on_the_phones_panel(mod, monkeypatch):
     # bottom (2400-2100-90)/2
     assert t.area.size == (90, 90)
     assert t.shell.margins == {"left": 225, "bottom": 105}
+    assert t.disc == (225, 105, 90)
     assert t.shell.monitor is t.get_display().monitors[1]
+    # The veil goes on the same screen
+    assert t.shell.monitors[t.glow] is t.get_display().monitors[1]
 
 
 def test_place_refuses_landscape(mod, monkeypatch):
@@ -254,8 +382,8 @@ def test_place_tiny_sensor_keeps_a_pixel(mod, monkeypatch):
 
 def bind(mod, t):
     """The Target methods on the fake object, so they call each other."""
-    for name in ("place", "set_state", "set_progress", "press", "release", "ui_ready", "call",
-                 "on_touch", "on_button"):
+    for name in ("place", "set_state", "set_progress", "press", "boost", "release", "ui_ready",
+                 "lift_veil", "call", "on_touch", "on_button", "scan_phase", "on_tick"):
         setattr(t, name, getattr(mod.Target, name).__get__(t))
     return t
 
@@ -267,6 +395,10 @@ def test_press_reports_down_then_ui_ready(mod, monkeypatch, glib):
     t.press()
     t.press()  # a second touch point changes nothing
     assert t.fp.calls == [("PointerDown", (540, 2100))]
+    # The veil with the alpha for the brightness of now, the scan beam running
+    assert t.glow.visible is True and t.glow.alpha == 0.4 and t.area.ticks == [t.on_tick]
+    assert t.scan_start == glib.now_us
+    # No frame clock on the veil: the boost follows right away
     assert t.backlight.boosts == 1
     (sid,) = glib.of_kind("timeout")
     assert glib.sources[sid][1] == mod.UI_READY_DELAY_MS
@@ -275,7 +407,7 @@ def test_press_reports_down_then_ui_ready(mod, monkeypatch, glib):
     t.release()
     t.release()
     assert t.fp.calls[-1] == ("PointerUp", None) and len(t.fp.calls) == 3
-    assert t.backlight.restores == 1
+    assert t.backlight.restores == 1 and t.glow.visible is False and t.area.ticks == []
 
 
 def test_lift_before_ui_ready_cancels_it(mod, monkeypatch, glib):
@@ -288,25 +420,73 @@ def test_lift_before_ui_ready_cancels_it(mod, monkeypatch, glib):
     assert [c[0] for c in t.fp.calls] == ["PointerDown", "PointerUp"]
 
 
-def test_ui_ready_waits_for_the_painted_frame(mod, monkeypatch, glib):
+def test_boost_waits_for_the_painted_veil(mod, monkeypatch, glib):
     t = bind(mod, target(mod, monkeypatch))
-
-    class Clock:
-        def __init__(self):
-            self.handlers = {}
-
-        def connect(self, signal, func):
-            self.handlers[signal] = func
-            return 7
-
-        def disconnect(self, handler):
-            self.disconnected = handler
-    t.area.clock = clock = Clock()
+    t.glow.clock = clock = Clock()
     t.set_state(mod.STATE_IDENTIFYING)
     t.press()
-    assert glib.sources == {}
+    assert glib.sources == {} and t.backlight.boosts == 0
     clock.handlers["after-paint"](clock)
-    assert clock.disconnected == 7 and len(glib.of_kind("timeout")) == 1
+    assert clock.disconnected == 7
+    (sid,) = glib.of_kind("timeout")
+    assert glib.sources[sid][1] == mod.BOOST_DELAY_MS and t.backlight.boosts == 0
+    glib.fire(sid)
+    assert t.backlight.boosts == 1
+    (sid,) = glib.of_kind("timeout")
+    assert glib.sources[sid][1] == mod.UI_READY_DELAY_MS
+    glib.fire(sid)
+    assert t.fp.calls[-1] == ("UiReady", None)
+
+
+def test_lifted_before_the_veil_was_painted(mod, monkeypatch, glib):
+    t = bind(mod, target(mod, monkeypatch))
+    t.glow.clock = clock = Clock()
+    t.set_state(mod.STATE_IDENTIFYING)
+    t.press()
+    t.release()
+    clock.handlers["after-paint"](clock)
+    assert glib.sources == {} and t.backlight.boosts == 0
+    # A boost source that fires after all does nothing either
+    assert t.boost() is False and t.backlight.boosts == 0
+
+
+def test_the_veil_goes_once_the_brightness_is_back(mod, monkeypatch, glib):
+    t = bind(mod, target(mod, monkeypatch))
+    t.backlight = BacklightFake(answer_now=False)
+    t.set_state(mod.STATE_IDENTIFYING)
+    t.press()
+    t.release()
+    assert t.glow.visible is True
+    t.backlight.pending.pop()()
+    assert t.glow.visible is False
+    # A new press before logind answered keeps the veil
+    t.press()
+    t.release()
+    t.press()
+    t.backlight.pending.pop()()
+    assert t.glow.visible is True
+
+
+def test_scan_phase_and_tick(mod, monkeypatch, glib):
+    t = bind(mod, target(mod, monkeypatch))
+    t.set_state(mod.STATE_IDENTIFYING)
+    t.press()
+    assert t.scan_phase() == 0
+    glib.advance_ms(mod.SCAN_PERIOD_US / 4000)
+    assert t.scan_phase() == pytest.approx(0.25)
+    glib.advance_ms(mod.SCAN_PERIOD_US / 1000)  # the next sweep
+    assert t.scan_phase() == pytest.approx(0.25)
+    draws = t.area.draws
+    assert t.on_tick(None, None) is True
+    assert t.area.draws == draws + 1 and t.glow.beams == 1
+
+
+def test_beam_offset_sweeps_top_to_bottom(mod):
+    assert mod.beam_offset(0, 30) == pytest.approx(-30)
+    assert mod.beam_offset(0.5, 30) == pytest.approx(0)
+    assert mod.beam_offset(1, 30) == pytest.approx(30)
+    # Slower at the ends than in the middle
+    assert mod.beam_offset(0.1, 30) + 30 < mod.beam_offset(0.55, 30) - mod.beam_offset(0.45, 30)
 
 
 def test_no_press_while_idle(mod, monkeypatch, glib):
@@ -368,12 +548,26 @@ def draw(mod, t, size=100):
     return pixel
 
 
-def test_pressed_circle_is_plain_white(mod, monkeypatch):
-    t = target(mod, monkeypatch)
+def test_pressed_circle_is_plain_white(mod, monkeypatch, glib):
+    t = bind(mod, target(mod, monkeypatch))
     t.pressed = True
+    t.scan_start = glib.now_us  # the beam above the circle, at the start of its sweep
     pixel = draw(mod, t)
     assert pixel(50, 50) == (255, 255, 255, 255)
+    assert pixel(50, 95) == (255, 255, 255, 255)
     assert pixel(1, 1) == (0, 0, 0, 0)  # transparent around it
+
+
+def test_scan_beam_passes_faintly_over_the_sensor(mod, monkeypatch, glib):
+    t = bind(mod, target(mod, monkeypatch))
+    t.pressed = True
+    t.scan_start = glib.now_us
+    glib.advance_ms(mod.SCAN_PERIOD_US / 2000)  # halfway: the beam through the centre
+    pixel = draw(mod, t)
+    r, g, b, a = pixel(50, 50)
+    assert a == 255 and b == 255 and 180 < r < 255  # light blue, still bright
+    assert pixel(50, 85) == (255, 255, 255, 255)  # below the beam: white
+    assert pixel(1, 1) == (0, 0, 0, 0)
 
 
 def test_idle_circle_is_dim_with_a_ring(mod, monkeypatch):
@@ -394,6 +588,69 @@ def test_enrollment_progress_is_drawn(mod, monkeypatch):
     after = draw(mod, t)(96, 50)
     assert before != after
     assert after[2] > after[0]  # blue
+
+
+# ----- the veil -----
+
+def glow(mod, monkeypatch, disc=(60, 100, 80), alpha=0.5, phase_ms=0, glib=None):
+    g = mod.Glow.__new__(mod.Glow)
+    t = bind(mod, target(mod, monkeypatch))
+    t.disc = disc
+    t.scan_start = glib.now_us
+    glib.advance_ms(phase_ms)
+    g.target, g.alpha = t, alpha
+    g.area = Area(200, 400)
+    return g
+
+
+def draw_glow(mod, g):
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 200, 400)
+    cr = cairo.Context(surface)
+    cr.set_source_rgba(1, 0, 0, 1)
+    cr.paint()
+    assert mod.Glow.on_draw(g, g.area, cr) is False
+    surface.flush()
+    data, stride = surface.get_data(), surface.get_stride()
+
+    def pixel(x, y):
+        b, gr, r, a = data[y * stride + 4 * x: y * stride + 4 * x + 4]
+        return r, gr, b, a
+    return pixel
+
+
+def test_veil_dims_everything_but_the_sensor(mod, monkeypatch, glib):
+    # The circle sits 60 from the left, 100 above the bottom, 80 wide: centre (100, 260)
+    g = glow(mod, monkeypatch, glib=glib)
+    pixel = draw_glow(mod, g)
+    assert pixel(10, 10) == (0, 0, 0, 128)  # far away: black at the alpha
+    assert pixel(100, 260) == (0, 0, 0, 0)  # the sensor stays clear for the target
+    assert pixel(100, 225) == (0, 0, 0, 0)
+    r, gr, b, a = pixel(145, 260)  # just outside: the glow
+    assert b > r and a > 128
+
+
+def test_veil_carries_the_beam_around_the_sensor(mod, monkeypatch, glib):
+    # Halfway through the sweep the beam crosses at the height of the centre
+    g = glow(mod, monkeypatch, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
+    on_beam = draw_glow(mod, g)(149, 260)
+    g = glow(mod, monkeypatch, phase_ms=0, glib=glib)
+    off_beam = draw_glow(mod, g)(149, 260)
+    assert on_beam[3] > off_beam[3] and on_beam[2] > off_beam[2]
+
+
+def test_veil_before_the_target_was_placed(mod, monkeypatch, glib):
+    g = glow(mod, monkeypatch, disc=None, alpha=0.25, glib=glib)
+    pixel = draw_glow(mod, g)
+    assert pixel(100, 260) == pixel(10, 10) == (0, 0, 0, 64)
+    g.queue_beam()
+    assert g.area.areas == []
+
+
+def test_veil_redraws_only_around_the_sensor(mod, monkeypatch, glib):
+    g = glow(mod, monkeypatch, glib=glib)
+    g.queue_beam()
+    # Centre (100, 260), radius 40, reach 52 and 2 to spare
+    assert g.area.areas == [(46, 206, 108, 108)]
 
 
 # ----- following biomd -----
@@ -511,7 +768,7 @@ class RecordingShell:
         OVERLAY = "overlay"
 
     class Edge:
-        LEFT, BOTTOM = "left", "bottom"
+        LEFT, RIGHT, TOP, BOTTOM = "left", "right", "top", "bottom"
 
     class KeyboardMode:
         NONE = "none"
@@ -550,10 +807,12 @@ def test_target_window_sits_over_everything(mod, monkeypatch, tmp_path, rgba):
     monkeypatch.setattr(mod.Target, "set_visual", lambda self, v: visuals.append(v),
                         raising=False)
     monkeypatch.setattr(mod.Target, "add", lambda self, child: added.append(child), raising=False)
+    monkeypatch.setattr(mod, "Glow", lambda target: ("glow", target))
     fp = Proxy()
     t = mod.Target(fp, SystemBus(), 540, 2100, 90, (1080, 2400))
     assert (t.fp, t.sx, t.sy, t.sr, t.panel_w, t.panel_h) == (fp, 540, 2100, 90, 1080, 2400)
     assert t.state == mod.STATE_IDLE and not t.pressed and t.backlight.name is None
+    assert t.glow == ("glow", t) and t.disc is None and t.tick == 0
     assert shell.calls == [("init_for_window",), ("set_namespace", "plinius-udfps"),
                            ("set_layer", "overlay"), ("set_anchor", "left", True),
                            ("set_anchor", "bottom", True), ("set_exclusive_zone", -1),
@@ -563,6 +822,31 @@ def test_target_window_sits_over_everything(mod, monkeypatch, tmp_path, rgba):
     assert t.area.handlers == {"draw": t.on_draw, "touch-event": t.on_touch,
                                "button-press-event": t.on_button,
                                "button-release-event": t.on_button}
+
+
+@pytest.mark.parametrize("rgba", [True, False])
+def test_veil_window_covers_the_screen_and_takes_no_touch(mod, monkeypatch, rgba):
+    shell = RecordingShell()
+    monkeypatch.setattr(mod, "GtkLayerShell", shell)
+    monkeypatch.setattr(mod.Gtk, "DrawingArea", DrawingArea)
+    visuals, added, shapes = [], [], []
+    screen = types.SimpleNamespace(get_rgba_visual=lambda: "rgba" if rgba else None)
+    monkeypatch.setattr(mod.Glow, "get_screen", lambda self: screen, raising=False)
+    monkeypatch.setattr(mod.Glow, "set_visual", lambda self, v: visuals.append(v), raising=False)
+    monkeypatch.setattr(mod.Glow, "add", lambda self, child: added.append(child), raising=False)
+    monkeypatch.setattr(mod.Glow, "input_shape_combine_region",
+                        lambda self, region: shapes.append(region), raising=False)
+    g = mod.Glow("target")
+    assert g.target == "target" and g.alpha == 0
+    assert shell.calls == [("init_for_window",), ("set_namespace", "plinius-udfps-glow"),
+                           ("set_layer", "overlay"), ("set_anchor", "left", True),
+                           ("set_anchor", "right", True), ("set_anchor", "top", True),
+                           ("set_anchor", "bottom", True), ("set_exclusive_zone", -1),
+                           ("set_keyboard_mode", "none")]
+    assert visuals == (["rgba"] if rgba else [])
+    (region,) = shapes
+    assert isinstance(region, cairo.Region) and region.is_empty()
+    assert added == [g.area] and g.area.handlers == {"draw": g.on_draw}
 
 
 def test_place_without_any_monitor(mod, monkeypatch):
