@@ -2,7 +2,7 @@
 
 pkgname=plinius-sar
 pkgver=0.1
-pkgrel=11
+pkgrel=12
 pkgdesc="SAR back-off: lowers the modem's transmit power while a body is near (MTK sensor hub to mtkradioex)"
 arch=(aarch64 x86_64)
 license=(MIT)
@@ -10,10 +10,12 @@ depends=(glib2 libgbinder)
 backup=(etc/plinius-sar.conf)
 source=(plinius-sar.c
 	plinius-sar.service
+	71-plinius-sar.rules
 	plinius-sar.conf
 	LICENSE)
 sha256sums=('50d606021e026330885d2a894d57a56cacb1a3318d17d056de752834ccf90ab9'
-	'b3672fe02d0ec8c2922bcf33e000643d8150355c3ebddc63caa1ef0cef93011d'
+	'da11fc9be585db4cfb5dc55151af36f8c57fd10b369cccfed1a60eabd1fc4bfc'
+	'7eae2c52fc87e8f3b474226e4bbf904011632a2df232166080f5f17f9da81061'
 	'd796379262a39f4ec33a37d96ba68c239132c455e12d363c4b1c63f27c4ea504'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
@@ -28,6 +30,8 @@ package() {
 	install -Dm755 plinius-sar -t "$pkgdir/usr/bin"
 	install -Dm644 plinius-sar.conf "$pkgdir/etc/plinius-sar.conf"
 	install -Dm644 plinius-sar.service -t "$pkgdir/usr/lib/systemd/system"
+	# The sensor hub as a device unit the service waits for
+	install -Dm644 71-plinius-sar.rules -t "$pkgdir/usr/lib/udev/rules.d"
 	# On from the start, without a session: the limit must hold whenever the modem transmits
 	install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
 	ln -s ../plinius-sar.service "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/"

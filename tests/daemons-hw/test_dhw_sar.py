@@ -5,7 +5,10 @@
 import errno
 import functools
 import os
+import re
+import shutil
 import struct
+import subprocess
 
 import pytest
 
@@ -1131,3 +1134,28 @@ def test_daemon_refresh_while_an_answer_is_due_sends_again(daemon):
     d, start = daemon
     out = start(cfg="Slots=slot1\n", script=["usr1"]).stdout
     assert at_sent(section(out, "usr1")) == [("slot1", "AT+ERFIDX=1,-1")]
+
+
+
+# ---- Wiring ----
+
+def test_service_waits_for_the_sensor_hub_device():
+    # DeviceAllow=char-hf_manager needs the driver in /proc/devices when the unit starts; the
+    # container loads it as a module, so the unit waits for the device that udev hands systemd
+    node = re.search(r'^#define HF_MANAGER_DEVICE "(/dev/[^"]+)"$', SRC.read_text(), re.M).group(1)
+    rules = (PKG / "plinius-sar" / "71-plinius-sar.rules").read_text()
+    rule = [line for line in rules.splitlines() if line and not line.startswith("#")]
+    assert rule == [f'SUBSYSTEM=="hf_manager", KERNEL=="{os.path.basename(node)}", TAG+="systemd"']
+    escape = shutil.which("systemd-escape")
+    device = (subprocess.run([escape, "--path", "--suffix=device", node], capture_output=True,
+                             text=True, check=True).stdout.strip()
+              if escape else "dev-hf_manager.device")
+    assert device == "dev-hf_manager.device"
+    unit = (PKG / "plinius-sar" / "plinius-sar.service").read_text()
+    for line in (f"Wants={device}", f"After={device}", "DeviceAllow=char-hf_manager rw"):
+        assert re.search(rf"^{re.escape(line)}$", unit, re.M), line
+    # Wants=, not Requires=: without the phone (QEMU) the unit still starts after the timeout
+    assert not re.search(r"^(Requires|BindsTo)=.*hf_manager", unit, re.M)
+    pkgbuild = (PKG / "plinius-sar" / "PKGBUILD").read_text()
+    assert re.search(r"^\t71-plinius-sar\.rules$", pkgbuild, re.M)
+    assert 'install -Dm644 71-plinius-sar.rules -t "$pkgdir/usr/lib/udev/rules.d"' in pkgbuild

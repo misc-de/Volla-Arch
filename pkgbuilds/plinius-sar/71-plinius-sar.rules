@@ -1,0 +1,6 @@
+# A device unit for the sensor hub, so plinius-sar.service can wait for it: the Android container
+# loads hf_manager as a module, and until then the driver is missing from /proc/devices. systemd
+# resolves DeviceAllow=char-hf_manager when the unit starts and drops the rule for a driver it
+# does not know yet; the first open then fails with EPERM (27 s after boot on 2026-11-27, the
+# restart 5 s later worked).
+SUBSYSTEM=="hf_manager", KERNEL=="hf_manager", TAG+="systemd"

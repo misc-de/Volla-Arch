@@ -2,6 +2,10 @@
 Description=SAR: lower the modem's transmit power while a body is near
 # The radio extension lives in the Android container; the daemon waits for it anyway
 After=lxc-android-config.service
+# The sensor hub's driver is a module of the container (71-plinius-sar.rules); without the phone
+# the device never comes and the unit starts after the device timeout anyway
+Wants=dev-hf_manager.device
+After=dev-hf_manager.device
 
 [Service]
 ExecStart=/usr/bin/plinius-sar
@@ -18,6 +22,7 @@ DeviceAllow=/dev/binder rw
 # By its driver, not its path: the container's ueventd creates the node after this unit starts,
 # and a path that does not exist yet is left out of the device policy. The first open then
 # failed with EPERM instead of ENOENT, past the daemon's wait for the node (measured 2026-11-14).
+# The driver must be known as well when the unit starts, hence the wait for the device above.
 DeviceAllow=char-hf_manager rw
 # More sandbox (docs/DIENSTE-HAERTEN.md): no capabilities
 CapabilityBoundingSet=
