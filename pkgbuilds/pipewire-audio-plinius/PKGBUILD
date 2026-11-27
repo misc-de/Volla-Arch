@@ -1,9 +1,9 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=pipewire-audio-plinius
-pkgver=1.6.11
-_archrel=2
-pkgrel=4
+pkgver=1.6.12
+_archrel=1
+pkgrel=1
 epoch=1
 pkgdesc="Arch's pipewire-audio, with a Bluetooth plugin whose hands-free gateway knows the modem"
 arch=(aarch64)
@@ -28,7 +28,7 @@ makedepends=(git meson glib2-devel libmm-glib)
 provides=("pipewire-audio=1:$pkgver-$_archrel" ladspa-host lv2-host)
 conflicts=(pipewire-audio)
 # Commit of tag $pkgver: a tag can be moved later, a commit hash cannot
-_commit=4287f31510771fc999f8a58a024c81ca10b8d55f
+_commit=d3069f761fe7d6e54980d55d59de22ce8cdf6bb4
 _archpkg=pipewire-audio-$pkgver-$_archrel-aarch64.pkg.tar.xz
 source=("pipewire::git+https://gitlab.freedesktop.org/pipewire/pipewire.git#commit=$_commit"
         "$_archpkg::https://de3.mirror.archlinuxarm.org/aarch64/extra/pipewire-audio-1%3A$pkgver-$_archrel-aarch64.pkg.tar.xz"
@@ -36,7 +36,7 @@ source=("pipewire::git+https://gitlab.freedesktop.org/pipewire/pipewire.git#comm
         0002-bluez5-modemmanager-answer-the-AT-command-when-its-call-goes-away.patch)
 noextract=("$_archpkg")
 sha256sums=('SKIP'
-            '66d315e9e9c49da3c4757ddb23a2f348df80d45da6b824c7d39484db22542317'
+            '0c0108e7ec05458223d960c2a53b574a8c1607f00a472eaefaf81d24dbfdec47'
             '05b15068574060136ee9ecabd27fd05ad4235dd4c7da07cbbe5f0cbcaaa78407'
             '09c67dd766b53fc1e393fa6bb11a20dff97b8948d7158f9ba96c2a3c2fb5f158')
 
