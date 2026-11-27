@@ -2,7 +2,7 @@
 
 pkgname=vibrator-ff-bridge
 pkgver=0.4
-pkgrel=3
+pkgrel=4
 pkgdesc="Force-feedback input device for feedbackd, backed by the vendor haptics FF device, sysfs or the AIDL vibrator HAL"
 arch=(aarch64 x86_64)
 license=(MIT)

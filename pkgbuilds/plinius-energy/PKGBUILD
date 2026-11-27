@@ -2,7 +2,7 @@
 
 pkgname=plinius-energy
 pkgver=0.1
-pkgrel=5
+pkgrel=6
 pkgdesc="Estimated battery use per app from processor time and the energy model, for Settings > Battery"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview (no energy model there, the service stays off)
 license=(MIT)

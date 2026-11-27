@@ -2,7 +2,7 @@
 
 pkgname=plinius-satellite
 pkgver=0.2
-pkgrel=2
+pkgrel=3
 pkgdesc="Satellite mode: tells when the phone is on a satellite network (Starlink Direct to Cell and alike), meters the connection, tells the user what works and scans for networks with a forecast"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 license=(MIT)

@@ -5,7 +5,7 @@
 # For checking from the host which Android binder services answer (docs/ROADMAP.md, phase 3).
 pkgname=libgbinder-tools
 pkgver=1.1.55
-pkgrel=1
+pkgrel=2
 pkgdesc="Command line tools for Android binder (binder-list, binder-ping, binder-call)"
 arch=(aarch64 x86_64)
 url="https://github.com/mer-hybris/libgbinder"

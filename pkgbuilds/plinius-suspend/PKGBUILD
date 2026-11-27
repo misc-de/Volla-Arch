@@ -2,7 +2,7 @@
 
 pkgname=plinius-suspend
 pkgver=0.4
-pkgrel=1
+pkgrel=2
 pkgdesc="Suspend the Volla Phone Plinius whenever the display is off, as UT's repowerd (wakeup_count loop)"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 license=(MIT)

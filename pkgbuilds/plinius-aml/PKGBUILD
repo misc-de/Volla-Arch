@@ -2,7 +2,7 @@
 
 pkgname=plinius-aml
 pkgver=0.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Advanced Mobile Location (ETSI TS 103 625): sends the GNSS position of an emergency call to the emergency services by SMS"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 license=(MIT)

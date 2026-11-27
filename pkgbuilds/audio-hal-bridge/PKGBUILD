@@ -2,7 +2,7 @@
 
 pkgname=audio-hal-bridge
 pkgver=0.6
-pkgrel=20
+pkgrel=21
 pkgdesc="Vendor legacy audio HAL (through libhybris) as PipeWire speaker, earpiece and microphone, with callaudiod's call API, echo cancellation for voice apps, Bluetooth hands-free through the HAL and the FM tuner's sound as a source"
 arch=(aarch64)  # needs the Android HAL through libhybris
 license=(MIT)

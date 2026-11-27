@@ -2,7 +2,7 @@
 
 pkgname=plinius-vdec
 pkgver=0.2
-pkgrel=8
+pkgrel=9
 pkgdesc="Hardware video decoding (H.264, H.265, VP9) and H.264 encoding for GStreamer on the Volla Phone Plinius: MediaTek decoder plus MDP colour conversion in a service of its own, MediaTek encoder"
 arch=(aarch64)  # needs the vendor's libdpframework through libhybris
 license=(MIT)

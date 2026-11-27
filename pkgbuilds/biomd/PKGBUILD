@@ -3,7 +3,7 @@
 pkgbase=biomd
 pkgname=(biomd biomd-fprintd biomd-pam biomd-session)
 pkgver=1.4.0.20261116
-pkgrel=2
+pkgrel=3
 pkgdesc="Biometrics daemon talking to the Android fingerprint HAL over binder (HIDL and AIDL)"
 arch=(aarch64 x86_64)
 url="https://github.com/FuriLabs/biomd"

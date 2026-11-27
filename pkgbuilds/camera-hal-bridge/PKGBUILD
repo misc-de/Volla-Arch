@@ -2,7 +2,7 @@
 
 pkgname=camera-hal-bridge
 pkgver=0.8
-pkgrel=10
+pkgrel=11
 pkgdesc="Android cameras (Camera2 NDK through libhybris) as PipeWire camera nodes, real photos with multi-frame noise reduction and camera settings over the session bus, and whether the front camera is on"
 arch=(aarch64)  # needs the Android camera stack through libhybris
 license=(MIT)

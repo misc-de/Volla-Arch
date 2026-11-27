@@ -2,7 +2,7 @@
 
 pkgname=plinius-speech
 pkgver=0.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Speech output for the Plinius: one voice and rate for every speech output, and the caller announcement in a Bluetooth headset"
 arch=(aarch64 x86_64)  # x86_64 for the KVM preview
 # The service links libespeak-ng (GPL-3.0-or-later)

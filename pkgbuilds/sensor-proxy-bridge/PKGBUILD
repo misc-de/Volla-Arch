@@ -2,7 +2,7 @@
 
 pkgname=sensor-proxy-bridge
 pkgver=0.9
-pkgrel=3
+pkgrel=4
 pkgdesc="Android sensors HAL (AIDL ISensors over binder) as the iio-sensor-proxy D-Bus service"
 arch=(aarch64 x86_64)
 license=(MIT)

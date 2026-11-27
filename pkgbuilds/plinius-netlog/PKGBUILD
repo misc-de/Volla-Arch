@@ -2,7 +2,7 @@
 
 pkgname=plinius-netlog
 pkgver=0.1
-pkgrel=8
+pkgrel=9
 pkgdesc="Records which app connects where (BPF on the cgroup tree, DNS names), for GNOME Settings"
 arch=(aarch64 x86_64)
 # The daemon is MIT; the BPF programs are GPL-2.0-only (the kernel's helpers ask for it)

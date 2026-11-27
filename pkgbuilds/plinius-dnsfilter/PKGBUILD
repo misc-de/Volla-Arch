@@ -2,7 +2,7 @@
 
 pkgname=plinius-dnsfilter
 pkgver=0.1
-pkgrel=13
+pkgrel=14
 pkgdesc="DNS filter of the Volla Phone Plinius: blocklists, own rules, own DNS servers (also DoT/DoH), statistics and a query log, for the phone, its hotspot and USB clients"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 license=(MIT)
