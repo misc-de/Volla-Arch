@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 06:29:37 +0100
+Subject: [PATCH] lockscreen: The slide hint halfway between the arrow and the
+ fingerprint target
+
+While the fingerprint target shows, "Slide up to unlock" sat 16 px below
+the arrow but only about 12 px above the target. Two pixels more above
+the sensor and two less below the arrow put the text in the middle, the
+arrow stays where it was.
+---
+ src/lockscreen.c     | 7 +++++--
+ src/ui/lockscreen.ui | 2 +-
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index ec2a150c..91561af2 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -51,9 +51,12 @@
+ #define BIOMD_SENSOR_UDFPS_OPTICAL    3
+ /* biomd's State: idle; enrolling and identifying show the fingerprint target */
+ #define BIOMD_STATE_IDLE              0
+-/* The slide hint's own bottom margin (lockscreen.ui) and the gap kept above the sensor */
++/*
++ * The slide hint's own bottom margin (lockscreen.ui) and the gap kept above the sensor: with the
++ * label's 4 px below the arrow the text sits halfway between the arrow and the fingerprint target
++ */
+ #define SLIDE_HINT_MARGIN     32
+-#define SLIDE_HINT_SENSOR_GAP 12
++#define SLIDE_HINT_SENSOR_GAP 14
+ 
+ #define LOCKSCREEN_SMALL_DISPLAY 700
+ 
+diff --git a/src/ui/lockscreen.ui b/src/ui/lockscreen.ui
+index 47e3e3a2..a672d0c8 100644
+--- a/src/ui/lockscreen.ui
++++ b/src/ui/lockscreen.ui
+@@ -90,7 +90,7 @@
+                       <object class="GtkLabel">
+                         <property name="visible">1</property>
+                         <property name="valign">end</property>
+-                        <property name="margin-top">6</property>
++                        <property name="margin-top">4</property>
+                         <property name="margin-bottom">32</property>
+                         <property name="label" translatable="yes">Slide up to unlock</property>
+                       </object>

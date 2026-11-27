@@ -3,7 +3,7 @@
 
 pkgname=phosh-plinius
 pkgver=0.59.0
-pkgrel=29
+pkgrel=30
 pkgdesc="Phosh mobile shell with a restart button, NFC, cast and USB switches and settings for the notch, the app overview and the calendar week"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 # Debug symbols in a -debug package (ALARM's makepkg.conf has !debug): perf names Phosh's functions
@@ -177,6 +177,7 @@ source=(
 	0112-location-manager-Remember-the-location-answers-of-na.patch
 	0113-cast-quick-setting-Buttons-per-TV-for-what-Schwupp-can-send.patch
 	0114-po-The-cast-quick-setting.patch
+	0115-lockscreen-The-slide-hint-halfway-between-the-arrow-.patch
 	phoc-ini-merge
 )
 sha256sums=('SKIP'
@@ -299,6 +300,7 @@ sha256sums=('SKIP'
 	'56a79acf6b3c2177ce32ed32174825114ef621134734397f8188cacb2f9e395b'
 	'235902e23961278dbc5769cbc6a9c565dceb0e313314233c6ce026b6a63d03a2'
 	'ebb9c179b37634f52e86b23e4377fee34a0120618c0674f662693d3bc764bbbc'
+	'cc1523ae7f391c0f391e1958efa1a0ad2b9396537347723c86d29552a20a69fe'
 	'38ca9adca511598de91f13da14d67fdeaf596d5ccf59693488db6cbd3e44c9f1')
 
 prepare() {
@@ -592,6 +594,8 @@ prepare() {
 	patch -d phosh -Np1 -i "$srcdir/0113-cast-quick-setting-Buttons-per-TV-for-what-Schwupp-can-send.patch"
 	# The cast quick setting in the eight languages (it was English everywhere)
 	patch -d phosh -Np1 -i "$srcdir/0114-po-The-cast-quick-setting.patch"
+	# Lock screen: "Slide up to unlock" halfway between the arrow and the fingerprint target
+	patch -d phosh -Np1 -i "$srcdir/0115-lockscreen-The-slide-hint-halfway-between-the-arrow-.patch"
 	# German: "WiFi" instead of "WLAN" in Phosh's own translation (msgstr lines only)
 	sed -i '/^msgstr/,/^$/{/^#/!s/WLAN\([^;]\)/WiFi\1/g}' phosh/po/de.po
 }
