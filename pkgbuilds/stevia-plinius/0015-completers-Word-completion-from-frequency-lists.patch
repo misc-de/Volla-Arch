@@ -1,0 +1,801 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 15:24:36 +0100
+Subject: [PATCH] completers: Word completion from frequency lists, in every
+ text field
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Stevia's default completer, hunspell, corrects spelling: "Wortvervo"
+gives "Verantworte", "schreib" nothing. And it only runs where an app
+sets the completion hint, which hardly any app does.
+
+The words completer suggests, from three characters on, the most
+frequent words that start with what was typed, from the lists of
+plinius-words (/usr/share/plinius-words/<lang>.words, NFC, most frequent
+first). Matching ignores case and folds ß to ss; a capital first letter
+typed stays one. Words the user typed at least twice come first, and
+from then on also when they are not in the list (pos-words.c, copied in
+by prepare()). Learned words go to $XDG_DATA_HOME/stevia/words/
+<lang>.learned (0600); GNOME Settings removes them and raises
+org.plinius.keyboard forget-learned-words so a running keyboard forgets
+them too. The list loads in a thread: a layout switch never waits.
+
+The plain US layout says nothing about the language someone writes in,
+so it completes in the session's language when there is a list for it.
+
+With org.plinius.keyboard word-suggestions on (the default) completion
+is enabled in every field of purpose "normal" that is neither hidden
+nor sensitive; off, completion-mode decides as before.
+---
+ src/completers/meson.build           |  27 ++
+ src/completers/pos-completer-words.c | 535 +++++++++++++++++++++++++++
+ src/completers/pos-completer-words.h |  23 ++
+ src/pos-completer-manager.c          |   6 +
+ src/pos-input-surface.c              |  56 +++
+ 5 files changed, 647 insertions(+)
+ create mode 100644 src/completers/pos-completer-words.c
+ create mode 100644 src/completers/pos-completer-words.h
+
+diff --git a/src/completers/meson.build b/src/completers/meson.build
+index 7e0057d..4d19de6 100644
+--- a/src/completers/meson.build
++++ b/src/completers/meson.build
+@@ -94,6 +94,30 @@ else
+   libpos_completer_hunspell_dep = declare_dependency()
+ endif
+ 
++# Plinius: completion from word lists by frequency (plinius-words)
++libpos_completer_words_sources = files(
++  'pos-completer-words.c',
++  'pos-completer-words.h',
++  'pos-words.c',
++  'pos-words.h',
++)
++
++libpos_completer_words_deps = [gio_dep, glib_dep, gtk_dep]
++
++libpos_completer_words_lib = static_library(
++  'pos-completer-words',
++  libpos_completer_words_sources,
++  include_directories: pos_includes,
++  c_args: ['-DPOS_WORDS_DIR="@0@"'.format(datadir / 'plinius-words')],
++  install: false,
++  dependencies: libpos_completer_words_deps,
++)
++
++libpos_completer_words_dep = declare_dependency(
++  include_directories: libpos_completer_includes,
++  link_with: libpos_completer_words_lib,
++)
++
+ if uim_dep.found()
+   # Uim based completer
+   libpos_completer_uim_sources = files('pos-completer-uim.c', 'pos-completer-uim.h')
+@@ -156,6 +180,7 @@ libpos_completers_sources = [
+   libpos_completer_presage_sources,
+   libpos_completer_uim_sources,
+   libpos_completer_varnam_sources,
++  libpos_completer_words_sources,
+ ]
+ 
+ libpos_completer_libs = [
+@@ -165,6 +190,7 @@ libpos_completer_libs = [
+   libpos_completer_presage_lib,
+   libpos_completer_uim_lib,
+   libpos_completer_varnam_lib,
++  libpos_completer_words_lib,
+ ]
+ 
+ libpos_completers_dep = declare_dependency(
+@@ -175,5 +201,6 @@ libpos_completers_dep = declare_dependency(
+     libpos_completer_presage_dep,
+     libpos_completer_uim_dep,
+     libpos_completer_varnam_dep,
++    libpos_completer_words_dep,
+   ],
+ )
+diff --git a/src/completers/pos-completer-words.c b/src/completers/pos-completer-words.c
+new file mode 100644
+index 0000000..e7ea1aa
+--- /dev/null
++++ b/src/completers/pos-completer-words.c
+@@ -0,0 +1,535 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "pos-completer-words"
++
++#include "pos-config.h"
++
++#include "pos-completer-base.h"
++#include "pos-completer-priv.h"
++#include "pos-completer-words.h"
++#include "pos-words.h"
++
++#include <gio/gio.h>
++#include <glib/gstdio.h>
++
++#include <errno.h>
++
++#define MAX_COMPLETIONS 3
++#define MAX_ADDITIONAL_RESULTS 3
++/* Learned words reach the disk this long after the last one */
++#define SAVE_DELAY_S 10
++
++#define KEYBOARD_SCHEMA "org.plinius.keyboard"
++#define FORGET_KEY "forget-learned-words"
++
++enum {
++  PROP_0,
++  PROP_NAME,
++  PROP_PREEDIT,
++  PROP_COMPLETIONS,
++  PROP_MODE_NAME,
++  PROP_MODE_SYMBOL,
++  PROP_MODE_MENU,
++  PROP_MODE_ACTIONS,
++  PROP_LAST_PROP
++};
++static GParamSpec *props[PROP_LAST_PROP];
++
++/**
++ * PosCompleterWords:
++ *
++ * Completes the word being typed from a list of the language's words by frequency
++ * (plinius-words, see pos-words.c): from three characters on, the most frequent words that
++ * start with them, words the user typed often before those. The list loads in a thread, so
++ * a language switch never waits for it; until it is there, nothing is suggested.
++ *
++ * Learned words go to $XDG_DATA_HOME/stevia/words/<lang>.learned. GNOME Settings forgets
++ * them: it removes the files and raises org.plinius.keyboard forget-learned-words.
++ */
++struct _PosCompleterWords {
++  PosCompleterBase  parent;
++
++  char             *name;
++  GString          *preedit;
++  GStrv             completions;
++  guint             max_completions;
++
++  char             *lang;      /* of the list loaded or loading */
++  PosWords         *words;     /* NULL while it loads */
++  GCancellable     *loading;
++  gboolean          dirty;     /* learned words not saved yet */
++  guint             save_id;
++  GSettings        *settings;  /* NULL without the schema */
++};
++
++
++static void pos_completer_words_interface_init (PosCompleterInterface *iface);
++static void pos_completer_words_initable_interface_init (GInitableIface *iface);
++
++G_DEFINE_TYPE_WITH_CODE (PosCompleterWords, pos_completer_words, POS_TYPE_COMPLETER_BASE,
++                         G_IMPLEMENT_INTERFACE (POS_TYPE_COMPLETER,
++                                                pos_completer_words_interface_init)
++                         G_IMPLEMENT_INTERFACE (G_TYPE_INITABLE,
++                                                pos_completer_words_initable_interface_init))
++
++
++static char *
++learned_path (const char *lang)
++{
++  g_autofree char *name = g_strdup_printf ("%s.learned", lang);
++
++  return g_build_filename (g_get_user_data_dir (), "stevia", "words", name, NULL);
++}
++
++
++static void
++save_learned (PosCompleterWords *self)
++{
++  g_autoptr (GError) err = NULL;
++  g_autofree char *path = NULL;
++
++  g_clear_handle_id (&self->save_id, g_source_remove);
++  if (!self->dirty || self->words == NULL)
++    return;
++
++  path = learned_path (self->lang);
++  if (!pos_words_save_learned (self->words, path, &err))
++    g_warning ("Saving learned words failed: %s", err->message);
++  self->dirty = FALSE;
++}
++
++
++static gboolean
++on_save_timeout (gpointer data)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (data);
++
++  self->save_id = 0;
++  save_learned (self);
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++learn (PosCompleterWords *self, const char *word)
++{
++  if (self->words == NULL || !pos_words_learn (self->words, word))
++    return;
++
++  self->dirty = TRUE;
++  g_clear_handle_id (&self->save_id, g_source_remove);
++  self->save_id = g_timeout_add_seconds (SAVE_DELAY_S, on_save_timeout, self);
++}
++
++
++static void
++on_forget_learned_words (PosCompleterWords *self)
++{
++  g_autofree char *path = NULL;
++
++  g_debug ("Forgetting learned words");
++  g_clear_handle_id (&self->save_id, g_source_remove);
++  self->dirty = FALSE;
++  if (self->words)
++    pos_words_forget_learned (self->words);
++  /* GNOME Settings removed them already; a list that was still loading may have read it */
++  if (self->lang) {
++    path = learned_path (self->lang);
++    if (g_unlink (path) != 0 && errno != ENOENT)
++      g_warning ("Removing %s failed: %s", path, g_strerror (errno));
++  }
++}
++
++
++static void
++pos_completer_words_set_completions (PosCompleter *iface, GStrv completions)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (iface);
++  g_auto (GStrv) additional_results = NULL;
++  g_autoptr (GStrvBuilder) builder = g_strv_builder_new ();
++
++  additional_results = pos_completer_base_get_additional_results (POS_COMPLETER_BASE (self),
++                                                                  self->preedit->str,
++                                                                  MAX_ADDITIONAL_RESULTS);
++  if (completions)
++    g_strv_builder_addv (builder, (const char **)completions);
++  if (additional_results)
++    g_strv_builder_addv (builder, (const char **)additional_results);
++  g_strfreev (self->completions);
++  self->completions = g_strv_builder_end (builder);
++
++  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_COMPLETIONS]);
++}
++
++
++static const char *
++pos_completer_words_get_preedit (PosCompleter *iface)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (iface);
++
++  return self->preedit->str;
++}
++
++
++static void
++pos_completer_words_set_preedit (PosCompleter *iface, const char *preedit)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (iface);
++
++  if (g_strcmp0 (self->preedit->str, preedit) == 0)
++    return;
++
++  g_string_truncate (self->preedit, 0);
++  if (preedit) {
++    g_string_append (self->preedit, preedit);
++  } else {
++    g_clear_pointer (&self->completions, g_strfreev);
++    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_COMPLETIONS]);
++  }
++
++  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_PREEDIT]);
++}
++
++
++static void
++pos_completer_words_set_surrounding_text (PosCompleter *iface,
++                                          const char   *before_text,
++                                          const char   *after_text)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (iface);
++
++  pos_completer_base_set_surrounding_text (POS_COMPLETER_BASE (self), before_text, after_text);
++}
++
++
++static gboolean
++pos_completer_words_feed_symbol (PosCompleter *iface, const char *symbol)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (iface);
++  g_autofree char *preedit = g_strdup (self->preedit->str);
++  g_auto (GStrv) completions = NULL;
++
++  if (pos_completer_add_preedit (POS_COMPLETER (self), self->preedit, symbol)) {
++    PosCompleterBase *base = POS_COMPLETER_BASE (self);
++    int before = 0;
++
++    /* Only swap if preedit is 2 characters: symbol + space */
++    if (pos_completer_base_wants_punctuation_swap (base, symbol) && self->preedit->len == 2)
++      before = 1;
++
++    /* The word ends here, as the user typed it */
++    learn (self, preedit);
++
++    g_signal_emit_by_name (self, "commit-string", self->preedit->str, before, 0);
++    pos_completer_words_set_preedit (POS_COMPLETER (self), NULL);
++
++    /* Make sure enter is processed as raw keystroke */
++    if (g_strcmp0 (symbol, "KEY_ENTER") == 0)
++      return FALSE;
++
++    return TRUE;
++  }
++
++  /* preedit didn't change and wasn't committed so we didn't handle it */
++  if (g_strcmp0 (self->preedit->str, preedit) == 0)
++    return FALSE;
++
++  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_PREEDIT]);
++
++  if (self->words)
++    completions = pos_words_complete (self->words, self->preedit->str, self->max_completions);
++  pos_completer_words_set_completions (POS_COMPLETER (self), completions);
++
++  return TRUE;
++}
++
++
++typedef struct {
++  char *list;
++  char *learned;
++} LoadData;
++
++
++static void
++load_data_free (LoadData *data)
++{
++  g_free (data->list);
++  g_free (data->learned);
++  g_free (data);
++}
++
++
++static void
++load_in_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *cancel)
++{
++  LoadData *data = task_data;
++  g_autoptr (PosWords) words = pos_words_new ();
++  g_autoptr (GError) err = NULL;
++
++  if (!pos_words_load_list (words, data->list, &err) ||
++      !pos_words_load_learned (words, data->learned, &err)) {
++    g_task_return_error (task, g_steal_pointer (&err));
++    return;
++  }
++  g_task_return_pointer (task, g_steal_pointer (&words), (GDestroyNotify)pos_words_free);
++}
++
++
++static void
++on_loaded (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (source);
++  g_autoptr (GError) err = NULL;
++  PosWords *words;
++
++  words = g_task_propagate_pointer (G_TASK (res), &err);
++  if (words == NULL) {
++    if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("Loading words failed: %s", err->message);
++    return;
++  }
++  /* The language changed while this one loaded */
++  if (g_task_get_cancellable (G_TASK (res)) != self->loading) {
++    pos_words_free (words);
++    return;
++  }
++
++  g_clear_object (&self->loading);
++  self->words = words;
++  g_debug ("%u words for '%s'", pos_words_get_n_words (words), self->lang);
++}
++
++
++static gboolean
++pos_completer_words_set_language (PosCompleter *completer,
++                                  const char   *lang,
++                                  const char   *region,
++                                  GError      **error)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (completer);
++  g_autofree char *pick = NULL;
++  g_autoptr (GTask) task = NULL;
++  LoadData *data;
++  char *list_name;
++
++  pick = pos_words_pick_language (POS_WORDS_DIR, lang, region, g_get_language_names ());
++  if (pick == NULL) {
++    g_set_error (error, POS_COMPLETER_ERROR, POS_COMPLETER_ERROR_LANG_INIT,
++                 "No word list for %s-%s", lang, region);
++    return FALSE;
++  }
++  if (g_strcmp0 (pick, self->lang) == 0)
++    return TRUE;
++
++  /* The words learned in the language so far go to its file */
++  save_learned (self);
++  g_cancellable_cancel (self->loading);
++  g_clear_object (&self->loading);
++  g_clear_pointer (&self->words, pos_words_free);
++  g_free (self->lang);
++  self->lang = g_steal_pointer (&pick);
++
++  data = g_new0 (LoadData, 1);
++  list_name = g_strdup_printf ("%s.words", self->lang);
++  data->list = g_build_filename (POS_WORDS_DIR, list_name, NULL);
++  g_free (list_name);
++  data->learned = learned_path (self->lang);
++
++  self->loading = g_cancellable_new ();
++  task = g_task_new (self, self->loading, on_loaded, NULL);
++  g_task_set_task_data (task, data, (GDestroyNotify)load_data_free);
++  g_task_set_return_on_cancel (task, TRUE);
++  g_task_run_in_thread (task, load_in_thread);
++
++  return TRUE;
++}
++
++
++static void
++pos_completer_words_set_property (GObject      *object,
++                                  guint         property_id,
++                                  const GValue *value,
++                                  GParamSpec   *pspec)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (object);
++
++  switch (property_id) {
++  case PROP_PREEDIT:
++    pos_completer_words_set_preedit (POS_COMPLETER (self), g_value_get_string (value));
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++
++static void
++pos_completer_words_get_property (GObject    *object,
++                                  guint       property_id,
++                                  GValue     *value,
++                                  GParamSpec *pspec)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (object);
++
++  switch (property_id) {
++  case PROP_NAME:
++    g_value_set_string (value, self->name);
++    break;
++  case PROP_PREEDIT:
++    g_value_set_string (value, self->preedit->str);
++    break;
++  case PROP_COMPLETIONS:
++    g_value_set_boxed (value, self->completions);
++    break;
++  case PROP_MODE_NAME:
++  case PROP_MODE_SYMBOL:
++    g_value_set_string (value, NULL);
++    break;
++  case PROP_MODE_MENU:
++  case PROP_MODE_ACTIONS:
++    g_value_set_object (value, NULL);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++    break;
++  }
++}
++
++
++static void
++pos_completer_words_dispose (GObject *object)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (object);
++
++  save_learned (self);
++  g_cancellable_cancel (self->loading);
++  g_clear_object (&self->loading);
++  g_clear_object (&self->settings);
++
++  G_OBJECT_CLASS (pos_completer_words_parent_class)->dispose (object);
++}
++
++
++static void
++pos_completer_words_finalize (GObject *object)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (object);
++
++  g_clear_pointer (&self->words, pos_words_free);
++  g_clear_pointer (&self->completions, g_strfreev);
++  g_clear_pointer (&self->lang, g_free);
++  g_string_free (self->preedit, TRUE);
++
++  G_OBJECT_CLASS (pos_completer_words_parent_class)->finalize (object);
++}
++
++
++static void
++pos_completer_words_class_init (PosCompleterWordsClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++
++  object_class->get_property = pos_completer_words_get_property;
++  object_class->set_property = pos_completer_words_set_property;
++  object_class->dispose = pos_completer_words_dispose;
++  object_class->finalize = pos_completer_words_finalize;
++
++  g_object_class_override_property (object_class, PROP_NAME, "name");
++  props[PROP_NAME] = g_object_class_find_property (object_class, "name");
++
++  g_object_class_override_property (object_class, PROP_PREEDIT, "preedit");
++  props[PROP_PREEDIT] = g_object_class_find_property (object_class, "preedit");
++
++  g_object_class_override_property (object_class, PROP_COMPLETIONS, "completions");
++  props[PROP_COMPLETIONS] = g_object_class_find_property (object_class, "completions");
++
++  g_object_class_override_property (object_class, PROP_MODE_NAME, "mode-name");
++  props[PROP_MODE_NAME] = g_object_class_find_property (object_class, "mode-name");
++
++  g_object_class_override_property (object_class, PROP_MODE_SYMBOL, "mode-symbol");
++  props[PROP_MODE_SYMBOL] = g_object_class_find_property (object_class, "mode-symbol");
++
++  g_object_class_override_property (object_class, PROP_MODE_MENU, "mode-menu");
++  props[PROP_MODE_MENU] = g_object_class_find_property (object_class, "mode-menu");
++
++  g_object_class_override_property (object_class, PROP_MODE_ACTIONS, "mode-actions");
++  props[PROP_MODE_ACTIONS] = g_object_class_find_property (object_class, "mode-actions");
++}
++
++
++static gboolean
++pos_completer_words_initable_init (GInitable    *initable,
++                                   GCancellable *cancelable,
++                                   GError      **error)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (initable);
++  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
++  g_autoptr (GSettingsSchema) schema = NULL;
++
++  if (source)
++    schema = g_settings_schema_source_lookup (source, KEYBOARD_SCHEMA, TRUE);
++  if (schema && g_settings_schema_has_key (schema, FORGET_KEY)) {
++    self->settings = g_settings_new (KEYBOARD_SCHEMA);
++    g_signal_connect_swapped (self->settings, "changed::" FORGET_KEY,
++                              G_CALLBACK (on_forget_learned_words), self);
++  }
++
++  return pos_completer_words_set_language (POS_COMPLETER (self),
++                                           POS_COMPLETER_DEFAULT_LANG,
++                                           POS_COMPLETER_DEFAULT_REGION,
++                                           error);
++}
++
++
++static void
++pos_completer_words_initable_interface_init (GInitableIface *iface)
++{
++  iface->init = pos_completer_words_initable_init;
++}
++
++
++static const char *
++pos_completer_words_get_name (PosCompleter *iface)
++{
++  PosCompleterWords *self = POS_COMPLETER_WORDS (iface);
++
++  return self->name;
++}
++
++
++static void
++pos_completer_words_interface_init (PosCompleterInterface *iface)
++{
++  iface->get_name = pos_completer_words_get_name;
++  iface->feed_symbol = pos_completer_words_feed_symbol;
++  iface->get_preedit = pos_completer_words_get_preedit;
++  iface->set_preedit = pos_completer_words_set_preedit;
++  iface->set_surrounding_text = pos_completer_words_set_surrounding_text;
++  iface->set_language = pos_completer_words_set_language;
++}
++
++
++static void
++pos_completer_words_init (PosCompleterWords *self)
++{
++  self->max_completions = MAX_COMPLETIONS;
++  self->preedit = g_string_new (NULL);
++  self->name = "words";
++}
++
++/**
++ * pos_completer_words_new:
++ * err: An error location
++ *
++ * Returns:(transfer full): A new completer
++ */
++PosCompleter *
++pos_completer_words_new (GError **err)
++{
++  return POS_COMPLETER (g_initable_new (POS_TYPE_COMPLETER_WORDS, NULL, err, NULL));
++}
+diff --git a/src/completers/pos-completer-words.h b/src/completers/pos-completer-words.h
+new file mode 100644
+index 0000000..428d0db
+--- /dev/null
++++ b/src/completers/pos-completer-words.h
+@@ -0,0 +1,23 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "pos-completer-base.h"
++#include "pos-completer.h"
++
++#include <glib-object.h>
++
++G_BEGIN_DECLS
++
++#define POS_TYPE_COMPLETER_WORDS (pos_completer_words_get_type ())
++
++G_DECLARE_FINAL_TYPE (PosCompleterWords, pos_completer_words, POS, COMPLETER_WORDS,
++                      PosCompleterBase)
++
++PosCompleter *pos_completer_words_new (GError **error);
++
++G_END_DECLS
+diff --git a/src/pos-completer-manager.c b/src/pos-completer-manager.c
+index bccccb8..e4b475a 100644
+--- a/src/pos-completer-manager.c
++++ b/src/pos-completer-manager.c
+@@ -13,6 +13,7 @@
+ #include "pos-completer-manager.h"
+ #include "completers/pos-completer-presage.h"
+ #include "completers/pos-completer-pipe.h"
++#include "completers/pos-completer-words.h"
+ #ifdef POS_HAVE_FZF
+ # include "completers/pos-completer-fzf.h"
+ #endif
+@@ -94,6 +95,11 @@ init_completer (PosCompleterManager *self, const char *name, GError **err)
+     if (completer)
+       goto done;
+     return NULL;
++  } else if (g_strcmp0 (name, "words") == 0) {
++    completer = pos_completer_words_new (err);
++    if (completer)
++      goto done;
++    return NULL;
+ #ifdef POS_HAVE_PRESAGE
+   } else if (g_strcmp0 (name, "presage") == 0) {
+     completer = pos_completer_presage_new (err);
+diff --git a/src/pos-input-surface.c b/src/pos-input-surface.c
+index 16b20da..3fea7ed 100644
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -197,6 +197,9 @@ struct _PosInputSurface {
+   /* Keymap handling */
+   guint                       keymap_delayed_id;
+ 
++  /* Plinius: word suggestions in every field (org.plinius.keyboard word-suggestions) */
++  GSettings                  *words_settings;
++
+   /* Speech to text through plinius-dictated (org.plinius.Dictate1) */
+   GSettings                  *dictate_settings;  /* NULL without plinius-dictate */
+   GDBusConnection            *session_bus;
+@@ -1621,6 +1624,33 @@ on_im_text_change_cause_changed (PosInputSurface *self, GParamSpec *pspec, PosIn
+ }
+ 
+ 
++/* zwp_text_input_v3 content hints: the input method's hint holds the protocol's bits */
++#define WORDS_HINT_HIDDEN_TEXT    0x40
++#define WORDS_HINT_SENSITIVE_DATA 0x80
++
++/*
++ * Plinius: word suggestions in every field of purpose "normal" (org.plinius.keyboard
++ * word-suggestions), not only where an app asks for them, which hardly any does. A hidden or
++ * sensitive field never gets them: the words completer learns what it completes. Returns
++ * whether the setting decides; switched off, Stevia's completion-mode does.
++ */
++static gboolean
++update_word_suggestions (PosInputSurface *self)
++{
++  guint hint = 0;
++
++  if (!g_settings_get_boolean (self->words_settings, "word-suggestions"))
++    return FALSE;
++
++  if (self->input_method)
++    hint = pos_input_method_get_hint (self->input_method);
++  pos_input_surface_set_completion_enabled (self,
++                                            !(hint & (WORDS_HINT_HIDDEN_TEXT |
++                                                      WORDS_HINT_SENSITIVE_DATA)));
++  return TRUE;
++}
++
++
+ static void
+ on_im_hint_changed (PosInputSurface *self, GParamSpec *pspec, PosInputMethod *im)
+ {
+@@ -1631,6 +1661,8 @@ on_im_hint_changed (PosInputSurface *self, GParamSpec *pspec, PosInputMethod *im
+ 
+   g_debug ("Hint changed: 0x%.2x", pos_input_method_get_hint (im));
+   update_dictation (self);
++  if (update_word_suggestions (self))
++    return;
+   if ((self->completion_mode & PHOSH_OSK_COMPLETION_MODE_HINT) == 0)
+     return;
+ 
+@@ -2315,6 +2347,7 @@ pos_input_surface_finalize (GObject *object)
+   g_cancellable_cancel (self->dictate_cancel);
+   g_clear_object (&self->dictate_cancel);
+   g_clear_object (&self->dictate_settings);
++  g_clear_object (&self->words_settings);
+   g_clear_handle_id (&self->dictate_idle_id, g_source_remove);
+   g_clear_handle_id (&self->dictate_tail_id, g_source_remove);
+   g_clear_pointer (&self->dictate_activity, g_free);
+@@ -2911,6 +2944,9 @@ on_completion_mode_changed (PosInputSurface *self, const char *key, GSettings *s
+ 
+   self->completion_mode = mode;
+ 
++  if (update_word_suggestions (self))
++    return;
++
+   /* In manual mode we don't interfere with the user's choice */
+   if (self->completion_mode & PHOSH_OSK_COMPLETION_MODE_MANUAL)
+     return;
+@@ -2929,6 +2965,23 @@ on_completion_mode_changed (PosInputSurface *self, const char *key, GSettings *s
+ }
+ 
+ 
++/* Plinius: word suggestions switched on or off in GNOME Settings */
++static void
++on_word_suggestions_changed (PosInputSurface *self)
++{
++  gboolean enable = FALSE;
++
++  if (update_word_suggestions (self))
++    return;
++
++  /* Back to Stevia's own completion mode: in manual mode off until switched on in the menu */
++  if ((self->completion_mode & PHOSH_OSK_COMPLETION_MODE_MANUAL) == 0 &&
++      (self->completion_mode & PHOSH_OSK_COMPLETION_MODE_HINT) && self->input_method)
++    enable = !!(pos_input_method_get_hint (self->input_method) & POS_INPUT_METHOD_HINT_COMPLETION);
++  pos_input_surface_set_completion_enabled (self, enable);
++}
++
++
+ static void
+ speech_input_change_state (GSimpleAction *action, GVariant *state, gpointer user_data)
+ {
+@@ -3060,6 +3113,9 @@ pos_input_surface_init (PosInputSurface *self)
+   self->xkbinfo = gnome_xkb_info_new ();
+   self->input_settings = g_settings_new ("org.gnome.desktop.input-sources");
+   self->osk_settings = g_settings_new ("mobi.phosh.osk");
++  self->words_settings = g_settings_new ("org.plinius.keyboard");
++  g_signal_connect_swapped (self->words_settings, "changed::word-suggestions",
++                            G_CALLBACK (on_word_suggestions_changed), self);
+   setup_dictation (self);
+   g_signal_connect_swapped (self->osk_settings, "changed::completion-mode",
+                             G_CALLBACK (on_completion_mode_changed),

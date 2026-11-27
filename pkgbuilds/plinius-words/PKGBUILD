@@ -1,0 +1,52 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=plinius-words
+pkgver=2018
+pkgrel=1
+pkgdesc="Word lists for the on-screen keyboard's word completion, by frequency, in the phone's languages"
+arch=(any)
+url="https://github.com/hermitdave/FrequencyWords"
+# The counts: OpenSubtitles 2018 by Hermit Dave (content CC-BY-SA 4.0); make-words.py: MIT
+license=(CC-BY-SA-4.0 MIT)
+# Each word gets its written case from hunspell ("Bahnhof", "hallo"); Arch has no Portuguese
+# dictionary, so that list stays in lower case
+makedepends=(hunspell hunspell-de hunspell-en_us hunspell-es_es hunspell-fr-comprehensive
+	hunspell-it hunspell-nl hunspell-pl hunspell-ru python)
+# Commit of FrequencyWords: the 2018 lists by a hash, not a branch
+_commit=525f9b560de45753a5ea01069454e72e9aa541c6
+# <language>:<hunspell dictionary, "-" for none>
+_langs=(de:de_DE en:en_US es:es_ES fr:fr_FR it:it_IT nl:nl_NL pl:pl_PL pt:- ru:ru_RU)
+source=(make-words.py LICENSE)
+for _l in "${_langs[@]}"; do
+	source+=("${_l%%:*}_50k-$_commit.txt::https://raw.githubusercontent.com/hermitdave/FrequencyWords/$_commit/content/2018/${_l%%:*}/${_l%%:*}_50k.txt")
+done
+sha256sums=('SKIP'
+	'SKIP'
+	'd9e50546fd7e8b6fe6542a2b33c51d1331092b2a3916ec09f80d97856068705b'
+	'5351ff405b1126ef555791dd4d9798a48e3e9a501a9fc481a9da957752cfb458'
+	'dcff3ad4316192f4dc4ff7d26e637c6ff314ef1ca0f3f720c5649018a71056c0'
+	'f81f7c570b6433764da99aa30f4dfb08d81c5926301377b709af23a13b1f9596'
+	'bb96cdcb56d28342c1e909db6b2525448b7767136b7e86a2ccc649a1be66fc19'
+	'099bd0c27b514d54284360ad9ce2b4ef7b6903b22e848b67ab10f6aa2adb4baa'
+	'50bf8d30d1ed4f5cedceb3e40e74d793ec6bec0f16d9f3dd0a2c9e313402e10f'
+	'f97704382f97273ff59488b1885e7ac90d20f81fd92e5fbad3e3ce43633f495c'
+	'6095f507cc167488ec66ada5a85ac50433503a08ad24a07c6eabdf54352c4e7f')
+
+build() {
+	local _l _lang _dict
+	mkdir -p words
+	for _l in "${_langs[@]}"; do
+		_lang=${_l%%:*}
+		_dict=${_l#*:}
+		if [[ $_dict == - ]]; then
+			python3 make-words.py "${_lang}_50k-$_commit.txt" "words/$_lang.words"
+		else
+			python3 make-words.py "${_lang}_50k-$_commit.txt" "words/$_lang.words" "/usr/share/hunspell/$_dict"
+		fi
+	done
+}
+
+package() {
+	install -Dm644 words/*.words -t "$pkgdir/usr/share/plinius-words"
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

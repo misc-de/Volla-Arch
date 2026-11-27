@@ -2,7 +2,7 @@
 
 pkgname=stevia-plinius
 pkgver=0.59.0
-pkgrel=5
+pkgrel=6
 pkgdesc="On-screen keyboard for Phosh, in its original look or the glass look of the password prompt at startup"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 url="https://gitlab.gnome.org/World/Phosh/stevia"
@@ -11,12 +11,14 @@ license=(GPL-3.0-or-later)
 depends=(
 	cairo dconf feedbackd gdk-pixbuf2 glib2 glibc gnome-desktop gst-plugins-base-libs gstreamer
 	gtk3 hunspell json-glib libgcc libhandy libsoup3 pango systemd-libs wayland
-	# The word suggestions' default completer is hunspell in en_US: without that dictionary
-	# Stevia has no completer at all ("Failed to find dictionary for en-us"), also with
-	# completion-mode on
+	# Word suggestions: the lists of the words completer (0015)
+	plinius-words
+	# The fallback completer is hunspell in en_US: without that dictionary Stevia has no
+	# completer at all ("Failed to find dictionary for en-us"), also with completion-mode on
 	hunspell-en_us
 )
-# Suggestions for the other layouts, found by language and region (de_DE.dic, fr_FR.dic, …)
+# hunspell's spelling suggestions for the other layouts (de_DE.dic, fr_FR.dic, …), if someone
+# picks the hunspell completer instead of the words one
 optdepends=(
 	'hunspell-de: word suggestions in German'
 	'hunspell-es_es: word suggestions in Spanish'
@@ -47,6 +49,10 @@ source=(
 	0012-osk-Hold-the-microphone-key-to-dictate.patch
 	0013-osk-The-microphone-key-buzzes-once-it-really-listens.patch
 	0014-input-surface-No-settings-from-the-keyboard-of-a-greeter.patch
+	0015-completers-Word-completion-from-frequency-lists.patch
+	pos-words.c
+	pos-words.h
+	50_stevia-plinius.gschema.override
 	org.plinius.keyboard.gschema.xml
 	plinius-osk-early.conf
 )
@@ -65,7 +71,11 @@ sha256sums=('SKIP'
 	'11e65c1995b4e8f900611c9b70d602118523406c9c33d79797bcd1c5a8d6650b'
 	'dc8731dc68bb3150c1cee73b332050223d7b970c9e42e089a8e3025a2316dfbf'
 	'e5e688b346b4e8204650f4e4ea8ae6283258453208ec73a8c136bbfb6adb9237'
-	'cdbf2c08e95163949eb6dda269f97818186c5141260f9209a75824eac2b21255'
+	'e1ddc182d22412d1c135357c7862e41d6dddbcb5ebcaa9fe8ba43568559e8319'
+	'acc1b697667b3d1695a4c829d81daa3eb7a89eda82ff628be63747e48d00517b'
+	'2933176794df69a26f94be67b1022886bcb2d26b51a45d8461c78797a1428255'
+	'199c612534cd0398d36df95205b8297379ab082a2ded896ca2fb93853fbe1b3e'
+	'7a075ad888e6d9166d694097cbab6f82a5cd126ad9f486106d3a643c4a77fd2d'
 	'f55d428789634f71686d1e755aef6872d4325c18e1e4bffd78a0fd0bc3f6781e')
 
 prepare() {
@@ -104,6 +114,10 @@ prepare() {
 	# No settings from the keyboard's menu in a greeter: its session is never locked, yet
 	# nobody has logged in (plinius-greeter)
 	patch -d stevia -Np1 -i "$srcdir/0014-input-surface-No-settings-from-the-keyboard-of-a-greeter.patch"
+	# Word completion from plinius-words' lists by frequency, in every field of purpose
+	# "normal"; the core (pos-words.c, tested on its own in tests/desktop) goes in beside it
+	cp "$srcdir/pos-words.c" "$srcdir/pos-words.h" stevia/src/completers/
+	patch -d stevia -Np1 -i "$srcdir/0015-completers-Word-completion-from-frequency-lists.patch"
 }
 
 build() {
@@ -118,6 +132,8 @@ package() {
 	meson install -C build --destdir "$pkgdir"
 	# Look of the keyboard; GNOME Settings shows its choice only with this schema
 	install -Dm644 "$srcdir/org.plinius.keyboard.gschema.xml" -t "$pkgdir/usr/share/glib-2.0/schemas"
+	# The words completer (0015) as Stevia's default
+	install -Dm644 "$srcdir/50_stevia-plinius.gschema.override" -t "$pkgdir/usr/share/glib-2.0/schemas"
 	# Pulled in along with Phosh, see 0007
 	install -Dm644 "$srcdir/plinius-osk-early.conf" -t "$pkgdir/usr/lib/systemd/user/mobi.phosh.Shell.service.d"
 }

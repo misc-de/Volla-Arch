@@ -559,11 +559,12 @@ def test_service_start_records_and_stop_ends(service):
     assert "own-name session org.plinius.Dictate1" in out
     assert "register /org/plinius/Dictate1 org.plinius.Dictate1" in out
     assert "reply Start ok ()" in out
-    # pw-record: 16 kHz mono float32 to stdout, as voice input
+    # pw-record: 16 kHz mono float32 to stdout, as voice input, from the phone's microphone (never a
+    # Bluetooth headset's source, which would switch it to hands-free)
     log = [line.split(" ", 2)[2] if line.startswith("start ") else line.split()[0]
            for line in (d / "pw.log").read_text().splitlines()]
     assert log[0].startswith("--raw --rate 16000 --channels 1 --format f32 --media-role Communication "
-                             "--latency 64ms -P")
+                             "--latency 64ms --target hal_input -P")
     assert log[0].endswith(" -")
     started, other_stop, stopped = states(out)[1:]
     assert started["client"] == ":1.42" and started["recording"] == "1" and started["state"] == "listening"

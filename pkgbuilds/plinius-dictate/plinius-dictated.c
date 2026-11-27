@@ -41,6 +41,8 @@
 #define VAD_MODEL DATA_DIR "/silero_vad_v5.onnx"
 
 #define SAMPLE_RATE 16000
+/* The phone's microphone: the source audio-hal-bridge makes of the HAL's input */
+#define MICROPHONE "hal_input"
 /* Silero VAD works on windows of 512 samples (32 ms) at 16 kHz */
 #define VAD_WINDOW 512
 /* Stop listening by itself after this much silence (seconds) */
@@ -451,11 +453,17 @@ on_silence_check (gpointer data)
 static gboolean
 start_recording (Dictate *d, GError **error)
 {
-  /* Raw 16 kHz mono float32 to stdout; the role marks it as voice input for the session */
+  /*
+   * Raw 16 kHz mono float32 to stdout; the role marks it as voice input for the session.
+   * Always the phone's own microphone (the HAL's input, also a wired headset's): the default
+   * source of a Bluetooth headset or car kit would switch it from music to hands-free for
+   * every dictation, and its microphone only opens about a second later, while the user
+   * already speaks into the phone that shows the keyboard.
+   */
   d->recorder = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_PIPE, error,
                                   "pw-record", "--raw", "--rate", "16000", "--channels", "1",
                                   "--format", "f32", "--media-role", "Communication",
-                                  "--latency", "64ms",
+                                  "--latency", "64ms", "--target", MICROPHONE,
                                   "-P", "{ application.name = \"Dictation\" node.description = \"Dictation\" }",
                                   "-", NULL);
   if (d->recorder == NULL)

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Plinius: look of the on-screen keyboard (stevia-plinius), set in GNOME Settings > Keyboard -->
+<!-- Plinius: look and word suggestions of the on-screen keyboard (stevia-plinius), set in GNOME
+     Settings > Keyboard -->
 <schemalist>
   <schema id="org.plinius.keyboard" path="/org/plinius/keyboard/">
     <key name="style" type="s">
@@ -13,6 +14,23 @@
         "original": Stevia's own dark keys. "glass": the look of the password prompt at startup,
         glass keys over the blurred wallpaper with wider character keys. High contrast always
         uses Stevia's high contrast look.
+      </description>
+    </key>
+    <key name="word-suggestions" type="b">
+      <default>true</default>
+      <summary>Word suggestions in every text field</summary>
+      <description>
+        Suggest words while typing in every text field of purpose "normal", not only where an
+        app asks for them. Hidden and sensitive fields never get suggestions. Off, Stevia's own
+        completion-mode (mobi.phosh.osk) decides.
+      </description>
+    </key>
+    <key name="forget-learned-words" type="u">
+      <default>0</default>
+      <summary>Raised to forget the learned words</summary>
+      <description>
+        The keyboard learns words typed in fields with suggestions. GNOME Settings removes the
+        learned words and raises this number, so a running keyboard forgets them too.
       </description>
     </key>
   </schema>

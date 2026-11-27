@@ -1,0 +1,4 @@
+# Plinius: word completion from plinius-words (0015) instead of hunspell, which only corrects
+# spelling; hunspell stays the fallback when no list is there
+[mobi.phosh.osk.Completers]
+default='words'
