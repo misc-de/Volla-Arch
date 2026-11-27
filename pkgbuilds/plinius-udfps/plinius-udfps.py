@@ -57,7 +57,11 @@ ACCENT = (0.21, 0.52, 0.89)
 # Glow and the beam's sweep reach this far up and down, in sensor radii (clear of "Slide up to
 # unlock" above)
 GLOW_REACH = 1.4
-# The beam reaches this far to the sides, fading out, so it shows beside the finger
+# The beam reaches this far beyond the ring to the sides, so it shows beside the finger; it
+# fades out over the outer part of that
+BEAM_BEYOND_MM = 10
+BEAM_FADE = 0.4
+# Without the panel's physical size: this far, in sensor radii
 BEAM_REACH = 2.2
 # One sweep of the beam from the top of the glow to its bottom: the sensor often knows the
 # finger after about 0.4 s
@@ -157,10 +161,11 @@ def beam_offset(phase, reach):
     return reach * (2 * ease - 1)
 
 
-def draw_beam(cr, left, right, y, trail, rgb, alpha, fade=False):
+def draw_beam(cr, left, right, y, trail, rgb, alpha, full=None):
     """A line at y with a trail fading out upwards, from left to right (clipped by the caller);
-    with fade it also fades out towards both ends."""
-    if fade:
+    with full (half a width around the middle) it is at full light only there and fades out
+    towards both ends."""
+    if full is not None:
         cr.push_group()
     gradient = cairo.LinearGradient(0, y - trail, 0, y)
     gradient.add_color_stop_rgba(0, *rgb, 0)
@@ -172,13 +177,13 @@ def draw_beam(cr, left, right, y, trail, rgb, alpha, fade=False):
     cr.rectangle(left, y - width / 2, right - left, width)
     cr.set_source_rgba(*rgb, alpha)
     cr.fill()
-    if fade:
+    if full is not None:
         cr.pop_group_to_source()
+        edge = max(0.0, min(0.5, 0.5 - full / (right - left)))
         ends = cairo.LinearGradient(left, 0, right, 0)
-        # Full light beside the finger, out only in the outer part
         ends.add_color_stop_rgba(0, 0, 0, 0, 0)
-        ends.add_color_stop_rgba(0.15, 0, 0, 0, 1)
-        ends.add_color_stop_rgba(0.85, 0, 0, 0, 1)
+        ends.add_color_stop_rgba(edge, 0, 0, 0, 1)
+        ends.add_color_stop_rgba(1 - edge, 0, 0, 0, 1)
         ends.add_color_stop_rgba(1, 0, 0, 0, 0)
         cr.mask(ends)
 
@@ -218,13 +223,20 @@ class Glow(Gtk.Window):
         r = size / 2
         return left + r, height - bottom - r, r
 
+    def beam_reach(self, r):
+        """How far the beam reaches to each side of the sensor centre and how far of that at
+        full light: BEAM_BEYOND_MM beyond the ring on the panel."""
+        mm = self.target.px_per_mm
+        wide = r + BEAM_BEYOND_MM * mm if mm else BEAM_REACH * r
+        return wide, r + (1 - BEAM_FADE) * (wide - r)
+
     def queue_beam(self):
         """Redraw only around the sensor, where the beam moves."""
         if self.target.disc is None:
             return
         cx, cy, r = self.sensor(self.area.get_allocated_height())
         # The beam's trail reaches above the glow's top by up to 0.6 r
-        wide = math.ceil(BEAM_REACH * r) + 2
+        wide = math.ceil(self.beam_reach(r)[0]) + 2
         high = math.ceil((GLOW_REACH + 0.6) * r) + 2
         self.area.queue_draw_area(int(cx - wide), int(cy - high), 2 * wide, 2 * high)
 
@@ -238,7 +250,7 @@ class Glow(Gtk.Window):
             return False
         cx, cy, r = self.sensor(widget.get_allocated_height())
         reach = GLOW_REACH * r
-        wide = BEAM_REACH * r
+        wide, full = self.beam_reach(r)
         # The sensor shows through: the target draws it, above or below the veil (its white
         # circle ends a pixel inside its edge)
         hole = r - 1
@@ -260,7 +272,7 @@ class Glow(Gtk.Window):
         cr.set_source(glow)
         cr.fill()
         draw_beam(cr, cx - wide, cx + wide, cy + beam_offset(self.target.scan_phase(), reach),
-                  r * 0.6, ACCENT, BEAM_AROUND_ALPHA, fade=True)
+                  r * 0.6, ACCENT, BEAM_AROUND_ALPHA, full=full)
         cr.restore()
         return False
 
@@ -282,6 +294,8 @@ class Target(Gtk.Window):
         self.scan_start = 0
         # Left and bottom margin and size of the circle in logical pixels, set by place()
         self.disc = None
+        # Logical pixels per millimetre on the panel, None if it has no physical size
+        self.px_per_mm = None
 
         GtkLayerShell.init_for_window(self)
         GtkLayerShell.set_namespace(self, "plinius-udfps")
@@ -342,6 +356,8 @@ class Target(Gtk.Window):
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, left)
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.BOTTOM, bottom)
         self.disc = (left, bottom, size)
+        width_mm = monitor.get_width_mm()
+        self.px_per_mm = geometry.width / width_mm if width_mm > 0 else None
         return True
 
     # ---- biomd state ----

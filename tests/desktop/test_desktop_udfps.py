@@ -336,6 +336,7 @@ def target(mod, monkeypatch, monitors=None, x=540, y=2100, r=90, panel=(1080, 24
     t.tick = 0
     t.scan_start = 0
     t.disc = None
+    t.px_per_mm = None
     t.area = Area()
     t.visible = None
     t.hide = lambda: setattr(t, "visible", False)
@@ -355,6 +356,7 @@ def test_place_in_logical_pixels_on_the_phones_panel(mod, monkeypatch):
     assert t.area.size == (90, 90)
     assert t.shell.margins == {"left": 225, "bottom": 105}
     assert t.disc == (225, 105, 90)
+    assert t.px_per_mm == pytest.approx(540 / 68)  # from the panel's physical width
     assert t.shell.monitor is t.get_display().monitors[1]
     # The veil goes on the same screen
     assert t.shell.monitors[t.glow] is t.get_display().monitors[1]
@@ -372,6 +374,7 @@ def test_place_falls_back_to_the_primary_monitor(mod, monkeypatch):
     t.get_display().primary = primary
     assert mod.Target.place(t) is True
     assert t.shell.monitor is primary and t.area.size == (60, 60)
+    assert t.px_per_mm is None  # no physical size
 
 
 def test_place_tiny_sensor_keeps_a_pixel(mod, monkeypatch):
@@ -592,14 +595,16 @@ def test_enrollment_progress_is_drawn(mod, monkeypatch):
 
 # ----- the veil -----
 
-def glow(mod, monkeypatch, disc=(60, 100, 80), alpha=0.5, phase_ms=0, glib=None):
+def glow(mod, monkeypatch, disc=(60, 100, 80), alpha=0.5, phase_ms=0, glib=None, mm=4.0):
     g = mod.Glow.__new__(mod.Glow)
     t = bind(mod, target(mod, monkeypatch))
     t.disc = disc
+    t.px_per_mm = mm
     t.scan_start = glib.now_us
     glib.advance_ms(phase_ms)
     g.target, g.alpha = t, alpha
     g.area = Area(200, 400)
+    g.beam_reach = mod.Glow.beam_reach.__get__(g)
     return g
 
 
@@ -642,10 +647,21 @@ def test_beam_shows_beside_the_finger_and_fades_out(mod, monkeypatch, glib):
     # Halfway through the sweep, at the centre's height, well beside the glow
     g = glow(mod, monkeypatch, alpha=0, phase_ms=mod.SCAN_PERIOD_US / 2000, glib=glib)
     pixel = draw_glow(mod, g)
-    near, far = pixel(160, 260), pixel(185, 260)
-    assert near[2] > near[0] and near[3] > 128
+    # 4 px per mm: the beam reaches 40 beyond the ring (radius 40), full light up to 64
+    near, far = pixel(160, 260), pixel(175, 260)
+    assert near[2] > near[0] and near[3] > 200
     assert 0 < far[3] < near[3]  # fading out towards the end
-    assert pixel(199, 260)[3] == 0 and pixel(160, 200) == (0, 0, 0, 0)  # beyond: nothing
+    assert pixel(183, 260)[3] == 0 and pixel(160, 200) == (0, 0, 0, 0)  # beyond: nothing
+
+
+def test_beam_reach_from_the_panel_size(mod, monkeypatch, glib):
+    g = glow(mod, monkeypatch, glib=glib, mm=5.6)
+    wide, full = g.beam_reach(30)
+    assert wide == pytest.approx(30 + 10 * 5.6)
+    assert full == pytest.approx(30 + 0.6 * 56)
+    # Without a physical size: in sensor radii
+    g.target.px_per_mm = None
+    assert g.beam_reach(30)[0] == pytest.approx(30 * mod.BEAM_REACH)
 
 
 def test_veil_before_the_target_was_placed(mod, monkeypatch, glib):
@@ -659,9 +675,9 @@ def test_veil_before_the_target_was_placed(mod, monkeypatch, glib):
 def test_veil_redraws_only_around_the_sensor(mod, monkeypatch, glib):
     g = glow(mod, monkeypatch, glib=glib)
     g.queue_beam()
-    # Centre (100, 260), radius 40: the beam 88 to the sides, glow and trail 80 up and down,
+    # Centre (100, 260), radius 40: the beam 80 to the sides, glow and trail 80 up and down,
     # 2 to spare
-    assert g.area.areas == [(10, 178, 180, 164)]
+    assert g.area.areas == [(18, 178, 164, 164)]
 
 
 # ----- following biomd -----

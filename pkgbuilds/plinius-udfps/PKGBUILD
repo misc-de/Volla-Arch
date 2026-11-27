@@ -2,7 +2,7 @@
 
 pkgname=plinius-udfps
 pkgver=0.1
-pkgrel=5
+pkgrel=6
 pkgdesc="Touch target and light for a fingerprint sensor under the display (biomd)"
 arch=(any)
 license=(MIT)
@@ -11,7 +11,7 @@ depends=(python python-gobject python-cairo gtk3 gtk-layer-shell 'biomd>=1.4.0.2
 source=(plinius-udfps.py
 	plinius-udfps.desktop
 	LICENSE)
-sha256sums=('0ebfd00ef27925a8fc0ec9f80f324ed14b62db1da2fd9d3b15c97fc7d08c5eba'
+sha256sums=('1b74b47c2db4f2554690a9851d94554b827eb6c511921db0105a238b41fd9744'
 	'f30e609b28afde0e8491d86c6d60945ff9948c2085ef124803f699374bb1f5e5'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
