@@ -1,0 +1,12 @@
+[Unit]
+Description=Android's screen in the Waydroid container follows the phone's lock
+# Started with the container service (its drop-in wants it) and stopped with it
+PartOf=waydroid-container.service
+After=waydroid-container.service
+
+[Service]
+ExecStart=/usr/lib/waydroid-plinius/waydroid-plinius-screen
+Restart=on-failure
+RestartSec=5
+# Its lines (lock, unlock) reach the journal, which stores notice and above
+SyslogLevel=notice

@@ -1,0 +1,84 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on Arch's waydroid 1.6.3-1 (George Hu)
+
+pkgname=waydroid-plinius
+_pkgname=waydroid
+pkgver=1.6.3
+pkgrel=7
+pkgdesc="A container-based approach to boot a full Android system on a regular Linux system (Plinius: the phone's devices and NFC stay as they are, Android gets the phone's hardware through the HAL bridges)"
+arch=('any')
+url="https://waydro.id/"
+license=('GPL-3.0-or-later' 'MIT')
+depends=(
+	'lxc'
+	'python'
+	'python-gbinder>=1.3.0'
+	'python-gobject'
+	'nftables'
+	'dnsmasq'
+	'gtk3'
+	'python-dbus'
+	'pulse-native-provider'
+	# The battery and NFC for Android: only of use with Waydroid
+	'health-hal-bridge'
+	'nfc-hal-bridge'
+)
+optdepends=('python-pyclip: clipboard manager support')
+provides=("waydroid=$pkgver")
+conflicts=(waydroid)
+install=waydroid-plinius.install
+# Commit of tag 1.6.3: a tag can be moved later, a commit hash cannot
+_commit=5b7e2e71be3f6bfaaaab3b461251dacaf1ce4991
+source=("$_pkgname::git+https://github.com/waydroid/waydroid.git#commit=$_commit"
+	0001-container-On-Halium-keep-the-vendor-s-device-permiss.patch
+	0002-container-On-Halium-never-stop-the-host-s-nfcd.patch
+	0003-images-Option-to-keep-the-image-s-EGL-libraries.patch
+	waydroid-plinius-setup
+	waydroid-plinius-screen
+	waydroid-plinius-screen.service
+	50-plinius.conf
+	display_settings.xml
+	plinius-sensors.xml
+	plinius-gnss.xml
+	plinius-vibrator.xml
+	plinius-health.xml
+	plinius-nfc.xml)
+sha256sums=('SKIP'
+	'acf376524ff8f586460bb917ce9e752e53d503a3626de688636e1ac614617202'
+	'6f23a1ac583a14d1c9dfdefc5432cd1c46f7445e4d0a63633f2acee57a2a05d3'
+	'f77829d534732caaefa39147ba809ee709bc5a45df25d4d8f05015f44b9a82ad'
+	'66057faa6b4a8017461921f135916c51487075d21f41e9c27a08924f544338cc'
+	'cf101b66a70ba8b8e1c8b7ef36ab1969b7f97473d53ab396c81e179aa1209e2e'
+	'1d436c8a47f8891a4f3496fb94ca269143bbac910e0f34ebd7a4aa9aace98ccd'
+	'a616fa53ed9ce2a6cd783e96d96d0564fe048d342c9050a9aeea2a0479bd0f6d'
+	'5eee68d553baf9f2f4c2214c6d1a146f38c4a5a376d8b64dbc894f0e783797a1'
+	'a34c61ca80fe9ac73ffaac0ca95c9fbe0fce1665d8f32554aef60d3b1899593d'
+	'3a6d92171607fe70d09e920d8863e8076718ef09f9435e796fdd7e092fc7abf7'
+	'8014f2ab122048c6b0b94f224a28680fc85f64da180400c09c7c312af3a08cf6'
+	'7ae05ae479f7c3292e0bb43f8c761331789eb26b65556236f9b0b17ea50a8a4e'
+	'2623c9a30df1bc691c5adfb45fefff41596c9a8c2ec529e7e939c1b26d6fd791')
+
+prepare() {
+	# On Halium the vendor's device permissions stay (no 777 on media, graphics and DMA heap nodes)
+	patch -d "$_pkgname" -Np1 -i "$srcdir/0001-container-On-Halium-keep-the-vendor-s-device-permiss.patch"
+	# On Halium the phone's own nfcd keeps running
+	patch -d "$_pkgname" -Np1 -i "$srcdir/0002-container-On-Halium-never-stop-the-host-s-nfcd.patch"
+	# bind_host_egl = False keeps the image's EGL libraries (software rendering without the
+	# vendor's graphics HALs)
+	patch -d "$_pkgname" -Np1 -i "$srcdir/0003-images-Option-to-keep-the-image-s-EGL-libraries.patch"
+}
+
+package() {
+	DESTDIR="$pkgdir" USE_NFTABLES=1 make -C "$_pkgname" install
+
+	# Byte-compile Python files during the packaging process instead of at runtime
+	python -m compileall -o 0 -o 1 -p / -s "$pkgdir" "$pkgdir/usr/lib/waydroid/tools/"
+
+	install -Dm755 waydroid-plinius-setup waydroid-plinius-screen -t "$pkgdir/usr/lib/waydroid-plinius"
+	install -Dm644 waydroid-plinius-screen.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 50-plinius.conf -t "$pkgdir/usr/lib/systemd/system/waydroid-container.service.d"
+	install -Dm644 display_settings.xml -t "$pkgdir/usr/share/waydroid-plinius"
+	install -Dm644 plinius-sensors.xml plinius-gnss.xml plinius-vibrator.xml plinius-health.xml \
+		plinius-nfc.xml \
+		-t "$pkgdir/usr/share/waydroid-plinius/vintf"
+}

@@ -1,0 +1,46 @@
+From 8d680e30142282fcf22412dca514155b26a894c2 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:21:00 +0100
+Subject: [PATCH 1/3] container: On Halium keep the vendor's device permissions
+
+set_permissions() made every media, graphics and DMA heap node of the host
+world-writable (777) at each start, protected heaps such as mtk_prot_region
+included, and changed nodes that belong to host services. On Halium the
+vendor's ueventd rules have already given these nodes to the same Android
+users the container runs, so leave them as they are there.
+---
+ tools/actions/container_manager.py | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/tools/actions/container_manager.py b/tools/actions/container_manager.py
+index 6e088bb..772c09b 100644
+--- a/tools/actions/container_manager.py
++++ b/tools/actions/container_manager.py
+@@ -65,6 +65,10 @@ class DbusContainerManager(dbus.service.Object):
+         except AttributeError:
+             return {}
+ 
++def is_halium(args):
++    # On Halium the devices belong to the vendor's Android container already
++    return tools.config.load(args)["waydroid"]["vendor_type"] != "MAINLINE"
++
+ def set_permissions(args, perm_list=None, mode="777"):
+     def chmod(path, mode):
+         if os.path.exists(path):
+@@ -198,8 +202,11 @@ def do_start(args, session):
+         command = ["systemctl", "stop", "nfcd"]
+         tools.helpers.run.user(args, command, check=False)
+ 
+-    # Set permissions
+-    set_permissions(args)
++    # Set permissions. Not on Halium: 777 would open every device (protected DMA heaps too) to
++    # every process of the host; the distribution gives Android the few it needs, with Android's
++    # own modes
++    if not is_halium(args):
++        set_permissions(args)
+ 
+     # Create session-specific LXC config file
+     helpers.lxc.generate_session_lxc_config(args, session)
+-- 
+2.56.1
+

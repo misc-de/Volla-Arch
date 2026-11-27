@@ -1,9 +1,9 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=sensor-proxy-bridge
-pkgver=0.9
-pkgrel=4
-pkgdesc="Android sensors HAL (AIDL ISensors over binder) as the iio-sensor-proxy D-Bus service"
+pkgver=0.10
+pkgrel=3
+pkgdesc="Android sensors HAL (AIDL ISensors over binder) as the iio-sensor-proxy D-Bus service, and to Android apps in the Waydroid container"
 arch=(aarch64 x86_64)
 license=(MIT)
 # iio-sensor-proxy: its D-Bus policy for net.hadess.SensorProxy and monitor-sensor; its own
@@ -13,8 +13,8 @@ source=(sensor-proxy-bridge.c
 	sensor-proxy-bridge.service
 	org.plinius.SensorProxyBridge.conf
 	LICENSE)
-sha256sums=('f4cb97cafe8d65a30b1188c0de4461651f6ad48e7064d1062a4ca033b798d40d'
-            'e853246a9bc8270e0821f5f9dac75ea33e0719b7b0a168ff076ddef9cd8b1366'
+sha256sums=('2ff1d3d3ac86680278e9cda1a6eeed6e30ae479ec56f3015fd6e0d4628255baa'
+            'cd279f28bbd6982f1dcbb56c5554063cda5fe739fa7b9e2b98aacd571429498f'
             '28f1a00873f26ff143036454ab66ce96f311d1de1f591a7f0ee7da0a3926d7b2'
             '1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 

@@ -1,0 +1,8 @@
+<!-- Plinius: the battery, served from the phone by health-hal-bridge -->
+<manifest version="1.0" type="device">
+    <hal format="aidl">
+        <name>android.hardware.health</name>
+        <version>1</version>
+        <fqname>IHealth/default</fqname>
+    </hal>
+</manifest>

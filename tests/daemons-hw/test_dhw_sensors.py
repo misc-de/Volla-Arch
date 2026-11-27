@@ -3,6 +3,7 @@
 # signal an event becomes. libgbinder is faked (fakes/gbinder.h), D-Bus signals are printed.
 
 import functools
+import os
 import math
 import re
 
@@ -45,6 +46,9 @@ static void init_claims(void)
 {
 	for (int id = 0; id < N_SENSORS; id++)
 		self.sensors[id].claims = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, unwatch);
+	self.list = g_array_new(FALSE, TRUE, sizeof(struct hal_sensor_info));
+	g_array_set_clear_func(self.list, hal_sensor_info_clear);
+	self.running = g_hash_table_new_full(NULL, NULL, NULL, g_free);
 }
 
 /* A SensorInfo parcel in the order hal_read_sensor_list reads it */
@@ -171,7 +175,8 @@ int main(int argc, char **argv)
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     d = tmp_path_factory.mktemp("sensors")
-    sandboxed_source(SRC, d, [("/var/lib/sensor-proxy-bridge/settings", d / "settings")],
+    sandboxed_source(SRC, d, [("/var/lib/sensor-proxy-bridge/settings", d / "settings"),
+                              ("/dev/anbox-binder", d / "anbox-binder")],
                      allow=("/dev/binder",))
     exe = build_harness(d, "sensors", HARNESS, pkgs=("gio-unix-2.0",))
     return d, functools.partial(run, exe)
@@ -346,6 +351,7 @@ def test_settle_time_settings(built):
 # runs the script given after the sensor list.
 
 SERVICE = r"""
+#define _GNU_SOURCE /* memfd_create */
 #define G_DISABLE_CAST_CHECKS
 #include <glib.h>
 #include <gio/gio.h>
@@ -362,10 +368,11 @@ static gint64 fake_now;
 /* ---- HAL steering ---- */
 static int no_reply_code = -1;          /* this transaction gets no reply */
 static int exception_code = -1;         /* this transaction answers with an exception */
-static int sm_missing, sm_not_ready;
+static int sm_missing, sm_not_ready, android_sm_missing;
 static int usleeps;
-static GBinderRemoteObjectNotifyFunc death_handler;
-static GBinderLocalTransactFunc hal_callback;
+/* The HAL's death handler is the first one, Android's the ones after it */
+static GBinderRemoteObjectNotifyFunc death_handler, android_death;
+static GBinderLocalTransactFunc hal_callback, android_fn;
 static FakeGbValue exception_reply[] = {{'i', -3}};
 
 static int last_code;
@@ -394,6 +401,8 @@ static void wrap_init_reader(GBinderRemoteReply *reply, GBinderReader *r)
 static GBinderServiceManager *wrap_sm_new(const char *dev)
 {
 	GBinderServiceManager *sm = gbinder_servicemanager_new(dev);
+	if (android_sm_missing && strcmp(dev, "/dev/binder"))
+		return NULL;
 	return sm_missing ? NULL : sm;
 }
 #define gbinder_servicemanager_new wrap_sm_new
@@ -404,7 +413,11 @@ static gboolean wrap_sm_wait(GBinderServiceManager *sm, long ms)
 #define gbinder_servicemanager_wait wrap_sm_wait
 static gulong wrap_add_death(GBinderRemoteObject *o, GBinderRemoteObjectNotifyFunc fn, void *user)
 {
-	death_handler = fn;
+	if (!death_handler)
+		death_handler = fn;
+	else
+		android_death = fn;
+	printf("death-handler\n");
 	return 1;
 }
 #define gbinder_remote_object_add_death_handler wrap_add_death
@@ -412,7 +425,10 @@ static GBinderLocalObject *wrap_new_local(GBinderServiceManager *sm, const char 
 					  void *user)
 {
 	printf("local-object %s\n", iface);
-	hal_callback = fn;
+	if (!strcmp(iface, "android.hardware.sensors.ISensors"))
+		android_fn = fn;
+	else
+		hal_callback = fn;
 	return gbinder_servicemanager_new_local_object(sm, iface, fn, user);
 }
 #define gbinder_servicemanager_new_local_object wrap_new_local
@@ -544,11 +560,11 @@ static void script_loop(GMainLoop *loop);
 /* A SensorInfo parcel in the order hal_read_sensor_list reads it */
 static FakeGbValue list[200] = {{'i', 0}, {'i', 0}};
 static int list_n = 2;
-static void add_sensor(int handle, int type, double range, int flags)
+static void add_sensor(int handle, int type, double range, int flags, int min_delay, int max_delay)
 {
 	FakeGbValue v[] = {{'i', 1}, {'i', 100}, {'i', handle}, {'s', 0, 0, "name"}, {'s', 0, 0, "vendor"}, {'i', 1},
-			   {'i', type}, {'s', 0, 0, "type"}, {'f', 0, range}, {'f', 0, 0.1}, {'f', 0, 0.5}, {'i', 0},
-			   {'u', 0}, {'u', 0}, {'s', 0, 0, ""}, {'i', 0}, {'u', flags}};
+			   {'i', type}, {'s', 0, 0, "type"}, {'f', 0, range}, {'f', 0, 0.1}, {'f', 0, 0.5}, {'i', min_delay},
+			   {'u', 0}, {'u', 0}, {'s', 0, 0, ""}, {'i', max_delay}, {'u', flags}};
 	memcpy(list + list_n, v, sizeof v);
 	list_n += G_N_ELEMENTS(v);
 	list[1].i++;
@@ -570,9 +586,14 @@ static void run_for(unsigned ms)
 	g_main_loop_unref(loop);
 }
 
+static int next_type, next_type_handle = -1;
 static void push_event(int handle, const char *values)
 {
 	struct hal_event e = {.timestamp = 1, .sensor = handle};
+	if (handle == next_type_handle) {
+		e.type = next_type;
+		next_type_handle = -1;
+	}
 	g_auto(GStrv) v = g_strsplit(values, ",", -1);
 	for (int i = 0; v[i] && i < 16; i++)
 		e.payload.data[i] = g_ascii_strtod(v[i], NULL);
@@ -595,6 +616,71 @@ static void print_log(void)
 	printf("hal=%s\n", fake_gb_log ? g_strdelimit(g_strdup(fake_gb_log->str), "\n", ';') : "");
 	if (fake_gb_log)
 		g_string_truncate(fake_gb_log, 0);
+}
+
+/* ---- Android: shared memory for its queues, scripted calls ---- */
+#include <sys/mman.h>
+#include <fcntl.h>
+/* A queue's memory: read counter at 0, write counter at 8, event flag word at 16, ring at 64 */
+typedef struct {
+	char name[16];
+	int fd;
+	guint8 *map;
+	gsize len;
+} Mem;
+static Mem mems[4];
+static int n_mems;
+static Mem *mem(const char *name)
+{
+	for (int i = 0; i < n_mems; i++)
+		if (!strcmp(mems[i].name, name))
+			return &mems[i];
+	g_error("no memory %s", name);
+}
+static FakeGbValue avals[256];
+/* Values: i<n> int32, l<n> int64, o object, h@<mem> its fd, hpipe a pipe, h<n> that fd */
+static int parse_vals(const char *spec)
+{
+	int n = 0;
+	g_auto(GStrv) t = g_strsplit(spec ? spec : "", ",", -1);
+	for (int i = 0; t[i] && *t[i]; i++) {
+		FakeGbValue v = {t[i][0]};
+		const char *arg = t[i] + 1;
+		if (v.kind == 'h' && *arg == '@') {
+			v.i = mem(arg + 1)->fd;
+		} else if (v.kind == 'h' && !strcmp(arg, "pipe")) {
+			int p[2];
+			if (pipe(p) < 0)
+				abort();
+			v.i = p[0];
+		} else {
+			v.i = g_ascii_strtoll(arg, NULL, 10);
+		}
+		avals[n++] = v;
+	}
+	return n;
+}
+static void android_call(guint code, const char *spec)
+{
+	int status = 99;
+	fake_gb_request_vals = avals;
+	fake_gb_request_n = parse_vals(spec);
+	GBinderLocalReply *reply = android_fn(NULL, NULL, code, 0, &status, NULL);
+	printf("acall %u status=%d reply=%s\n", code, status, reply ? "yes" : "no");
+	print_log();
+}
+/* The queue in a memory: counters, flag word and the sensor handles of the unread items */
+static void print_queue(const char *name, gsize quantum, gsize ring)
+{
+	Mem *m = mem(name);
+	guint64 r = *(guint64 *)m->map, w = *(guint64 *)(m->map + 8);
+	printf("aqueue %s read=%" G_GUINT64_FORMAT " write=%" G_GUINT64_FORMAT " flag=%u items=", name, r, w,
+	       *(guint32 *)(m->map + 16));
+	for (guint64 at = r; quantum == sizeof(struct hal_event) && at + quantum <= w; at += quantum) {
+		const struct hal_event *e = (const struct hal_event *)(m->map + 64 + at % ring);
+		printf("%d/%d,", e->sensor, e->type);
+	}
+	printf("\n");
 }
 
 static gboolean hal_dies(gpointer data)
@@ -654,6 +740,57 @@ static void command(const char *a)
 		g_idle_add(lose_name, NULL);
 		g_main_loop_run(self.loop);
 		printf("loop quit\n");
+	} else if (!strcmp(w[0], "amem")) {
+		/* amem|name|bytes: shared memory for a queue */
+		Mem *m = &mems[n_mems++];
+		g_strlcpy(m->name, w[1], sizeof m->name);
+		m->len = atoi(w[2]);
+		m->fd = memfd_create(w[1], 0);
+		if (m->fd < 0 || ftruncate(m->fd, m->len) < 0)
+			abort();
+		m->map = mmap(NULL, m->len, PROT_READ | PROT_WRITE, MAP_SHARED, m->fd, 0);
+	} else if (!strcmp(w[0], "acall")) {
+		/* acall|code|values */
+		android_call(atoi(w[1]), w[2]);
+	} else if (!strcmp(w[0], "aqueue")) {
+		/* aqueue|name|quantum|ring bytes */
+		print_queue(w[1], atoi(w[2]), atoi(w[3]));
+	} else if (!strcmp(w[0], "aset")) {
+		/* aset|name|read|write: the counters as the other side moves them */
+		Mem *m = mem(w[1]);
+		*(guint64 *)m->map = g_ascii_strtoull(w[2], NULL, 10);
+		*(guint64 *)(m->map + 8) = g_ascii_strtoull(w[3], NULL, 10);
+	} else if (!strcmp(w[0], "atype")) {
+		/* atype|handle|type: the next event's SensorType */
+		next_type = atoi(w[2]);
+		next_type_handle = atoi(w[1]);
+	} else if (!strcmp(w[0], "adie")) {
+		android_death(NULL, NULL);
+	} else if (!strcmp(w[0], "apresence")) {
+		fake_gb_sm_present = atoi(w[1]);
+		on_android_presence(NULL, NULL);
+		print_log();
+	} else if (!strcmp(w[0], "aadded")) {
+		on_android_added(NULL, atoi(w[1]), NULL);
+	} else if (!strcmp(w[0], "anode")) {
+		/* anode|mode: the device node (octal mode) */
+		int fd = open(ANDROID_DEVICE, O_CREAT | O_WRONLY, 0600);
+		if (fd >= 0)
+			close(fd);
+		chmod(ANDROID_DEVICE, strtol(w[1], NULL, 8));
+	} else if (!strcmp(w[0], "spin")) {
+		/* Let the file monitor deliver: up to 2 s, until Android's binder is open */
+		for (int j = 0; j < 200 && !android.sm; j++) {
+			while (g_main_context_iteration(NULL, FALSE))
+				;
+			usleep(10000);
+		}
+		printf("android sm=%s\n", android.sm ? "set" : "none");
+		print_log();
+	} else if (!strcmp(w[0], "running")) {
+		/* running|handle: the period the HAL sensor runs at */
+		const gint64 *p = g_hash_table_lookup(self.running, GINT_TO_POINTER(atoi(w[1])));
+		printf("running %s=%" G_GINT64_FORMAT "\n", w[1], p ? *p : (gint64)-1);
 	} else if (!strcmp(w[0], "sigterm")) {
 		raise(SIGTERM);
 		g_main_loop_run(self.loop);
@@ -680,7 +817,9 @@ int main(int argc, char **argv)
 	for (; i < argc && strcmp(argv[i], "start"); i++) {
 		g_auto(GStrv) w = g_strsplit(argv[i], ":", -1);
 		if (!strcmp(w[0], "sensor"))
-			add_sensor(atoi(w[1]), atoi(w[2]), g_ascii_strtod(w[3], NULL), atoi(w[4]));
+			/* sensor:<handle>:<type>:<range>:<flags>[:<min delay µs>:<max delay µs>] */
+			add_sensor(atoi(w[1]), atoi(w[2]), g_ascii_strtod(w[3], NULL), atoi(w[4]),
+				   w[5] ? atoi(w[5]) : 0, w[5] && w[6] ? atoi(w[6]) : 0);
 		else if (!strcmp(w[0], "no-reply"))
 			no_reply_code = atoi(w[1]);
 		else if (!strcmp(w[0], "exception"))
@@ -693,6 +832,15 @@ int main(int argc, char **argv)
 			sm_not_ready = 1;
 		else if (!strcmp(w[0], "no-service"))
 			fake_gb_no_service = TRUE;
+		else if (!strcmp(w[0], "no-android-sm"))
+			android_sm_missing = 1;
+		else if (!strcmp(w[0], "android")) {
+			/* The container's binder, open to us */
+			int fd = open(ANDROID_DEVICE, O_CREAT | O_WRONLY, 0600);
+			if (fd < 0)
+				abort();
+			close(fd);
+		}
 		else
 			g_error("unknown option %s", argv[i]);
 	}
@@ -710,7 +858,8 @@ int main(int argc, char **argv)
 @pytest.fixture(scope="module")
 def service_built(tmp_path_factory):
     d = tmp_path_factory.mktemp("sensors-service")
-    sandboxed_source(SRC, d, [("/var/lib/sensor-proxy-bridge/settings", d / "settings")],
+    sandboxed_source(SRC, d, [("/var/lib/sensor-proxy-bridge/settings", d / "settings"),
+                              ("/dev/anbox-binder", d / "anbox-binder")],
                      allow=("/dev/binder",))
     exe = build_harness(d, "sensors_service", SERVICE, pkgs=("gio-unix-2.0",))
     return d, exe
@@ -720,7 +869,9 @@ def service_built(tmp_path_factory):
 def service(service_built):
     d, exe = service_built
     (d / "settings").unlink(missing_ok=True)
-    return d, functools.partial(run, exe)
+    (d / "anbox-binder").unlink(missing_ok=True)
+    yield d, functools.partial(run, exe)
+    (d / "anbox-binder").unlink(missing_ok=True)
 
 
 ALL = ("sensor:10:1:39.2:0", "sensor:11:5:10000:0", "sensor:12:8:5:3", "sensor:13:20:1:0",
@@ -977,3 +1128,242 @@ def test_service_method_names_that_are_neither_claim_nor_release(service, method
     r = binary(*ALL, "start", f"call|{P}|{IF}|:1.5|{method}")
     assert replies(r.stdout) == [
         f"reply {method} error org.freedesktop.DBus.Error.UnknownMethod: Unknown method {method}"]
+
+
+# ---- ISensors for Android (Waydroid container) ----
+
+GET_VERSION, GET_HASH = 0x00ffffff, 0x00fffffe
+ACTIVATE, BATCH, CONFIG_DIRECT, FLUSH, LIST, INITIALIZE, INJECT, REGISTER_DIRECT, OP_MODE, UNREGISTER_DIRECT = \
+    range(1, 11)
+# Each Android test gets the two queues' memory first
+MEM = ("amem|ev|4096", "amem|wl|4096")
+EV, WL = "aqueue|ev|96|768", "aqueue|wl|4|64"
+
+
+def mq(mem, quantum, ring, grantors=4, fd=None, fd_index=0, n_fds=1, n_ints=0, item=None, header=1):
+    """An MQDescriptor as Android writes it: the grantors (read and write counter, ring, event
+    flag word) and the NativeHandle with the memory's file descriptor."""
+    vals = [f"i{header}", "i100", f"i{grantors}"]
+    for off, ext in [(0, 8), (8, 8), (64, ring), (16, 4), (24, 4)][:grantors]:
+        vals += ["i1", "i24", f"i{fd_index}", f"i{off}", f"l{ext}"]
+    vals += ["i1", "i100", f"i{n_fds}"]
+    vals += ["i1", "i0", fd or f"h@{mem}"] * n_fds
+    vals += [f"i{n_ints}", f"i{item or quantum}", "i1"]
+    return vals
+
+
+def init(events=None, wake_lock=None, callback=True):
+    vals = (events or mq("ev", 96, 768)) + (wake_lock or mq("wl", 4, 64)) + (["o"] if callback else [])
+    return f"acall|{INITIALIZE}|" + ",".join(vals)
+
+
+def acall(code, *values):
+    return f"acall|{code}|" + ",".join(values)
+
+
+def areplies(out):
+    """Per Android call: its code and the reply parcel."""
+    lines = out.splitlines()
+    return [(int(line.split()[1]), lines[i + 1][4:]) for i, line in enumerate(lines)
+            if line.startswith("acall ") and "status=0 reply=yes" in line]
+
+
+def queue(out, name):
+    return [line.split(" ", 2)[2] for line in out.splitlines() if line.startswith(f"aqueue {name} ")]
+
+
+def running(out):
+    return [line[8:] for line in out.splitlines() if line.startswith("running ")]
+
+
+ANDROID = (*ALL, "android", "start", *MEM)
+
+
+def test_android_registers_and_gets_version_hash_and_list(service):
+    d, binary = service
+    out = binary("sensor:10:1:39.2:0", "sensor:19:1:39.2:3971", "android", "start",
+                 acall(GET_VERSION), acall(GET_HASH), acall(LIST)).stdout
+    assert f"add-service android.hardware.sensors.ISensors/default" in hal_lines(out)[0]
+    assert "local-object android.hardware.sensors.ISensors" in out
+    r = areplies(out)
+    assert r[0] == (GET_VERSION, "i32 0;i32 1;")
+    assert r[1] == (GET_HASH, "i32 0;s16 c38c6b75e592ba5a6400b6348ad7f27db3064410;")
+    # Both sensors, the second without its direct report and channel flags (0xf80): 3971 -> 3
+    code, parcel = r[2]
+    assert parcel.startswith("i32 0;i32 2;parcelable {;i32 10;s16 name;")
+    assert parcel.count("parcelable {") == 2
+    assert parcel.endswith("s16 ;i32 0;i32 3;};")
+
+
+def test_android_activates_merged_with_dbus_claims(service):
+    d, binary = service
+    out = binary(*ANDROID, init(), f"call|{P}|{IF}|:1.5|ClaimAccelerometer", "hal", "running|10",
+                 acall(BATCH, "i10", "l50000000"), "running|10", acall(ACTIVATE, "i10", "i1"), "running|10",
+                 acall(ACTIVATE, "i10", "i0"), "running|10", acall(ACTIVATE, "i10", "i1"),
+                 f"call|{P}|{IF}|:1.5|ReleaseAccelerometer", "hal", "running|10",
+                 acall(ACTIVATE, "i10", "i0"), "running|10").stdout
+    # D-Bus 10 Hz; Android's batch() alone changes nothing while it has the sensor off; on, it
+    # runs at Android's 20 Hz; Android off again: back to D-Bus's rate without switching off
+    assert running(out) == ["10=100000000", "10=100000000", "10=50000000", "10=100000000", "10=50000000",
+                            "10=-1"]
+    r = dict()
+    for code, parcel in areplies(out):
+        r.setdefault(code, []).append(parcel)
+    assert r[BATCH] == ["i32 0;"]
+    assert r[ACTIVATE][0] == "request;i32 10;i64 50000000;i64 0;tx 2;i32 0;"
+    assert r[ACTIVATE][1] == "request;i32 10;i64 100000000;i64 0;tx 2;i32 0;"
+    assert r[ACTIVATE][3] == "request;i32 10;i32 0;tx 1;i32 0;"
+
+
+def test_android_default_rate_and_limits(service):
+    d, binary = service
+    # min delay 10 ms, max delay 100 ms
+    out = binary("sensor:10:1:39.2:0", "sensor:21:4:10:0:10000:100000", "android", "start", *MEM, init(),
+                 acall(ACTIVATE, "i10", "i1"), "running|10", acall(BATCH, "i21", "l1000"),
+                 acall(ACTIVATE, "i21", "i1"), "running|21", acall(BATCH, "i21", "l900000000"),
+                 "running|21", acall(BATCH, "i21", "l-5")).stdout
+    # Without batch() Android gets SENSOR_DELAY_NORMAL (200 ms); periods within the sensor's limits
+    assert running(out) == ["10=200000000", "21=10000000", "21=100000000"]
+    assert areplies(out)[-1] == (BATCH, "request;i32 21;i64 10000000;i64 0;tx 2;i32 0;")
+
+
+def test_android_unknown_sensors_and_modes(service):
+    d, binary = service
+    out = binary(*ANDROID, init(), acall(ACTIVATE, "i99", "i1"), acall(ACTIVATE, "i10"), acall(BATCH, "i99", "l1"),
+                 acall(FLUSH, "i99"), acall(FLUSH, "i10"), acall(FLUSH), acall(OP_MODE, "i0"), acall(OP_MODE, "i1"),
+                 acall(INJECT), acall(UNREGISTER_DIRECT, "i1"), acall(CONFIG_DIRECT), acall(REGISTER_DIRECT),
+                 acall(42)).stdout
+    no_such = "i32 -3;s16 No such sensor;i32 0;"
+    assert [p for c, p in areplies(out)[1:]] == [
+        no_such, no_such, no_such, no_such, "i32 -3;s16 Sensor not active;i32 0;", no_such,
+        "i32 0;", "i32 -7;s16 Only the normal mode;i32 0;", "i32 0;", "i32 0;",
+        "i32 -7;s16 Not supported;i32 0;", "i32 -7;s16 Not supported;i32 0;", "i32 -7;s16 Not supported;i32 0;"]
+
+
+def test_android_flush_goes_to_the_hal(service):
+    d, binary = service
+    out = binary(*ANDROID, init(), acall(ACTIVATE, "i10", "i1"), acall(FLUSH, "i10")).stdout
+    assert areplies(out)[-1] == (FLUSH, "request;i32 10;tx 4;i32 0;")
+    out = binary("exception:4", *ANDROID, init(), acall(ACTIVATE, "i10", "i1"), acall(FLUSH, "i10")).stdout
+    assert areplies(out)[-1] == (FLUSH, "request;i32 10;tx 4;i32 -3;s16 Sensor not active;i32 0;")
+
+
+def test_android_gets_events_of_its_sensors_and_flush_completes(service):
+    d, binary = service
+    out = binary(*ANDROID, init(), EV, acall(ACTIVATE, "i10", "i1"), f"call|{P}|{IF}|:1.5|ClaimProximity",
+                 "atype|10|1", "event:10:0,0,9.8", "drain", "atype|12|8", "event:12:5", "drain",
+                 "atype|11|0", "event:11:1", "drain", EV, "aset|wl|0|8", "atype|10|1", "event:10:0,0,9.8",
+                 "drain", WL, EV).stdout
+    q = queue(out, "ev")
+    assert q[0] == "read=0 write=0 flag=0 items="
+    # Its accelerometer and the flush-complete event (type 0), not the proximity only D-Bus uses;
+    # Android is woken through the event flag word
+    assert q[1] == "read=0 write=192 flag=1 items=10/1,11/0,"
+    assert q[2] == "read=0 write=288 flag=1 items=10/1,11/0,10/1,"
+    # Its wake lock counts are read away: the bridge holds no wake lock for Android
+    assert queue(out, "wl") == ["read=8 write=8 flag=0 items="]
+
+
+def test_android_queue_full_drops_and_warns(service):
+    d, binary = service
+    r = binary(*ANDROID, init(), acall(ACTIVATE, "i10", "i1"), "aset|ev|0|768", "atype|10|1", "event:10:1",
+               "drain", EV, "aset|ev|0|672", "atype|10|1", "event:10:1", "drain", EV, "aset|ev|0|900",
+               "atype|10|1", "event:10:1", "drain", EV)
+    q = queue(r.stdout, "ev")
+    # Full: nothing written, no wake-up; one item free: written; counters broken: nothing
+    assert q[0] == "read=0 write=768 flag=0 items=" + "0/0," * 8
+    assert q[1].startswith("read=0 write=768 flag=1 ")
+    assert q[2].startswith("read=0 write=900 flag=1 ")
+    assert r.stderr.count("Android's sensor queue is full: 1 events dropped") == 2
+
+
+def test_android_one_shot_sensor_is_off_after_firing(service):
+    d, binary = service
+    out = binary(*ALL, "sensor:20:17:1:4", "android", "start", *MEM, init(), acall(ACTIVATE, "i20", "i1"),
+                 "running|20", "hal", "atype|20|17", "event:20:1", "drain", "running|20", "hal",
+                 acall(ACTIVATE, "i20", "i1"), "running|20").stdout
+    # Significant motion fires once: the HAL switched it off itself, so no deactivate; Android
+    # arms it again
+    assert running(out) == ["20=200000000", "20=-1", "20=200000000"]
+    assert out.split("running 20=-1\n")[1].startswith("hal=\n")
+    assert queue(out, "ev") == []
+
+
+@pytest.mark.parametrize("events", [
+    mq("ev", 96, 768, header=0),           # null parcelable
+    mq("ev", 96, 768, grantors=2),         # too few grantors
+    mq("ev", 96, 768, grantors=5),         # too many
+    mq("ev", 96, 768, fd_index=1),         # a file descriptor the handle has not
+    mq("ev", 96, 768, n_fds=0),            # no file descriptor
+    mq("ev", 96, 768, fd="h-1"),           # one that is not open
+    mq("ev", 96, 768, fd="hpipe"),         # one that cannot be mapped
+    mq("ev", 96, 768, n_ints=1),           # ints in the handle
+    mq("ev", 96, 768, item=4),             # items of another size
+    mq("ev", 96, 50),                      # a ring smaller than one item
+    mq("ev", 96, 0),                       # an empty grantor
+    mq("ev", 96, 768)[:20],                # cut short
+], ids=["null", "2-grantors", "5-grantors", "fd-index", "no-fd", "bad-fd", "pipe", "ints", "item",
+        "small-ring", "empty", "short"])
+def test_android_unusable_queues_are_refused(service, events):
+    d, binary = service
+    r = binary(*ANDROID, init(events=events), acall(ACTIVATE, "i10", "i1"), "atype|10|1", "event:10:1", "drain")
+    assert areplies(r.stdout)[0] == (INITIALIZE, "i32 -3;s16 Bad queues or callback;i32 0;")
+    assert "Android handed over an unusable queue" in r.stderr
+    assert "death-handler" not in r.stdout.split("acall 6")[1]
+
+
+@pytest.mark.parametrize("args", [{"wake_lock": mq("wl", 4, 64, item=96)}, {"callback": False}],
+                         ids=["wake-lock", "no-callback"])
+def test_android_initialize_needs_both_queues_and_a_callback(service, args):
+    d, binary = service
+    out = binary(*ANDROID, init(**args)).stdout
+    assert areplies(out)[0] == (INITIALIZE, "i32 -3;s16 Bad queues or callback;i32 0;")
+
+
+def test_android_three_grantors_without_event_flag(service):
+    d, binary = service
+    out = binary(*ANDROID, init(events=mq("ev", 96, 768, grantors=3)), acall(ACTIVATE, "i10", "i1"),
+                 "atype|10|1", "event:10:1", "drain", EV).stdout
+    # Written, but there is no flag word to wake Android through
+    assert queue(out, "ev") == ["read=0 write=96 flag=0 items=10/1,"]
+
+
+@pytest.mark.parametrize("gone", ["adie", "apresence|0", init()])
+def test_android_gone_or_restarted_switches_its_sensors_off(service, gone):
+    d, binary = service
+    out = binary(*ANDROID, init(), acall(ACTIVATE, "i10", "i1"), acall(BATCH, "i11", "l1000000"), "hal", gone,
+                 "hal", "running|10", acall(ACTIVATE, "i11", "i1"), "running|11").stdout
+    after = out.split("acall 2 status=0 reply=yes\n", 1)[1]
+    assert "request;i32 10;i32 0;tx 1;" in "".join(hal_lines(after))
+    # Its batch() periods are forgotten as well: the light comes back at the default
+    assert running(out) == ["10=-1", "11=200000000"]
+
+
+def test_android_registers_again_when_the_container_restarts(service):
+    d, binary = service
+    r = binary(*ANDROID, "apresence|0", "apresence|1", "aadded|0", "aadded|-2147483647")
+    assert hal_lines(r.stdout)[-3:-1] == ["", "add-service android.hardware.sensors.ISensors/default;"]
+    assert "Cannot serve the sensors to Android (status -2147483647)" in r.stderr
+
+
+def test_android_sensors_off_on_the_way_out(service):
+    d, binary = service
+    out = binary(*ANDROID, init(), acall(ACTIVATE, "i11", "i1"), "hal", "sigterm").stdout
+    assert hal_lines(out)[-1] == "request;i32 11;i32 0;tx 1;"
+
+
+def test_android_waits_for_the_node(service):
+    d, binary = service
+    if os.geteuid() == 0:
+        pytest.skip("root opens any node")
+    out = binary(*ALL, "start", "spin", "anode|0", "spin", "anode|600", "spin").stdout
+    assert out.count("android sm=none") == 2
+    assert "android sm=set" in out
+    assert hal_lines(out)[-2].endswith("anbox-binder;add-service android.hardware.sensors.ISensors/default;")
+
+
+def test_android_node_that_is_no_binder(service):
+    d, binary = service
+    out = binary(*ALL, "no-android-sm", "android", "start", "spin").stdout
+    assert "android sm=none" in out
+    assert "local-object android.hardware.sensors.ISensors\n" not in out

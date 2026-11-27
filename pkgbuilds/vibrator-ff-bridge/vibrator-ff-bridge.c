@@ -11,12 +11,20 @@
  *
  * Transaction codes follow the frozen AIDL definition (android.hardware.vibrator version 2).
  *
+ * Android apps (Waydroid container): the bridge serves the same interface (IVibrator version 2)
+ * to the container's vibrator service on /dev/anbox-binder, registered whenever the container's
+ * service manager shows up (the node opens to users other than root only once the container has
+ * started; inotify tells). Android's vibrations go to the same backend as feedbackd's: on() and
+ * off(), the strength of setAmplitude() and the predefined click effects. Android times the
+ * vibrations itself (no completion callbacks) and makes up the effects it is not offered.
+ *
  * SPDX-License-Identifier: MIT
  */
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -24,6 +32,7 @@
 
 #include <glib.h>
 #include <glib-unix.h>
+#include <gio/gio.h>
 #include <gbinder.h>
 
 #define DEVICE_NAME     "vibrator-ff-bridge"
@@ -42,9 +51,33 @@ enum {
   VIB_GET_CAPABILITIES = 1,
   VIB_OFF = 2,
   VIB_ON = 3,
+  VIB_PERFORM = 4,
+  VIB_GET_SUPPORTED_EFFECTS = 5,
   VIB_SET_AMPLITUDE = 6,
 };
 #define CAP_AMPLITUDE_CONTROL 4
+
+/* What Android in the Waydroid container gets: IVibrator version 2 and the hash of that frozen
+ * version */
+#define ANDROID_DEVICE  "/dev/anbox-binder"
+#define ANDROID_VERSION 2
+#define ANDROID_HASH    "ea8742d6993e1a82917da38b9938e537aa7fcb54"
+/* Transactions every AIDL interface answers */
+#define TX_GET_INTERFACE_VERSION 0x00ffffff
+#define TX_GET_INTERFACE_HASH    0x00fffffe
+/* AIDL exception codes */
+#define EX_NONE                  0
+#define EX_ILLEGAL_ARGUMENT      (-3)
+#define EX_UNSUPPORTED_OPERATION (-7)
+/* Effect values (android.hardware.vibrator.Effect) Android gets as short pulses */
+enum {
+  EFFECT_CLICK = 0,
+  EFFECT_DOUBLE_CLICK = 1,
+  EFFECT_TICK = 2,
+  EFFECT_HEAVY_CLICK = 5,
+};
+/* Between the starts of the two clicks of a double click */
+#define DOUBLE_CLICK_GAP_MS 100
 
 typedef struct {
   int                    fd;
@@ -64,6 +97,20 @@ typedef struct {
 } Bridge;
 
 static Bridge bridge = { .fd = -1, .gain = 0xffff, .kfd = -1, .kid = -1 };
+
+/* Android in the Waydroid container: its vibrator service drives the same motor */
+typedef struct {
+  GBinderServiceManager *sm;
+  GBinderLocalObject    *service;
+  gulong                 presence_id;
+  char                  *node;      /* name of the device node in its directory */
+  double                 amplitude; /* of setAmplitude(), 0..1 */
+  gint64                 end;       /* monotonic µs when Android's on() ends, 0: none */
+  double                 click;     /* strength of the pending second click */
+  guint                  second_id; /* the second click of a double click */
+} Android;
+
+static Android android = { .amplitude = 1.0 };
 
 /* Find and open the vendor haptics FF device (KERNEL_FF_NAME) among /dev/input/event*; -1 if absent */
 static int
@@ -427,6 +474,231 @@ kernel_ff_retry (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+/* ---- IVibrator for Android ---- */
+
+/* The pulses Android gets for its predefined effects, in ms, and the strength per EffectStrength
+ * (LIGHT, MEDIUM, STRONG) */
+static const struct { gint32 effect; guint ms; } android_effects[] = {
+  { EFFECT_TICK, 10 },
+  { EFFECT_CLICK, 20 },
+  { EFFECT_HEAVY_CLICK, 30 },
+  { EFFECT_DOUBLE_CLICK, 20 },
+};
+static const double android_strengths[] = { 0.5, 0.75, 1.0 };
+
+static void
+android_off (void)
+{
+  g_clear_handle_id (&android.second_id, g_source_remove);
+  android.end = 0;
+  vibrate_off ();
+}
+
+/* on(timeoutMs, callback), with timeoutMs > 0 */
+static void
+android_on (gint32 ms)
+{
+  g_clear_handle_id (&android.second_id, g_source_remove);
+  android.end = g_get_monotonic_time () + (gint64) ms * G_TIME_SPAN_MILLISECOND;
+  vibrate_on (ms, android.amplitude);
+}
+
+/* Android sets the strength right after on(): what is left of it plays at the new strength */
+static void
+android_set_amplitude (float amplitude)
+{
+  gint64 left = android.end - g_get_monotonic_time ();
+
+  android.amplitude = CLAMP (amplitude, 0.0, 1.0);
+  if (left >= G_TIME_SPAN_MILLISECOND)
+    vibrate_on (left / G_TIME_SPAN_MILLISECOND, android.amplitude);
+}
+
+static gboolean
+on_second_click (gpointer data)
+{
+  android.second_id = 0;
+  vibrate_on (GPOINTER_TO_UINT (data), android.click);
+  return G_SOURCE_REMOVE;
+}
+
+/* perform(effect, strength, callback): the pulse's length in ms, or -1 if not offered */
+static gint32
+android_perform (gint32 effect, gint32 strength)
+{
+  for (gsize i = 0; i < G_N_ELEMENTS (android_effects); i++) {
+    guint ms = android_effects[i].ms;
+
+    if (android_effects[i].effect != effect)
+      continue;
+    g_clear_handle_id (&android.second_id, g_source_remove);
+    android.end = 0;
+    android.click = android_strengths[strength];
+    vibrate_on (ms, android.click);
+    if (effect != EFFECT_DOUBLE_CLICK)
+      return ms;
+    android.second_id = g_timeout_add (DOUBLE_CLICK_GAP_MS, on_second_click, GUINT_TO_POINTER (ms));
+    return DOUBLE_CLICK_GAP_MS + ms;
+  }
+  return -1;
+}
+
+static void
+write_exception (GBinderWriter *w, gint32 code)
+{
+  gbinder_writer_append_int32 (w, code);
+  if (code != EX_NONE) {
+    gbinder_writer_append_string16 (w, code == EX_ILLEGAL_ARGUMENT ? "Bad argument" : "Not supported");
+    gbinder_writer_append_int32 (w, 0); /* no remote stack trace */
+  }
+}
+
+static GBinderLocalReply *
+on_android_call (GBinderLocalObject *obj, GBinderRemoteRequest *req, guint code, guint flags,
+                 int *status, void *user_data)
+{
+  GBinderReader reader;
+  GBinderWriter w;
+  GBinderLocalReply *reply = gbinder_local_object_new_reply (obj);
+  gint32 value = 0, strength = -1, ms;
+  float amplitude;
+
+  gbinder_remote_request_init_reader (req, &reader);
+  gbinder_local_reply_init_writer (reply, &w);
+  *status = GBINDER_STATUS_OK;
+  switch (code) {
+  case TX_GET_INTERFACE_VERSION:
+    write_exception (&w, EX_NONE);
+    gbinder_writer_append_int32 (&w, ANDROID_VERSION);
+    break;
+  case TX_GET_INTERFACE_HASH:
+    write_exception (&w, EX_NONE);
+    gbinder_writer_append_string16 (&w, ANDROID_HASH);
+    break;
+  case VIB_GET_CAPABILITIES:
+    write_exception (&w, EX_NONE);
+    gbinder_writer_append_int32 (&w, CAP_AMPLITUDE_CONTROL);
+    break;
+  case VIB_OFF:
+    android_off ();
+    write_exception (&w, EX_NONE);
+    break;
+  case VIB_ON:
+    if (gbinder_reader_read_int32 (&reader, &value) && value > 0) {
+      android_on (value);
+      write_exception (&w, EX_NONE);
+    } else {
+      write_exception (&w, EX_ILLEGAL_ARGUMENT);
+    }
+    break;
+  case VIB_PERFORM:
+    /* EffectStrength is a byte enum, sent as an int32 */
+    if (!gbinder_reader_read_int32 (&reader, &value) ||
+        !gbinder_reader_read_int32 (&reader, &strength) ||
+        strength < 0 || strength >= (gint32) G_N_ELEMENTS (android_strengths)) {
+      write_exception (&w, EX_ILLEGAL_ARGUMENT);
+    } else if ((ms = android_perform (value, strength)) < 0) {
+      write_exception (&w, EX_UNSUPPORTED_OPERATION);
+    } else {
+      write_exception (&w, EX_NONE);
+      gbinder_writer_append_int32 (&w, ms);
+    }
+    break;
+  case VIB_GET_SUPPORTED_EFFECTS:
+    write_exception (&w, EX_NONE);
+    gbinder_writer_append_int32 (&w, G_N_ELEMENTS (android_effects));
+    for (gsize i = 0; i < G_N_ELEMENTS (android_effects); i++)
+      gbinder_writer_append_int32 (&w, android_effects[i].effect);
+    break;
+  case VIB_SET_AMPLITUDE:
+    if (gbinder_reader_read_float (&reader, &amplitude) && amplitude > 0 && amplitude <= 1) {
+      android_set_amplitude (amplitude);
+      write_exception (&w, EX_NONE);
+    } else {
+      write_exception (&w, EX_ILLEGAL_ARGUMENT);
+    }
+    break;
+  default:
+    /* External control, compositions, always-on effects, frequencies, PWLE: not offered */
+    write_exception (&w, EX_UNSUPPORTED_OPERATION);
+    break;
+  }
+  return reply;
+}
+
+static void
+on_android_added (GBinderServiceManager *sm, int status, void *user_data)
+{
+  if (status)
+    g_warning ("Cannot serve the vibrator to Android (status %d)", status);
+  else
+    g_message ("Serving the vibrator to Android");
+}
+
+static void
+android_register (void)
+{
+  if (gbinder_servicemanager_is_present (android.sm))
+    gbinder_servicemanager_add_service (android.sm, VIB_INSTANCE, android.service,
+                                        on_android_added, NULL);
+}
+
+/* The container's service manager comes with every start of the container; when it goes, so
+ * does whatever Android was playing */
+static void
+on_android_presence (GBinderServiceManager *sm, void *user_data)
+{
+  if (gbinder_servicemanager_is_present (sm))
+    android_register ();
+  else
+    android_off ();
+}
+
+/* Serve IVibrator on the container's binder. Idempotent: called at start and whenever the device
+ * node changes, until it can be opened */
+static void
+android_start (void)
+{
+  if (android.sm || access (ANDROID_DEVICE, R_OK | W_OK) != 0)
+    return;
+  android.sm = gbinder_servicemanager_new (ANDROID_DEVICE);
+  if (!android.sm)
+    return;
+  android.service = gbinder_servicemanager_new_local_object (android.sm, VIB_IFACE,
+                                                             on_android_call, NULL);
+  gbinder_local_object_set_stability (android.service, GBINDER_STABILITY_VINTF);
+  android.presence_id = gbinder_servicemanager_add_presence_handler (android.sm,
+                                                                     on_android_presence, NULL);
+  android_register ();
+}
+
+static void
+on_android_node (GFileMonitor *monitor, GFile *file, GFile *other, GFileMonitorEvent event,
+                 gpointer user_data)
+{
+  g_autofree char *base = g_file_get_basename (file);
+
+  if (event != G_FILE_MONITOR_EVENT_DELETED && g_strcmp0 (base, android.node) == 0)
+    android_start ();
+}
+
+/* The kernel creates the node at boot, but only the start of the container opens it to users
+ * other than root: watch its directory (binderfs reports chmod) instead of polling */
+static GFileMonitor *
+android_watch (void)
+{
+  g_autofree char *path = realpath (ANDROID_DEVICE, NULL);
+  g_autoptr (GFile) node = g_file_new_for_path (path ? path : ANDROID_DEVICE);
+  g_autoptr (GFile) dir = g_file_get_parent (node);
+  GFileMonitor *monitor = g_file_monitor_directory (dir, G_FILE_MONITOR_NONE, NULL, NULL);
+
+  g_free (android.node);
+  android.node = g_file_get_basename (node);
+  if (monitor)
+    g_signal_connect (monitor, "changed", G_CALLBACK (on_android_node), NULL);
+  return monitor;
+}
+
 static gboolean
 on_quit (gpointer loop)
 {
@@ -439,7 +711,11 @@ main (int argc, char **argv)
 {
   g_autoptr (GMainLoop) loop = g_main_loop_new (NULL, FALSE);
   g_autofree char *activate = g_build_filename (SYSFS_DIR, "activate", NULL);
+  g_autoptr (GFileMonitor) monitor = NULL;
 
+  /* First: a signal during the set-up must end the loop, not the process */
+  g_unix_signal_add (SIGTERM, on_quit, loop);
+  g_unix_signal_add (SIGINT, on_quit, loop);
   bridge.kfd = kernel_ff_open ();
   if (bridge.kfd < 0) {
     bridge.sysfs = g_file_test (activate, G_FILE_TEST_EXISTS);
@@ -450,8 +726,8 @@ main (int argc, char **argv)
     return 1;
 
   g_unix_fd_add (bridge.fd, G_IO_IN | G_IO_HUP | G_IO_ERR, on_uinput, loop);
-  g_unix_signal_add (SIGTERM, on_quit, loop);
-  g_unix_signal_add (SIGINT, on_quit, loop);
+  monitor = android_watch ();
+  android_start ();
   g_main_loop_run (loop);
 
   vibrate_off ();

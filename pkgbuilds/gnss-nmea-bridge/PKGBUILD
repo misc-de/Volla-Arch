@@ -1,9 +1,9 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=gnss-nmea-bridge
-pkgver=0.4
-pkgrel=3
-pkgdesc="Android GNSS HAL (AIDL IGnss over binder) to an NMEA socket for geoclue"
+pkgver=0.5
+pkgrel=4
+pkgdesc="Android GNSS HAL (AIDL IGnss over binder) to an NMEA socket for geoclue, and to Android apps in the Waydroid container"
 arch=(aarch64 x86_64)
 license=(MIT)
 depends=(glib2 libgbinder geoclue)
@@ -11,11 +11,13 @@ backup=(etc/geoclue/conf.d/90-gnss-nmea-bridge.conf
 	etc/geoclue/conf.d/91-gps-only.conf)
 source=(gnss-nmea-bridge.c
 	gnss-nmea-bridge.service
+	gnss-nmea-bridge.sysusers
 	90-gnss-nmea-bridge.conf
 	91-gps-only.conf
 	LICENSE)
-sha256sums=('2ddf351283f8696c59a1ead69e3f7d18695d356d6e322e95938204c896b1592b'
-	'500639f4ea8e7779bc57eb52090af27d3741f0067a258e2047c231b741a42700'
+sha256sums=('34c32ceb61c7bab00a9537dd34ee3b1d49554c9f5594f7680745ea62f691f83c'
+	'a1f7c4c28097adc39cff7139edf7aaf443dd678824d48a520cd47b44b2c60da9'
+	'64b149e1c3ee9e058ae7cad1882458ab6485e2214804d2ba2c49a21d237dd863'
 	'2a603425d3425624c12a004c151dfb77d60ea5609967a4d31afb7b62dd2acdd4'
 	'9a62d8ed4fe9de8e3cc7685f18d1ce75bd552c5eba4cb3858ee65de2228bd94c'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
@@ -31,5 +33,6 @@ package() {
 	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
 	install -Dm755 gnss-nmea-bridge -t "$pkgdir/usr/bin"
 	install -Dm644 gnss-nmea-bridge.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 gnss-nmea-bridge.sysusers "$pkgdir/usr/lib/sysusers.d/gnss-nmea-bridge.conf"
 	install -Dm644 90-gnss-nmea-bridge.conf 91-gps-only.conf -t "$pkgdir/etc/geoclue/conf.d"
 }

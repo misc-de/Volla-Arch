@@ -20,6 +20,8 @@ DevicePolicy=closed
 DeviceAllow=/dev/uinput rw
 DeviceAllow=char-input rw
 DeviceAllow=/dev/binderfs/binder rw
+# The vibrator for Android in the Waydroid container
+DeviceAllow=/dev/binderfs/anbox-binder rw
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes

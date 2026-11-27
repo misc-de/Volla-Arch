@@ -1,0 +1,31 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=nfc-hal-bridge
+pkgver=0.1
+pkgrel=6
+pkgdesc="The phone's NFC HAL (AIDL INfc over binder) for Android apps in the Waydroid container, while NFC is off for Linux"
+arch=(aarch64 x86_64)
+license=(MIT)
+depends=(glib2 libgbinder)
+source=(nfc-hal-bridge.c
+	nfc-hal-bridge.service
+	nfc-hal-bridge.sysusers
+	LICENSE)
+sha256sums=('a85da1a6bc5f8c8910616c48417a2fd65e133b769ba0fb4c43f1d7ff889cdcdf'
+	'88e5bff5ad2b0e3846e69a70bf2f7f01616602149a6d8af5f39e1080a3ef5aa0'
+	'da9900e0b68ebf9f444cd445d5c45e9bb757ffeec7813b2fa23ceacd3d1fb132'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o nfc-hal-bridge nfc-hal-bridge.c \
+		$(pkg-config --cflags --libs gio-2.0 libgbinder) $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 nfc-hal-bridge -t "$pkgdir/usr/bin"
+	install -Dm644 nfc-hal-bridge.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 nfc-hal-bridge.sysusers "$pkgdir/usr/lib/sysusers.d/nfc-hal-bridge.conf"
+}

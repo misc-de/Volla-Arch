@@ -26,13 +26,28 @@
 // that need no north: measured on the Plinius (0.8), the rotation vector's view lagged behind a
 // turn and kept moving on the table, about 4° a minute, as the sensor hub pulled the heading
 // towards the magnetometer's. plinius-ambient's 360° background takes this one.
+//
+// Android apps (Waydroid container): the bridge stays the only client of the HAL and serves the
+// same interface (android.hardware.sensors.ISensors, version 1) to the container's SensorService
+// on /dev/anbox-binder, registered whenever the container's service manager shows up (the node
+// opens to users other than root only once the container has started; inotify tells). Android
+// gets the HAL's sensor list (without direct channels) and every event of the sensors it has
+// switched on, written into the event queue its SensorService hands over. A sensor runs while
+// D-Bus or Android wants it, at the fastest rate either asks for.
+#include <errno.h>
 #include <gbinder.h>
 #include <gio/gio.h>
 #include <glib-unix.h>
+#include <limits.h>
+#include <linux/futex.h>
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #define HAL_DEVICE "/dev/binder"
 #define HAL_IFACE "android.hardware.sensors.ISensors"
@@ -41,9 +56,26 @@
 #define HAL_WAIT_S 60
 
 /* ISensors transactions, in the order of ISensors.aidl */
-enum { HAL_ACTIVATE = 1, HAL_BATCH = 2, HAL_GET_SENSORS_LIST = 5, HAL_INITIALIZE = 6 };
+enum { HAL_ACTIVATE = 1, HAL_BATCH = 2, HAL_CONFIG_DIRECT_REPORT = 3, HAL_FLUSH = 4, HAL_GET_SENSORS_LIST = 5,
+       HAL_INITIALIZE = 6, HAL_INJECT_SENSOR_DATA = 7, HAL_REGISTER_DIRECT_CHANNEL = 8, HAL_SET_OPERATION_MODE = 9,
+       HAL_UNREGISTER_DIRECT_CHANNEL = 10 };
+/* Transactions every AIDL interface answers */
+#define TX_GET_INTERFACE_VERSION 0x00ffffff
+#define TX_GET_INTERFACE_HASH 0x00fffffe
+/* AIDL exception codes in a reply */
+enum { EX_NONE = 0, EX_ILLEGAL_ARGUMENT = -3, EX_UNSUPPORTED_OPERATION = -7 };
 /* Event flag bits of the queues (ISensors.aidl) */
 enum { EVENT_QUEUE_READ_AND_PROCESS = 1, EVENT_QUEUE_EVENTS_READ = 2, WAKE_LOCK_QUEUE_DATA_WRITTEN = 1 };
+
+/* What Android in the Waydroid container gets: ISensors version 1, the version its framework
+ * (Android 13 and later) is built against; the hash is that of the frozen version 1 */
+#define ANDROID_DEVICE "/dev/anbox-binder"
+#define ANDROID_VERSION 1
+#define ANDROID_HASH "c38c6b75e592ba5a6400b6348ad7f27db3064410"
+/* Direct report (bits 7-9) and direct channels (bits 10-11): not served */
+#define SENSOR_FLAG_DIRECT_MASK 0xf80
+/* SensorType of the flush-complete events */
+#define TYPE_META_DATA 0
 /* SensorType values and SensorInfo flags */
 enum { TYPE_ACCELEROMETER = 1, TYPE_LIGHT = 5, TYPE_PROXIMITY = 8, TYPE_GRAVITY = 9,
        TYPE_LINEAR_ACCELERATION = 10, TYPE_ROTATION_VECTOR = 11, TYPE_GAME_ROTATION_VECTOR = 15, TYPE_GEOMAGNETIC_ROTATION_VECTOR = 20,
@@ -89,6 +121,42 @@ struct sensor {
 	gboolean one_shot;
 };
 
+/* A sensor of the HAL as getSensorsList describes it (SensorInfo), kept for Android */
+struct hal_sensor_info {
+	gint32 handle, version, type, min_delay, max_delay;
+	guint32 fifo_reserved, fifo_max, flags;
+	gfloat max_range, resolution, power;
+	char *name, *vendor, *type_string, *permission;
+};
+
+/* A fast message queue that the other side created and handed over (its MQDescriptor): the
+ * read and write counters in bytes, the ring and the event flag word, all in shared memory */
+struct peer_queue {
+	guint8 *ring;
+	guint64 *read_ptr, *write_ptr;
+	guint32 *flag;
+	gsize quantum, size;
+	void *maps[4];
+	gsize map_lengths[4];
+};
+
+/* Android in the Waydroid container: its SensorService is a client like the D-Bus ones */
+static struct {
+	GBinderServiceManager *sm;
+	GBinderLocalObject *service;
+	gulong presence_id;
+	gulong added_id;
+	/* Shared with the reader thread */
+	GMutex lock;
+	struct peer_queue *events;
+	struct peer_queue *wake_lock;
+	GHashTable *active; /* HAL handle -> gint64 * sampling period in ns */
+	/* Main loop only */
+	GBinderRemoteObject *callback;
+	gulong death_id;
+	char *node; /* name of the device node in its directory */
+} android;
+
 static struct {
 	GMainLoop *loop;
 	GDBusConnection *bus;
@@ -102,6 +170,10 @@ static struct {
 	GThread *reader;
 	volatile gint quit;
 	struct sensor sensors[N_SENSORS];
+	/* Every sensor of the HAL (struct hal_sensor_info), read once at start */
+	GArray *list;
+	/* HAL handle -> gint64 * period the sensor runs at; absent: off (main loop) */
+	GHashTable *running;
 	/* D-Bus state, main loop only */
 	const char *orientation;
 	const char *tilt;
@@ -212,26 +284,92 @@ static gboolean hal_call(guint32 code, GBinderLocalRequest *req)
 	return TRUE;
 }
 
-static void hal_set_active(struct sensor *s, gboolean active)
+static const struct hal_sensor_info *hal_info(gint32 handle)
 {
+	for (guint i = 0; self.list && i < self.list->len; i++) {
+		const struct hal_sensor_info *info = &g_array_index(self.list, struct hal_sensor_info, i);
+		if (info->handle == handle)
+			return info;
+	}
+	return NULL;
+}
+
+/* The period a HAL sensor should run at: the shortest any D-Bus claim or Android asks for; -1 if
+ * nobody wants it */
+static gint64 wanted_period(gint32 handle)
+{
+	gint64 period = -1;
+	for (int id = 0; id < N_SENSORS; id++) {
+		const struct sensor *s = &self.sensors[id];
+		if (s->handle == handle && g_hash_table_size(s->claims))
+			period = period < 0 ? s->period_ns : MIN(period, s->period_ns);
+	}
+	g_mutex_lock(&android.lock);
+	const gint64 *android_period = android.active ? g_hash_table_lookup(android.active, GINT_TO_POINTER(handle))
+						      : NULL;
+	if (android_period)
+		period = period < 0 ? *android_period : MIN(period, *android_period);
+	g_mutex_unlock(&android.lock);
+	return period;
+}
+
+/* Switches a HAL sensor on, off or to another rate when what its users want has changed */
+static void hal_apply(gint32 handle)
+{
+	if (handle < 0)
+		return;
+	gint64 want = wanted_period(handle);
+	const gint64 *now = g_hash_table_lookup(self.running, GINT_TO_POINTER(handle));
 	GBinderLocalRequest *req;
-	if (active) {
+	if (want < 0 && !now)
+		return;
+	if (want >= 0 && now && *now == want)
+		return;
+	if (want >= 0) {
 		req = gbinder_client_new_request(self.client);
-		gbinder_local_request_append_int32(req, s->handle);
-		gbinder_local_request_append_int64(req, s->period_ns);
+		gbinder_local_request_append_int32(req, handle);
+		gbinder_local_request_append_int64(req, want);
 		gbinder_local_request_append_int64(req, 0);
 		hal_call(HAL_BATCH, req);
 		gbinder_local_request_unref(req);
 	}
-	req = gbinder_client_new_request(self.client);
-	gbinder_local_request_append_int32(req, s->handle);
-	gbinder_local_request_append_int32(req, active);
-	hal_call(HAL_ACTIVATE, req);
-	gbinder_local_request_unref(req);
-	g_info("%s %s", s->name, active ? "on" : "off");
+	if (want < 0 || !now) {
+		req = gbinder_client_new_request(self.client);
+		gbinder_local_request_append_int32(req, handle);
+		gbinder_local_request_append_int32(req, want >= 0);
+		hal_call(HAL_ACTIVATE, req);
+		gbinder_local_request_unref(req);
+	}
+	if (want < 0)
+		g_hash_table_remove(self.running, GINT_TO_POINTER(handle));
+	else
+		g_hash_table_insert(self.running, GINT_TO_POINTER(handle), g_memdup2(&want, sizeof(want)));
+	g_info("Sensor %d %s", handle, want < 0 ? "off" : "on");
 }
 
-/* Picks the first sensor of each type we serve; a non-wakeup accelerometer is preferred */
+/* A one-shot sensor has fired and switched itself off: Android takes that as off (it arms it
+ * again itself), D-Bus claims get it armed again */
+static void hal_fired(gint32 handle)
+{
+	g_hash_table_remove(self.running, GINT_TO_POINTER(handle));
+	g_mutex_lock(&android.lock);
+	if (android.active)
+		g_hash_table_remove(android.active, GINT_TO_POINTER(handle));
+	g_mutex_unlock(&android.lock);
+	hal_apply(handle);
+}
+
+static void hal_sensor_info_clear(gpointer data)
+{
+	struct hal_sensor_info *info = data;
+	g_free(info->name);
+	g_free(info->vendor);
+	g_free(info->type_string);
+	g_free(info->permission);
+}
+
+/* Keeps the whole list (for Android) and picks the first sensor of each type we serve; a
+ * non-wakeup accelerometer is preferred */
 static void hal_read_sensor_list(void)
 {
 	int status;
@@ -246,27 +384,31 @@ static void hal_read_sensor_list(void)
 	gbinder_reader_read_int32(&r, &exception);
 	gbinder_reader_read_int32(&r, &count);
 	for (gint32 i = 0; exception == 0 && i < count; i++) {
-		gint32 present, size, handle, version, type, min_delay, max_delay;
-		guint32 fifo_reserved, fifo_max, flags;
-		gfloat max_range, resolution, power;
+		struct hal_sensor_info info = {0};
+		gint32 present, size;
 		/* Non-null marker and size of the SensorInfo parcelable */
 		gbinder_reader_read_int32(&r, &present);
 		gbinder_reader_read_int32(&r, &size);
-		gbinder_reader_read_int32(&r, &handle);
-		char *name = gbinder_reader_read_string16(&r);
-		gbinder_reader_skip_string16(&r); /* vendor */
-		gbinder_reader_read_int32(&r, &version);
-		gbinder_reader_read_int32(&r, &type);
-		gbinder_reader_skip_string16(&r); /* typeAsString */
-		gbinder_reader_read_float(&r, &max_range);
-		gbinder_reader_read_float(&r, &resolution);
-		gbinder_reader_read_float(&r, &power);
-		gbinder_reader_read_int32(&r, &min_delay);
-		gbinder_reader_read_uint32(&r, &fifo_reserved);
-		gbinder_reader_read_uint32(&r, &fifo_max);
-		gbinder_reader_skip_string16(&r); /* requiredPermission */
-		gbinder_reader_read_int32(&r, &max_delay);
-		gbinder_reader_read_uint32(&r, &flags);
+		gbinder_reader_read_int32(&r, &info.handle);
+		info.name = gbinder_reader_read_string16(&r);
+		info.vendor = gbinder_reader_read_string16(&r);
+		gbinder_reader_read_int32(&r, &info.version);
+		gbinder_reader_read_int32(&r, &info.type);
+		info.type_string = gbinder_reader_read_string16(&r);
+		gbinder_reader_read_float(&r, &info.max_range);
+		gbinder_reader_read_float(&r, &info.resolution);
+		gbinder_reader_read_float(&r, &info.power);
+		gbinder_reader_read_int32(&r, &info.min_delay);
+		gbinder_reader_read_uint32(&r, &info.fifo_reserved);
+		gbinder_reader_read_uint32(&r, &info.fifo_max);
+		info.permission = gbinder_reader_read_string16(&r);
+		gbinder_reader_read_int32(&r, &info.max_delay);
+		gbinder_reader_read_uint32(&r, &info.flags);
+		g_array_append_val(self.list, info);
+		const gint32 handle = info.handle, type = info.type;
+		const guint32 flags = info.flags;
+		const gfloat max_range = info.max_range;
+		const char *name = info.name;
 		if (type == TYPE_GAME_ROTATION_VECTOR && game_rotation < 0) {
 			game_rotation = handle;
 			game_rotation_wakeup = (flags & SENSOR_FLAG_WAKE_UP) != 0;
@@ -285,7 +427,6 @@ static void hal_read_sensor_list(void)
 			g_info("%s: handle %d \"%s\"%s, max range %.1f", s->name, handle, name,
 			       wakeup ? " (wakeup)" : "", max_range);
 		}
-		g_free(name);
 	}
 	gbinder_remote_reply_unref(reply);
 	struct sensor *o = &self.sensors[ORIENTATION];
@@ -490,9 +631,9 @@ static void on_pick_up(void)
 	struct sensor *s = &self.sensors[PICK_UP];
 	g_dbus_connection_emit_signal(self.bus, NULL, "/net/hadess/SensorProxy", "org.plinius.SensorProxyBridge",
 				      "PickedUp", NULL, NULL);
-	/* A one-shot sensor is off now: arm it again while it is claimed */
-	if (s->one_shot && g_hash_table_size(s->claims))
-		hal_set_active(s, TRUE);
+	/* A one-shot sensor is off now: armed again while it is claimed */
+	if (s->one_shot)
+		hal_fired(s->handle);
 }
 
 /* Every sample goes out as a signal (m/s², sensor axes: x right, y up, z out of the screen; at
@@ -546,16 +687,155 @@ static gboolean dispatch_events(gpointer data)
 			on_gravity(e->payload.vec3.x, e->payload.vec3.y, e->payload.vec3.z);
 		else if (e->sensor == self.sensors[MOTION].handle)
 			on_motion(e->payload.vec3.x, e->payload.vec3.y, e->payload.vec3.z);
-		else {
+		else if (e->sensor == self.sensors[ORIENTATION].handle ||
+			 e->sensor == self.sensors[GAME_ORIENTATION].handle) {
 			/* Both may be the game rotation vector (no rotation vector): each its signal */
 			if (e->sensor == self.sensors[ORIENTATION].handle)
 				on_orientation("Orientation", e->payload.data);
 			if (e->sensor == self.sensors[GAME_ORIENTATION].handle)
 				on_orientation("GameOrientation", e->payload.data);
+		} else if (e->type != TYPE_META_DATA) {
+			/* A sensor only Android uses: a one-shot one is off now */
+			const struct hal_sensor_info *info = hal_info(e->sensor);
+			if (info && (info->flags & SENSOR_FLAG_REPORTING_MODE) == SENSOR_FLAG_ONE_SHOT)
+				hal_fired(e->sensor);
 		}
 	}
 	g_array_unref(batch);
 	return G_SOURCE_REMOVE;
+}
+
+/* ---- Queues handed over by Android ---- */
+
+static void peer_queue_free(struct peer_queue *q)
+{
+	if (!q)
+		return;
+	for (guint i = 0; i < G_N_ELEMENTS(q->maps); i++)
+		if (q->maps[i])
+			munmap(q->maps[i], q->map_lengths[i]);
+	g_free(q);
+}
+
+/* Reads a parcelable header (non-null marker and size); FALSE for a null parcelable */
+static gboolean read_parcelable_header(GBinderReader *r)
+{
+	gint32 present = 0, size = 0;
+	return gbinder_reader_read_int32(r, &present) && present && gbinder_reader_read_int32(r, &size);
+}
+
+/* Maps a queue from its MQDescriptor (android.hardware.common.fmq): grantors read counter, write
+ * counter, ring and, if configured, the event flag word, in the file descriptors of a NativeHandle */
+static struct peer_queue *peer_queue_read(GBinderReader *r, gsize quantum)
+{
+	struct { gint32 fd_index, offset; gint64 extent; } grantors[4];
+	gint32 n_grantors = 0, n_fds = 0, n_ints = 0, item = 0, flavor = 0;
+	int fds[4] = {-1, -1, -1, -1};
+	struct peer_queue *q = NULL;
+	gboolean ok = read_parcelable_header(r) && gbinder_reader_read_int32(r, &n_grantors) && n_grantors >= 3 &&
+		      n_grantors <= (gint32)G_N_ELEMENTS(grantors);
+	for (gint32 i = 0; ok && i < n_grantors; i++)
+		ok = read_parcelable_header(r) && gbinder_reader_read_int32(r, &grantors[i].fd_index) &&
+		     gbinder_reader_read_int32(r, &grantors[i].offset) &&
+		     gbinder_reader_read_int64(r, &grantors[i].extent);
+	ok = ok && read_parcelable_header(r) && gbinder_reader_read_int32(r, &n_fds) && n_fds >= 1 &&
+	     n_fds <= (gint32)G_N_ELEMENTS(fds);
+	for (gint32 i = 0; ok && i < n_fds; i++) {
+		gint32 present = 0, has_comm = 0;
+		ok = gbinder_reader_read_int32(r, &present) && present && gbinder_reader_read_int32(r, &has_comm) &&
+		     (fds[i] = gbinder_reader_read_dup_fd(r)) >= 0;
+	}
+	ok = ok && gbinder_reader_read_int32(r, &n_ints) && n_ints == 0 && gbinder_reader_read_int32(r, &item) &&
+	     gbinder_reader_read_int32(r, &flavor) && item == (gint32)quantum;
+	if (ok) {
+		q = g_new0(struct peer_queue, 1);
+		for (gint32 i = 0; ok && i < n_grantors; i++) {
+			const long page = sysconf(_SC_PAGESIZE);
+			const gint64 start = grantors[i].offset & ~(page - 1);
+			ok = grantors[i].fd_index >= 0 && grantors[i].fd_index < n_fds && grantors[i].offset >= 0 &&
+			     grantors[i].extent > 0 && grantors[i].extent <= G_MAXINT32;
+			if (!ok)
+				break;
+			q->map_lengths[i] = grantors[i].offset - start + grantors[i].extent;
+			void *map = mmap(NULL, q->map_lengths[i], PROT_READ | PROT_WRITE, MAP_SHARED,
+					 fds[grantors[i].fd_index], start);
+			ok = map != MAP_FAILED;
+			if (ok)
+				q->maps[i] = map;
+		}
+		if (ok) {
+			q->read_ptr = (guint64 *)((guint8 *)q->maps[0] + (grantors[0].offset & (sysconf(_SC_PAGESIZE) - 1)));
+			q->write_ptr = (guint64 *)((guint8 *)q->maps[1] + (grantors[1].offset & (sysconf(_SC_PAGESIZE) - 1)));
+			q->ring = (guint8 *)q->maps[2] + (grantors[2].offset & (sysconf(_SC_PAGESIZE) - 1));
+			if (n_grantors > 3)
+				q->flag = (guint32 *)((guint8 *)q->maps[3] +
+						      (grantors[3].offset & (sysconf(_SC_PAGESIZE) - 1)));
+			q->quantum = quantum;
+			q->size = grantors[2].extent - grantors[2].extent % quantum;
+			ok = q->size > 0;
+		}
+	}
+	for (guint i = 0; i < G_N_ELEMENTS(fds); i++)
+		if (fds[i] >= 0)
+			close(fds[i]);
+	if (!ok) {
+		g_warning("Android handed over an unusable queue");
+		peer_queue_free(q);
+		return NULL;
+	}
+	return q;
+}
+
+/* Writes whole items as far as they fit; returns how many */
+static gsize peer_queue_write(struct peer_queue *q, const void *items, gsize n)
+{
+	const guint64 write = __atomic_load_n(q->write_ptr, __ATOMIC_RELAXED);
+	const guint64 read = __atomic_load_n(q->read_ptr, __ATOMIC_ACQUIRE);
+	const guint64 used = write - read;
+	if (used > q->size)
+		return 0;
+	n = MIN(n, (q->size - used) / q->quantum);
+	const gsize bytes = n * q->quantum, at = write % q->size, first = MIN(bytes, q->size - at);
+	memcpy(q->ring + at, items, first);
+	memcpy(q->ring, (const guint8 *)items + first, bytes - first);
+	__atomic_store_n(q->write_ptr, write + bytes, __ATOMIC_RELEASE);
+	return n;
+}
+
+/* Throws away what the other side wrote (Android's wake lock counts: we hold none) */
+static void peer_queue_drain(struct peer_queue *q)
+{
+	__atomic_store_n(q->read_ptr, __atomic_load_n(q->write_ptr, __ATOMIC_ACQUIRE), __ATOMIC_RELEASE);
+}
+
+static void peer_queue_wake(struct peer_queue *q, guint32 bits)
+{
+	if (q->flag && (~__atomic_fetch_or(q->flag, bits, __ATOMIC_SEQ_CST) & bits))
+		syscall(__NR_futex, q->flag, FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, bits);
+}
+
+/* Passes the events of the sensors Android has on (and the flush-complete events, which come
+ * from its flushes) into its queue (reader thread) */
+static void android_forward(const struct hal_event *events, gsize n)
+{
+	struct hal_event out[QUEUE_EVENTS];
+	gsize count = 0;
+	g_mutex_lock(&android.lock);
+	if (android.events) {
+		for (gsize i = 0; i < n && count < G_N_ELEMENTS(out); i++)
+			if (events[i].type == TYPE_META_DATA ||
+			    g_hash_table_contains(android.active, GINT_TO_POINTER(events[i].sensor)))
+				out[count++] = events[i];
+		if (count) {
+			gsize written = peer_queue_write(android.events, out, count);
+			if (written < count)
+				g_warning("Android's sensor queue is full: %zu events dropped", count - written);
+			if (written)
+				peer_queue_wake(android.events, EVENT_QUEUE_READ_AND_PROCESS);
+		}
+		peer_queue_drain(android.wake_lock);
+	}
+	g_mutex_unlock(&android.lock);
 }
 
 /* ---- Event queue (reader thread) ---- */
@@ -579,21 +859,308 @@ static gpointer reader_thread(gpointer data)
 
 		/* Per event, not per entry: sensors may share one HAL sensor (and its handle) */
 		guint32 wakeups = 0;
-		for (gsize i = 0; i < n; i++)
-			for (int id = 0; id < N_SENSORS; id++)
-				if (buffer[i].sensor == self.sensors[id].handle && self.sensors[id].wakeup) {
-					wakeups++;
-					break;
-				}
+		for (gsize i = 0; i < n; i++) {
+			const struct hal_sensor_info *info = hal_info(buffer[i].sensor);
+			gboolean wakeup = info && (info->flags & SENSOR_FLAG_WAKE_UP);
+			for (int id = 0; !wakeup && id < N_SENSORS; id++)
+				wakeup = buffer[i].sensor == self.sensors[id].handle && self.sensors[id].wakeup;
+			wakeups += wakeup;
+		}
 		/* Wakeup events hold a wake lock in the HAL until we report them as handled */
 		if (wakeups && gbinder_fmq_write(self.wake_lock, &wakeups, 1))
 			gbinder_fmq_wake(self.wake_lock, WAKE_LOCK_QUEUE_DATA_WRITTEN);
+		android_forward(buffer, n);
 
 		GArray *batch = g_array_sized_new(FALSE, FALSE, sizeof(struct hal_event), n);
 		g_array_append_vals(batch, buffer, n);
 		g_idle_add(dispatch_events, batch);
 	}
 	return NULL;
+}
+
+/* ---- ISensors for Android (main loop) ---- */
+
+/* Sampling periods Android asked for by batch(), also of sensors it has not switched on yet */
+static GHashTable *android_periods;
+/* SENSOR_DELAY_NORMAL, for a sensor Android switches on without a batch() */
+#define ANDROID_DEFAULT_PERIOD_NS 200000000
+
+/* Android's SensorService is gone or starts over: its sensors are off, its queues closed */
+static void android_reset(void)
+{
+	g_mutex_lock(&android.lock);
+	/* The keys are handles, not pointers: the list stays valid after the removal */
+	GList *handles = android.active ? g_hash_table_get_keys(android.active) : NULL;
+	if (android.active)
+		g_hash_table_remove_all(android.active);
+	peer_queue_free(android.events);
+	peer_queue_free(android.wake_lock);
+	android.events = android.wake_lock = NULL;
+	g_mutex_unlock(&android.lock);
+	for (GList *l = handles; l; l = l->next)
+		hal_apply(GPOINTER_TO_INT(l->data));
+	g_list_free(handles);
+	if (android_periods)
+		g_hash_table_remove_all(android_periods);
+	if (android.callback) {
+		gbinder_remote_object_remove_handler(android.callback, android.death_id);
+		gbinder_remote_object_unref(android.callback);
+		android.callback = NULL;
+	}
+}
+
+static void on_android_died(GBinderRemoteObject *obj, void *user_data)
+{
+	g_info("Android's sensor service is gone");
+	android_reset();
+}
+
+static void write_exception(GBinderWriter *w, gint32 code, const char *message)
+{
+	gbinder_writer_append_int32(w, code);
+	if (code != EX_NONE) {
+		gbinder_writer_append_string16(w, message);
+		gbinder_writer_append_int32(w, 0); /* no remote stack trace */
+	}
+}
+
+/* The HAL's sensors as SensorInfo parcelables, without direct report and direct channels */
+static void write_sensor_list(GBinderWriter *w)
+{
+	gbinder_writer_append_int32(w, self.list->len);
+	for (guint i = 0; i < self.list->len; i++) {
+		const struct hal_sensor_info *info = &g_array_index(self.list, struct hal_sensor_info, i);
+		GBinderWriter p;
+		gbinder_writer_start_parcelable(w, &p);
+		gbinder_writer_append_int32(&p, info->handle);
+		gbinder_writer_append_string16(&p, info->name);
+		gbinder_writer_append_string16(&p, info->vendor);
+		gbinder_writer_append_int32(&p, info->version);
+		gbinder_writer_append_int32(&p, info->type);
+		gbinder_writer_append_string16(&p, info->type_string);
+		gbinder_writer_append_float(&p, info->max_range);
+		gbinder_writer_append_float(&p, info->resolution);
+		gbinder_writer_append_float(&p, info->power);
+		gbinder_writer_append_int32(&p, info->min_delay);
+		gbinder_writer_append_int32(&p, info->fifo_reserved);
+		gbinder_writer_append_int32(&p, info->fifo_max);
+		gbinder_writer_append_string16(&p, info->permission);
+		gbinder_writer_append_int32(&p, info->max_delay);
+		gbinder_writer_append_int32(&p, info->flags & ~SENSOR_FLAG_DIRECT_MASK);
+		gbinder_writer_finish_parcelable(&p);
+	}
+}
+
+/* initialize(eventQueue, wakeLockQueue, callback): starts over with the new queues */
+static void android_initialize(GBinderReader *r, GBinderWriter *w)
+{
+	struct peer_queue *events = peer_queue_read(r, sizeof(struct hal_event));
+	struct peer_queue *wake_lock = events ? peer_queue_read(r, sizeof(guint32)) : NULL;
+	GBinderRemoteObject *callback = wake_lock ? gbinder_reader_read_object(r) : NULL;
+	if (!callback) {
+		peer_queue_free(events);
+		peer_queue_free(wake_lock);
+		write_exception(w, EX_ILLEGAL_ARGUMENT, "Bad queues or callback");
+		return;
+	}
+	android_reset();
+	g_mutex_lock(&android.lock);
+	android.events = events;
+	android.wake_lock = wake_lock;
+	g_mutex_unlock(&android.lock);
+	android.callback = callback;
+	android.death_id = gbinder_remote_object_add_death_handler(callback, on_android_died, NULL);
+	g_info("Android's sensor service connected");
+	write_exception(w, EX_NONE, NULL);
+}
+
+/* A period within what the sensor can do */
+static gint64 android_clamp(const struct hal_sensor_info *info, gint64 period)
+{
+	if (info->min_delay > 0)
+		period = MAX(period, (gint64)info->min_delay * 1000);
+	if (info->max_delay > 0)
+		period = MIN(period, (gint64)info->max_delay * 1000);
+	return MAX(period, 0);
+}
+
+static void android_activate(const struct hal_sensor_info *info, gboolean on)
+{
+	g_mutex_lock(&android.lock);
+	if (on) {
+		const gint64 *asked = g_hash_table_lookup(android_periods, GINT_TO_POINTER(info->handle));
+		gint64 period = android_clamp(info, asked ? *asked : ANDROID_DEFAULT_PERIOD_NS);
+		g_hash_table_insert(android.active, GINT_TO_POINTER(info->handle), g_memdup2(&period, sizeof(period)));
+	} else {
+		g_hash_table_remove(android.active, GINT_TO_POINTER(info->handle));
+	}
+	g_mutex_unlock(&android.lock);
+	hal_apply(info->handle);
+}
+
+static void android_batch(const struct hal_sensor_info *info, gint64 period)
+{
+	period = android_clamp(info, period);
+	g_hash_table_insert(android_periods, GINT_TO_POINTER(info->handle), g_memdup2(&period, sizeof(period)));
+	g_mutex_lock(&android.lock);
+	gboolean active = g_hash_table_contains(android.active, GINT_TO_POINTER(info->handle));
+	if (active)
+		g_hash_table_insert(android.active, GINT_TO_POINTER(info->handle), g_memdup2(&period, sizeof(period)));
+	g_mutex_unlock(&android.lock);
+	if (active)
+		hal_apply(info->handle);
+}
+
+/* flush(handle): the HAL answers with a flush-complete event, which goes to Android */
+static gint32 android_flush(const struct hal_sensor_info *info)
+{
+	g_mutex_lock(&android.lock);
+	gboolean active = g_hash_table_contains(android.active, GINT_TO_POINTER(info->handle));
+	g_mutex_unlock(&android.lock);
+	if (!active)
+		return EX_ILLEGAL_ARGUMENT;
+	GBinderLocalRequest *req = gbinder_client_new_request(self.client);
+	gbinder_local_request_append_int32(req, info->handle);
+	gboolean ok = hal_call(HAL_FLUSH, req);
+	gbinder_local_request_unref(req);
+	return ok ? EX_NONE : EX_ILLEGAL_ARGUMENT;
+}
+
+static GBinderLocalReply *on_android_call(GBinderLocalObject *obj, GBinderRemoteRequest *req, guint code,
+					  guint flags, int *status, void *user_data)
+{
+	GBinderReader r;
+	GBinderWriter w;
+	GBinderLocalReply *reply = gbinder_local_object_new_reply(obj);
+	gint32 handle = -1, value = 0;
+	gint64 period = 0;
+	gbinder_remote_request_init_reader(req, &r);
+	gbinder_local_reply_init_writer(reply, &w);
+	*status = GBINDER_STATUS_OK;
+	const struct hal_sensor_info *info = NULL;
+	switch (code) {
+	case TX_GET_INTERFACE_VERSION:
+		write_exception(&w, EX_NONE, NULL);
+		gbinder_writer_append_int32(&w, ANDROID_VERSION);
+		break;
+	case TX_GET_INTERFACE_HASH:
+		write_exception(&w, EX_NONE, NULL);
+		gbinder_writer_append_string16(&w, ANDROID_HASH);
+		break;
+	case HAL_GET_SENSORS_LIST:
+		write_exception(&w, EX_NONE, NULL);
+		write_sensor_list(&w);
+		break;
+	case HAL_INITIALIZE:
+		android_initialize(&r, &w);
+		break;
+	case HAL_ACTIVATE:
+		if (gbinder_reader_read_int32(&r, &handle) && gbinder_reader_read_int32(&r, &value) &&
+		    (info = hal_info(handle))) {
+			android_activate(info, value != 0);
+			write_exception(&w, EX_NONE, NULL);
+		} else {
+			write_exception(&w, EX_ILLEGAL_ARGUMENT, "No such sensor");
+		}
+		break;
+	case HAL_BATCH:
+		if (gbinder_reader_read_int32(&r, &handle) && gbinder_reader_read_int64(&r, &period) &&
+		    (info = hal_info(handle))) {
+			android_batch(info, period);
+			write_exception(&w, EX_NONE, NULL);
+		} else {
+			write_exception(&w, EX_ILLEGAL_ARGUMENT, "No such sensor");
+		}
+		break;
+	case HAL_FLUSH:
+		if (gbinder_reader_read_int32(&r, &handle) && (info = hal_info(handle)))
+			write_exception(&w, android_flush(info), "Sensor not active");
+		else
+			write_exception(&w, EX_ILLEGAL_ARGUMENT, "No such sensor");
+		break;
+	case HAL_SET_OPERATION_MODE:
+		/* Only the normal mode (0), no data injection */
+		gbinder_reader_read_int32(&r, &value);
+		write_exception(&w, value == 0 ? EX_NONE : EX_UNSUPPORTED_OPERATION, "Only the normal mode");
+		break;
+	case HAL_INJECT_SENSOR_DATA:
+	case HAL_UNREGISTER_DIRECT_CHANNEL:
+		write_exception(&w, EX_NONE, NULL);
+		break;
+	default:
+		/* configDirectReport, registerDirectChannel and anything newer */
+		write_exception(&w, EX_UNSUPPORTED_OPERATION, "Not supported");
+		break;
+	}
+	return reply;
+}
+
+static void on_android_added(GBinderServiceManager *sm, int status, void *user_data)
+{
+	if (status)
+		g_warning("Cannot serve the sensors to Android (status %d)", status);
+	else
+		g_info("Serving the sensors to Android");
+}
+
+static void android_register(void)
+{
+	if (gbinder_servicemanager_is_present(android.sm))
+		gbinder_servicemanager_add_service(android.sm, HAL_IFACE "/default", android.service, on_android_added,
+						   NULL);
+}
+
+/* The container's service manager comes with every start of the container */
+static void on_android_presence(GBinderServiceManager *sm, void *user_data)
+{
+	if (gbinder_servicemanager_is_present(sm))
+		android_register();
+	else
+		android_reset();
+}
+
+static void android_init(void)
+{
+	android.active = g_hash_table_new_full(NULL, NULL, NULL, g_free);
+	android_periods = g_hash_table_new_full(NULL, NULL, NULL, g_free);
+}
+
+/* Serves ISensors on the container's binder. Idempotent: called at start and whenever the device
+ * node changes, until it can be opened */
+static void android_start(void)
+{
+	if (android.sm || access(ANDROID_DEVICE, R_OK | W_OK) != 0)
+		return;
+	android.sm = gbinder_servicemanager_new(ANDROID_DEVICE);
+	if (!android.sm)
+		return;
+	android.service = gbinder_servicemanager_new_local_object(android.sm, HAL_IFACE, on_android_call, NULL);
+	gbinder_local_object_set_stability(android.service, GBINDER_STABILITY_VINTF);
+	android.presence_id = gbinder_servicemanager_add_presence_handler(android.sm, on_android_presence, NULL);
+	android_register();
+}
+
+static void on_android_node(GFileMonitor *monitor, GFile *file, GFile *other, GFileMonitorEvent event,
+			    gpointer user_data)
+{
+	g_autofree char *base = g_file_get_basename(file);
+	if (event != G_FILE_MONITOR_EVENT_DELETED && g_strcmp0(base, android.node) == 0)
+		android_start();
+}
+
+/* The kernel creates the node at boot, but only the start of the container opens it to users other
+ * than root: watch its directory (binderfs reports chmod) instead of polling */
+static GFileMonitor *android_watch(void)
+{
+	g_autofree char *path = realpath(ANDROID_DEVICE, NULL);
+	g_autoptr(GFile) node = g_file_new_for_path(path ? path : ANDROID_DEVICE);
+	g_autoptr(GFile) dir = g_file_get_parent(node);
+	GFileMonitor *monitor = g_file_monitor_directory(dir, G_FILE_MONITOR_NONE, NULL, NULL);
+	g_free(android.node);
+	android.node = g_file_get_basename(node);
+	if (monitor)
+		g_signal_connect(monitor, "changed", G_CALLBACK(on_android_node), NULL);
+	return monitor;
 }
 
 /* ---- D-Bus ---- */
@@ -603,24 +1170,10 @@ static void unwatch(gpointer watch)
 	g_bus_unwatch_name(GPOINTER_TO_UINT(watch));
 }
 
-/* Another of ours on the same HAL sensor that is claimed (Orientation standing in with the game
- * rotation vector): that one keeps it running */
-static gboolean shared_and_claimed(const struct sensor *s)
-{
-	for (int id = 0; id < N_SENSORS; id++) {
-		const struct sensor *other = &self.sensors[id];
-		if (other != s && other->handle == s->handle && g_hash_table_size(other->claims))
-			return TRUE;
-	}
-	return FALSE;
-}
-
 static void release(struct sensor *s, const char *sender)
 {
-	if (!g_hash_table_remove(s->claims, sender))
-		return;
-	if (g_hash_table_size(s->claims) == 0 && !shared_and_claimed(s))
-		hal_set_active(s, FALSE);
+	if (g_hash_table_remove(s->claims, sender))
+		hal_apply(s->handle);
 }
 
 static void on_client_vanished(GDBusConnection *bus, const char *name, gpointer user_data)
@@ -641,8 +1194,7 @@ static void claim(struct sensor *s, const char *sender)
 	/* The last heading is stale by now: report the first new one in any case */
 	if (s == &self.sensors[COMPASS])
 		self.heading = -1;
-	if (!shared_and_claimed(s))
-		hal_set_active(s, TRUE);
+	hal_apply(s->handle);
 }
 
 static void on_method_call(GDBusConnection *bus, const char *sender, const char *path, const char *iface,
@@ -785,6 +1337,9 @@ int main(void)
 {
 	for (int id = 0; id < N_SENSORS; id++)
 		self.sensors[id].claims = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, unwatch);
+	self.list = g_array_new(FALSE, TRUE, sizeof(struct hal_sensor_info));
+	g_array_set_clear_func(self.list, hal_sensor_info_clear);
+	self.running = g_hash_table_new_full(NULL, NULL, NULL, g_free);
 	if (!hal_connect()) {
 		g_warning("Cannot initialize the sensors HAL");
 		return 1;
@@ -796,13 +1351,21 @@ int main(void)
 				     on_bus_acquired, NULL, on_name_lost, NULL, NULL);
 	g_unix_signal_add(SIGTERM, on_signal, NULL);
 	g_unix_signal_add(SIGINT, on_signal, NULL);
+	android_init();
+	g_autoptr(GFileMonitor) monitor = android_watch();
+	android_start();
 	g_main_loop_run(self.loop);
 
+	/* Everything off: D-Bus claims and Android alike */
+	android_reset();
 	for (int id = 0; id < N_SENSORS; id++)
-		if (self.sensors[id].handle >= 0 && g_hash_table_size(self.sensors[id].claims))
-			hal_set_active(&self.sensors[id], FALSE);
+		g_hash_table_remove_all(self.sensors[id].claims);
+	for (int id = 0; id < N_SENSORS; id++)
+		hal_apply(self.sensors[id].handle);
 	g_bus_unown_name(owner);
 	g_atomic_int_set(&self.quit, 1);
 	g_thread_join(self.reader);
+	/* The reader thread looked sensors up in the list until here */
+	g_array_unref(self.list);
 	return 0;
 }

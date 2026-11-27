@@ -1,0 +1,8 @@
+<!-- Plinius: the sensors, served from the phone by sensor-proxy-bridge -->
+<manifest version="1.0" type="device">
+    <hal format="aidl">
+        <name>android.hardware.sensors</name>
+        <version>1</version>
+        <fqname>ISensors/default</fqname>
+    </hal>
+</manifest>

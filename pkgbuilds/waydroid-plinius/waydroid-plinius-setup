@@ -1,0 +1,234 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""waydroid-plinius-setup: what Waydroid needs on the Volla Phone Plinius besides its own set-up.
+
+Runs before the container service starts (ExecStartPre of waydroid-container.service, after the
+HAL bridges):
+
+1. /etc/gbinder.d/60-waydroid-anbox.conf: the protocols of the container's binder for the
+   Android version of the system image, as Waydroid picks them for itself (its
+   tools/helpers/protocol.py). The bridges are libgbinder clients that read this file when they
+   start; if it changes, the running bridges start again.
+2. The container's vendor overlay: a VINTF entry for each bridge that runs (Android waits forever
+   at boot for a declared service that never registers), display_settings.xml, so that apps are
+   no free-form windows with a caption bar of their own on the phone, and the vendor's
+   libnfc-nci.conf, the settings of the phone's NFC controller for Android's NFC stack.
+3. The size of Android's display in waydroid.cfg: the phone's screen in logical pixels between
+   Phosh's top bar and home bar (Waydroid multiplies it by the scale). A size set there already
+   stays.
+4. The devices Android needs: its processes run as the same uids on the host, where udev gives
+   ashmem, the system DMA heaps and the DRM device to root and video only. They get the modes of
+   Android's own ueventd.rc (the DRM device opens for everybody, as Waydroid opens its render
+   nodes, until graphics go through the host's binder). Waydroid's own chmod 777 of every device
+   is off on Halium (0001); permissions are only added here, never taken.
+
+Without an initialised Waydroid (no waydroid.cfg) it does nothing.
+"""
+
+import configparser
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+WAYDROID_CFG = "/var/lib/waydroid/waydroid.cfg"
+OVERLAY = "/var/lib/waydroid/overlay"
+GBINDER_CONF = "/etc/gbinder.d/60-waydroid-anbox.conf"
+DATA = "/usr/share/waydroid-plinius"
+VENDOR_ETC = "/vendor/etc"
+
+# The bridges and the VINTF entry each one serves
+BRIDGES = {
+    "sensor-proxy-bridge.service": "plinius-sensors.xml",
+    "gnss-nmea-bridge.service": "plinius-gnss.xml",
+    "vibrator-ff-bridge.service": "plinius-vibrator.xml",
+    "health-hal-bridge.service": "plinius-health.xml",
+    "nfc-hal-bridge.service": "plinius-nfc.xml",
+}
+
+# Devices for Android and the mode bits it needs on them (AOSP's ueventd.rc)
+DEVICE_MODES = {
+    "/dev/ashmem": 0o666,  # shared memory of every Android process (the sensors' queues too)
+    "/dev/dma_heap/system": 0o444,  # gralloc's buffers; opened read-only to allocate
+    "/dev/dma_heap/system-uncached": 0o444,
+}
+# The DRM device of waydroid.cfg: SurfaceFlinger's and the apps' buffers (gbm)
+DRM_MODE = 0o666
+
+# The Plinius in portrait: 1080 x 2400 at Phosh's scale 2.265625 is 476 x 1059 logical pixels;
+# the top bar takes 32 and the home bar 15 (PHOSH_TOP_BAR_HEIGHT, PHOSH_HOME_BAR_HEIGHT)
+DISPLAY_WIDTH = 476
+DISPLAY_HEIGHT = 1059 - 32 - 15
+
+
+def protocols(api):
+    """(binder protocol, service manager protocol) for an Android API level, as Waydroid's
+    set_aidl_version() picks them."""
+    if api < 28:
+        return "aidl", "aidl"
+    if api < 30:
+        return "aidl2", "aidl2"
+    if api < 31:
+        return "aidl3", "aidl3"
+    if api < 33:
+        return "aidl4", "aidl3"
+    if api < 35:
+        return "aidl3", "aidl3"
+    if api < 36:
+        return "aidl3", "aidl5"
+    return "aidl3", "aidl6"
+
+
+def load_cfg():
+    cfg = configparser.ConfigParser()
+    cfg.optionxform = str  # property names keep their case
+    if not cfg.read(WAYDROID_CFG):
+        return None
+    return cfg
+
+
+def read_prop(path, name):
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                key, sep, value = line.strip().partition("=")
+                if sep and key == name:
+                    return value
+    except OSError:
+        pass
+    return None
+
+
+def image_api(cfg):
+    """The API level of the system image (ro.build.version.sdk), mounted read-only for that;
+    None if there is none or it cannot be read."""
+    image = os.path.join(cfg.get("waydroid", "images_path", fallback=""), "system.img")
+    if not os.path.isfile(image):
+        return None
+    with tempfile.TemporaryDirectory(prefix="waydroid-plinius-") as mnt:
+        if subprocess.run(["mount", "-o", "ro,loop", image, mnt], stderr=subprocess.DEVNULL).returncode:
+            return None
+        try:
+            value = read_prop(os.path.join(mnt, "system", "build.prop"), "ro.build.version.sdk")
+        finally:
+            subprocess.run(["umount", mnt], stderr=subprocess.DEVNULL)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def gbinder_text(api):
+    binder, sm = protocols(api)
+    return ("# Written by waydroid-plinius-setup for the system image (Android API %d)\n"
+            "[Protocol]\n/dev/anbox-binder = %s\n[ServiceManager]\n/dev/anbox-binder = %s\n" % (api, binder, sm))
+
+
+def write_if_changed(path, text):
+    """Writes text to path (atomically) unless it holds that already; True if it changed."""
+    try:
+        with open(path) as f:
+            if f.read() == text:
+                return False
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".new"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    return True
+
+
+def is_active(unit):
+    return subprocess.run(["systemctl", "is-active", "-q", unit]).returncode == 0
+
+
+def setup_gbinder(cfg):
+    api = image_api(cfg)
+    if api is None:
+        print("No readable system image: the binder protocols stay as they are")
+        return
+    if write_if_changed(GBINDER_CONF, gbinder_text(api)):
+        print("Binder protocols for Android API %d: %s, %s" % ((api,) + protocols(api)))
+        # The bridges read it when they start
+        subprocess.run(["systemctl", "try-restart"] + list(BRIDGES))
+
+
+def setup_overlay():
+    manifests = os.path.join(OVERLAY, "vendor", "etc", "vintf", "manifest")
+    os.makedirs(manifests, exist_ok=True)
+    for unit, name in BRIDGES.items():
+        target = os.path.join(manifests, name)
+        if is_active(unit):
+            shutil.copyfile(os.path.join(DATA, "vintf", name), target)
+            os.chmod(target, 0o644)
+        elif os.path.exists(target):
+            os.unlink(target)
+            print("%s does not run: %s left out" % (unit, name))
+    target = os.path.join(OVERLAY, "vendor", "etc", "display_settings.xml")
+    shutil.copyfile(os.path.join(DATA, "display_settings.xml"), target)
+    os.chmod(target, 0o644)
+    nfc = os.path.join(VENDOR_ETC, "libnfc-nci.conf")
+    if os.path.isfile(nfc):
+        target = os.path.join(OVERLAY, "vendor", "etc", "libnfc-nci.conf")
+        shutil.copyfile(nfc, target)
+        os.chmod(target, 0o644)
+
+
+def setup_display(cfg):
+    if not cfg.has_section("properties"):
+        cfg.add_section("properties")
+    props = cfg["properties"]
+    if "persist.waydroid.width" in props or "persist.waydroid.height" in props:
+        return
+    props["persist.waydroid.width"] = str(DISPLAY_WIDTH)
+    props["persist.waydroid.height"] = str(DISPLAY_HEIGHT)
+    with open(WAYDROID_CFG, "w") as f:
+        cfg.write(f)
+    print("Android's display: %d x %d logical pixels" % (DISPLAY_WIDTH, DISPLAY_HEIGHT))
+    # Waydroid makes its properties from waydroid.cfg only on init and upgrade
+    subprocess.run(["waydroid", "upgrade", "--offline"])
+
+
+def add_mode(path, mode):
+    """Adds the mode bits to a device node; True if it had them not all already."""
+    try:
+        old = os.stat(path).st_mode & 0o7777
+    except OSError:
+        return False
+    if old | mode == old:
+        return False
+    try:
+        os.chmod(path, old | mode)
+    except OSError as e:
+        print("%s: %s" % (path, e.strerror), file=sys.stderr)
+        return False
+    print("%s: %o -> %o" % (path, old, old | mode))
+    return True
+
+
+def setup_devices(cfg):
+    for path, mode in DEVICE_MODES.items():
+        add_mode(path, mode)
+    drm = cfg.get("waydroid", "drm_device", fallback="")
+    if drm:
+        add_mode(drm, DRM_MODE)
+
+
+def main():
+    cfg = load_cfg()
+    if cfg is None:
+        print("Waydroid is not initialised")
+        return 0
+    setup_gbinder(cfg)
+    setup_overlay()
+    setup_display(cfg)
+    setup_devices(cfg)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

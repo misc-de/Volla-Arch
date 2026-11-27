@@ -11,9 +11,12 @@ Restart=on-failure
 RestartSec=3
 
 # Sandbox (docs/DIENSTE-HAERTEN.md): the bridge only needs the binder device and its socket.
-# No root: a dynamic user in the group geoclue, which gets the socket (0660). Android's
+# No root: a system user in the group geoclue, which gets the socket (0660). Android's
 # servicemanager and the GNSS HAL accept the caller without root (measured 2026-11-07).
-DynamicUser=yes
+# A static system user, not DynamicUser=: the servicemanager in the Waydroid container
+# refuses addService from app UIDs (10000 and above), and dynamic users get 61184 and up.
+User=gnss-nmea-bridge
+Group=gnss-nmea-bridge
 SupplementaryGroups=geoclue
 CapabilityBoundingSet=
 AmbientCapabilities=
@@ -26,6 +29,8 @@ PrivateIPC=yes
 # PrivateDevices= would hide /dev/binderfs; /dev/binder is a link to it
 DevicePolicy=closed
 DeviceAllow=/dev/binderfs/binder rw
+# GNSS for Android in the Waydroid container
+DeviceAllow=/dev/binderfs/anbox-binder rw
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

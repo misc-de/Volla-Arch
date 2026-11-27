@@ -13,7 +13,8 @@ StateDirectory=sensor-proxy-bridge
 RestartSec=3
 
 # Sandbox (docs/DIENSTE-HAERTEN.md): root only for the bus name, no capabilities; talks to the
-# sensors HAL over binder and to D-Bus, nothing else
+# sensors HAL over binder, serves it to Android in the Waydroid container (anbox-binder) and to
+# D-Bus, nothing else
 CapabilityBoundingSet=
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -22,6 +23,7 @@ PrivateTmp=yes
 PrivateIPC=yes
 DevicePolicy=closed
 DeviceAllow=/dev/binderfs/binder rw
+DeviceAllow=/dev/binderfs/anbox-binder rw
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes

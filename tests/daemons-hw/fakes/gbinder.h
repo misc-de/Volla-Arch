@@ -11,6 +11,7 @@
 #include <glib.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 struct fake_gb_obj {
 	int unused;
@@ -66,6 +67,9 @@ static const char *fake_gb_request_iface;
 static int fake_gb_status;              /* status of synchronous transactions */
 static gboolean fake_gb_no_service;     /* get_service_sync finds nothing */
 static gboolean fake_gb_transact_fails; /* gbinder_client_transact returns 0 */
+/* The reply handler of the last asynchronous transaction, for the test to call */
+static GBinderClientReplyFunc fake_gb_reply_fn;
+static void *fake_gb_reply_user;
 
 static void fake_gb_logf(const char *fmt, ...) G_GNUC_PRINTF(1, 2);
 static void fake_gb_logf(const char *fmt, ...)
@@ -154,6 +158,30 @@ static void gbinder_reader_copy(GBinderReader *dst, const GBinderReader *src)
 {
 	*dst = *src;
 }
+/* A file descriptor: scripted as 'h' with the number of an open fd, which is dup()ed */
+static int gbinder_reader_read_dup_fd(GBinderReader *r)
+{
+	const FakeGbValue *v = fake_gb_next(r, 'h');
+	return v ? dup((int)v->i) : -1;
+}
+/* The raw parcel: the fake has none, only scripted values; each counts as 4 bytes, like
+ * gbinder_reader_bytes_remaining() */
+static const void *gbinder_reader_get_data(const GBinderReader *r, gsize *size)
+{
+	static const guint8 fake_gb_data[4096];
+	if (size)
+		*size = r ? MIN((gsize)r->n * 4, sizeof(fake_gb_data)) : 0;
+	return fake_gb_data;
+}
+static gsize gbinder_reader_bytes_remaining(const GBinderReader *r)
+{
+	return r ? (gsize)(r->n - r->pos) * 4 : 0;
+}
+/* A binder object: scripted as 'o' (present) */
+static GBinderRemoteObject *gbinder_reader_read_object(GBinderReader *r)
+{
+	return fake_gb_next(r, 'o') ? &fake_gb_instance : NULL;
+}
 
 /* ---- requests and replies ---- */
 static void gbinder_remote_request_init_reader(GBinderRemoteRequest *req, GBinderReader *r)
@@ -181,6 +209,22 @@ static GBinderLocalReply *gbinder_local_reply_append_int32(GBinderLocalReply *re
 {
 	fake_gb_logf("reply-i32 %d\n", (gint32)v);
 	return reply;
+}
+static void gbinder_local_reply_init_writer(GBinderLocalReply *reply, GBinderWriter *w) {}
+static void gbinder_local_reply_unref(GBinderLocalReply *reply) {}
+/* Requests answered later */
+static GBinderRemoteRequest *gbinder_remote_request_ref(GBinderRemoteRequest *req)
+{
+	return req;
+}
+static void gbinder_remote_request_unref(GBinderRemoteRequest *req) {}
+static void gbinder_remote_request_block(GBinderRemoteRequest *req)
+{
+	fake_gb_logf("block\n");
+}
+static void gbinder_remote_request_complete(GBinderRemoteRequest *req, GBinderLocalReply *reply, int status)
+{
+	fake_gb_logf("complete %d\n", status);
 }
 
 /* ---- writers ---- */
@@ -216,6 +260,22 @@ static void gbinder_writer_append_int32(GBinderWriter *w, guint32 v)
 {
 	fake_gb_logf("i32 %d\n", (gint32)v);
 }
+static void gbinder_writer_append_int64(GBinderWriter *w, guint64 v)
+{
+	fake_gb_logf("i64 %" G_GINT64_FORMAT "\n", (gint64)v);
+}
+static void gbinder_writer_start_parcelable(GBinderWriter *w, GBinderWriter *parcelable)
+{
+	fake_gb_logf("parcelable {\n");
+}
+static void gbinder_writer_finish_parcelable(GBinderWriter *parcelable)
+{
+	fake_gb_logf("}\n");
+}
+static void gbinder_writer_append_bytes(GBinderWriter *w, const void *data, gsize n)
+{
+	fake_gb_logf("bytes %zu\n", n);
+}
 static void gbinder_writer_append_float(GBinderWriter *w, float v)
 {
 	fake_gb_logf("float %.4f\n", v);
@@ -246,7 +306,11 @@ static gulong gbinder_client_transact(GBinderClient *c, guint32 code, guint32 fl
 				      GBinderClientReplyFunc reply, GDestroyNotify destroy, void *user)
 {
 	fake_gb_logf("tx-async %u flags %u\n", code, flags);
-	return fake_gb_transact_fails ? 0 : 1;
+	if (fake_gb_transact_fails)
+		return 0;
+	fake_gb_reply_fn = reply;
+	fake_gb_reply_user = user;
+	return 1;
 }
 
 /* ---- objects ---- */
@@ -272,6 +336,27 @@ static GBinderLocalObject *gbinder_servicemanager_new_local_object(GBinderServic
 								  GBinderLocalTransactFunc fn, void *user)
 {
 	return &fake_gb_instance;
+}
+typedef void (*GBinderServiceManagerFunc)(GBinderServiceManager *, void *);
+typedef void (*GBinderServiceManagerAddServiceFunc)(GBinderServiceManager *, int, void *);
+static gboolean fake_gb_sm_present = TRUE; /* the service manager is there */
+static int fake_gb_add_status;             /* status add_service reports */
+static gboolean gbinder_servicemanager_is_present(GBinderServiceManager *sm)
+{
+	return fake_gb_sm_present;
+}
+static gulong gbinder_servicemanager_add_service(GBinderServiceManager *sm, const char *name, GBinderLocalObject *o,
+						 GBinderServiceManagerAddServiceFunc fn, void *user)
+{
+	fake_gb_logf("add-service %s\n", name);
+	if (fn)
+		fn(sm, fake_gb_add_status, user);
+	return 1;
+}
+static gulong gbinder_servicemanager_add_presence_handler(GBinderServiceManager *sm, GBinderServiceManagerFunc fn,
+							   void *user)
+{
+	return 1;
 }
 static void gbinder_local_object_set_stability(GBinderLocalObject *o, int stability) {}
 static void gbinder_local_object_unref(GBinderLocalObject *o) {}

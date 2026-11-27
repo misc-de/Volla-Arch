@@ -1,0 +1,31 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+
+pkgname=health-hal-bridge
+pkgver=0.1
+pkgrel=4
+pkgdesc="The phone's health HAL (AIDL IHealth over binder) for Android apps in the Waydroid container"
+arch=(aarch64 x86_64)
+license=(MIT)
+depends=(glib2 libgbinder)
+source=(health-hal-bridge.c
+	health-hal-bridge.service
+	health-hal-bridge.sysusers
+	LICENSE)
+sha256sums=('4a936e2d54cb9bdfcb31c8c3df1d52bcabe40f26c0aa07387b574f5594b77673'
+	'fa0d1a8c07031e12685b62eff2d8334bd1f89517f4a6f5025f330a929d944959'
+	'274af88185128eb5561666485d35df04d402c9bb1eac1d4e2284affe32cf8962'
+	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
+
+build() {
+	# shellcheck disable=SC2046
+	${CC:-cc} $CFLAGS $CPPFLAGS -std=gnu11 -Wall -Wextra -Wno-unused-parameter \
+		-o health-hal-bridge health-hal-bridge.c \
+		$(pkg-config --cflags --libs gio-2.0 libgbinder) $LDFLAGS
+}
+
+package() {
+	install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+	install -Dm755 health-hal-bridge -t "$pkgdir/usr/bin"
+	install -Dm644 health-hal-bridge.service -t "$pkgdir/usr/lib/systemd/system"
+	install -Dm644 health-hal-bridge.sysusers "$pkgdir/usr/lib/sysusers.d/health-hal-bridge.conf"
+}

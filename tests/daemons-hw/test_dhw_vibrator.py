@@ -132,6 +132,27 @@ static GBinderServiceManager *servicemanager_or_none(const char *dev)
 
 static int kernel_rd = -1;
 
+/* Android calls IVibrator: values i<n> int32, f<x> float, o object */
+static FakeGbValue avals[16];
+static void android_call(guint code, const char *spec)
+{
+	g_auto(GStrv) t = g_strsplit(spec ? spec : "", ",", -1);
+	int n = 0, status = 99;
+	for (int i = 0; t[i] && *t[i] && n < 16; i++) {
+		avals[n] = (FakeGbValue){t[i][0]};
+		if (t[i][0] == 'f')
+			avals[n].d = g_ascii_strtod(t[i] + 1, NULL);
+		else
+			avals[n].i = atoi(t[i] + 1);
+		n++;
+	}
+	fake_gb_request_vals = avals;
+	fake_gb_request_n = n;
+	GBinderLocalReply *reply = on_android_call(NULL, NULL, code, 0, &status, NULL);
+	printf("acall %u status=%d reply=%s\n", code, status, reply ? "yes" : "no");
+}
+static GFileMonitor *watch;
+
 static void use_kernel_ff(void)
 {
 	int p[2];
@@ -311,6 +332,51 @@ int main(int argc, char **argv)
 				dump_sysfs();
 			close(q[0]);
 			close(q[1]);
+		} else if (!strcmp(c, "acall")) {
+			/* acall:<code>:<values> */
+			android_call(atoi(p[1]), p[2]);
+			if (kernel_rd >= 0)
+				dump_kernel();
+		} else if (!strcmp(c, "spin")) {
+			/* spin:<ms>: the main loop for that long (the second click of a double click) */
+			gint64 end = (g_get_monotonic_time)() + atoi(p[1]) * G_TIME_SPAN_MILLISECOND;
+			while ((g_get_monotonic_time)() < end) {
+				while (g_main_context_iteration(NULL, FALSE))
+					;
+				g_usleep(2000);
+			}
+			if (kernel_rd >= 0)
+				dump_kernel();
+		} else if (!strcmp(c, "astate")) {
+			printf("astate sm=%s amplitude=%.2f end=%" G_GINT64_FORMAT " second=%s\n",
+			       android.sm ? "set" : "none", android.amplitude, android.end,
+			       android.second_id ? "pending" : "none");
+		} else if (!strcmp(c, "apresence")) {
+			fake_gb_sm_present = atoi(p[1]);
+			on_android_presence(NULL, NULL);
+			if (kernel_rd >= 0)
+				dump_kernel();
+		} else if (!strcmp(c, "aadded")) {
+			on_android_added(NULL, atoi(p[1]), NULL);
+		} else if (!strcmp(c, "astart")) {
+			android_start();
+		} else if (!strcmp(c, "awatch")) {
+			watch = android_watch();
+			printf("watch=%s node=%s\n", watch ? "set" : "none", android.node);
+		} else if (!strcmp(c, "anode")) {
+			/* anode:<octal mode>: the container's binder node */
+			int fd = open(ANDROID_DEVICE, O_CREAT | O_WRONLY, 0600);
+			if (fd >= 0)
+				close(fd);
+			chmod(ANDROID_DEVICE, strtol(p[1], NULL, 8));
+		} else if (!strcmp(c, "await")) {
+			/* Until the file monitor opened Android's binder (at most 2 s) */
+			for (int t = 0; t < 200 && !android.sm; t++) {
+				while (g_main_context_iteration(NULL, FALSE))
+					;
+				g_usleep(10000);
+			}
+			printf("android sm=%s\n", android.sm ? "set" : "none");
 		} else if (!strcmp(c, "uinput")) {
 			/* Events from feedbackd through our uinput device: gain values in p[1..] */
 			int q[2];
@@ -346,8 +412,9 @@ def built(tmp_path_factory):
         ("/sys/class/leds/vibrator", d / "leds-vibrator"),
         ('"/dev/input"', f'"{d}/input"'),
         ("/dev/uinput", d / "uinput"),
+        ("/dev/anbox-binder", d / "anbox-binder"),
     ], allow=("/dev/binder",))
-    exe = build_harness(d, "vibrator", HARNESS, flags=[f'-DBASE="{d}"'])
+    exe = build_harness(d, "vibrator", HARNESS, flags=[f'-DBASE="{d}"'], pkgs=("gio-2.0",))
     return d, functools.partial(run, exe)
 
 
@@ -361,7 +428,9 @@ def vib(built):
         shutil.rmtree(d / sub, ignore_errors=True)
         (d / sub).mkdir()
     (d / "uinput").unlink(missing_ok=True)
-    return binary
+    (d / "anbox-binder").unlink(missing_ok=True)
+    yield binary
+    (d / "anbox-binder").unlink(missing_ok=True)
 
 
 def amps(out):
@@ -734,3 +803,142 @@ def test_daemon_without_uinput(built, vib):
     r = vib("daemon", check=False)
     assert r.returncode == 1
     assert f"Cannot open {d}/uinput" in r.stderr
+
+
+# ---- IVibrator for Android (Waydroid container) ----
+
+GET_VERSION, GET_HASH = 0x00ffffff, 0x00fffffe
+CAPS, OFF, ON, PERFORM, EFFECTS, AMPLITUDE = 1, 2, 3, 4, 5, 6
+CLICK, DOUBLE_CLICK, TICK, THUD, HEAVY_CLICK = 0, 1, 2, 3, 5
+LIGHT, MEDIUM, STRONG = 0, 1, 2
+BAD = "i32 -3;s16 Bad argument;i32 0;"
+UNSUPPORTED = "i32 -7;s16 Not supported;i32 0;"
+
+
+def acall(code, *values):
+    return f"acall:{code}:" + ",".join(values)
+
+
+def areplies(out):
+    """Per Android call: its code and the reply parcel (the binder line after it)."""
+    lines = out.splitlines()
+    result = []
+    for i, line in enumerate(lines):
+        if line.startswith("acall ") and "status=0 reply=yes" in line:
+            parcel = next(x for x in lines[i + 1:] if x.startswith("binder="))
+            result.append((int(line.split()[1]), parcel[7:]))
+    return result
+
+
+def gain(amplitude):
+    """FF_GAIN the vendor device gets for a pulse of 20 ms or more."""
+    return int((0.4 + 0.6 * amplitude) * 0x7fff)
+
+
+def test_android_version_hash_capabilities_effects(vib):
+    out = vib(acall(GET_VERSION), acall(GET_HASH), acall(CAPS), acall(EFFECTS)).stdout
+    assert areplies(out) == [
+        (GET_VERSION, "i32 0;i32 2;"),
+        (GET_HASH, "i32 0;s16 ea8742d6993e1a82917da38b9938e537aa7fcb54;"),
+        # Amplitude control only: no callbacks, compositions or external control
+        (CAPS, "i32 0;i32 4;"),
+        (EFFECTS, f"i32 0;i32 4;i32 {TICK};i32 {CLICK};i32 {HEAVY_CLICK};i32 {DOUBLE_CLICK};"),
+    ]
+
+
+def test_android_on_then_amplitude_plays_the_rest_at_that_strength(vib):
+    out = vib("kernel", "now:1000", acall(ON, "i500", "o"), "now:1002", acall(AMPLITUDE, "f0.5"), "astate",
+              "now:1600", acall(AMPLITUDE, "f0.25"), "astate").stdout
+    ev, up = events(out)
+    # On at the strength set last (full at first), then the 498 ms left at half strength; after
+    # the end a new strength only waits for the next on()
+    assert up == ["upload type=82 length=500 id=-1", "upload type=82 length=498 id=3"]
+    assert ev == ["event type=21 code=96 value=32767", "event type=21 code=3 value=1",
+                  f"event type=21 code=96 value={gain(0.5)}", "event type=21 code=3 value=1"]
+    assert "astate sm=none amplitude=0.50 end=1500000 second=none" in out
+    assert "astate sm=none amplitude=0.25 end=1500000 second=none" in out
+    assert [r for c, r in areplies(out)] == ["i32 0;"] * 3
+
+
+def test_android_off_stops_at_once(vib):
+    out = vib("kernel", "now:1000", acall(ON, "i500"), "now:1100", acall(OFF), "astate").stdout
+    assert events(out)[0][-1] == "event type=21 code=3 value=0"
+    assert "astate sm=none amplitude=1.00 end=0 second=none" in out
+
+
+@pytest.mark.parametrize("effect,strength,ms,length,amplitude", [
+    (TICK, STRONG, 10, 20, 1.0),          # shorter than the shortest tap: a full tap
+    (CLICK, LIGHT, 20, 20, 0.5),
+    (CLICK, MEDIUM, 20, 20, 0.75),
+    (HEAVY_CLICK, STRONG, 30, 30, 1.0),
+])
+def test_android_click_effects(vib, effect, strength, ms, length, amplitude):
+    out = vib("kernel", acall(PERFORM, f"i{effect}", f"i{strength}", "o")).stdout
+    assert areplies(out) == [(PERFORM, f"i32 0;i32 {ms};")]
+    ev, up = events(out)
+    assert up == [f"upload type=82 length={length} id=-1"]
+    assert ev[0] == f"event type=21 code=96 value={gain(amplitude)}"
+
+
+def test_android_double_click(vib):
+    out = vib("kernel", acall(PERFORM, f"i{DOUBLE_CLICK}", f"i{MEDIUM}"), "astate", "spin:180", "astate").stdout
+    assert areplies(out) == [(PERFORM, "i32 0;i32 120;")]
+    ev, up = events(out)
+    # Two clicks 100 ms apart, both at medium strength
+    assert up == ["upload type=82 length=20 id=-1", "upload type=82 length=20 id=3"]
+    assert ev.count(f"event type=21 code=96 value={gain(0.75)}") == 2
+    assert "second=pending" in out.splitlines()[out.splitlines().index("binder=i32 0;i32 120;") + 1]
+    assert out.rstrip().endswith("second=none")
+
+
+@pytest.mark.parametrize("step", [acall(OFF), acall(ON, "i50"), acall(PERFORM, f"i{CLICK}", f"i{LIGHT}"),
+                                  "apresence:0"])
+def test_android_second_click_is_cancelled(vib, step):
+    out = vib("kernel", acall(PERFORM, f"i{DOUBLE_CLICK}", f"i{STRONG}"), step, "astate", "spin:150").stdout
+    assert "second=none" in [line for line in out.splitlines() if line.startswith("astate")][0]
+    # The first click and what the step plays, no second click after it
+    assert len(events(out)[1]) <= 2
+
+
+def test_android_bad_and_unsupported_calls(vib):
+    out = vib("kernel", acall(ON, "i0"), acall(ON), acall(PERFORM, f"i{THUD}", f"i{STRONG}"),
+              acall(PERFORM, f"i{CLICK}", "i3"), acall(PERFORM, f"i{CLICK}", "i-1"), acall(PERFORM, f"i{CLICK}"),
+              acall(AMPLITUDE, "f0"), acall(AMPLITUDE, "f1.5"), acall(AMPLITUDE), acall(7, "i1"), acall(12),
+              acall(16), acall(24)).stdout
+    assert [r for c, r in areplies(out)] == [BAD, BAD, UNSUPPORTED, BAD, BAD, BAD, BAD, BAD, BAD] + [UNSUPPORTED] * 4
+    assert events(out) == ([], [])
+
+
+def test_android_with_the_led_vibrator(built, vib):
+    d, binary = built
+    vib("sysfs", acall(ON, "i300"))
+    assert [(d / "leds-vibrator" / f).read_text() for f in ("duration", "activate")] == ["300", "1"]
+    vib("sysfs", acall(OFF))
+    assert (d / "leds-vibrator" / "activate").read_text() == "0"
+
+
+def test_android_container_gone_stops_its_vibration(vib):
+    out = vib("kernel", "now:1000", acall(ON, "i5000"), "now:1100", "apresence:0", "astate", "apresence:1",
+              "aadded:0", "aadded:-2147483647")
+    assert events(out.stdout)[0][-1] == "event type=21 code=3 value=0"
+    assert "end=0" in [line for line in out.stdout.splitlines() if line.startswith("astate")][0]
+    assert "binder=add-service android.hardware.vibrator.IVibrator/default;" in out.stdout
+    assert "Serving the vibrator to Android" in out.stderr
+    assert "Cannot serve the vibrator to Android (status -2147483647)" in out.stderr
+
+
+def test_android_waits_for_an_open_node(built, vib):
+    d, binary = built
+    if os.geteuid() == 0:
+        pytest.skip("root opens any node")
+    out = vib("astart", "astate", "anode:0", "awatch", "astart", "astate", "anode:600", "await", "astart",
+              "astate").stdout
+    states = [line for line in out.splitlines() if line.startswith("astate")]
+    assert [s.split()[1] for s in states] == ["sm=none", "sm=none", "sm=set"]
+    assert "watch=set node=anbox-binder" in out
+    assert f"binder=servicemanager {d}/anbox-binder;add-service android.hardware.vibrator.IVibrator/default;" in out
+
+
+def test_android_node_that_is_no_binder(vib):
+    out = vib("fail:no-sm", "anode:600", "astart", "astate").stdout
+    assert "astate sm=none" in out

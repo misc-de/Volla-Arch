@@ -659,6 +659,8 @@ def test_every_install_script_is_tested():
               "plinius-apparmor", "plinius-crypt", "plinius-desktop", "plinius-dnsfilter",
               "plinius-keyring", "plinius-pdf-printer", "plinius-pinguard", "plinius-security",
               "plinius-ssh", "plinius-swap", "plinius-vdec", "plinius-widevine",
-              "plinius-account", "plinius-games", "plinius-dos-installer", "plinius-epo"}
+              "plinius-account", "plinius-games", "plinius-dos-installer", "plinius-epo",
+              # tests/apps/test_apps_waydroid_units.py
+              "waydroid-plinius"}
     found = {p.stem for p in PKG.glob("*/*.install")}
     assert found - tested == set()

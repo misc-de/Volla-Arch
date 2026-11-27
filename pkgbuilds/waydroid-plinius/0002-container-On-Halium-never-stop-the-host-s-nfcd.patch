@@ -1,0 +1,42 @@
+From 9c8162a31d8f9d1c270bc8b95aa7f814d2c92551 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:21:00 +0100
+Subject: [PATCH 2/3] container: On Halium never stop the host's nfcd
+
+On a Halium phone the host's nfcd is the phone's NFC service (Linux apps,
+the lock screen); stopping it for every container session took NFC away
+from the phone until the container stopped.
+---
+ tools/actions/container_manager.py | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/tools/actions/container_manager.py b/tools/actions/container_manager.py
+index 772c09b..606b672 100644
+--- a/tools/actions/container_manager.py
++++ b/tools/actions/container_manager.py
+@@ -195,7 +195,10 @@ def do_start(args, session):
+                 os.rmdir("/sys/fs/cgroup/schedtune/probe0")
+ 
+     #TODO: remove NFC hacks
+-    if which("stop"):
++    # Not on Halium: there the host's nfcd is the phone's own NFC service
++    if is_halium(args):
++        pass
++    elif which("stop"):
+         command = ["stop", "nfcd"]
+         tools.helpers.run.user(args, command, check=False)
+     elif which("systemctl") and (tools.helpers.run.user(args, ["systemctl", "is-active", "-q", "nfcd"], check=False) == 0):
+@@ -247,7 +250,9 @@ def stop(args, quit_session=True):
+         tools.helpers.run.user(args, command, check=False)
+ 
+         #TODO: remove NFC hacks
+-        if which("start"):
++        if is_halium(args):
++            pass
++        elif which("start"):
+             command = ["start", "nfcd"]
+             tools.helpers.run.user(args, command, check=False)
+         elif which("systemctl") and (tools.helpers.run.user(args, ["systemctl", "is-enabled", "-q", "nfcd"], check=False) == 0):
+-- 
+2.56.1
+

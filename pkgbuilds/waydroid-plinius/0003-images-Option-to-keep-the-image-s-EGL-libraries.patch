@@ -1,0 +1,41 @@
+From c609f519ade5df00d145278129f8b9ad40928298 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:33:31 +0100
+Subject: [PATCH 3/3] images: Option to keep the image's EGL libraries
+
+The host's /vendor/lib{,64}/egl is always bound over the image's. On a
+Halium phone those are the vendor's GPU libraries, which the container
+cannot use without the vendor's graphics HALs; they hide the image's own
+EGL (SwiftShader, Mesa) and SurfaceFlinger aborts with "couldn't find an
+OpenGL ES implementation". bind_host_egl = False in [waydroid] keeps the
+image's libraries; the default stays as it was.
+---
+ tools/helpers/images.py | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/tools/helpers/images.py b/tools/helpers/images.py
+index 36bd09b..55ce959 100644
+--- a/tools/helpers/images.py
++++ b/tools/helpers/images.py
+@@ -184,10 +184,14 @@ def mount_rootfs(args, images_dir, session):
+                                     upper_dir=tools.config.defaults["overlay_rw"] + "/vendor",
+                                     work_dir=tools.config.defaults["overlay_work"] + "/vendor")
+ 
+-    for egl_path in ["/vendor/lib/egl", "/vendor/lib64/egl"]:
+-        if os.path.isdir(egl_path):
+-            helpers.mount.bind(
+-                args, egl_path, tools.config.defaults["rootfs"] + egl_path)
++    # The host's EGL libraries over the image's: for the host's GPU. bind_host_egl = False in
++    # [waydroid] keeps the image's own (software rendering, or a GPU the host's libraries don't
++    # serve to the container)
++    if cfg["waydroid"].get("bind_host_egl", "True") == "True":
++        for egl_path in ["/vendor/lib/egl", "/vendor/lib64/egl"]:
++            if os.path.isdir(egl_path):
++                helpers.mount.bind(
++                    args, egl_path, tools.config.defaults["rootfs"] + egl_path)
+     if helpers.mount.ismount("/odm"):
+         helpers.mount.bind(
+             args, "/odm", tools.config.defaults["rootfs"] + "/odm_extra")
+-- 
+2.56.1
+

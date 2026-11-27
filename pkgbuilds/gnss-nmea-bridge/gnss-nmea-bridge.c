@@ -13,11 +13,20 @@
  * Transaction codes follow the frozen AIDL definitions (android.hardware.gnss version 3,
  * aidl_api in AOSP hardware/interfaces): the n-th method has code n.
  *
+ * Android apps (Waydroid container): the bridge stays the only client of the HAL and serves
+ * IGnss (version 2, which Android 13 and later are built against) to the container's location
+ * service on /dev/anbox-binder, registered whenever the container's service manager shows up
+ * (the node opens to the bridge's user only once the container has started; inotify tells).
+ * The receiver runs while an NMEA client or Android wants it; locations, satellites, NMEA and
+ * the session status of the HAL go to Android's callback unchanged. Android gets no
+ * extensions (measurements, PSDS, batching, geofences, AGNSS).
+ *
  * SPDX-License-Identifier: MIT
  */
 
 #include <errno.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -34,13 +43,30 @@
 #define GNSS_CB_IFACE   "android.hardware.gnss.IGnssCallback"
 #define GNSS_INSTANCE   GNSS_IFACE "/default"
 #define SOCKET_PATH     "/run/gnss-nmea-bridge/nmea.sock"
+#define ANDROID_DEVICE  "/dev/anbox-binder"
+/* IGnss for Android: version 2 and the hash of that frozen version */
+#define ANDROID_VERSION 2
+#define ANDROID_HASH    "fc957f1d3d261d065ff5e5415f2d21caa79c310f"
+/* Transactions every AIDL interface answers */
+#define TX_GET_INTERFACE_VERSION 0x00ffffff
+#define TX_GET_INTERFACE_HASH    0x00fffffe
+/* AIDL exception codes */
+#define EX_NONE                  0
+#define EX_UNSUPPORTED_OPERATION (-7)
 
 /* IGnss */
 enum {
   GNSS_SET_CALLBACK = 1,
+  GNSS_CLOSE = 2,
   GNSS_START = 14,
   GNSS_STOP = 15,
+  GNSS_INJECT_TIME = 16,
+  GNSS_INJECT_LOCATION = 17,
+  GNSS_INJECT_BEST_LOCATION = 18,
+  GNSS_DELETE_AIDING_DATA = 19,
   GNSS_SET_POSITION_MODE = 20,
+  GNSS_START_SV_STATUS = 23,
+  GNSS_STOP_SV_STATUS = 24,
   GNSS_START_NMEA = 25,
   GNSS_STOP_NMEA = 26,
 };
@@ -48,6 +74,8 @@ enum {
 /* IGnssCallback */
 enum {
   CB_SET_CAPABILITIES = 1,
+  CB_STATUS = 2,
+  CB_SV_STATUS = 3,
   CB_LOCATION = 4,
   CB_NMEA = 5,
 };
@@ -77,8 +105,25 @@ typedef struct {
 
 static Bridge bridge;
 
+/* Android in the Waydroid container: its location service is a client like the NMEA ones */
+typedef struct {
+  GBinderServiceManager *sm;
+  GBinderLocalObject    *service;
+  gulong                 presence_id;
+  GBinderRemoteObject   *remote;    /* its IGnssCallback */
+  GBinderClient         *callback;
+  gulong                 death_id;
+  gboolean               started;   /* between start() and stop() */
+  gboolean               sv_status; /* between startSvStatus() and stopSvStatus() */
+  gboolean               nmea;      /* between startNmea() and stopNmea() */
+  char                  *node;      /* name of the device node in its directory */
+} Android;
+
+static Android android;
+
 static void bridge_update (void);
 static gboolean on_retry (gpointer user_data);
+static void android_forward (guint code, const GBinderReader *reader);
 
 /* Drop a client; when the last one is gone, schedule stopping the receiver */
 static void
@@ -295,6 +340,7 @@ on_callback (GBinderLocalObject *obj, GBinderRemoteRequest *req, guint code, gui
     return NULL;
   }
   gbinder_remote_request_init_reader (req, &reader);
+  android_forward (code, &reader);
   switch (code) {
   case CB_NMEA:
     handle_nmea (&reader);
@@ -440,7 +486,7 @@ on_retry (gpointer user_data)
 static void
 bridge_update (void)
 {
-  gboolean want = bridge.clients != NULL;
+  gboolean want = bridge.clients != NULL || android.started;
 
   if (want == bridge.running)
     return;
@@ -488,6 +534,219 @@ on_incoming (GSocketService *service, GSocketConnection *conn, GObject *source, 
   return TRUE;
 }
 
+/* ---- IGnss for Android ---- */
+
+/* A callback of the HAL goes on to Android unchanged (the rest of the request after the
+ * interface header: parcelables and strings, no binder objects), one-way so that a slow
+ * container never holds up the HAL */
+static void
+android_forward (guint code, const GBinderReader *reader)
+{
+  GBinderLocalRequest *req;
+  GBinderWriter w;
+  gsize size = 0, rest;
+  const guint8 *data;
+
+  if (!android.callback || !android.started)
+    return;
+  if (code != CB_STATUS && code != CB_LOCATION && !(code == CB_SV_STATUS && android.sv_status) &&
+      !(code == CB_NMEA && android.nmea))
+    return;
+  data = gbinder_reader_get_data (reader, &size);
+  rest = gbinder_reader_bytes_remaining (reader);
+  if (!data || rest > size)
+    return;
+  req = gbinder_client_new_request (android.callback);
+  gbinder_local_request_init_writer (req, &w);
+  gbinder_writer_append_bytes (&w, data + size - rest, rest);
+  gbinder_client_transact (android.callback, code, GBINDER_TX_FLAG_ONEWAY, req, NULL, NULL, NULL);
+  gbinder_local_request_unref (req);
+}
+
+/* Android's location service is gone or closed the HAL: the receiver may stop */
+static void
+android_reset (void)
+{
+  if (android.remote && android.death_id)
+    gbinder_remote_object_remove_handler (android.remote, android.death_id);
+  android.death_id = 0;
+  g_clear_pointer (&android.callback, gbinder_client_unref);
+  g_clear_pointer (&android.remote, gbinder_remote_object_unref);
+  android.started = android.sv_status = android.nmea = FALSE;
+  bridge_update ();
+}
+
+static void
+on_android_died (GBinderRemoteObject *obj, void *user_data)
+{
+  g_message ("Android's location service is gone");
+  android_reset ();
+}
+
+static void
+write_exception (GBinderWriter *w, gint32 code)
+{
+  gbinder_writer_append_int32 (w, code);
+  if (code != EX_NONE) {
+    gbinder_writer_append_string16 (w, "Not supported");
+    gbinder_writer_append_int32 (w, 0); /* no remote stack trace */
+  }
+}
+
+/* setCallback(IGnssCallback): Android's callback, told at once that the HAL has no special
+ * capabilities (Android then schedules the fixes itself) */
+static gint32
+android_set_callback (GBinderReader *reader)
+{
+  GBinderRemoteObject *remote = gbinder_reader_read_object (reader);
+  GBinderLocalRequest *req;
+
+  if (!remote)
+    return EX_UNSUPPORTED_OPERATION;
+  android_reset ();
+  android.remote = remote;
+  android.callback = gbinder_client_new (remote, GNSS_CB_IFACE);
+  android.death_id = gbinder_remote_object_add_death_handler (remote, on_android_died, NULL);
+  req = gbinder_client_new_request (android.callback);
+  gbinder_local_request_append_int32 (req, 0);
+  gbinder_client_transact (android.callback, CB_SET_CAPABILITIES, GBINDER_TX_FLAG_ONEWAY, req,
+                           NULL, NULL, NULL);
+  gbinder_local_request_unref (req);
+  g_message ("Android's location service connected");
+  return EX_NONE;
+}
+
+static GBinderLocalReply *
+on_android_call (GBinderLocalObject *obj, GBinderRemoteRequest *req, guint code, guint flags,
+                 int *status, void *user_data)
+{
+  GBinderReader reader;
+  GBinderWriter w;
+  GBinderLocalReply *reply = gbinder_local_object_new_reply (obj);
+  gint32 ex = EX_NONE;
+
+  gbinder_remote_request_init_reader (req, &reader);
+  gbinder_local_reply_init_writer (reply, &w);
+  *status = GBINDER_STATUS_OK;
+  switch (code) {
+  case TX_GET_INTERFACE_VERSION:
+    write_exception (&w, EX_NONE);
+    gbinder_writer_append_int32 (&w, ANDROID_VERSION);
+    return reply;
+  case TX_GET_INTERFACE_HASH:
+    write_exception (&w, EX_NONE);
+    gbinder_writer_append_string16 (&w, ANDROID_HASH);
+    return reply;
+  case GNSS_SET_CALLBACK:
+    ex = android_set_callback (&reader);
+    break;
+  case GNSS_CLOSE:
+    android_reset ();
+    break;
+  case GNSS_START:
+    android.started = TRUE;
+    bridge_update ();
+    break;
+  case GNSS_STOP:
+    android.started = FALSE;
+    bridge_update ();
+    break;
+  case GNSS_START_SV_STATUS:
+  case GNSS_STOP_SV_STATUS:
+    android.sv_status = code == GNSS_START_SV_STATUS;
+    break;
+  case GNSS_START_NMEA:
+  case GNSS_STOP_NMEA:
+    android.nmea = code == GNSS_START_NMEA;
+    break;
+  case GNSS_INJECT_TIME:
+  case GNSS_INJECT_LOCATION:
+  case GNSS_INJECT_BEST_LOCATION:
+  case GNSS_DELETE_AIDING_DATA:
+  case GNSS_SET_POSITION_MODE:
+    /* The receiver keeps its own mode (1 Hz) and aiding (EPO) */
+    break;
+  default:
+    /* getExtension*(): none, Android goes without */
+    ex = EX_UNSUPPORTED_OPERATION;
+    break;
+  }
+  write_exception (&w, ex);
+  return reply;
+}
+
+static void
+on_android_added (GBinderServiceManager *sm, int status, void *user_data)
+{
+  if (status)
+    g_warning ("Cannot serve GNSS to Android (status %d)", status);
+  else
+    g_message ("Serving GNSS to Android");
+}
+
+static void
+android_register (void)
+{
+  if (gbinder_servicemanager_is_present (android.sm))
+    gbinder_servicemanager_add_service (android.sm, GNSS_INSTANCE, android.service,
+                                        on_android_added, NULL);
+}
+
+/* The container's service manager comes with every start of the container */
+static void
+on_android_presence (GBinderServiceManager *sm, void *user_data)
+{
+  if (gbinder_servicemanager_is_present (sm))
+    android_register ();
+  else
+    android_reset ();
+}
+
+/* Serve IGnss on the container's binder. Idempotent: called at start and whenever the device
+ * node changes, until it can be opened */
+static void
+android_start (void)
+{
+  if (android.sm || access (ANDROID_DEVICE, R_OK | W_OK) != 0)
+    return;
+  android.sm = gbinder_servicemanager_new (ANDROID_DEVICE);
+  if (!android.sm)
+    return;
+  android.service = gbinder_servicemanager_new_local_object (android.sm, GNSS_IFACE,
+                                                             on_android_call, NULL);
+  gbinder_local_object_set_stability (android.service, GBINDER_STABILITY_VINTF);
+  android.presence_id = gbinder_servicemanager_add_presence_handler (android.sm,
+                                                                     on_android_presence, NULL);
+  android_register ();
+}
+
+static void
+on_android_node (GFileMonitor *monitor, GFile *file, GFile *other, GFileMonitorEvent event,
+                 gpointer user_data)
+{
+  g_autofree char *base = g_file_get_basename (file);
+
+  if (event != G_FILE_MONITOR_EVENT_DELETED && g_strcmp0 (base, android.node) == 0)
+    android_start ();
+}
+
+/* The kernel creates the node at boot, but only the start of the container opens it to users
+ * other than root: watch its directory (binderfs reports chmod) instead of polling */
+static GFileMonitor *
+android_watch (void)
+{
+  g_autofree char *path = realpath (ANDROID_DEVICE, NULL);
+  g_autoptr (GFile) node = g_file_new_for_path (path ? path : ANDROID_DEVICE);
+  g_autoptr (GFile) dir = g_file_get_parent (node);
+  GFileMonitor *monitor = g_file_monitor_directory (dir, G_FILE_MONITOR_NONE, NULL, NULL);
+
+  g_free (android.node);
+  android.node = g_file_get_basename (node);
+  if (monitor)
+    g_signal_connect (monitor, "changed", G_CALLBACK (on_android_node), NULL);
+  return monitor;
+}
+
 static gboolean
 on_quit (gpointer loop)
 {
@@ -501,8 +760,12 @@ main (int argc, char **argv)
   g_autoptr (GMainLoop) loop = g_main_loop_new (NULL, FALSE);
   g_autoptr (GSocketAddress) addr = NULL;
   g_autoptr (GError) err = NULL;
+  g_autoptr (GFileMonitor) monitor = NULL;
   struct group *gr;
 
+  /* First: a signal during the set-up must end the loop, not the process */
+  g_unix_signal_add (SIGTERM, on_quit, loop);
+  g_unix_signal_add (SIGINT, on_quit, loop);
   bridge.sm = gbinder_servicemanager_new (BINDER_DEVICE);
   if (!bridge.sm) {
     g_printerr ("Cannot open %s\n", BINDER_DEVICE);
@@ -519,8 +782,8 @@ main (int argc, char **argv)
     return 1;
   }
   /* Positions only for geoclue, not for every local user. Only the group changes (owner -1):
-   * the service runs as a dynamic user in the supplementary group geoclue, which may do that
-   * without CAP_CHOWN. */
+   * the service runs as its own system user in the supplementary group geoclue, which may do
+   * that without CAP_CHOWN. */
   gr = getgrnam ("geoclue");
   if (gr && chown (SOCKET_PATH, (uid_t) -1, gr->gr_gid) == 0)
     chmod (SOCKET_PATH, 0660);
@@ -528,8 +791,8 @@ main (int argc, char **argv)
     chmod (SOCKET_PATH, 0600);
 
   g_signal_connect (bridge.service, "incoming", G_CALLBACK (on_incoming), NULL);
-  g_unix_signal_add (SIGTERM, on_quit, loop);
-  g_unix_signal_add (SIGINT, on_quit, loop);
+  monitor = android_watch ();
+  android_start ();
   g_main_loop_run (loop);
 
   if (bridge.running)

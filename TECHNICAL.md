@@ -83,6 +83,7 @@ image to download yet.
 | App security | Access Control in Settings limits what each app may reach | not finished, not every way to a device or service is covered yet |
 | Echo cancellation in calls | on during calls | the voice still varies a little |
 | Camera | photos with noise reduction | motion and daylight still to be judged |
+| Android apps | Waydroid with a test image (Android 13): apps full screen in their own windows; sensors, GPS, vibration, battery and NFC of the phone through the HAL bridges; NFC passes between Linux and Android; Android sleeps while the phone is locked | graphics in software, no app store, an Android 16 image, Bluetooth and the cameras for Android |
 
 ### Built, test on the device pending
 
@@ -337,6 +338,7 @@ Settings, GPL-2.0-or-later). The licenses of each package are recorded in its `P
 | `plinius-kmod` | `uleds` from the [UBports kernel](https://gitlab.com/ubports/porting/community-ports/android12/generic/kernel-android-common) | GPL-2.0-only | none; next to our own modules `plinius-backlight`, `plinius-novt` and `plinius-btsuspend` |
 | `furios-gps-contribute` | [misc-de/furios_gps](https://github.com/misc-de/furios_gps), only the beaconDB contribution tool | MIT | patches: wait past geoclue's cached location for a fresh fix, time for a cold start |
 | `furios-audio-bt-reconnect` | [misc-de/furios_audio](https://github.com/misc-de/furios_audio), only the Bluetooth reconnect watcher | MIT | patch: also dials when the display comes on, when music starts and after a reboot; headphones only, no car kits |
+| `waydroid-plinius` | [waydroid/waydroid](https://github.com/waydroid/waydroid), PKGBUILD based on Arch's | GPL-3.0-or-later | patches: on Halium the devices keep the vendor's permissions and the host's nfcd keeps running, an option to keep the image's EGL libraries; own set-up of the container (VINTF entries of the HAL bridges, display size, devices) and Android's screen following the phone's lock |
 | `schwupp` | [misc-de/Schwupp](https://github.com/misc-de/Schwupp) (own project) | MIT | none |
 | `muga` | [misc-de/Muga](https://github.com/misc-de/Muga) (own project) | MIT | none |
 

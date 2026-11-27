@@ -1,0 +1,48 @@
+[Unit]
+Description=The phone's health HAL (battery) for Android apps in the Waydroid container
+
+[Service]
+ExecStart=/usr/bin/health-hal-bridge
+Restart=on-failure
+RestartSec=3
+
+# Sandbox (docs/DIENSTE-HAERTEN.md): the two binder devices and the system bus (UPower's signals).
+# A system user of its own, not DynamicUser=: the service manager in the Waydroid container
+# refuses addService from app UIDs (10000 and above), and dynamic users get 61184 and up.
+User=health-hal-bridge
+Group=health-hal-bridge
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateIPC=yes
+# PrivateDevices= would hide /dev/binderfs; /dev/binder and /dev/anbox-binder link to it
+DevicePolicy=closed
+DeviceAllow=/dev/binderfs/binder rw
+DeviceAllow=/dev/binderfs/anbox-binder rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RemoveIPC=yes
+UMask=0077
+
+# Only Android uses it: it starts with the container service (waydroid-plinius' drop-in)
+[Install]
+WantedBy=waydroid-container.service

@@ -133,6 +133,13 @@ static gboolean my_timed_wait(GSocket *s, GIOCondition cond, gint64 timeout, GCa
 #define g_socket_send my_socket_send
 #define g_socket_condition_timed_wait my_timed_wait
 
+/* ---- the raw parcel of a callback: missing when FAKE_NO_DATA is set ---- */
+static const void *my_get_data(const GBinderReader *r, gsize *size)
+{
+	return getenv("FAKE_NO_DATA") ? NULL : gbinder_reader_get_data(r, size);
+}
+#define gbinder_reader_get_data my_get_data
+
 #define main real_main
 #include "gnss-nmea-bridge.c"
 #undef main
@@ -175,6 +182,20 @@ static void flush_log(void)
 				printf("gb %s\n", *l);
 		g_string_truncate(fake_gb_log, 0);
 	}
+}
+
+static GFileMonitor *watch;
+
+/* Android calls IGnss: the reply's parcel goes to the log */
+static void android_call(guint code, FakeGbValue *v, int n)
+{
+	int status = 99;
+	fake_gb_request_iface = GNSS_IFACE;
+	fake_gb_request_vals = v;
+	fake_gb_request_n = n;
+	GBinderLocalReply *reply = on_android_call(NULL, NULL, code, 0, &status, NULL);
+	flush_log();
+	printf("acall %u status=%d reply=%s\n", code, status, reply ? "yes" : "no");
 }
 
 static void callback(guint code, const char *iface, FakeGbValue *v, int n)
@@ -298,6 +319,44 @@ int main(int argc, char **argv)
 			printf("state running=%d clients=%u client=%s retry=%s\n", bridge.running,
 			       g_list_length(bridge.clients), bridge.client ? "set" : "none",
 			       bridge.retry_id ? "pending" : "none");
+		} else if (!strcmp(a[0], "acall")) {
+			/* acall|code[|o]: Android calls IGnss, with its callback object when o */
+			FakeGbValue v[] = {{'o'}};
+			android_call(atoi(a[1]), v, a[2] && *a[2] == 'o' ? 1 : 0);
+		} else if (!strcmp(a[0], "adie")) {
+			on_android_died(NULL, NULL);
+		} else if (!strcmp(a[0], "apresence")) {
+			fake_gb_sm_present = atoi(a[1]);
+			on_android_presence(NULL, NULL);
+		} else if (!strcmp(a[0], "aadded")) {
+			on_android_added(NULL, atoi(a[1]), NULL);
+		} else if (!strcmp(a[0], "astart")) {
+			android_start();
+		} else if (!strcmp(a[0], "awatch")) {
+			watch = android_watch();
+			printf("watch=%s node=%s\n", watch ? "set" : "none", android.node);
+		} else if (!strcmp(a[0], "anode")) {
+			/* anode|mode: create or chmod the device node (octal mode), - removes it */
+			if (*a[1] == '-') {
+				unlink(ANDROID_DEVICE);
+			} else {
+				int fd = open(ANDROID_DEVICE, O_CREAT | O_WRONLY, 0600);
+				if (fd >= 0)
+					close(fd);
+				chmod(ANDROID_DEVICE, strtol(a[1], NULL, 8));
+			}
+		} else if (!strcmp(a[0], "spin")) {
+			/* Let the file monitor deliver: up to 2 s, until Android's binder is open */
+			for (int j = 0; j < 200 && !android.sm; j++) {
+				while (g_main_context_iteration(NULL, FALSE))
+					;
+				g_usleep(10000);
+			}
+		} else if (!strcmp(a[0], "astate")) {
+			flush_log();
+			printf("astate sm=%s callback=%s started=%d sv=%d nmea=%d\n",
+			       android.sm ? "set" : "none", android.callback ? "set" : "none",
+			       android.started, android.sv_status, android.nmea);
 		}
 	}
 	flush_log();
@@ -315,7 +374,8 @@ def built(tmp_path_factory):
     short = None
     if len(str(run_dir / "nmea.sock")) > 100:
         short = run_dir = Path(tempfile.mkdtemp(prefix="dhw-gnss-"))
-    sandboxed_source(SRC, d, [("/run/gnss-nmea-bridge/nmea.sock", run_dir / "nmea.sock")],
+    sandboxed_source(SRC, d, [("/run/gnss-nmea-bridge/nmea.sock", run_dir / "nmea.sock"),
+                              ("/dev/anbox-binder", d / "anbox-binder")],
                      allow=("/dev/binder",))
     exe = build_harness(d, "gnss_hal", HARNESS, pkgs=("gio-unix-2.0",))
     yield d, exe, run_dir
@@ -583,3 +643,169 @@ def test_main_cannot_listen(built):
                        timeout=20 * SLOW)
     assert "rc=1" in r.stdout
     assert "Cannot listen on" in r.stderr
+
+
+# ---- IGnss for Android (Waydroid container) ----
+
+CB = "android.hardware.gnss.IGnssCallback"
+GET_VERSION, GET_HASH = 0x00ffffff, 0x00fffffe
+SET_CALLBACK, CLOSE, START_, STOP_ = 1, 2, 14, 15
+START_SV, STOP_SV, START_NMEA, STOP_NMEA = 23, 24, 25, 26
+NOT_SUPPORTED = ["i32 -7", "s16 Not supported", "i32 0"]
+
+
+def calls(out):
+    """Per Android call: the reply parcel (gb lines just before it) and its status."""
+    result, pending = [], []
+    for line in out.splitlines():
+        if line.startswith("gb "):
+            pending.append(line[3:])
+        elif line.startswith("acall "):
+            result.append((line, pending))
+            pending = []
+        else:
+            pending = []
+    return result
+
+
+def astates(out):
+    return [line[7:] for line in out.splitlines() if line.startswith("astate ")]
+
+
+@pytest.fixture
+def node(built):
+    """The test's stand-in for /dev/anbox-binder, absent before and after each test."""
+    path = built[0] / "anbox-binder"
+    path.unlink(missing_ok=True)
+    yield path
+    path.unlink(missing_ok=True)
+
+
+def test_android_gets_version_and_hash(gnss):
+    c = calls(gnss(f"acall|{GET_VERSION}", f"acall|{GET_HASH}").stdout)
+    assert c[0] == (f"acall {GET_VERSION} status=0 reply=yes", ["i32 0", "i32 2"])
+    assert c[1] == (f"acall {GET_HASH} status=0 reply=yes",
+                    ["i32 0", "s16 fc957f1d3d261d065ff5e5415f2d21caa79c310f"])
+
+
+def test_set_callback_needs_an_object(gnss):
+    out = gnss(f"acall|{SET_CALLBACK}", "astate").stdout
+    assert calls(out)[0][1] == NOT_SUPPORTED
+    assert astates(out) == ["sm=none callback=none started=0 sv=0 nmea=0"]
+
+
+def test_set_callback_reports_no_capabilities(gnss):
+    out = gnss(f"acall|{SET_CALLBACK}|o", "astate").stdout
+    # setCapabilitiesCb(0), one-way, then EX_NONE
+    assert calls(out)[0][1] == ["request", "i32 0", "tx-async 1 flags 1", "i32 0"]
+    assert astates(out) == ["sm=none callback=set started=0 sv=0 nmea=0"]
+
+
+def test_android_start_and_stop_run_the_receiver(gnss):
+    out = gnss(f"acall|{SET_CALLBACK}|o", f"acall|{START_}", "state", f"acall|{STOP_}", "state").stdout
+    c = calls(out)
+    assert c[1][1][:len(START)] == START and c[1][1][-1] == "i32 0"
+    assert c[2][1] == ["tx 26", "tx 15", "i32 0"]
+    assert states(out) == ["running=1 clients=0 client=set retry=none",
+                           "running=0 clients=0 client=set retry=none"]
+
+
+def test_receiver_stays_on_for_nmea_clients_when_android_stops(gnss):
+    out = gnss("client", f"acall|{SET_CALLBACK}|o", f"acall|{START_}", f"acall|{STOP_}", "state").stdout
+    assert states(out) == ["running=1 clients=1 client=set retry=none"]
+    assert calls(out)[-1][1] == ["i32 0"]
+
+
+def test_locations_and_status_go_to_android(gnss):
+    out = gnss(f"acall|{SET_CALLBACK}|o", f"acall|{START_}", "location", f"cb|2|{CB}").stdout
+    log = gb(out)
+    i = log.index("tx-async 4 flags 1")
+    # The parcel after the interface header, one-way, before the bridge handles it itself
+    assert log[i - 2:i] == ["request", "bytes 52"]
+    assert log[-3:] == ["bytes 0", "tx-async 2 flags 1", "reply-i32 0"]
+
+
+def test_satellites_and_nmea_only_when_android_asked(gnss):
+    out = gnss(f"acall|{SET_CALLBACK}|o", f"acall|{START_}", "nmea|$GPGSV,1,1,00*79", f"cb|3|{CB}",
+               f"acall|{START_SV}", f"acall|{START_NMEA}", "astate", "nmea|$GPGSV,1,1,00*79",
+               f"cb|3|{CB}", f"acall|{STOP_SV}", f"acall|{STOP_NMEA}", "astate", f"cb|3|{CB}",
+               "nmea|$GPGSV,1,1,00*79").stdout
+    fwd = [line for line in gb(out) if line.startswith("tx-async")]
+    assert fwd == ["tx-async 1 flags 1", "tx-async 5 flags 1", "tx-async 3 flags 1"]
+    assert astates(out) == ["sm=none callback=set started=1 sv=1 nmea=1",
+                            "sm=none callback=set started=1 sv=0 nmea=0"]
+
+
+def test_nothing_goes_to_android_before_start_or_without_callback(gnss):
+    out = gnss(f"cb|2|{CB}", "location", f"acall|{SET_CALLBACK}|o", f"cb|2|{CB}").stdout
+    assert [line for line in gb(out) if line.startswith("tx-async")] == ["tx-async 1 flags 1"]
+
+
+def test_callback_without_raw_parcel_is_not_forwarded(gnss):
+    out = gnss(f"acall|{SET_CALLBACK}|o", f"acall|{START_}", f"cb|2|{CB}",
+               env=dict(os.environ, FAKE_NO_DATA="1")).stdout
+    assert "tx-async 2 flags 1" not in gb(out)
+    assert "callback 2 status=0 reply=yes" in out
+
+
+@pytest.mark.parametrize("code", [16, 17, 18, 19, 20])
+def test_injection_and_position_mode_are_acknowledged(gnss, code):
+    assert calls(gnss(f"acall|{code}").stdout)[0][1] == ["i32 0"]
+
+
+@pytest.mark.parametrize("code", [3, 4, 13, 27])
+def test_extensions_are_not_supported(gnss, code):
+    assert calls(gnss(f"acall|{code}").stdout)[0][1] == NOT_SUPPORTED
+
+
+@pytest.mark.parametrize("step", [f"acall|{CLOSE}", "adie", "apresence|0"])
+def test_android_gone_stops_the_receiver(gnss, step):
+    out = gnss(f"acall|{SET_CALLBACK}|o", f"acall|{START_}", f"acall|{START_SV}", step, "state",
+               "astate").stdout
+    assert "remove-death-handler 1" in gb(out)
+    assert states(out)[-1] == "running=0 clients=0 client=set retry=none"
+    assert astates(out) == ["sm=none callback=none started=0 sv=0 nmea=0"]
+
+
+def test_new_callback_replaces_the_old_one(gnss):
+    out = gnss(f"acall|{SET_CALLBACK}|o", f"acall|{SET_CALLBACK}|o", "astate").stdout
+    assert gb(out).count("remove-death-handler 1") == 1
+    assert astates(out) == ["sm=none callback=set started=0 sv=0 nmea=0"]
+
+
+def test_registration_follows_the_service_manager(gnss):
+    out = gnss("apresence|1", "aadded|0", "aadded|-2147483647")
+    assert gb(out.stdout) == ["add-service android.hardware.gnss.IGnss/default"]
+    assert "Serving GNSS to Android" in out.stderr
+    assert "Cannot serve GNSS to Android (status -2147483647)" in out.stderr
+
+
+def test_start_waits_for_an_open_node(gnss, node):
+    if os.geteuid() == 0:
+        pytest.skip("root opens any node")
+    out = gnss("astart", "astate", "anode|0", "astart", "astate", "anode|600", "astart", "astate",
+               "astart", "astate").stdout
+    assert astates(out) == ["sm=none callback=none started=0 sv=0 nmea=0"] * 2 + \
+        ["sm=set callback=none started=0 sv=0 nmea=0"] * 2
+    # Opened once, registered once
+    assert gb(out) == [f"servicemanager {node}", "add-service android.hardware.gnss.IGnss/default"]
+
+
+def test_container_start_opens_the_node(gnss, node):
+    if os.geteuid() == 0:
+        pytest.skip("root opens any node")
+    out = gnss("anode|0", "awatch", "astart", "astate", "anode|666", "spin", "astate").stdout
+    assert f"watch=set node={node.name}" in out
+    assert astates(out) == ["sm=none callback=none started=0 sv=0 nmea=0",
+                            "sm=set callback=none started=0 sv=0 nmea=0"]
+
+
+def test_watch_without_node_watches_its_directory(gnss, node):
+    out = gnss("awatch").stdout
+    assert f"watch=set node={node.name}" in out
+
+
+def test_node_that_is_no_binder_is_skipped(gnss, node):
+    out = gnss("anode|600", "astart", "astate", env=dict(os.environ, FAKE_NO_BINDER="1")).stdout
+    assert astates(out) == ["sm=none callback=none started=0 sv=0 nmea=0"]
+    assert gb(out) == []

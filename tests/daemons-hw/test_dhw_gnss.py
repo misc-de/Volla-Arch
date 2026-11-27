@@ -124,7 +124,7 @@ int main(int argc, char **argv)
 def gnss(tmp_path_factory):
     d = tmp_path_factory.mktemp("gnss")
     # The socket path is only used by main(), which the harness does not run
-    sandboxed_source(SRC, d, [("/run/gnss-nmea-bridge/nmea.sock", d / "nmea.sock")], allow=("/dev/binder",))
+    sandboxed_source(SRC, d, [("/run/gnss-nmea-bridge/nmea.sock", d / "nmea.sock"), ("/dev/anbox-binder", d / "anbox-binder")], allow=("/dev/binder",))
     exe = build_harness(d, "gnss", HARNESS, pkgs=("gio-unix-2.0",))
     return functools.partial(run, exe)
 

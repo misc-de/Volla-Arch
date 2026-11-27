@@ -1,0 +1,17 @@
+# The container service runs from boot on, so that an Android app starts from the app grid like
+# any other (it starts Android only with the first app; until Waydroid is initialised, its
+# condition keeps it from starting at all). Enabled once: on installing, or on the update that
+# brought this; a choice made since stays.
+post_install() {
+	systemctl enable waydroid-container.service
+}
+
+post_upgrade() {
+	if [ "$(vercmp "$2" 1.6.3-6)" -lt 0 ]; then
+		systemctl enable waydroid-container.service
+	fi
+}
+
+pre_remove() {
+	systemctl disable waydroid-container.service
+}

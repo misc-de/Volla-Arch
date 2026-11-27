@@ -1,0 +1,113 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""waydroid-plinius-screen: Android's screen in the Waydroid container follows the phone's lock.
+
+Android knows nothing of Phosh's lock screen: it takes its screen for on and unlocked all the
+time, so its NFC stack looks for tags while the phone is locked and dark, and its apps keep
+running. This service watches the lock of the seat's active session (logind's LockedHint, which
+Phosh sets) while the container service runs:
+
+  locked:   Android goes to sleep (KEYCODE_SLEEP). Its NFC stops polling, and Waydroid freezes
+            the container once Android asks to suspend.
+  unlocked: the container is thawed and Android wakes up (KEYCODE_WAKEUP).
+"""
+
+import subprocess
+import sys
+
+from gi.repository import Gio, GLib
+
+LOGIN1 = "org.freedesktop.login1"
+SEAT = "/org/freedesktop/login1/seat/seat0"
+
+
+def container_state():
+    """RUNNING, FROZEN, STOPPED (waydroid status), or None if Waydroid does not answer."""
+    try:
+        r = subprocess.run(["waydroid", "status"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in r.stdout.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "Container":
+            return value.strip()
+    return None
+
+
+def run(command):
+    try:
+        return subprocess.run(command, capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def apply(locked):
+    """Android's screen off (locked) or on; False if no Android is running."""
+    state = container_state()
+    if state not in ("RUNNING", "FROZEN"):
+        return False
+    if not locked and state == "FROZEN":
+        run(["waydroid", "container", "unfreeze"])
+    key = "KEYCODE_SLEEP" if locked else "KEYCODE_WAKEUP"
+    ok = run(["waydroid", "shell", "--", "input", "keyevent", key])
+    print("Phone %s: Android %s%s" % ("locked" if locked else "unlocked", "asleep" if locked else "awake",
+                                     "" if ok else " (failed)"), flush=True)
+    return ok
+
+
+class Watcher:
+    """The lock of the seat's active session; a change goes to apply()."""
+
+    def __init__(self, bus, apply_fn=apply):
+        self.bus = bus
+        self.apply = apply_fn
+        self.locked = None
+        self.session = None
+        self.seat = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, LOGIN1, SEAT,
+                                           LOGIN1 + ".Seat", None)
+        self.seat.connect("g-properties-changed", self.on_seat_changed)
+        self.follow_session()
+
+    def follow_session(self):
+        active = self.seat.get_cached_property("ActiveSession")
+        path = active.unpack()[1] if active is not None else "/"
+        if path == "/":
+            self.session = None
+            return
+        self.session = Gio.DBusProxy.new_sync(self.bus, Gio.DBusProxyFlags.NONE, None, LOGIN1, path,
+                                              LOGIN1 + ".Session", None)
+        self.session.connect("g-properties-changed", self.on_session_changed)
+        self.check()
+
+    def check(self):
+        value = self.session.get_cached_property("LockedHint") if self.session else None
+        locked = bool(value.unpack()) if value is not None else False
+        # At start only a lock needs doing: an Android that runs is awake
+        if locked != self.locked and (self.locked is not None or locked):
+            self.apply(locked)
+        self.locked = locked
+
+    def on_seat_changed(self, proxy, changed, invalidated):
+        if "ActiveSession" in changed.keys():
+            self.follow_session()
+
+    def on_session_changed(self, proxy, changed, invalidated):
+        if "LockedHint" in changed.keys():
+            self.check()
+
+
+def main():
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        # Held for as long as the loop runs: with it go its proxies and their handlers
+        watcher = Watcher(bus)
+    except GLib.Error as e:
+        print("Cannot watch the lock: %s" % e.message, file=sys.stderr)
+        return 1
+    GLib.MainLoop().run()
+    del watcher
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
