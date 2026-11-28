@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="400" viewBox="0 0 240 400">
+  <!-- Unlock with a pattern (phosh-plinius 0010), the fingerprint below the screen or the face -->
+  <defs>
+    <radialGradient id="glow" cx="120" cy="400" r="110" gradientUnits="userSpaceOnUse" gradientTransform="matrix(1.6 0 0 .6 -72 160)">
+      <stop offset="0" stop-color="#1c71d8"/>
+      <stop offset="1" stop-color="#1c71d8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M30 10a15 15 0 0 0-15 15v375h210V25a15 15 0 0 0-15-15z" fill="#deddda" fill-opacity=".92"/>
+  <rect x="105" y="17" width="30" height="5" rx="2.5" fill="#fff" fill-opacity=".92"/>
+  <rect x="20" y="30" width="200" height="370" fill="#000"/>
+  <rect x="20" y="300" width="200" height="100" fill="url(#glow)" opacity=".5"/>
+  <!-- the face -->
+  <g fill="none" stroke="#fff" stroke-opacity=".8" stroke-width="2.5" stroke-linecap="round">
+    <path d="M104 58v-4a6 6 0 0 1 6-6h4m12 0h4a6 6 0 0 1 6 6v4m0 12v4a6 6 0 0 1-6 6h-4m-12 0h-4a6 6 0 0 1-6-6v-4"/>
+    <path d="M114 68q6 5 12 0"/>
+  </g>
+  <g fill="#fff" fill-opacity=".8"><circle cx="114" cy="59" r="2"/><circle cx="126" cy="59" r="2"/></g>
+  <!-- the pattern -->
+  <path d="M70 120l50 50h50v50" fill="none" stroke="#3584e4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#fff" fill-opacity=".5">
+    <circle cx="120" cy="120" r="5"/><circle cx="170" cy="120" r="5"/>
+    <circle cx="70" cy="170" r="5"/>
+    <circle cx="70" cy="220" r="5"/><circle cx="120" cy="220" r="5"/>
+  </g>
+  <g fill="#3584e4"><circle cx="70" cy="120" r="8"/><circle cx="120" cy="170" r="8"/><circle cx="170" cy="170" r="8"/></g>
+  <!-- the fingerprint sensor below the screen -->
+  <g fill="none" stroke="#fff" stroke-opacity=".75" stroke-width="2.5" stroke-linecap="round">
+    <path d="M108 318a16 16 0 0 1 28 6"/>
+    <path d="M104 334q0-16 16-16"/>
+    <path d="M110 344q-2-6-1-12a11 11 0 0 1 22 0q1 8-1 12"/>
+    <path d="M116 348q-2-8-1-16a5 5 0 0 1 10 0q1 8 0 14"/>
+    <path d="M120 332q1 10-2 18"/>
+    <path d="M136 330q1 8-2 14"/>
+  </g>
+  <!-- the finger finishes the pattern -->
+  <circle cx="170" cy="220" r="12" fill="#1c71d8" stroke="#1c71d8" stroke-width="12" stroke-opacity=".5"/>
+</svg>

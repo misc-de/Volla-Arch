@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 11:57:08 +0100
+Subject: [PATCH] window: Pages for what Phosh on the Plinius adds
+
+Plinius: phosh-plinius adds gestures and places that the tour did not
+show, so nobody found them. Nine pages explain them in the tour's own
+look, each next to the page about the same part of Phosh:
+
+- Long Press a Tile, after Quick Settings: a long press opens the
+  tile's page in Settings; the tiles of our own
+- Unlock Your Way and Emergency Calls, after Slide to Unlock: pattern,
+  fingerprint and face; the emergency button of the unlock page
+- Force Quit and Arrange Your Apps, after Closing Applications: hold a
+  card halfway away, or hold it to move it
+- Search from the Notch, after Launching Applications
+- Volume for Each Sound, Camera Light and Always-On Display, after See
+  Your Notifications
+
+The power menu is a list with Restart and Restart Phosh now: its page
+gets a picture of that and names the actions.
+
+The pictures are in data/pages/plinius/ (pkgbuilds/phosh-tour-plinius
+puts them there), under the resource path pages/plinius/.
+---
+ src/phosh-tour.gresource.xml | 12 ++++++
+ src/ui/pt-window.ui          | 78 +++++++++++++++++++++++++++++++++++-
+ 2 files changed, 88 insertions(+), 2 deletions(-)
+
+diff --git a/src/phosh-tour.gresource.xml b/src/phosh-tour.gresource.xml
+index 4487361..1772095 100644
+--- a/src/phosh-tour.gresource.xml
++++ b/src/phosh-tour.gresource.xml
+@@ -21,4 +21,16 @@
+   <gresource prefix="/mobi/phosh/PhoshTour/pages/distro/postmarketos">
+     <file alias="hacking.svg">../data/pages/distro/postmarketos/hacking.svg</file>
+   </gresource>
++  <gresource prefix="/mobi/phosh/PhoshTour/pages/plinius">
++    <file alias="always-on.svg">../data/pages/plinius/always-on.svg</file>
++    <file alias="arrange-apps.svg">../data/pages/plinius/arrange-apps.svg</file>
++    <file alias="camera-light.svg">../data/pages/plinius/camera-light.svg</file>
++    <file alias="emergency-button.svg">../data/pages/plinius/emergency-button.svg</file>
++    <file alias="force-quit.svg">../data/pages/plinius/force-quit.svg</file>
++    <file alias="long-press-tile.svg">../data/pages/plinius/long-press-tile.svg</file>
++    <file alias="notch-search.svg">../data/pages/plinius/notch-search.svg</file>
++    <file alias="power-menu.svg">../data/pages/plinius/power-menu.svg</file>
++    <file alias="unlock-ways.svg">../data/pages/plinius/unlock-ways.svg</file>
++    <file alias="volume-roles.svg">../data/pages/plinius/volume-roles.svg</file>
++  </gresource>
+ </gresources>
+diff --git a/src/ui/pt-window.ui b/src/ui/pt-window.ui
+index 8e4023f..d50416f 100644
+--- a/src/ui/pt-window.ui
++++ b/src/ui/pt-window.ui
+@@ -72,10 +72,18 @@
+ 
+                 <child>
+                   <object class="PtPage">
+-                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/power-menu.svg</property>
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/long-press-tile.svg</property>
++                    <property name="summary" translatable="yes">Long Press a Tile</property>
++                    <property name="explanation" translatable="yes">Long pressing a quick setting opens its page in Settings. Airplane mode, NFC, casting to a TV, USB and your contact card have tiles of their own.</property>
++                  </object>
++                </child>
++
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/power-menu.svg</property>
+                     <!-- Translators: The menu shown when the device's power button is long pressed -->
+                     <property name="summary" translatable="yes">Power Menu</property>
+-                    <property name="explanation" translatable="yes">Pressing and holding the Power button will display a menu with quick actions for your device. When set up, an Emergency calling action will also be available.</property>
++                    <property name="explanation" translatable="yes">Pressing and holding the Power button shows a menu to power off or restart the phone, restart Phosh, lock the screen, take a screenshot or make an emergency call.</property>
+                   </object>
+                 </child>
+ 
+@@ -87,6 +95,23 @@
+                   </object>
+                 </child>
+ 
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/unlock-ways.svg</property>
++                    <property name="summary" translatable="yes">Unlock Your Way</property>
++                    <!-- Translators: “Settings › System › Users” are the names of the pages in GNOME Settings, as there -->
++                    <property name="explanation" translatable="yes">Instead of the PIN you can draw a pattern; your fingerprint and your face unlock the phone too. Set them up in Settings › System › Users.</property>
++                  </object>
++                </child>
++
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/emergency-button.svg</property>
++                    <property name="summary" translatable="yes">Emergency Calls</property>
++                    <property name="explanation" translatable="yes">The red button in the lower left corner of the unlock page opens the emergency dialer without unlocking the phone.</property>
++                  </object>
++                </child>
++
+                 <child>
+                   <object class="PtPage">
+                     <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/close-apps.svg</property>
+@@ -95,6 +120,22 @@
+                   </object>
+                 </child>
+ 
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/force-quit.svg</property>
++                    <property name="summary" translatable="yes">Force Quit</property>
++                    <property name="explanation" translatable="yes">If an app does not close, swipe it halfway away and hold it there for a second. You will then be asked whether to force quit it.</property>
++                  </object>
++                </child>
++
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/arrange-apps.svg</property>
++                    <property name="summary" translatable="yes">Arrange Your Apps</property>
++                    <property name="explanation" translatable="yes">Hold an app in the Overview for a second until it vibrates, then drag it to its new place.</property>
++                  </object>
++                </child>
++
+                 <child>
+                   <object class="PtPage">
+                     <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/launch-apps.svg</property>
+@@ -103,6 +144,14 @@
+                   </object>
+                 </child>
+ 
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/notch-search.svg</property>
++                    <property name="summary" translatable="yes">Search from the Notch</property>
++                    <property name="explanation" translatable="yes">Tap the camera at the top of the screen to search for apps, settings, contacts and more.</property>
++                  </object>
++                </child>
++
+                 <child>
+                   <object class="PtPage">
+                     <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/see-notifications.svg</property>
+@@ -111,6 +160,31 @@
+                   </object>
+                 </child>
+ 
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/volume-roles.svg</property>
++                    <property name="summary" translatable="yes">Volume for Each Sound</property>
++                    <property name="explanation" translatable="yes">The volume keys show a slider at the edge of the screen. Swipe it inwards to set media, calls, ringtone, notifications and alarms separately.</property>
++                  </object>
++                </child>
++
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/camera-light.svg</property>
++                    <property name="summary" translatable="yes">Camera Light</property>
++                    <property name="explanation" translatable="yes">While the front camera is on, a ring of light runs around it, so nobody films you unnoticed.</property>
++                  </object>
++                </child>
++
++                <child>
++                  <object class="PtPage">
++                    <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/plinius/always-on.svg</property>
++                    <property name="summary" translatable="yes">Always-On Display</property>
++                    <!-- Translators: “Settings › Displays” is the names of the pages in GNOME Settings, as there -->
++                    <property name="explanation" translatable="yes">Turn it on in Settings › Displays to see the time and your notifications while the screen is off.</property>
++                  </object>
++                </child>
++
+                 <child>
+                   <object class="PtDistroPage">
+                     <property name="image-uri">resource:///mobi/phosh/PhoshTour/pages/distro/postmarketos/hacking.svg</property>
+-- 
+2.56.1
+

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="400" viewBox="0 0 240 400">
+  <!-- A tap on the camera in the top bar opens the search below it (phosh-plinius 0018, 0033) -->
+  <path d="M30 10a15 15 0 0 0-15 15v375h210V25a15 15 0 0 0-15-15z" fill="#deddda" fill-opacity=".92"/>
+  <rect x="105" y="17" width="30" height="5" rx="2.5" fill="#fff" fill-opacity=".92"/>
+  <rect x="20" y="30" width="200" height="370" fill="#000"/>
+  <!-- top bar: clock, network and battery -->
+  <rect x="30" y="37" width="20" height="6" rx="3" fill="#fff" fill-opacity=".7"/>
+  <rect x="176" y="37" width="6" height="6" rx="3" fill="#fff" fill-opacity=".7"/>
+  <rect x="186" y="37" width="6" height="6" rx="3" fill="#fff" fill-opacity=".7"/>
+  <rect x="196" y="37" width="14" height="6" rx="2" fill="#fff" fill-opacity=".7"/>
+  <!-- the app grid behind the search -->
+  <g fill="#f6f5f4" fill-opacity=".1">
+    <rect x="30" y="226" width="180" height="25" rx="12.5"/>
+    <circle cx="48" cy="281" r="18"/><circle cx="96" cy="281" r="18"/><circle cx="144" cy="281" r="18"/><circle cx="192" cy="281" r="18"/>
+    <circle cx="48" cy="329" r="18"/><circle cx="96" cy="329" r="18"/><circle cx="144" cy="329" r="18"/><circle cx="192" cy="329" r="18"/>
+    <circle cx="48" cy="377" r="18"/><circle cx="96" cy="377" r="18"/><circle cx="144" cy="377" r="18"/><circle cx="192" cy="377" r="18"/>
+  </g>
+  <!-- the search: a card joined to the notch by a stem -->
+  <path d="M100 30q10 0 10 10v28q0 8-8 8H48q-12 0-12 12v112q0 12 12 12h144q12 0 12-12V88q0-12-12-12h-54q-8 0-8-8V40q0-10 10-10z" fill="#f6f5f4" fill-opacity=".16"/>
+  <g transform="translate(0 16)">
+  <rect x="46" y="70" width="148" height="24" rx="12" fill="#f6f5f4" fill-opacity=".2" stroke="#62a0ea" stroke-width="2"/>
+  <path d="M60.5 76.5a5 5 0 1 0 2.9 9.1l3 3c.7.7 1.8-.4 1.1-1.1l-3-3a5 5 0 0 0-4-8zm0 1.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z" fill="#fff" fill-opacity=".5"/>
+  <rect x="74" y="79" width="40" height="6" rx="3" fill="#fff" fill-opacity=".8"/>
+  <!-- hits: an app, then settings and contacts -->
+  <rect x="44" y="102" width="152" height="26" rx="8" fill="#3584e4" fill-opacity=".45"/>
+  <circle cx="60" cy="115" r="8" fill="#f6f5f4" fill-opacity=".6"/>
+  <rect x="76" y="112" width="70" height="6" rx="3" fill="#fff" fill-opacity=".7"/>
+  <rect x="52" y="136" width="30" height="4" rx="2" fill="#fff" fill-opacity=".3"/>
+  <rect x="53" y="148" width="14" height="14" rx="4" fill="#f6f5f4" fill-opacity=".35"/>
+  <rect x="76" y="152" width="84" height="6" rx="3" fill="#fff" fill-opacity=".35"/>
+  <circle cx="60" cy="178" r="7" fill="#f6f5f4" fill-opacity=".35"/>
+  <rect x="76" y="175" width="58" height="6" rx="3" fill="#fff" fill-opacity=".35"/>
+  </g>
+  <!-- the camera hole -->
+  <circle cx="120" cy="40" r="5" fill="#3d3846" stroke="#5e5c64"/>
+  <!-- tap on the camera -->
+  <circle cx="120" cy="40" r="26" fill="none" stroke="#1c71d8" stroke-width="2" stroke-opacity=".3"/>
+  <circle cx="120" cy="40" r="12" fill="#1c71d8" stroke="#1c71d8" stroke-width="12" stroke-opacity=".5"/>
+</svg>

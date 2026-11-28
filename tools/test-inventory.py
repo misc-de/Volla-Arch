@@ -41,9 +41,10 @@ CATEGORIES = [
         "wpa_supplicant-plinius", "nfcd", "libncicore", "plinius-dictate", "cups-plinius",
         "plinius-pdf-printer"]),
     ("ui", "User interface (shell, settings, apps)", [
-        "gnome-control-center-plinius", "phosh-plinius", "phoc-plinius", "stevia-plinius",
-        "snapshot-plinius", "libhandy-plinius", "gtk3-plinius", "plinius-desktop", "plinius-remote",
-        "plinius-cardshare", "plinius-screentime", "plinius-ambient", "plinius-assist",
+        "gnome-control-center-plinius", "phosh-plinius", "phosh-tour-plinius", "phoc-plinius",
+        "stevia-plinius", "snapshot-plinius", "libhandy-plinius", "gtk3-plinius", "plinius-desktop",
+        "plinius-remote", "plinius-cardshare", "plinius-screentime", "plinius-ambient",
+        "plinius-assist",
         "plinius-apps", "plinius-nfc-lab", "gnome-usage-plinius", "gnome-online-accounts-plinius",
         "gnome-bluetooth-plinius", "xdg-desktop-portal-wlr-plinius", "mobile-config-firefox",
         "muga", "schwupp"]),

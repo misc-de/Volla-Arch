@@ -581,7 +581,9 @@ def candidate_world(repo):
     (repo.volla / "image").mkdir()
     (repo.volla / "image/mkimage.sh").write_text("packages=(\n\tbase phosh\n\tmodemmanager\n)\n")
     (repo.volla / "pkgbuilds/plinius-apps").mkdir(parents=True)
-    (repo.volla / "pkgbuilds/plinius-apps/recommended.list").write_text("# apps\nsnapshot\nfirefox\n")
+    # snapshot and phosh-tour come as our -plinius packages, not from ALARM
+    (repo.volla / "pkgbuilds/plinius-apps/recommended.list").write_text(
+        "# apps\nsnapshot\nphosh-tour\nfirefox\n")
     # freigabe as a module (the file conflicts step imports it) and a fixed conflict report
     (repo.tools / "freigabe.py").write_text(f'''
 import os

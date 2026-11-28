@@ -200,7 +200,8 @@ check_host
 # Audio: audio-hal-bridge puts the vendor audio HAL into PipeWire (user service). Sensors:
 # sensor-proxy-bridge serves the sensors HAL as iio-sensor-proxy (rotation, proximity, light, compass).
 # Cameras: camera-hal-bridge offers them as PipeWire camera nodes (user service), Snapshot as app
-# (snapshot-plinius: pictures in the gallery can be zoomed). gnome-usage-plinius: Usage without
+# (snapshot-plinius: pictures in the gallery can be zoomed). phosh-tour-plinius: the tour of the
+# first login also explains what phosh-plinius adds. gnome-usage-plinius: Usage without
 # system services in the app list (cupsd was "Manage Printing"). gnome-calls-plinius: Calls that
 # doesn't lose an emergency call (docs/NOTRUF.md), plinius-apps takes it for gnome-calls.
 # gnome-online-accounts-plinius: Refresh button; apps get an account's data after a start without
@@ -327,7 +328,7 @@ packages=(base openssh sudo device-volla-ansuz hybris-tls-relocate
 	phosh-plinius phoc-plinius stevia-plinius greetd which gnome-backgrounds gnome-console noto-fonts noto-fonts-emoji adwaita-fonts
 	networkmanager wpa_supplicant-plinius dnsmasq iptables-legacy iw bluez bluez-utils bluebinder feedbackd vibrator-ff-bridge
 	ofono-sailfish ofono-binder-plugin ofono2mm nfcd nfcd-binder-plugin gnss-nmea-bridge audio-hal-bridge
-	sensor-proxy-bridge camera-hal-bridge snapshot-plinius gnome-usage-plinius gnome-keyring rtkit gnome-control-center-plinius
+	sensor-proxy-bridge camera-hal-bridge snapshot-plinius phosh-tour-plinius gnome-usage-plinius gnome-keyring rtkit gnome-control-center-plinius
 	gnome-online-accounts-plinius chatty-plinius libhandy-plinius gtk3-plinius
 	plinius-kmod plinius-torch glibc-locales lpac plinius-wake plinius-assist plinius-sar plinius-datawatch plinius-kmsg cups-plinius
 	plinius-pdf-printer plinius-remote biomd biomd-fprintd biomd-session plinius-udfps plinius-charge
@@ -343,13 +344,14 @@ packages=(base openssh sudo device-volla-ansuz hybris-tls-relocate
 	plinius-speech plinius-speech-voice-en-us-joe
 	noto-fonts-cjk gvfs-mtp gvfs-smb exfatprogs dosfstools less)
 # App selection as in the preview (image/mkpreview.sh): plinius-apps (calls, SMS, contacts; fixed)
-# and recommended.list (removable in Software). snapshot and gnome-usage come as snapshot-plinius
-# and gnome-usage-plinius above, which conflict with them; names already listed are skipped.
+# and recommended.list (removable in Software). snapshot, phosh-tour and gnome-usage come as
+# snapshot-plinius, phosh-tour-plinius and gnome-usage-plinius above, which conflict with them;
+# names already listed are skipped.
 # Apps below "# Not preinstalled" are only offered in Software, the image leaves them out.
 packages+=(plinius-apps)
 while read -r app; do
 	[[ $app == "# Not preinstalled"* ]] && break
-	[[ -n $app && $app != \#* && $app != snapshot && $app != gnome-usage && " ${packages[*]} " != *" $app "* ]] && packages+=("$app")
+	[[ -n $app && $app != \#* && $app != snapshot && $app != phosh-tour && $app != gnome-usage && " ${packages[*]} " != *" $app "* ]] && packages+=("$app")
 done < "$PKGBUILDS/plinius-apps/recommended.list"
 # Without the key in the image the device could not verify any update from [plinius]
 if [[ -n $repo_url ]]; then

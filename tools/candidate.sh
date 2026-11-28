@@ -49,7 +49,8 @@ mapfile -t ours < <(bsdtar -xOf "$LOCALREPO/plinius-local.db.tar.gz" '*/desc' |
 # The rest of the image (image/mkimage.sh) comes from ALARM and pulls in what users have
 image_pkgs=$(sed -n '/^packages=(/,/)$/p' "$VOLLA_DIR/image/mkimage.sh" | tr -d '()' |
 	sed 's/^packages=//' | tr -s ' \t\n' '\n' | grep -v '^$')
-recommended=$(grep -v '^#' "$PKGBUILDS/plinius-apps/recommended.list" | grep -vx 'snapshot' || true)
+# snapshot and phosh-tour come as our snapshot-plinius and phosh-tour-plinius (replaces=)
+recommended=$(grep -v '^#' "$PKGBUILDS/plinius-apps/recommended.list" | grep -vxE 'snapshot|phosh-tour' || true)
 
 {
 	echo "Candidate check $stamp, $ARCH"

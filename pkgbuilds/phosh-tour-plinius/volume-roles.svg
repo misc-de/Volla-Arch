@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="400" viewBox="0 0 240 400">
+  <!-- The volume keys show a slider at their edge, swiped inwards one per role (phosh-plinius 0068) -->
+  <path d="M30 10a15 15 0 0 0-15 15v375h210V25a15 15 0 0 0-15-15z" fill="#deddda" fill-opacity=".92"/>
+  <rect x="105" y="17" width="30" height="5" rx="2.5" fill="#fff" fill-opacity=".92"/>
+  <!-- the volume keys on the side, one pressed -->
+  <rect x="224" y="96" width="6" height="34" rx="3" fill="#3584e4" stroke="#3584e4" stroke-width="8" stroke-opacity=".2"/>
+  <rect x="225" y="138" width="4" height="34" rx="2" fill="#c0bfbc"/>
+  <rect x="20" y="30" width="200" height="370" fill="#000"/>
+  <!-- an app in the background -->
+  <rect x="30" y="40" width="20" height="6" rx="3" fill="#fff" fill-opacity=".3"/>
+  <rect x="196" y="40" width="14" height="6" rx="2" fill="#fff" fill-opacity=".3"/>
+  <g fill="#f6f5f4" fill-opacity=".05">
+    <rect x="30" y="56" width="180" height="70" rx="8"/>
+    <rect x="30" y="134" width="180" height="70" rx="8"/>
+    <rect x="30" y="212" width="180" height="70" rx="8"/>
+    <rect x="30" y="290" width="180" height="70" rx="8"/>
+  </g>
+  <!-- the slider at the keys: output volume -->
+  <rect x="190" y="70" width="22" height="150" rx="11" fill="#3d3846"/>
+  <path d="M190 140h22v69a11 11 0 0 1-11 11 11 11 0 0 1-11-11z" fill="#3584e4"/>
+  <path d="M196 204h3l4-4v12l-4-4h-3z" fill="#fff"/>
+  <circle cx="201" cy="236" r="10" fill="#3d3846"/>
+  <g fill="#fff" fill-opacity=".8"><circle cx="196.5" cy="236" r="1.5"/><circle cx="201" cy="236" r="1.5"/><circle cx="205.5" cy="236" r="1.5"/></g>
+  <!-- one slider per role: media, calls, ringtone, notifications, alarm -->
+  <g>
+    <rect x="34" y="80" width="16" height="130" rx="8" fill="#3d3846"/>
+    <path d="M34 120h16v82a8 8 0 0 1-16 0z" fill="#62a0ea"/>
+    <rect x="58" y="80" width="16" height="130" rx="8" fill="#3d3846"/>
+    <path d="M58 150h16v52a8 8 0 0 1-16 0z" fill="#62a0ea"/>
+    <rect x="82" y="80" width="16" height="130" rx="8" fill="#3d3846"/>
+    <path d="M82 100h16v102a8 8 0 0 1-16 0z" fill="#62a0ea"/>
+    <rect x="106" y="80" width="16" height="130" rx="8" fill="#3d3846"/>
+    <path d="M106 166h16v36a8 8 0 0 1-16 0z" fill="#62a0ea"/>
+    <rect x="130" y="80" width="16" height="130" rx="8" fill="#3d3846"/>
+    <path d="M130 132h16v70a8 8 0 0 1-16 0z" fill="#62a0ea"/>
+  </g>
+  <g fill="#fff" fill-opacity=".6">
+    <circle cx="42" cy="224" r="4"/><circle cx="66" cy="224" r="4"/><circle cx="90" cy="224" r="4"/><circle cx="114" cy="224" r="4"/><circle cx="138" cy="224" r="4"/>
+  </g>
+  <!-- swipe the slider inwards -->
+  <circle cx="201" cy="140" r="12" fill="#1c71d8" stroke="#1c71d8" stroke-width="12" stroke-opacity=".5"/>
+  <path d="M201 140h-40" fill="none" stroke="#1c70d8" stroke-width="6" stroke-linecap="round"/>
+  <path d="m171 130-10 10 10 10" fill="none" stroke="#1c70d8" stroke-width="6" stroke-linecap="round"/>
+</svg>

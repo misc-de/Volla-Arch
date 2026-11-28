@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="400" viewBox="0 0 240 400">
+  <!-- A long press on a quick setting opens its page in Settings (phosh-plinius 0086) -->
+  <path d="M30 10a15 15 0 0 0-15 15v375h210V25a15 15 0 0 0-15-15z" fill="#deddda" fill-opacity=".92"/>
+  <rect x="105" y="17" width="30" height="5" rx="2.5" fill="#fff" fill-opacity=".92"/>
+  <rect x="20" y="30" width="200" height="370" fill="#000"/>
+  <!-- top bar and sliders -->
+  <rect x="30" y="37" width="20" height="6" rx="3" fill="#fff" fill-opacity=".7"/>
+  <rect x="196" y="37" width="14" height="6" rx="2" fill="#fff" fill-opacity=".7"/>
+  <g fill="#fff">
+    <circle cx="36" cy="62" r="5" fill-opacity=".4"/>
+    <rect x="48" y="61" width="158" height="2" rx="1" fill-opacity=".3"/>
+    <rect x="48" y="61" width="90" height="2" rx="1" fill="#3584e4"/>
+    <circle cx="138" cy="62" r="5"/>
+    <circle cx="36" cy="80" r="5" fill-opacity=".4"/>
+    <rect x="48" y="79" width="158" height="2" rx="1" fill-opacity=".3"/>
+    <rect x="48" y="79" width="130" height="2" rx="1" fill="#3584e4"/>
+    <circle cx="178" cy="80" r="5"/>
+  </g>
+  <!-- tiles: on in blue, off in grey -->
+  <g>
+    <rect x="30" y="96" width="86" height="20" rx="10" fill="#15539e"/>
+    <rect x="124" y="96" width="86" height="20" rx="10" fill="#333"/>
+    <rect x="30" y="122" width="86" height="20" rx="10" fill="#15539e"/>
+    <rect x="124" y="122" width="86" height="20" rx="10" fill="#333"/>
+    <rect x="30" y="148" width="86" height="20" rx="10" fill="#333"/>
+    <rect x="124" y="148" width="86" height="20" rx="10" fill="#15539e"/>
+    <rect x="30" y="174" width="86" height="20" rx="10" fill="#333"/>
+    <rect x="124" y="174" width="86" height="20" rx="10" fill="#333"/>
+  </g>
+  <g fill="#fff" fill-opacity=".8">
+    <circle cx="42" cy="106" r="4"/><rect x="51" y="104" width="40" height="4" rx="2"/>
+    <circle cx="136" cy="106" r="4"/><rect x="145" y="104" width="32" height="4" rx="2"/>
+    <circle cx="42" cy="132" r="4"/><rect x="51" y="130" width="46" height="4" rx="2"/>
+    <circle cx="136" cy="132" r="4"/><rect x="145" y="130" width="28" height="4" rx="2"/>
+    <circle cx="42" cy="158" r="4"/><rect x="51" y="156" width="36" height="4" rx="2"/>
+    <circle cx="136" cy="158" r="4"/><rect x="145" y="156" width="44" height="4" rx="2"/>
+    <circle cx="42" cy="184" r="4"/><rect x="51" y="182" width="30" height="4" rx="2"/>
+    <circle cx="136" cy="184" r="4"/><rect x="145" y="182" width="38" height="4" rx="2"/>
+  </g>
+  <!-- the tile's page in Settings comes up -->
+  <path d="M20 240h200v160H20z" fill="#f6f5f4"/>
+  <path d="M20 240h200v28H20z" fill="#deddda"/>
+  <path d="M34 254l6-6m-6 6 6 6" fill="none" stroke="#5e5c64" stroke-width="2" stroke-linecap="round"/>
+  <rect x="90" y="251" width="60" height="6" rx="3" fill="#5e5c64" fill-opacity=".8"/>
+  <g fill="#fff">
+    <rect x="32" y="282" width="176" height="94" rx="10"/>
+  </g>
+  <g fill="#5e5c64">
+    <rect x="44" y="296" width="70" height="5" rx="2.5" fill-opacity=".7"/>
+    <rect x="172" y="292" width="26" height="14" rx="7" fill="#3584e4"/>
+    <circle cx="191" cy="299" r="5" fill="#fff"/>
+    <rect x="32" y="313" width="176" height="1" fill-opacity=".15"/>
+    <rect x="44" y="325" width="96" height="5" rx="2.5" fill-opacity=".5"/>
+    <rect x="32" y="342" width="176" height="1" fill-opacity=".15"/>
+    <rect x="44" y="354" width="58" height="5" rx="2.5" fill-opacity=".5"/>
+  </g>
+  <!-- hold the tile -->
+  <circle cx="167" cy="158" r="12" fill="#1c71d8" stroke="#1c71d8" stroke-width="12" stroke-opacity=".5"/>
+  <path d="M167 132a26 26 0 1 1-26 26" fill="none" stroke="#1c71d8" stroke-width="4" stroke-linecap="round"/>
+  <path d="M167 228v-28" fill="none" stroke="#1c70d8" stroke-width="6" stroke-linecap="round"/>
+  <path d="m157 218 10 10 10-10" fill="none" stroke="#1c70d8" stroke-width="6" stroke-linecap="round"/>
+</svg>

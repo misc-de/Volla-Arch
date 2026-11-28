@@ -1,0 +1,91 @@
+# Maintainer: misc-de <misc-de@users.noreply.github.com>
+# Based on: Arch's PKGBUILD (phosh-tour 0.59.0-1); ALARM builds it unchanged.
+
+pkgname=phosh-tour-plinius
+pkgver=0.59.0
+pkgrel=2
+pkgdesc="Phosh Tour with pages for what phosh-plinius adds: long presses on tiles, pattern, fingerprint and face, the emergency button, force quit, the app order, the notch search, the volume per sound, the camera light and the always-on display"
+arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
+url="https://gitlab.gnome.org/World/Phosh/phosh-tour"
+license=(GPL-3.0-or-later)
+# Why a custom build: the tour starts on the first login and explains Phosh's gestures, but
+# none of the ones phosh-plinius adds, so they stay unknown. Nine pages in the tour's own look
+# (240x400 pictures of a phone, the finger as a blue dot) explain them next to the page about
+# the same part of Phosh, and the power menu page shows our list with Restart and Restart Phosh.
+# Must follow the phosh-tour version in ALARM.
+# Dependencies as in ALARM; gettext (msgcat) comes with base-devel.
+depends=(dconf glib2 glibc gtk4 hicolor-icon-theme libadwaita libgcc libgmobile)
+makedepends=(git glib2-devel meson)
+provides=("phosh-tour=$pkgver")
+conflicts=(phosh-tour)
+# Phones with phosh-tour from ALARM take this one with their next update
+replaces=(phosh-tour)
+# Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
+_commit=f89dd54f58432f5696ea3955e93a8f1ff823f666
+_pages=(
+	always-on.svg arrange-apps.svg camera-light.svg emergency-button.svg force-quit.svg
+	long-press-tile.svg notch-search.svg power-menu.svg unlock-ways.svg volume-roles.svg
+)
+_langs=(de es fr it nl pl pt pt_BR ru)
+source=(
+	"git+$url.git#commit=$_commit"
+	0001-window-Pages-for-what-Phosh-on-the-Plinius-adds.patch
+	"${_pages[@]}"
+	"${_langs[@]/%/.po}"
+)
+sha256sums=('SKIP'
+            '6b484562bcdc7ff19459aed7f1f9424be82c180ac7ce1e6d3e12c36ff3488ae0'
+            'c41aa36cbe5b94a0dbc5566201f02ee1342bf99159db235576eedfb9e3e7fbcf'
+            '26c6464561ea32fa6b71c128583ca98790fbf72744d4a3949177e7f8e1f02c33'
+            'f93eb612dfa880bd89f85c176e62990db105bab50a84ed73db0272148f777c31'
+            'f9b39f86b4e29be6a8f6d819c36bc373ae691dd6a8d2cc9e6d1b86e77228ae9d'
+            '9aa3fb768fa6330c6b1e8853943cd79bbc29695469b8478cf6e14829682d6a0a'
+            '2c840c022f1681f2e11cc63d70c362cd275543730988c4a5872ed29f5d81e424'
+            '6946edb2ae7b4bab4d98c5631351e6448bf1f4b846e21fea0bd46f5a99648d27'
+            'ff6e1f58b5947079b6267d215e54477ed37570d433159d95f8529f482c20c151'
+            '91e71b40b6647b6f7afc89c0cb258de1c2c597aa1ddf4e51865296fd72b23b16'
+            '2d88950522f16682d4c4eda79fc6de197c1686c04d752860cb5d0235b4137b74'
+            '2fa5ebe73f92ea77c2c5ef7433e796796cf6c1d5f752fe13f49d820856b16744'
+            '5ed74e87bd386de21213b2fa9d183b608b7dfd6fc5ca09c7f36b9b1bbba6b7e7'
+            '5b0e0c667095dd73dc18e49ce0ad53647b5151de1a8a4ac26469423bb1060e16'
+            'b03cb91cd61cf62c2a649d7c82ad67aae9e48f842beaf956315f8540f052b630'
+            'a0d13893ba841786ed6e7cd02ed5bd44be991af2907ee4a0140e69a3d751814e'
+            'ca49ba0d6b85c0348fe501de28e82067894e2abf0d75b6a48ba6db6899dd1ad5'
+            '57dd8d4f53a96e2e823374acb1185f08c63c731761d67b71e2572960953875a6'
+            'd35b8d24748227b42d66c7d925f4d852230d569d812827c3fac85d2e605dc433'
+            'c7b4838f5fc6aaecdf0a6576701ab0dfd4fdc7a01647574f35bdbdbc6cba708f')
+
+prepare() {
+	cd phosh-tour
+	# The pages for what phosh-plinius adds, each after the page about the same part of Phosh,
+	# and the power menu page with a picture and words for the list it is now
+	patch -Np1 -i "$srcdir/0001-window-Pages-for-what-Phosh-on-the-Plinius-adds.patch"
+	# Their pictures, at the resource path pages/plinius/ that the patch names
+	install -Dm644 -t data/pages/plinius "${_pages[@]/#/$srcdir/}"
+	# Their translations join phosh-tour's own: msgcat keeps phosh-tour's header and entries
+	# and adds ours (also for the few strings phosh-tour left untranslated, such as the arrows'
+	# tooltips). phosh-tour has no Spanish: our es.po translates the whole tour and becomes a
+	# language of its own.
+	local lang
+	for lang in "${_langs[@]}"; do
+		if [[ -e po/$lang.po ]]; then
+			msgcat --use-first -o "po/$lang.po" "po/$lang.po" "$srcdir/$lang.po"
+		else
+			cp "$srcdir/$lang.po" "po/$lang.po"
+			echo "$lang" >> po/LINGUAS
+		fi
+	done
+}
+
+build() {
+	arch-meson phosh-tour build
+	meson compile -C build
+}
+
+check() {
+	meson test -C build --print-errorlogs
+}
+
+package() {
+	meson install -C build --no-rebuild --destdir "$pkgdir"
+}
