@@ -1,0 +1,13 @@
+[Desktop Entry]
+# The window of plinius-remote --desktop (app id org.plinius.Remote.Desktop): name and icon for
+# Phosh's overview. Hidden in the app grid; Remote Input's own icon opens it while a desktop is up.
+Name=Remote Input
+Name[de]=Eingabegerät
+Comment=Touchpad and keyboard for the phone's desktop
+Comment[de]=Touchpad und Tastatur für den Desktop des Telefons
+Exec=plinius-remote --desktop
+Icon=org.plinius.Remote
+Terminal=false
+Type=Application
+NoDisplay=true
+StartupNotify=true

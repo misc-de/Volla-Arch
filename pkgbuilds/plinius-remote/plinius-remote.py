@@ -13,10 +13,12 @@ working for real keyboards and mice.
 Nothing is registered while the switch in the header bar is off: the phone is then neither
 visible nor pairable through this app, and BlueZ's adapter settings are as before.
 
-"--desktop": the touchpad and keyboard work this phone's own desktop on a TV instead (Phosh's
-cast quick setting starts the app like this once the TV shows it, through Schwupp and
-plinius-desktop). The same reports go to a virtual mouse and keyboard (uinput), in full
-screen; the app ends when the TV no longer shows the desktop.
+"--desktop": the touchpad and keyboard work this phone's own desktop on a TV or over VNC instead
+(Phosh's cast quick setting starts the app like this once the TV shows it, through Schwupp and
+plinius-desktop). The app does the same when it is started while such a desktop is up. The same
+reports go to a virtual mouse and keyboard (uinput). The app is an ordinary window on the phone:
+the phone stays usable beside it (phoc leaves the keyboard with the window on the desktop, see
+phoc's setting keyboard-elsewhere), and the app ends when the desktop's screen goes away.
 """
 
 import gettext
@@ -325,21 +327,20 @@ CC_PLAY_PAUSE, CC_MUTE, CC_VOL_UP, CC_VOL_DOWN = 0xCD, 0xE2, 0xE9, 0xEA
 CC_NEXT, CC_PREVIOUS = 0xB5, 0xB6
 CC_AC_HOME, CC_AC_BACK = 0x223, 0x224
 
-# ----- The desktop on a TV (--desktop) -----
+# ----- The desktop on a TV or over VNC (--desktop) -----
 
-SCHWUPP_BUS = "de.cais.Schwupp"
-SCHWUPP_PATH = "/de/cais/Schwupp/Cast"
-SCHWUPP_IFACE = "de.cais.Schwupp.Cast1"
 UINPUT_NAME = "Plinius Remote Input"
 # The TV's screen lies right of the phone's: the pointer goes there, to the middle of it, a
 # moment after the window is up (phoc puts a new window on the screen with the pointer)
 POINTER_TO_TV = (100000, -100000, -960, 540)
 POINTER_DELAY_MS = 500
-# --desktop runs as a layer surface on the phone's screen that never takes the keyboard focus:
-# typing reaches the window on the TV, not this app. gtk4-layer-shell has to load before
-# libwayland, so the app starts itself again with it preloaded.
-LAYER_SHELL_LIB = "/usr/lib/libgtk4-layer-shell.so"
+# --desktop is an app id of its own: phoc gives windows of org.plinius.Remote.Desktop no keyboard
+# focus (its setting keyboard-elsewhere), what the app types reaches the desktop's window
 DESKTOP_APP_ID = APP_ID + ".Desktop"
+# The phone's own panel; any other screen is plinius-desktop's virtual one (TV or VNC)
+BUILT_IN_CONNECTORS = ("DSI-", "DPI-", "eDP-", "LVDS-")
+# A screen that goes away for longer than this has ended the desktop (not just a new layout)
+SCREEN_GONE_MS = 2000
 
 # HID keyboard usage -> Linux key code, as the kernel maps a real keyboard (hid-input.c)
 HID_TO_EVDEV = (
@@ -1964,7 +1965,8 @@ class RemoteApp(Adw.Application):
     def __init__(self, desktop=False):
         # Command line handled here: "--touchpad"/"--keyboard" open that page (GNOME Settings'
         # Mouse & Touchpad and Keyboard pages start us like this, see the desktop file's actions).
-        # --desktop is an instance of its own: the Bluetooth one, if open, stays as it is.
+        # --desktop is an instance of its own: the Bluetooth one, if open, stays as it is, and
+        # only the desktop's window leaves the keyboard on the other screen.
         super().__init__(application_id=DESKTOP_APP_ID if desktop else APP_ID,
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.desktop_mode = desktop
@@ -2003,7 +2005,9 @@ class RemoteApp(Adw.Application):
         self.zoom_scale = 1.0
         # --desktop: input for this phone's desktop on a TV, not for a Bluetooth host
         self.local = None
-        self.schwupp_watch = 0
+        self.monitors = None
+        self.monitors_handler = 0
+        self.screen_gone = 0
 
     # ----- Settings -----
 
@@ -2049,33 +2053,10 @@ class RemoteApp(Adw.Application):
             self.start_local()
         return 0
 
-    # ----- The desktop on a TV -----
-
-    def as_layer(self, win):
-        """The whole phone screen, above the shell, and no keyboard focus ever (needs
-        gtk4-layer-shell; without it the app is a full-screen window)."""
-        try:
-            gi.require_version("Gtk4LayerShell", "1.0")
-            from gi.repository import Gtk4LayerShell as Layer
-        except (ImportError, ValueError):
-            log("no gtk4-layer-shell: a window instead of a layer")
-            return False
-        if not Layer.is_supported():
-            return False
-        Layer.init_for_window(win)
-        Layer.set_namespace(win, "plinius-remote")
-        Layer.set_layer(win, Layer.Layer.OVERLAY)
-        Layer.set_keyboard_mode(win, Layer.KeyboardMode.NONE)
-        for edge in (Layer.Edge.TOP, Layer.Edge.BOTTOM, Layer.Edge.LEFT, Layer.Edge.RIGHT):
-            Layer.set_anchor(win, edge, True)
-        phone = phone_monitor()
-        if phone is not None:
-            Layer.set_monitor(win, phone)
-        self.layered = True
-        return True
+    # ----- The desktop on a TV or over VNC -----
 
     def start_local(self):
-        """Touchpad and keyboard for this phone's desktop on a TV, in full screen."""
+        """Touchpad and keyboard for this phone's desktop on another screen."""
         if self.local is None:
             try:
                 self.local = LocalInput()
@@ -2086,9 +2067,9 @@ class RemoteApp(Adw.Application):
             if self.peripheral:
                 self.peripheral.stop()
             self.reports.reset()
-            self.schwupp_watch = Gio.bus_watch_name(
-                Gio.BusType.SESSION, SCHWUPP_BUS, Gio.BusNameWatcherFlags.NONE,
-                self.on_schwupp_appeared, self.on_schwupp_vanished)
+            self.monitors = Gdk.Display.get_default().get_monitors()
+            self.monitors_handler = self.monitors.connect("items-changed",
+                                                          self.on_monitors_changed)
             # phoc opens a window on the screen with the pointer: the pointer goes to the TV
             # only once this window stands on the phone
             win = self.props.active_window
@@ -2098,8 +2079,6 @@ class RemoteApp(Adw.Application):
                 win.connect("map", lambda _w: GLib.timeout_add(POINTER_DELAY_MS,
                                                                self.pointer_to_tv))
         self.show_local()
-        if not getattr(self, "layered", False):
-            self.props.active_window.fullscreen()
 
     def pointer_to_tv(self):
         if self.local is not None:
@@ -2108,26 +2087,29 @@ class RemoteApp(Adw.Application):
 
     def show_local(self):
         self.switch.set_sensitive(False)
-        self.title.set_subtitle(_("Desktop on the TV"))
-        self.pad_label.set_label(_("Move the pointer on the TV with one finger, tap to click. "
-                                   "Two fingers: tap for the right button, move to scroll."))
+        self.title.set_subtitle(_("Desktop"))
+        self.pad_label.set_label(_("Move the pointer on the desktop with one finger, tap to "
+                                   "click. Two fingers: tap for the right button, move to "
+                                   "scroll."))
 
-    def on_schwupp_appeared(self, conn, _name, _owner):
-        conn.signal_subscribe(SCHWUPP_BUS, PROPS_IFACE, "PropertiesChanged", SCHWUPP_PATH,
-                              SCHWUPP_IFACE, Gio.DBusSignalFlags.NONE, self.on_schwupp_changed)
+    def on_monitors_changed(self, *_args):
+        """The desktop's screen went away: the app ends unless it is back in a moment."""
+        if desktop_screen() is not None:
+            if self.screen_gone:
+                GLib.source_remove(self.screen_gone)
+                self.screen_gone = 0
+        elif not self.screen_gone:
+            self.screen_gone = GLib.timeout_add(SCREEN_GONE_MS, self.on_screen_gone)
 
-    def on_schwupp_changed(self, _conn, _sender, _path, _iface, _signal, params):
-        _iface_name, changed, _invalid = params.unpack()
-        if "Source" in changed and changed["Source"] != "desktop":
+    def on_screen_gone(self):
+        self.screen_gone = 0
+        if desktop_screen() is None:
             self.end_local()
-
-    def on_schwupp_vanished(self, _conn, _name):
-        if self.local is not None:
-            self.end_local()
+        return False
 
     def end_local(self):
-        """The TV no longer shows the desktop: the app is done."""
-        log("the desktop on the TV ended")
+        """The desktop has ended: the app is done."""
+        log("the desktop ended")
         self.quit()
 
     def do_activate(self):
@@ -2181,8 +2163,6 @@ class RemoteApp(Adw.Application):
                                      lambda _path: self.save_settings())
         GLib.timeout_add_seconds(60, self.on_battery_timer)
         self.on_peripheral_changed()
-        if self.desktop_mode:
-            self.as_layer(win)
         win.present()
         # Nothing that could open the phone's on-screen keyboard gets the focus by itself
         win.set_focus(None)
@@ -2754,9 +2734,12 @@ class RemoteApp(Adw.Application):
         return mods
 
     def do_shutdown(self):
-        if self.schwupp_watch:
-            Gio.bus_unwatch_name(self.schwupp_watch)
-            self.schwupp_watch = 0
+        if self.monitors_handler:
+            self.monitors.disconnect(self.monitors_handler)
+            self.monitors_handler = 0
+        if self.screen_gone:
+            GLib.source_remove(self.screen_gone)
+            self.screen_gone = 0
         if self.local is not None:
             self.local.close()
             self.local = None
@@ -2765,30 +2748,30 @@ class RemoteApp(Adw.Application):
         Adw.Application.do_shutdown(self)
 
 
-def phone_monitor():
-    """The phone's own screen (DSI, eDP, LVDS), not the TV's virtual one."""
-    monitors = Gdk.Display.get_default().get_monitors()
+def desktop_screen():
+    """The screen of the phone's desktop (plinius-desktop's virtual one, shown on a TV or over
+    VNC): any screen with a connector other than the phone's own panel, or None."""
+    display = Gdk.Display.get_default()
+    if display is None:
+        return None
+    monitors = display.get_monitors()
     for i in range(monitors.get_n_items()):
-        monitor = monitors.get_item(i)
-        if (monitor.get_connector() or "").startswith(("DSI-", "eDP-", "LVDS-")):
-            return monitor
+        connector = monitors.get_item(i).get_connector() or ""
+        if connector and not connector.startswith(BUILT_IN_CONNECTORS):
+            return monitors.get_item(i)
     return None
 
 
-def preload_layer_shell(argv, environ, execv=os.execve):
-    """--desktop: start again with gtk4-layer-shell preloaded, once (see LAYER_SHELL_LIB)."""
-    if "--desktop" not in argv or not os.path.exists(LAYER_SHELL_LIB):
-        return
-    preload = environ.get("LD_PRELOAD", "")
-    if LAYER_SHELL_LIB in preload.split(":"):
-        return
-    env = dict(environ, LD_PRELOAD=":".join(filter(None, (LAYER_SHELL_LIB, preload))))
-    execv(sys.executable, [sys.executable, os.path.abspath(argv[0]), *argv[1:]], env)
+def wants_desktop(argv):
+    """--desktop, or a start of any kind while the phone shows its desktop on another screen:
+    the app then works that desktop instead of a Bluetooth host."""
+    if "--desktop" in argv:
+        return True
+    return Gtk.init_check() and desktop_screen() is not None
 
 
 def main():
-    preload_layer_shell(sys.argv, os.environ)
-    app = RemoteApp(desktop="--desktop" in sys.argv)
+    app = RemoteApp(desktop=wants_desktop(sys.argv))
     # Quit cleanly on SIGTERM/SIGINT so the adapter's Pairable setting is put back
     for sig in (signal.SIGTERM, signal.SIGINT):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda: (app.quit(), False)[1])

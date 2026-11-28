@@ -1084,6 +1084,9 @@ def test_main_quits_cleanly_on_signals(mod, monkeypatch):
         GLib, unix_signal_add=lambda prio, sig, func: handlers.append((sig, func))))
     monkeypatch.setattr(mod, "default_layout", lambda: "us")
     monkeypatch.setattr(Application, "exit_code", 3)
+    # No screen besides the phone's: the Bluetooth app
+    monkeypatch.setattr(Gdk, "Display", types.SimpleNamespace(get_default=lambda: None),
+                        raising=False)
     made = []
     real = mod.RemoteApp
     monkeypatch.setattr(mod, "RemoteApp", lambda **kw: made.append(real(**kw)) or made[-1])
@@ -1108,6 +1111,8 @@ def test_run_as_a_program_exits_with_the_apps_code(mod, monkeypatch):
         monkeypatch.setattr(repository, name, obj, raising=False)
         monkeypatch.setitem(sys.modules, "gi.repository." + name, obj)
     monkeypatch.setattr(Application, "exit_code", 5)
+    monkeypatch.setattr(Gdk, "Display", types.SimpleNamespace(get_default=lambda: None),
+                        raising=False)
     with pytest.raises(SystemExit) as exit_:
         runpy.run_path(str(REMOTE), run_name="__main__")
     assert exit_.value.code == 5 and len(handlers) == 2

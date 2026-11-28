@@ -2,7 +2,7 @@
 
 pkgname=phoc-plinius
 pkgver=0.59.0
-pkgrel=12
+pkgrel=13
 pkgdesc="Phosh compositor with embedded, patched wlroots 0.20.2 as upstream intends"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 url="https://gitlab.gnome.org/World/Phosh/phoc"
@@ -66,6 +66,7 @@ source=(
 	0037-view-Windows-can-be-minimized.patch
 	0038-input-method-relay-The-OSK-only-for-the-phone-s-own-.patch
 	0039-backend-drm-A-dozing-panel-leaves-its-low-power-mode-for-a-modeset.patch
+	0040-seat-A-window-that-types-into-another-screen-leaves-the-keyboard-there.patch
 )
 sha256sums=('SKIP'
 	'SKIP'
@@ -104,7 +105,8 @@ sha256sums=('SKIP'
 	'c40be68caace2db39ead878727440aa17cf9ef4e8d35490bc9fcb0ccef55aed8'
 	'47bfb6fdd682f1e4d293f999ab1754af68f862dfa02c994ba7b48db1d59641a9'
 	'41da21271531577d4a0aee94621c59f8fe4768b9bf2b8a5722557819a14a926e'
-	'853a8c2c0fb7f7bd64117b40c0205dd143e6b0d091394c4eb76027b739aa26b9')
+	'853a8c2c0fb7f7bd64117b40c0205dd143e6b0d091394c4eb76027b739aa26b9'
+	'7a796230c9c7dbe9a78619ad72c54db2eb4adfd9d07e23bef9719aaccd2a496d')
 
 prepare() {
 	# Place the subprojects where phoc's .wrap files expect them (no download during build)
@@ -223,6 +225,10 @@ prepare() {
 	# MediaTek's driver skips the page-flip event of a modeset with DOZE_ACTIVE set and wlroots
 	# waited for it forever. The panel now leaves its low-power mode before a modeset
 	patch -d phoc/subprojects/wlroots-0.20.x -Np1 -i "$srcdir/0039-backend-drm-A-dozing-panel-leaves-its-low-power-mode-for-a-modeset.patch"
+	# plinius-remote's touchpad and keyboard for the desktop on a TV is an ordinary window on the
+	# phone; what it types (a virtual keyboard) reaches the desktop's window, not itself: phoc's
+	# setting keyboard-elsewhere lists such apps
+	patch -d phoc -Np1 -i "$srcdir/0040-seat-A-window-that-types-into-another-screen-leaves-the-keyboard-there.patch"
 }
 
 build() {

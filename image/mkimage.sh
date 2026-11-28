@@ -230,8 +230,8 @@ check_host
 #   Both services are enabled below.
 # plinius-pdf-printer: "Print to PDF" (cups-pdf), never the default next to a real printer.
 # plinius-remote: the phone as Bluetooth touchpad and keyboard for another computer
-#   (Settings > Mouse/Keyboard), and for its own desktop on a TV (a layer surface through
-#   gtk4-layer-shell, a virtual mouse and keyboard through python-evdev and uinput).
+#   (Settings > Mouse/Keyboard), and for its own desktop on a TV or over VNC (a virtual mouse and
+#   keyboard through python-evdev and uinput; phoc leaves the keyboard on the desktop's screen).
 # Hotspot: NetworkManager shares through dnsmasq and iptables-legacy (the kernel has no nf_tables);
 #   wpa_supplicant-plinius offers WPA2-PSK the WLAN driver accepts (docs/HARDWARE.md, Hotspot).
 # Fingerprint: biomd talks to the fingerprint HAL (enabled below), biomd-fprintd gives Settings the

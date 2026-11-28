@@ -1,0 +1,155 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 01:26:48 +0100
+Subject: [PATCH] seat: A window that types into another screen leaves the
+ keyboard there
+
+plinius-remote's touchpad and keyboard for the phone's desktop on a TV
+(or over VNC) is a window on the phone that sends what it types through a
+virtual keyboard of the same seat. With an ordinary window that typing
+reached the window itself: a tap on it took the keyboard focus. Run as a
+full-screen layer surface instead, it covered the phone and could not be
+left or brought back from the overview.
+
+Windows of the apps in the new setting keyboard-elsewhere (by app id,
+org.plinius.Remote.Desktop by default) now come to the front of their
+screen as any other window, and their activation token is handed on, but
+the keyboard goes to (or stays with) the most recently focused window on
+another screen that is not minimized; none there leaves the keyboard
+without focus.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ data/mobi.phosh.phoc.gschema.xml | 10 ++++++++
+ src/seat.c                       | 42 ++++++++++++++++++++++++++++++++
+ src/server.c                     | 22 +++++++++++++++++
+ src/server.h                     |  2 ++
+ 4 files changed, 76 insertions(+)
+
+diff --git a/data/mobi.phosh.phoc.gschema.xml b/data/mobi.phosh.phoc.gschema.xml
+index 5bd0250c..d124dac4 100644
+--- a/data/mobi.phosh.phoc.gschema.xml
++++ b/data/mobi.phosh.phoc.gschema.xml
+@@ -8,6 +8,16 @@
+         window.
+       </description>
+     </key>
++    <key name="keyboard-elsewhere" type="as">
++      <default>['org.plinius.Remote.Desktop']</default>
++      <summary>Apps that type into another screen</summary>
++      <description>
++        Windows of these apps (by app id) come to the front of their
++        screen as others do, but the keyboard focus stays with the most
++        recently focused window on another screen. plinius-remote's
++        touchpad and keyboard for the desktop on a TV is such an app.
++      </description>
++    </key>
+   </schema>
+ 
+   <!-- Legacy schema -->
+diff --git a/src/seat.c b/src/seat.c
+index 7cdafcce..4c329520 100644
+--- a/src/seat.c
++++ b/src/seat.c
+@@ -1265,6 +1265,38 @@ seat_raise_view_stack (PhocSeat *seat, PhocView *view)
+     seat_raise_view_stack (seat, child);
+ }
+ 
++/*
++ * Windows of some apps only type into another screen: plinius-remote's touchpad and keyboard
++ * for the phone's desktop on a TV (a virtual mouse and keyboard of this seat). Such a window
++ * comes to the front of its own screen as any other, but the keyboard stays with the most
++ * recently focused window on another screen, so what it types reaches that window.
++ */
++static gboolean
++seat_view_types_elsewhere (PhocView *view)
++{
++  return phoc_server_keeps_keyboard_elsewhere (phoc_server_get_default (),
++                                               phoc_view_get_app_id (view));
++}
++
++
++static PhocView *
++seat_get_keyboard_view_elsewhere (PhocSeat *seat, PhocView *view)
++{
++  PhocSeatPrivate *priv = phoc_seat_get_instance_private (seat);
++  PhocOutput *output = phoc_view_get_output (view);
++
++  for (GList *l = priv->views->head; l; l = l->next) {
++    PhocView *other = ((PhocSeatView *)l->data)->view;
++
++    if (other == view || phoc_view_is_minimized (other) || seat_view_types_elsewhere (other))
++      continue;
++    if (phoc_view_get_output (other) != output)
++      return other;
++  }
++  return NULL;
++}
++
++
+ /**
+  * phoc_seat_set_focus_view:
+  * @seat: The seat
+@@ -1358,6 +1390,16 @@ phoc_seat_set_focus_view (PhocSeat *seat, PhocView *view)
+     }
+   }
+ 
++  /* It is in front now; the keyboard goes to (or stays with) a window on another screen */
++  if (view && seat_view_types_elsewhere (view)) {
++    if (phoc_view_get_activation_token (token_view))
++      phoc_view_flush_activation_token (token_view);
++    view = seat_get_keyboard_view_elsewhere (seat, view);
++    g_debug ("Keyboard stays on another screen, with view %p", view);
++    if (view == prev_focus)
++      return;
++  }
++
+   PhocSeatView *seat_view = NULL;
+   if (view != NULL) {
+     seat_view = phoc_seat_view_from_view (seat, view);
+diff --git a/src/server.c b/src/server.c
+index 23bdf3cc..c005dcc3 100644
+--- a/src/server.c
++++ b/src/server.c
+@@ -1114,6 +1114,28 @@ phoc_server_get_use_focus_frame (PhocServer *self)
+   return g_settings_get_boolean (self->settings, "focus-frame");
+ }
+ 
++/**
++ * phoc_server_keeps_keyboard_elsewhere:
++ * @self: The server
++ * @app_id:(nullable): The app id of a window
++ *
++ * Returns: Whether the app's windows leave the keyboard focus on another
++ *   screen (the setting `keyboard-elsewhere`)
++ */
++gboolean
++phoc_server_keeps_keyboard_elsewhere (PhocServer *self, const char *app_id)
++{
++  g_auto (GStrv) app_ids = NULL;
++
++  g_assert (PHOC_IS_SERVER (self));
++
++  if (app_id == NULL || *app_id == '\0')
++    return FALSE;
++
++  app_ids = g_settings_get_strv (self->settings, "keyboard-elsewhere");
++  return g_strv_contains ((const char *const *)app_ids, app_id);
++}
++
+ /**
+  * phoc_server_get_xx_cutouts_manager:
+  * @self: the server
+diff --git a/src/server.h b/src/server.h
+index 3ce8f6d7..fde599df 100644
+--- a/src/server.h
++++ b/src/server.h
+@@ -87,6 +87,8 @@ void                   phoc_server_set_linux_dmabuf_surface_feedback (PhocServer
+                                                                       bool        enable);
+ gboolean               phoc_server_get_allow_input         (PhocServer *self);
+ gboolean               phoc_server_get_use_focus_frame     (PhocServer *self);
++gboolean               phoc_server_keeps_keyboard_elsewhere (PhocServer *self,
++                                                           const char *app_id);
+ PhocXxCutoutsManager * phoc_server_get_xx_cutouts_manager  (PhocServer *self);
+ 
+ 
