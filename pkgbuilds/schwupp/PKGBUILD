@@ -1,7 +1,7 @@
 # Maintainer: misc-de <misc-de@users.noreply.github.com>
 
 pkgname=schwupp
-pkgver=0.6.5
+pkgver=0.7.3
 pkgrel=1
 pkgdesc="Cast the screen, YouTube and media to TVs, and all sound to Cast, Sonos, DLNA and AirPlay speakers"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
@@ -13,8 +13,10 @@ license=(MIT)
 # "Streaming" page of GNOME Settings (gnome-control-center-plinius) over the same interface
 # (GetSettings/SetSetting), so the app itself has no launcher on the phone. The screen comes from
 # xdg-desktop-portal-wlr-plinius, H.264 from the phone's hardware encoder (v4l2h264enc).
-# AirPlay TVs get the screen as HLS (hlssink2 from gst-plugins-bad); the other AirPlay route
-# needs doubletake, which is not packaged.
+# AirPlay TVs get the screen and sound through Schwupp's own AirPlay mirroring (same capture and
+# hardware encoder, sound as ALAC, the pairing made when connecting also covers it). Only devices
+# that require FairPlay (Apple TV) would need doubletake, which is not packaged. HLS (hlssink2
+# from gst-plugins-bad) stays for AirPlay TVs that take video URLs.
 # Speakers get all sound of the phone: a virtual output (pactl) feeds a live MP3 stream
 # (lamemp3enc from gst-plugins-good) for Cast, Sonos and DLNA; AirPlay speakers go through
 # PipeWire's RAOP sink (pipewire-zeroconf, Avahi).
@@ -34,7 +36,7 @@ optdepends=(
 	'gst-plugins-ugly: x264enc where no hardware H.264 encoder exists'
 )
 # Commit of tag v$pkgver: a tag can be moved later, a commit hash cannot
-_commit=51fa59634855a3d5e9ca6b45914f0d869a0b8856
+_commit=27d7fc3b5800bdde57cdf0b8fa3096a1464edbc3
 source=(
 	"git+$url.git#commit=$_commit"
 	schwupp.sh
@@ -46,7 +48,7 @@ source=(
 	pyatv-0001-Support-srptools-2.0.patch
 )
 sha256sums=('SKIP'
-            'ffec634844cb85f2bd8ed6a9a135731b97c4e5d2050fb803fb95b7a86462be85'
+            '0703b93c8cb6919e7d4ffbcf7b416e0d4a278528124b886cbf5bbed09ebf15b4'
             'f650807f6d5c15460677152d38c97e83d22ddfe2113d63689e71d9a27b616c35'
             '3b5296fde4b70e76443bbeacc641f4e4125c81b6bd20e4e228bba340f00c06c5'
             '6652da7e60fabde24d4f3b56c062d4be5f3bfb626818c5a2877f2c782d6e2c4f'
