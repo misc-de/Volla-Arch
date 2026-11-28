@@ -4,7 +4,7 @@
 pkgname=waydroid-plinius
 _pkgname=waydroid
 pkgver=1.6.3
-pkgrel=8
+pkgrel=12
 pkgdesc="A container-based approach to boot a full Android system on a regular Linux system (Plinius: the phone's devices and NFC stay as they are, Android gets the phone's hardware through the HAL bridges)"
 arch=('any')
 url="https://waydro.id/"
@@ -33,6 +33,7 @@ source=("$_pkgname::git+https://github.com/waydroid/waydroid.git#commit=$_commit
 	0001-container-On-Halium-keep-the-vendor-s-device-permiss.patch
 	0002-container-On-Halium-never-stop-the-host-s-nfcd.patch
 	0003-images-Option-to-keep-the-image-s-EGL-libraries.patch
+	0004-lxc-On-Halium-pass-the-host-s-binder-as-host_binder.patch
 	waydroid-plinius-setup
 	waydroid-plinius-screen
 	waydroid-plinius-screen.service
@@ -49,12 +50,13 @@ sha256sums=('SKIP'
 	'acf376524ff8f586460bb917ce9e752e53d503a3626de688636e1ac614617202'
 	'6f23a1ac583a14d1c9dfdefc5432cd1c46f7445e4d0a63633f2acee57a2a05d3'
 	'f77829d534732caaefa39147ba809ee709bc5a45df25d4d8f05015f44b9a82ad'
-	'66057faa6b4a8017461921f135916c51487075d21f41e9c27a08924f544338cc'
-	'cf101b66a70ba8b8e1c8b7ef36ab1969b7f97473d53ab396c81e179aa1209e2e'
-	'1d436c8a47f8891a4f3496fb94ca269143bbac910e0f34ebd7a4aa9aace98ccd'
+	'6edb1c14e562e30140ef3d65957ad7f338e8d77c1a2ed9454508b2d64c7fc57b'
+	'7b7611fade73c705e17224e32005b5cfa44d767bdd3db2faffcf91a0de749115'
+	'320d5a08cf4c3f61c46394895f417db8abaef054693f5a09a9a93cc0a8d5bf4b'
+	'399f398ac29ec5c84f0bcdb06f60c9ebc579898c6b78670592e3e8c035292cd2'
 	'89fa3599e3d56b8264f0e3a81347d2dd6fc1bed322dec47bf2039fdfed81433d'
 	'e36c402c66d8ed4357493e7c7123c872c45e7e2813b63ff3d4d9f52257285304'
-	'a616fa53ed9ce2a6cd783e96d96d0564fe048d342c9050a9aeea2a0479bd0f6d'
+	'4759f143366cf7ac993e12463ca8e76cfe07b2d48d4c09f26d1b782e6f65dc3a'
 	'5eee68d553baf9f2f4c2214c6d1a146f38c4a5a376d8b64dbc894f0e783797a1'
 	'a34c61ca80fe9ac73ffaac0ca95c9fbe0fce1665d8f32554aef60d3b1899593d'
 	'3a6d92171607fe70d09e920d8863e8076718ef09f9435e796fdd7e092fc7abf7'
@@ -70,6 +72,9 @@ prepare() {
 	# bind_host_egl = False keeps the image's EGL libraries (software rendering without the
 	# vendor's graphics HALs)
 	patch -d "$_pkgname" -Np1 -i "$srcdir/0003-images-Option-to-keep-the-image-s-EGL-libraries.patch"
+	# The host's binder as host_binder: the vendor's AIDL graphics allocator and camera provider
+	# reach Android through it
+	patch -d "$_pkgname" -Np1 -i "$srcdir/0004-lxc-On-Halium-pass-the-host-s-binder-as-host_binder.patch"
 }
 
 package() {

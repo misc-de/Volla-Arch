@@ -1,10 +1,13 @@
 # waydroid-plinius-setup: the binder protocols for the system image, the VINTF entries of the
-# bridges that run, display_settings.xml and Android's display size in waydroid.cfg. Every path
-# is in tmp; mount, umount, systemctl and waydroid are stubs (the mount stub writes a build.prop
-# with the API level of FAKE_SDK into the mount point).
+# bridges that run, display_settings.xml, Android's display size in waydroid.cfg and graphics on
+# the GPU through the vendor's HALs. Every path is in tmp; mount, umount, systemctl and waydroid
+# are stubs (the mount stub writes a build.prop with the API level of FAKE_SDK into the mount
+# point and the libraries of FAKE_SYSTEM_LIBS and FAKE_VENDOR_LIBS into the images).
 
 import configparser
 import os
+import shutil
+import struct
 
 import pytest
 
@@ -14,9 +17,17 @@ SCRIPT = PKG / "waydroid-plinius" / "waydroid-plinius-setup"
 
 MOUNT = r'''
 mnt="${@: -1}"
+image="${@: -2:1}"
 [ -n "$FAKE_MOUNT_FAILS" ] && exit 32
-mkdir -p "$mnt/system"
-[ -n "$FAKE_SDK" ] && printf 'ro.build.id=TQ3A\nro.build.version.sdk=%s\n' "$FAKE_SDK" > "$mnt/system/build.prop"
+case "$image" in
+*vendor.img)
+	mkdir -p "$mnt/lib64/hw"
+	for l in $FAKE_VENDOR_LIBS; do : > "$mnt/lib64/$l"; done ;;
+*)
+	mkdir -p "$mnt/system/lib64"
+	for l in $FAKE_SYSTEM_LIBS; do : > "$mnt/system/lib64/$l"; done
+	[ -n "$FAKE_SDK" ] && printf 'ro.build.id=TQ3A\nro.build.version.sdk=%s\n' "$FAKE_SDK" > "$mnt/system/build.prop" ;;
+esac
 exit 0
 '''
 # is-active: active if the unit is in FAKE_ACTIVE (space-separated)
@@ -41,6 +52,11 @@ def setup(tmp_path, fake_bin, monkeypatch):
     monkeypatch.setattr(mod, "GBINDER_CONF", str(tmp_path / "gbinder.d" / "60-waydroid-anbox.conf"))
     monkeypatch.setattr(mod, "DATA", str(tmp_path / "share"))
     monkeypatch.setattr(mod, "VENDOR_ETC", str(tmp_path / "vendor-etc"))
+    # The phone's vendor partition (no graphics HALs unless a test adds them) and Halium's VNDK
+    monkeypatch.setattr(mod, "VENDOR", str(tmp_path / "vendor"))
+    monkeypatch.setattr(mod, "VNDK_GLOB", str(tmp_path / "proc" / "*" / "apex" / "vndk.v%s" / "lib64"))
+    monkeypatch.setattr(mod, "GRAPHICS_STATE", str(tmp_path / "waydroid" / "plinius-graphics.list"))
+    monkeypatch.setattr(mod, "HALIUM_SYSTEM", str(tmp_path / "halium-system"))
     # Device nodes as files in tmp, with udev's modes on the phone
     dev = tmp_path / "dev"
     (dev / "dma_heap").mkdir(parents=True)
@@ -269,3 +285,278 @@ def test_device_that_cannot_be_changed(setup, monkeypatch, capsys):
     monkeypatch.setattr(setup.os, "chmod", refuse)
     assert setup.add_mode(str(setup.dev / "ashmem"), 0o666) is False
     assert "Operation not permitted" in capsys.readouterr().err
+
+
+# ---- graphics on the GPU ----
+
+def elf(path, needed=()):
+    """A minimal 64-bit ELF file whose dynamic section names the libraries in needed."""
+    dynstr = b"\0"
+    offsets = []
+    for name in needed:
+        offsets.append(len(dynstr))
+        dynstr += name.encode() + b"\0"
+    dynamic = b"".join(struct.pack("<qQ", 1, o) for o in offsets) + struct.pack("<qQ", 0, 0)
+    shstr = b"\0.dynstr\0.dynamic\0"
+    dynstr_off = 64
+    dynamic_off = dynstr_off + len(dynstr)
+    shstr_off = dynamic_off + len(dynamic)
+    shoff = shstr_off + len(shstr)
+    header = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9)
+    header += struct.pack("<HHIQQQIHHHHHH", 3, 183, 1, 0, 0, shoff, 0, 64, 0, 0, 64, 4, 3)
+    sections = [struct.pack("<IIQQQQIIQQ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                struct.pack("<IIQQQQIIQQ", 1, 3, 0, 0, dynstr_off, len(dynstr), 0, 0, 1, 0),
+                struct.pack("<IIQQQQIIQQ", 9, 6, 0, 0, dynamic_off, len(dynamic), 1, 0, 8, 16),
+                struct.pack("<IIQQQQIIQQ", 0, 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0)]
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(header + dynstr + dynamic + shstr + b"".join(sections))
+
+
+def vendor_gpu(setup, egl32=False):
+    """A vendor with an AIDL allocator, a stable-C mapper and a Mali driver behind MediaTek's EGL
+    wrapper, as on the Plinius; Halium's VNDK APEX with the newer AIDL libraries."""
+    v = setup.tmp / "vendor"
+    (v / "bin" / "hw").mkdir(parents=True)
+    (v / "bin" / "hw" / "android.hardware.graphics.allocator-V2-service-mediatek").write_text("")
+    (v / "etc").mkdir()
+    (v / "build.prop").write_text("ro.hardware.egl=meow\nro.vndk.version=34\n#ro.hardware.egl?=mali\n"
+                                  "ro.vendor.arm.egl.configs.nv12.hal_format=0x200\nro.board.platform=mt6878\n")
+    (v / "etc" / "extra.prop").write_text("ro.vendor.arm.egl.configs.nv12.recordable=true\n")
+    (v / "etc" / "mali_platform.config").write_text("x")
+    elf(v / "lib64" / "hw" / "mapper.mediatek.so", ["libged.so", "android.hardware.graphics.common-V4-ndk.so"])
+    elf(v / "lib64" / "egl" / "libGLES_meow.so", ["libc.so"])
+    elf(v / "lib64" / "egl" / "mt6878" / "libGLES_mali.so",
+        ["libged.so", "android.hardware.graphics.allocator-V2-ndk.so", "libnowhere.so", "libc.so"])
+    elf(v / "lib64" / "libged.so", ["libc.so", "liblog.so"])
+    if egl32:
+        (v / "lib" / "egl").mkdir(parents=True)
+        (v / "lib" / "egl" / "libGLES_meow.so").write_text("")
+    vndk = setup.tmp / "proc" / "251" / "apex" / "vndk.v34" / "lib64"
+    elf(vndk / "android.hardware.graphics.allocator-V2-ndk.so",
+        ["libbinder_ndk.so", "android.hardware.graphics.common-V4-ndk.so"])
+    elf(vndk / "android.hardware.graphics.common-V4-ndk.so", ["libbinder_ndk.so"])
+    return v
+
+
+def read_cfg(setup):
+    cfg = configparser.ConfigParser()
+    cfg.optionxform = str
+    cfg.read(setup.WAYDROID_CFG)
+    return cfg
+
+
+def overlay_libs(setup):
+    lib64 = os.path.join(setup.OVERLAY, "vendor", "lib64")
+    return sorted(f for f in os.listdir(lib64) if f.endswith(".so")) if os.path.isdir(lib64) else []
+
+
+def test_graphics_on_the_gpu(setup, fake_bin, monkeypatch, capsys):
+    monkeypatch.setenv("FAKE_SYSTEM_LIBS", "libc.so liblog.so libbinder_ndk.so")
+    vendor_gpu(setup)
+    write_cfg(setup, {"persist.waydroid.width": "476", "ro.hardware.gralloc": "gbm", "ro.hardware.egl": "mesa",
+                      "gralloc.gbm.device": "/dev/dri/card0"}, drm="/dev/dri/card0")
+    assert setup.main() == 0
+    cfg = read_cfg(setup)
+    assert cfg["waydroid"]["bind_host_egl"] == "True" and "drm_device" not in cfg["waydroid"]
+    props = cfg["properties"]
+    assert props["ro.hardware.gralloc"] == "android" and props["ro.hardware.egl"] == "meow"
+    assert "gralloc.gbm.device" not in props
+    # Mali's EGL configs from the vendor's properties, from every file
+    assert props["ro.vendor.arm.egl.configs.nv12.hal_format"] == "0x200"
+    assert props["ro.vendor.arm.egl.configs.nv12.recordable"] == "true"
+    # No 32-bit driver: the zygotes preload no graphics
+    assert props["ro.zygote.disable_gl_preload"] == "true"
+    assert fake_bin.calls("waydroid") == [["upgrade", "--offline"]]
+    # The AIDL libraries of the newer Android, copied from Halium's VNDK, with what they need
+    assert overlay_libs(setup) == ["android.hardware.graphics.allocator-V2-ndk.so",
+                                   "android.hardware.graphics.common-V4-ndk.so"]
+    lib64 = os.path.join(setup.OVERLAY, "vendor", "lib64")
+    assert oct(os.stat(os.path.join(lib64, "android.hardware.graphics.common-V4-ndk.so")).st_mode & 0o777) == "0o644"
+    # The mapper and the platform file where the vendor's libraries look for them
+    assert os.readlink(os.path.join(lib64, "hw", "mapper.mediatek.so")) == "/vendor_extra/lib64/hw/mapper.mediatek.so"
+    assert os.readlink(os.path.join(setup.OVERLAY, "vendor", "etc", "mali_platform.config")) == \
+        "/vendor_extra/etc/mali_platform.config"
+    assert open(os.path.join(setup.OVERLAY, "system", "etc", "hosthals.xml")).read() == setup.HOSTHALS_MAPPER
+    out = capsys.readouterr().out
+    assert "Graphics on the GPU: meow EGL" in out
+    assert "found nowhere: libnowhere.so" in out
+    # card0 is not opened for everybody any more
+    assert mode(setup.dev / "card0") == 0o660
+
+
+def test_graphics_a_second_time_changes_nothing(setup, fake_bin, monkeypatch):
+    monkeypatch.setenv("FAKE_SYSTEM_LIBS", "libc.so liblog.so libbinder_ndk.so")
+    vendor_gpu(setup)
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    (fake_bin.path / "waydroid.log").unlink()
+    setup.main()
+    assert fake_bin.calls("waydroid") == []
+    assert len(overlay_libs(setup)) == 2
+
+
+def test_libraries_in_the_images_are_not_copied(setup, monkeypatch):
+    monkeypatch.setenv("FAKE_SYSTEM_LIBS", "libc.so liblog.so libbinder_ndk.so")
+    monkeypatch.setenv("FAKE_VENDOR_LIBS", "android.hardware.graphics.allocator-V2-ndk.so "
+                                           "android.hardware.graphics.common-V4-ndk.so")
+    (setup.images / "vendor.img").write_text("image")
+    vendor_gpu(setup)
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    assert overlay_libs(setup) == []
+
+
+def test_32_bit_driver_keeps_preloading(setup):
+    vendor_gpu(setup, egl32=True)
+    write_cfg(setup, {"persist.waydroid.width": "476", "ro.zygote.disable_gl_preload": "true"})
+    setup.main()
+    assert "ro.zygote.disable_gl_preload" not in read_cfg(setup)["properties"]
+
+
+def test_without_halium_s_vndk(setup, monkeypatch, capsys):
+    monkeypatch.setenv("FAKE_SYSTEM_LIBS", "libc.so liblog.so libbinder_ndk.so")
+    vendor_gpu(setup)
+    shutil.rmtree(setup.tmp / "proc")
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    assert overlay_libs(setup) == []
+    assert "android.hardware.graphics.allocator-V2-ndk.so" in capsys.readouterr().out
+
+
+def test_vendor_without_graphics_hals_takes_the_overlay_back(setup, monkeypatch):
+    monkeypatch.setenv("FAKE_SYSTEM_LIBS", "libc.so liblog.so libbinder_ndk.so")
+    v = vendor_gpu(setup)
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    before = read_cfg(setup)
+    os.unlink(v / "bin" / "hw" / "android.hardware.graphics.allocator-V2-service-mediatek")
+    setup.main()
+    lib64 = os.path.join(setup.OVERLAY, "vendor", "lib64")
+    assert overlay_libs(setup) == []
+    assert not os.path.lexists(os.path.join(lib64, "hw", "mapper.mediatek.so"))
+    assert not os.path.lexists(os.path.join(setup.OVERLAY, "vendor", "etc", "mali_platform.config"))
+    assert open(os.path.join(setup.OVERLAY, "system", "etc", "hosthals.xml")).read() == setup.HOSTHALS_NONE
+    # waydroid.cfg stays as it is
+    after = read_cfg(setup)
+    assert {s: dict(after[s]) for s in after.sections()} == {s: dict(before[s]) for s in before.sections()}
+
+
+def test_without_graphics_hals_from_the_start(setup):
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    assert open(os.path.join(setup.OVERLAY, "system", "etc", "hosthals.xml")).read() == setup.HOSTHALS_NONE
+    assert open(setup.GRAPHICS_STATE).read() == ""
+
+
+def test_a_link_that_was_there_already(setup):
+    vendor_gpu(setup)
+    link = os.path.join(setup.OVERLAY, "vendor", "lib64", "hw", "mapper.mediatek.so")
+    os.makedirs(os.path.dirname(link))
+    os.symlink("/somewhere/else", link)
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    assert os.readlink(link) == "/vendor_extra/lib64/hw/mapper.mediatek.so"
+
+
+def test_elf_needed_of_files_that_are_no_elf(setup, tmp_path):
+    (tmp_path / "text").write_text("not an elf")
+    assert setup.elf_needed(str(tmp_path / "text")) == []
+    assert setup.elf_needed(str(tmp_path / "missing")) == []
+    elf(tmp_path / "plain.so")
+    assert setup.elf_needed(str(tmp_path / "plain.so")) == []
+
+
+def test_unreadable_vendor_props(setup):
+    os.makedirs(setup.tmp / "vendor" / "build.prop")
+    assert setup.vendor_props() == {}
+
+
+# ---- the vendor's cameras ----
+
+VENDOR_MANIFEST = """<manifest version="2.0" type="device">
+    <hal format="aidl">
+        <name>android.hardware.camera.provider</name>
+        <version>2</version>
+        <interface>
+            <name>ICameraProvider</name>
+            <instance>internal/0</instance>
+        </interface>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.nfc</name>
+        <fqname>INfc/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>android.hardware.camera.provider</name>
+        <fqname>@2.4::ICameraProvider/legacy/0</fqname>
+    </hal>
+</manifest>
+"""
+
+
+def vendor_cameras(setup, halium_sdk="34"):
+    vintf = setup.tmp / "vendor" / "etc" / "vintf"
+    (vintf / "manifest").mkdir(parents=True, exist_ok=True)
+    (vintf / "manifest.xml").write_text(VENDOR_MANIFEST)
+    (vintf / "manifest" / "broken.xml").write_text("<manifest")
+    (vintf / "manifest" / "extra.xml").write_text(
+        '<manifest version="2.0" type="device"><hal format="aidl">'
+        "<name>android.hardware.camera.provider</name><fqname>ICameraProvider/external/1</fqname>"
+        "</hal></manifest>")
+    halium = setup.tmp / "halium-system"
+    (halium / "lib64").mkdir(parents=True, exist_ok=True)
+    (halium / "lib64" / "libcamera_metadata.so").write_text("android 14")
+    if halium_sdk is not None:
+        (halium / "build.prop").write_text(f"ro.build.version.sdk={halium_sdk}\n")
+
+
+def camera_files(setup):
+    return (os.path.join(setup.OVERLAY, "vendor", "etc", "vintf", "manifest", "plinius-camera.xml"),
+            os.path.join(setup.OVERLAY, "system", "lib64", "libcamera_metadata.so"))
+
+
+def test_cameras_of_the_vendor(setup):
+    vendor_cameras(setup)
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    manifest, metadata = camera_files(setup)
+    # Each AIDL provider instance, declared at the version Android 13 knows
+    assert open(manifest).read() == (
+        '<manifest version="1.0" type="device">\n    <hal format="aidl">\n'
+        "        <name>android.hardware.camera.provider</name>\n        <version>1</version>\n"
+        "        <fqname>ICameraProvider/internal/0</fqname>\n"
+        "        <fqname>ICameraProvider/external/1</fqname>\n    </hal>\n</manifest>\n")
+    # Halium's Android (14) is newer than the image's (13): its camera metadata library
+    assert open(metadata).read() == "android 14"
+
+
+@pytest.mark.parametrize("sdk", ["33", None, "x"], ids=["same-android", "no-build-prop", "bad-sdk"])
+def test_camera_metadata_only_from_a_newer_android(setup, sdk):
+    vendor_cameras(setup, halium_sdk=sdk)
+    _manifest, metadata = camera_files(setup)
+    os.makedirs(os.path.dirname(metadata))
+    with open(metadata, "w") as f:
+        f.write("old")
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    assert not os.path.exists(metadata)
+
+
+def test_vendor_without_cameras_takes_them_back(setup):
+    vendor_cameras(setup)
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    shutil.rmtree(setup.tmp / "vendor" / "etc" / "vintf")
+    setup.main()
+    manifest, metadata = camera_files(setup)
+    assert not os.path.exists(manifest) and not os.path.exists(metadata)
+
+
+def test_unreadable_image_keeps_halium_s_camera_library_out(setup, monkeypatch):
+    monkeypatch.setenv("FAKE_MOUNT_FAILS", "1")
+    vendor_cameras(setup)
+    write_cfg(setup, {"persist.waydroid.width": "476"})
+    setup.main()
+    manifest, metadata = camera_files(setup)
+    assert os.path.exists(manifest) and not os.path.exists(metadata)

@@ -1,5 +1,5 @@
 [Unit]
-Description=Android's screen in the Waydroid container follows the phone's lock
+Description=Android in the Waydroid container follows the phone and Phosh: lock, status bar, time zone, keyboard, clock, style, language
 # Started with the container service (its drop-in wants it) and stopped with it
 PartOf=waydroid-container.service
 After=waydroid-container.service
@@ -8,5 +8,5 @@ After=waydroid-container.service
 ExecStart=/usr/lib/waydroid-plinius/waydroid-plinius-screen
 Restart=on-failure
 RestartSec=5
-# Its lines (lock, unlock) reach the journal, which stores notice and above
+# Its lines (lock, unlock, settings) reach the journal, which stores notice and above
 SyslogLevel=notice

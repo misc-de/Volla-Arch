@@ -1,0 +1,30 @@
+From 4d0f05bd6d0ed1198b5e3a62ed3bbd7dc95f928b Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 01:49:22 +0100
+Subject: [PATCH] lxc: On Halium, pass the host's binder as host_binder
+
+The images pass the AIDL HALs listed in /system/etc/hostaidls.conf (the
+graphics allocator and the camera provider) through from /dev/host_binder,
+as they do for HIDL from host_hwbinder. Without the node, a vendor with
+AIDL graphics HALs (Android 14) gets no hardware graphics.
+---
+ tools/helpers/lxc.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/tools/helpers/lxc.py b/tools/helpers/lxc.py
+index 1b6ff49..3dd68d0 100644
+--- a/tools/helpers/lxc.py
++++ b/tools/helpers/lxc.py
+@@ -77,6 +77,9 @@ def generate_nodes_lxc_config(args):
+     make_entry("/dev/" + args.HWBINDER_DRIVER, "dev/hwbinder", check=False)
+ 
+     if args.vendor_type != "MAINLINE":
++        # The host's binder: the image passes the AIDL HALs of /system/etc/hostaidls.conf
++        # (graphics allocator, camera provider) through from it, as hwbinder for HIDL
++        make_entry("/dev/binder", "dev/host_binder")
+         if not make_entry("/dev/hwbinder", "dev/host_hwbinder"):
+             raise OSError('Binder node "hwbinder" of host not found')
+         make_entry("/vendor", "vendor_extra", options="rbind,optional 0 0")
+-- 
+2.56.1
+

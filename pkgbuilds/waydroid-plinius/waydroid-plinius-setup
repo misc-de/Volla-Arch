@@ -18,16 +18,35 @@ HAL bridges):
    stays.
 4. The devices Android needs: its processes run as the same uids on the host, where udev gives
    ashmem, the system DMA heaps and the DRM device to root and video only. They get the modes of
-   Android's own ueventd.rc (the DRM device opens for everybody, as Waydroid opens its render
-   nodes, until graphics go through the host's binder). Waydroid's own chmod 777 of every device
-   is off on Halium (0001); permissions are only added here, never taken.
+   Android's own ueventd.rc (a DRM device in waydroid.cfg, for graphics in software, opens for
+   everybody, as Waydroid opens its render nodes). Waydroid's own chmod 777 of every device is
+   off on Halium (0001); permissions are only added here, never taken.
+5. Graphics on the GPU, when the vendor has its graphics HALs (an AIDL allocator, a stable-C
+   mapper, an EGL driver): the image passes the vendor's allocator through from the host's binder
+   (0004), loads the vendor's mapper and EGL libraries from /vendor_extra and the host's EGL
+   directory, and needs what Waydroid's own vendor image lacks for them: the EGL properties of the
+   vendor (Mali builds its configs from ro.vendor.arm.*), the mapper and the driver's platform
+   file in its /vendor, and the AIDL libraries of a newer Android that the vendor's libraries link
+   against (from Halium's VNDK APEX). A vendor without a 32-bit EGL driver gets no graphics
+   preloading in the zygotes (the 32-bit one aborted on it). hosthals.xml sends only the mapper to
+   the host: the image's list sent media.c2 there too, which the host does not have, and the
+   codecs of Android waited for it forever.
+6. The vendor's cameras: a VINTF entry for each AIDL camera provider of the vendor (Android finds
+   AIDL providers only by their declaration; the image passes the provider itself through from
+   the host's binder), and, with a newer Android on Halium than in the image, Halium's
+   libcamera_metadata: the vendor's metadata carries the newer Android's tags, which the older
+   library rejects as malformed, leaving every camera without characteristics. The provider takes
+   a callback per client, so Linux keeps its cameras; one camera is used by one side at a time.
 
 Without an initialised Waydroid (no waydroid.cfg) it does nothing.
 """
 
 import configparser
+import contextlib
+import glob
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -37,6 +56,22 @@ OVERLAY = "/var/lib/waydroid/overlay"
 GBINDER_CONF = "/etc/gbinder.d/60-waydroid-anbox.conf"
 DATA = "/usr/share/waydroid-plinius"
 VENDOR_ETC = "/vendor/etc"
+VENDOR = "/vendor"
+# Halium's running Android container holds the VNDK APEX of the vendor's Android version
+VNDK_GLOB = "/proc/[0-9]*/root/apex/com.android.vndk.v%s/lib64"
+# What the graphics set-up put into the overlay, to take it away again
+GRAPHICS_STATE = "/var/lib/waydroid/plinius-graphics.list"
+HOSTHALS_MAPPER = """<hosthals version="1.0">
+    <hal>
+        <name>android.hardware.graphics.mapper</name>
+        <priority>true</priority>
+    </hal>
+</hosthals>
+"""
+HOSTHALS_NONE = '<hosthals version="1.0">\n</hosthals>\n'
+# Halium's Android system (lxc-android), its libraries and build properties
+HALIUM_SYSTEM = "/android/system"
+CAMERA_PROVIDER = "android.hardware.camera.provider"
 
 # The bridges and the VINTF entry each one serves
 BRIDGES = {
@@ -100,19 +135,30 @@ def read_prop(path, name):
     return None
 
 
-def image_api(cfg):
-    """The API level of the system image (ro.build.version.sdk), mounted read-only for that;
-    None if there is none or it cannot be read."""
-    image = os.path.join(cfg.get("waydroid", "images_path", fallback=""), "system.img")
+@contextlib.contextmanager
+def mounted(image):
+    """An image of Waydroid's, mounted read-only; None if there is none or it cannot be mounted."""
     if not os.path.isfile(image):
-        return None
+        yield None
+        return
     with tempfile.TemporaryDirectory(prefix="waydroid-plinius-") as mnt:
         if subprocess.run(["mount", "-o", "ro,loop", image, mnt], stderr=subprocess.DEVNULL).returncode:
-            return None
+            yield None
+            return
         try:
-            value = read_prop(os.path.join(mnt, "system", "build.prop"), "ro.build.version.sdk")
+            yield mnt
         finally:
             subprocess.run(["umount", mnt], stderr=subprocess.DEVNULL)
+
+
+def image_path(cfg, name):
+    return os.path.join(cfg.get("waydroid", "images_path", fallback=""), name)
+
+
+def image_api(cfg):
+    """The API level of the system image (ro.build.version.sdk); None if it cannot be read."""
+    with mounted(image_path(cfg, "system.img")) as mnt:
+        value = read_prop(os.path.join(mnt, "system", "build.prop"), "ro.build.version.sdk") if mnt else None
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -146,8 +192,7 @@ def is_active(unit):
     return subprocess.run(["systemctl", "is-active", "-q", unit]).returncode == 0
 
 
-def setup_gbinder(cfg):
-    api = image_api(cfg)
+def setup_gbinder(api):
     if api is None:
         print("No readable system image: the binder protocols stay as they are")
         return
@@ -178,19 +223,202 @@ def setup_overlay():
         os.chmod(target, 0o644)
 
 
-def setup_display(cfg):
+def properties(cfg):
     if not cfg.has_section("properties"):
         cfg.add_section("properties")
-    props = cfg["properties"]
+    return cfg["properties"]
+
+
+def setup_display(cfg):
+    """The display size into the properties; True if they changed."""
+    props = properties(cfg)
     if "persist.waydroid.width" in props or "persist.waydroid.height" in props:
-        return
+        return False
     props["persist.waydroid.width"] = str(DISPLAY_WIDTH)
     props["persist.waydroid.height"] = str(DISPLAY_HEIGHT)
-    with open(WAYDROID_CFG, "w") as f:
-        cfg.write(f)
     print("Android's display: %d x %d logical pixels" % (DISPLAY_WIDTH, DISPLAY_HEIGHT))
-    # Waydroid makes its properties from waydroid.cfg only on init and upgrade
-    subprocess.run(["waydroid", "upgrade", "--offline"])
+    return True
+
+
+def vendor_props():
+    """The build properties of the phone's vendor partition."""
+    props = {}
+    for path in [os.path.join(VENDOR, "build.prop"), os.path.join(VENDOR, "default.prop")] + \
+            sorted(glob.glob(os.path.join(VENDOR, "etc", "*.prop"))):
+        try:
+            with open(path, errors="replace") as f:
+                for line in f:
+                    key, sep, value = line.strip().partition("=")
+                    if sep and not key.startswith("#"):
+                        props.setdefault(key, value)
+        except OSError:
+            pass
+    return props
+
+
+def elf_needed(path):
+    """The DT_NEEDED entries of a 64-bit little-endian ELF file; [] if it is none."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return []
+    if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        return []
+    shoff, = struct.unpack_from("<Q", data, 0x28)
+    shentsize, shnum = struct.unpack_from("<HH", data, 0x3a)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize) for i in range(shnum)]
+    needed = []
+    for _name, kind, _flags, _addr, offset, size, link, _info, _align, entsize in sections:
+        if kind != 6 or not entsize:  # SHT_DYNAMIC
+            continue
+        strtab = sections[link][4]
+        for pos in range(offset, offset + size, entsize):
+            tag, value = struct.unpack_from("<qQ", data, pos)
+            if tag == 0:
+                break
+            if tag == 1:  # DT_NEEDED
+                end = data.index(b"\0", strtab + value)
+                needed.append(data[strtab + value:end].decode())
+    return needed
+
+
+def vndk_lib64(vndk):
+    """lib64 of Halium's VNDK APEX for the vendor's Android version; None if not to be found."""
+    for path in sorted(glob.glob(VNDK_GLOB % vndk)):
+        if os.path.isdir(path):
+            return path
+    return None
+
+
+def image_libs(cfg):
+    """The names of the libraries Waydroid's images bring (system and vendor, 64-bit)."""
+    names = set()
+    for image, sub in (("system.img", "system/lib64"), ("vendor.img", "lib64")):
+        with mounted(image_path(cfg, image)) as mnt:
+            if mnt:
+                for _root, _dirs, files in os.walk(os.path.join(mnt, sub)):
+                    names.update(files)
+    return names
+
+
+def vendor_lib(name):
+    """A library of the phone's vendor by name (lib64 and its subdirectories); None if none."""
+    for root, _dirs, files in os.walk(os.path.join(VENDOR, "lib64")):
+        if name in files:
+            return os.path.join(root, name)
+    return None
+
+
+def missing_libraries(cfg, roots, vndk_dir):
+    """The libraries the vendor's graphics libraries need beyond the images and the vendor
+    itself, found in Halium's VNDK APEX: {name: path}; and the names found nowhere."""
+    have = image_libs(cfg)
+    todo, seen, found, unknown = list(roots), set(), {}, []
+    while todo:
+        path = todo.pop()
+        for name in elf_needed(path):
+            if name in seen or name in have:
+                continue
+            seen.add(name)
+            source = vendor_lib(name)
+            if source is None and vndk_dir and os.path.isfile(os.path.join(vndk_dir, name)):
+                source = found[name] = os.path.join(vndk_dir, name)
+            if source:
+                todo.append(source)
+            else:
+                unknown.append(name)
+    return found, sorted(unknown)
+
+
+def graphics_libs():
+    """The vendor's graphics libraries: EGL driver, mapper and their libraries; [] without an
+    AIDL allocator, a stable-C mapper or an EGL driver."""
+    allocators = glob.glob(os.path.join(VENDOR, "bin", "hw", "android.hardware.graphics.allocator-V*-service*"))
+    mappers = sorted(glob.glob(os.path.join(VENDOR, "lib64", "hw", "mapper.*.so")))
+    egl = sorted(glob.glob(os.path.join(VENDOR, "lib64", "egl", "**", "*.so"), recursive=True))
+    if not (allocators and mappers and egl):
+        return [], []
+    return mappers, egl
+
+
+def place(path, target=None, source=None):
+    """A symbolic link to target or a copy of source at path in the overlay."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if target is not None:
+        if os.path.islink(path) and os.readlink(path) == target:
+            return
+        if os.path.lexists(path):
+            os.unlink(path)
+        os.symlink(target, path)
+        return
+    shutil.copyfile(source, path)
+    os.chmod(path, 0o644)
+
+
+def setup_graphics(cfg):
+    """GPU graphics through the vendor's HALs (see above); True if waydroid.cfg changed."""
+    try:
+        with open(GRAPHICS_STATE) as f:
+            before = set(f.read().split())
+    except OSError:
+        before = set()
+    mappers, egl = graphics_libs()
+    placed = set()
+    hosthals = HOSTHALS_NONE
+    changed = False
+    if mappers:
+        vprops = vendor_props()
+        vndk_dir = vndk_lib64(vprops.get("ro.vndk.version", ""))
+        found, unknown = missing_libraries(cfg, mappers + egl, vndk_dir)
+        for name, source in sorted(found.items()):
+            rel = os.path.join("vendor", "lib64", name)
+            place(os.path.join(OVERLAY, rel), source=source)
+            placed.add(rel)
+        if unknown:
+            print("Libraries of the vendor's graphics found nowhere: %s" % " ".join(unknown))
+        # The stable-C mapper and the driver's platform file, where the vendor's libraries look
+        for mapper in mappers:
+            rel = os.path.join("vendor", "lib64", "hw", os.path.basename(mapper))
+            place(os.path.join(OVERLAY, rel), target=os.path.join("/vendor_extra", "lib64", "hw", os.path.basename(mapper)))
+            placed.add(rel)
+        if os.path.isfile(os.path.join(VENDOR, "etc", "mali_platform.config")):
+            rel = os.path.join("vendor", "etc", "mali_platform.config")
+            place(os.path.join(OVERLAY, rel), target="/vendor_extra/etc/mali_platform.config")
+            placed.add(rel)
+        hosthals = HOSTHALS_MAPPER
+        changed = graphics_cfg(cfg, vprops)
+    for rel in before - placed:
+        path = os.path.join(OVERLAY, rel)
+        if os.path.lexists(path):
+            os.unlink(path)
+    write_if_changed(os.path.join(OVERLAY, "system", "etc", "hosthals.xml"), hosthals)
+    write_if_changed(GRAPHICS_STATE, "".join(rel + "\n" for rel in sorted(placed)))
+    return changed
+
+
+def graphics_cfg(cfg, vprops):
+    """waydroid.cfg for the vendor's GPU stack; True if it changed."""
+    before = {s: dict(cfg[s]) for s in cfg.sections()}
+    waydroid = cfg["waydroid"]
+    waydroid["bind_host_egl"] = "True"
+    waydroid.pop("drm_device", None)
+    props = properties(cfg)
+    props.pop("gralloc.gbm.device", None)
+    props["ro.hardware.gralloc"] = "android"
+    props["ro.hardware.egl"] = vprops.get("ro.hardware.egl", "")
+    for key, value in vprops.items():
+        if key.startswith("ro.vendor.arm."):
+            props[key] = value
+    if glob.glob(os.path.join(VENDOR, "lib", "egl", "lib*_%s.so" % vprops.get("ro.hardware.egl", ""))):
+        props.pop("ro.zygote.disable_gl_preload", None)
+    else:
+        props["ro.zygote.disable_gl_preload"] = "true"
+    after = {s: dict(cfg[s]) for s in cfg.sections()}
+    if after != before:
+        print("Graphics on the GPU: %s EGL, the vendor's allocator and mapper" % props["ro.hardware.egl"])
+        return True
+    return False
 
 
 def add_mode(path, mode):
@@ -218,14 +446,70 @@ def setup_devices(cfg):
         add_mode(drm, DRM_MODE)
 
 
+def camera_instances():
+    """The instances of the vendor's AIDL camera providers (internal/0), from its VINTF manifests."""
+    import xml.etree.ElementTree as ET
+    instances = []
+    for path in [os.path.join(VENDOR, "etc", "vintf", "manifest.xml")] + \
+            sorted(glob.glob(os.path.join(VENDOR, "etc", "vintf", "manifest", "*.xml"))):
+        try:
+            root = ET.parse(path).getroot()
+        except (OSError, ET.ParseError):
+            continue
+        for hal in root.iter("hal"):
+            if hal.get("format") != "aidl" or hal.findtext("name") != CAMERA_PROVIDER:
+                continue
+            for iface in hal.iter("interface"):
+                for inst in iface.iter("instance"):
+                    instances.append("%s/%s" % (iface.findtext("name"), inst.text))
+            for fq in hal.iter("fqname"):
+                instances.append(fq.text)
+    return instances
+
+
+def camera_manifest(instances):
+    hal = "".join("        <fqname>%s</fqname>\n" % i for i in instances)
+    return ('<manifest version="1.0" type="device">\n    <hal format="aidl">\n'
+            "        <name>%s</name>\n        <version>1</version>\n%s    </hal>\n</manifest>\n"
+            % (CAMERA_PROVIDER, hal))
+
+
+def setup_camera(api):
+    manifest = os.path.join(OVERLAY, "vendor", "etc", "vintf", "manifest", "plinius-camera.xml")
+    metadata = os.path.join(OVERLAY, "system", "lib64", "libcamera_metadata.so")
+    instances = camera_instances()
+    if instances:
+        write_if_changed(manifest, camera_manifest(instances))
+    elif os.path.exists(manifest):
+        os.unlink(manifest)
+    halium = read_prop(os.path.join(HALIUM_SYSTEM, "build.prop"), "ro.build.version.sdk")
+    source = os.path.join(HALIUM_SYSTEM, "lib64", "libcamera_metadata.so")
+    try:
+        newer = instances and api is not None and int(halium) > api and os.path.isfile(source)
+    except (TypeError, ValueError):
+        newer = False
+    if newer:
+        place(metadata, source=source)
+    elif os.path.exists(metadata):
+        os.unlink(metadata)
+
+
 def main():
     cfg = load_cfg()
     if cfg is None:
         print("Waydroid is not initialised")
         return 0
-    setup_gbinder(cfg)
+    api = image_api(cfg)
+    setup_gbinder(api)
     setup_overlay()
-    setup_display(cfg)
+    setup_camera(api)
+    changed = setup_graphics(cfg)
+    changed = setup_display(cfg) or changed
+    if changed:
+        with open(WAYDROID_CFG, "w") as f:
+            cfg.write(f)
+        # Waydroid makes its properties from waydroid.cfg only on init and upgrade
+        subprocess.run(["waydroid", "upgrade", "--offline"])
     setup_devices(cfg)
     return 0
 

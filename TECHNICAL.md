@@ -84,7 +84,7 @@ image to download yet.
 | App security | Access Control in Settings limits what each app may reach | not finished, not every way to a device or service is covered yet |
 | Echo cancellation in calls | on during calls | the voice still varies a little |
 | Camera | photos with noise reduction | motion and daylight still to be judged |
-| Android apps | Waydroid with a test image (Android 13): apps full screen in their own windows; sensors, GPS, vibration, battery and NFC of the phone through the HAL bridges; NFC passes between Linux and Android; Android sleeps while the phone is locked | graphics in software, no app store, an Android 16 image, Bluetooth and the cameras for Android |
+| Android apps | Waydroid with a test image (Android 13): apps full screen in their own windows, drawn on the GPU (Mali, OpenGL ES 3.2, through the vendor's graphics HALs); the four cameras through the vendor's camera HAL; sensors, GPS, vibration, battery and NFC of the phone through the HAL bridges; NFC passes between Linux and Android; sound through PipeWire; Android sleeps while the phone is locked and takes the phone's time zone, Phosh's keyboard layout, clock format, style and language, and a status bar without what Phosh's top bar shows | no app store, an Android 16 image, Bluetooth devices in Android apps, 32-bit apps with graphics |
 
 ### Built, test on the device pending
 

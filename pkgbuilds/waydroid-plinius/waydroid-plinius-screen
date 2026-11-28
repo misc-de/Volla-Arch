@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT
-"""waydroid-plinius-screen: Android's screen in the Waydroid container follows the phone's lock.
+"""waydroid-plinius-screen: Android's screen in the Waydroid container follows the phone's.
 
 Android knows nothing of Phosh's lock screen: it takes its screen for on and unlocked all the
 time, so its NFC stack looks for tags while the phone is locked and dark, and its apps keep
@@ -10,8 +10,28 @@ Phosh sets) while the container service runs:
   locked:   Android goes to sleep (KEYCODE_SLEEP). Its NFC stops polling, and Waydroid freezes
             the container once Android asks to suspend.
   unlocked: the container is thawed and Android wakes up (KEYCODE_WAKEUP).
+
+Once Android has booted, its settings follow the phone's as well (Android keeps them; they are
+set where they differ):
+
+  status bar: no clock, battery or radio icons, which Phosh's top bar shows already; Android's
+              notifications stay. A list of hidden icons of the user's own stays.
+  time zone:  the phone's (Android in Waydroid has neither telephony nor location to find its
+              own and stays at GMT), set as a manual zone; again when the phone's changes.
+
+and Phosh's settings of the session's user, again whenever they change (Phosh leads; a choice
+made in Android gives way to Phosh's when it is applied):
+
+  keyboard:   the layout of the first input source for each keyboard (Android otherwise asks
+              for one with a notification at every start).
+  clock:      12 or 24 hours.
+  style:      dark or light.
+  language:   the user's (AccountsService, else the system's); Android takes it as it starts.
 """
 
+import os
+import pwd
+import re
 import subprocess
 import sys
 
@@ -19,6 +39,34 @@ from gi.repository import Gio, GLib
 
 LOGIN1 = "org.freedesktop.login1"
 SEAT = "/org/freedesktop/login1/seat/seat0"
+TIMEDATE = "org.freedesktop.timedate1"
+TIMEDATE_PATH = "/org/freedesktop/timedate1"
+LOCALTIME = "/etc/localtime"
+ZONEINFO = "/usr/share/zoneinfo/"
+# Seconds between looks whether Android has booted
+BOOT_POLL = 10
+# Android's status icons that Phosh's top bar shows already (SystemUI's icon_blacklist)
+STATUS_ICONS = ("clock,battery,wifi,mobile,airplane,ethernet,volume,zen,bluetooth,location,"
+                "hotspot,vpn,nfc,data_saver,rotate,headset,alarm_clock")
+ACCOUNTS = "/var/lib/AccountsService/users"
+LOCALE_CONF = "/etc/locale.conf"
+# IInputManager's transaction codes per Android API: (get, set) the current keyboard layout of an
+# input device (Android has no shell command for it)
+INPUT_CODES = {33: (17, 18)}
+INPUT_LAYOUT = "com.android.inputdevices/com.android.inputdevices.InputDeviceReceiver/keyboard_layout_"
+# Android's keyboard layouts for xkb layouts (layout+variant where it differs from the layout)
+LAYOUTS = {
+    "us": "english_us", "us+dvorak": "english_us_dvorak", "us+colemak": "english_us_colemak",
+    "us+workman": "english_us_workman", "gb": "english_uk", "de": "german", "ch": "swiss_german",
+    "ch+fr": "swiss_french", "fr": "french", "ca": "french_ca", "be": "belgian", "es": "spanish",
+    "latam": "spanish_latin", "it": "italian", "pt": "portuguese", "br": "brazilian", "pl": "polish",
+    "ru": "russian", "ua": "ukrainian", "by": "belarusian", "cz": "czech", "cz+qwerty": "czech_qwerty",
+    "sk": "slovak", "si": "slovenian", "hr": "croatian", "hu": "hungarian", "dk": "danish",
+    "no": "norwegian", "se": "swedish", "fi": "finnish", "is": "icelandic", "ee": "estonian",
+    "lv": "latvian", "lt": "lithuanian", "tr": "turkish", "tr+f": "turkish_f", "gr": "greek",
+    "il": "hebrew", "ara": "arabic", "ir": "persian", "az": "azerbaijani", "bg": "bulgarian",
+    "bg+phonetic": "bulgarian_phonetic", "ge": "georgian", "mn": "mongolian",
+}
 
 
 def container_state():
@@ -53,6 +101,250 @@ def apply(locked):
     print("Phone %s: Android %s%s" % ("locked" if locked else "unlocked", "asleep" if locked else "awake",
                                      "" if ok else " (failed)"), flush=True)
     return ok
+
+
+def android(script):
+    """The output of a shell script in Android, or None if it could not run."""
+    try:
+        r = subprocess.run(["waydroid", "shell", "--", "sh", "-c", script], capture_output=True,
+                           text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def phone_zone():
+    """The phone's time zone (Europe/Berlin), or None."""
+    try:
+        target = os.path.realpath(LOCALTIME)
+    except OSError:
+        return None
+    if not target.startswith(ZONEINFO):
+        return None
+    zone = target[len(ZONEINFO):]
+    # A zone name goes into Android's shell: letters, digits and _+-/ only
+    return zone if re.fullmatch(r"[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*", zone) else None
+
+
+def phosh_setting(user, schema, key):
+    """A setting of Phosh for the user (GSettings, read as the user), unpacked, or None."""
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        return None
+    run_dir = "/run/user/%d" % pw.pw_uid
+    try:
+        # setpriv, not runuser: no PAM session (and its lines in the journal) for each read
+        r = subprocess.run(["setpriv", "--reuid=%d" % pw.pw_uid, "--regid=%d" % pw.pw_gid, "--init-groups",
+                            "env", "HOME=" + pw.pw_dir, "XDG_RUNTIME_DIR=" + run_dir,
+                            "DBUS_SESSION_BUS_ADDRESS=unix:path=%s/bus" % run_dir,
+                            "gsettings", "get", schema, key], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        return GLib.Variant.parse(None, r.stdout.strip(), None, None).unpack()
+    except GLib.Error:
+        return None
+
+
+def keyboard_layout(sources):
+    """Android's keyboard layout for the first xkb input source of Phosh, or None."""
+    for kind, name in sources or []:
+        if kind == "xkb":
+            layout, _sep, variant = name.partition("+")
+            return LAYOUTS.get(layout + "+" + variant, LAYOUTS.get(layout))
+    return None
+
+
+def user_locale(user):
+    """The user's language as an Android locale (de-DE): AccountsService's, else the system's."""
+    value = None
+    try:
+        with open(os.path.join(ACCOUNTS, user)) as f:
+            for line in f:
+                key, sep, v = line.strip().partition("=")
+                if key in ("Languages", "Language") and v.strip(";"):
+                    value = v.split(";")[0]
+                    break
+    except OSError:
+        pass
+    if value is None:
+        value = read_prop(LOCALE_CONF, "LANG")
+    match = re.fullmatch(r"([a-z]{2,3})_([A-Z]{2})(\.[^@]*)?(@.*)?", value or "")
+    return "%s-%s" % match.group(1, 2) if match else None
+
+
+def read_prop(path, name):
+    """name=value of a file of such lines (quotes removed), or None."""
+    try:
+        with open(path) as f:
+            for line in f:
+                key, sep, value = line.strip().partition("=")
+                if sep and key == name:
+                    return value.strip("\"'")
+    except OSError:
+        pass
+    return None
+
+
+def keyboards(dump):
+    """(descriptor, vendor, product) of each alphabetic keyboard in dumpsys input's EventHub."""
+    found = []
+    for block in re.split(r"\n\s+\d+: ", dump)[1:]:
+        classes = re.search(r"Classes: (.*)", block)
+        descriptor = re.search(r"Descriptor: ([0-9a-f]+)", block)
+        ident = re.search(r"vendor=0x([0-9a-f]+), product=0x([0-9a-f]+)", block)
+        if classes and "ALPHAKEY" in classes.group(1) and "VIRTUAL" not in classes.group(1) \
+                and descriptor and ident:
+            entry = (descriptor.group(1), int(ident.group(1), 16), int(ident.group(2), 16))
+            if entry not in found:
+                found.append(entry)
+    return found
+
+
+def keyboard_script(api, layout):
+    """Commands that give each keyboard in Android the layout, for those that have another."""
+    codes = INPUT_CODES.get(api)
+    if codes is None or layout is None:
+        return []
+    dump = android("dumpsys input")
+    if dump is None:
+        return []
+    script = []
+    for descriptor, vendor, product in keyboards(dump):
+        device = "i32 1 s16 %s i32 %d i32 %d" % (descriptor, vendor, product)
+        current = android("service call input %d %s" % (codes[0], device)) or ""
+        text = "".join(re.findall(r"'([^']*)'", current)).replace(".", "")
+        if "keyboard_layout_" + layout not in text:
+            script.append("service call input %d %s s16 %s%s" % (codes[1], device, INPUT_LAYOUT, layout))
+    return script
+
+
+def apply_settings():
+    """Android's settings as the phone's; None until Android has booted, else the user of the
+    session (whose settings of Phosh were taken), or "" without one."""
+    if container_state() != "RUNNING":
+        return None
+    out = android("getprop sys.boot_completed")
+    if out is None or out.strip() != "1":
+        return None
+    out = android("echo \"icons=$(settings get secure icon_blacklist)\"; "
+                  "echo \"zone=$(getprop persist.sys.timezone)\"; "
+                  "echo \"api=$(getprop ro.build.version.sdk)\"; "
+                  "echo \"user=$(getprop waydroid.host.user)\"; "
+                  "echo \"clock=$(settings get system time_12_24)\"; "
+                  "echo \"night=$(cmd uimode night)\"; "
+                  "echo \"locale=$(getprop persist.sys.locale)\"")
+    if out is None:
+        return None
+    values = dict(line.partition("=")[::2] for line in out.splitlines() if "=" in line)
+    unset = ("", "null")
+    script = []
+    changes = []
+    if values.get("icons", "") in unset:
+        script.append("settings put secure icon_blacklist " + STATUS_ICONS)
+        changes.append("no status icons of the phone's top bar")
+    zone = phone_zone()
+    if zone and values.get("zone") != zone:
+        script.append("cmd time_zone_detector set_auto_detection_enabled false")
+        script.append("cmd time_zone_detector suggest_manual_time_zone --zone_id " + zone)
+        changes.append("time zone " + zone)
+    user = values.get("user", "")
+    if re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
+        clock = {"24h": "24", "12h": "12"}.get(phosh_setting(user, "org.gnome.desktop.interface", "clock-format"))
+        if clock and values.get("clock") != clock:
+            script.append("settings put system time_12_24 " + clock)
+            changes.append(clock + "-hour clock")
+        scheme = phosh_setting(user, "org.gnome.desktop.interface", "color-scheme")
+        if scheme is not None:
+            night = "yes" if scheme == "prefer-dark" else "no"
+            if values.get("night") != "Night mode: " + night:
+                script.append("cmd uimode night " + night)
+                changes.append("dark style" if night == "yes" else "light style")
+        layout = keyboard_layout(phosh_setting(user, "org.gnome.desktop.input-sources", "sources"))
+        api = int(values["api"]) if values.get("api", "").isdigit() else 0
+        keys = keyboard_script(api, layout)
+        if keys:
+            script.extend(keys)
+            changes.append("keyboard layout " + layout)
+        locale = user_locale(user)
+        if locale and values.get("locale") != locale:
+            # Read by Android as it starts: the language of its next start
+            script.append("setprop persist.sys.locale " + locale)
+            changes.append("language %s (from Android's next start)" % locale)
+    else:
+        user = ""
+    if script:
+        ok = android("; ".join(script)) is not None
+        print("Android's settings: %s%s" % (", ".join(changes), "" if ok else " (failed)"), flush=True)
+    return user
+
+
+class Settings:
+    """Android's settings as the phone's: applied once Android has booted (looked at every
+    BOOT_POLL seconds), again when timedated reports a new time zone and when the session user's
+    settings of Phosh (dconf) or language (AccountsService) change."""
+
+    def __init__(self, bus, apply_fn=apply_settings):
+        self.apply = apply_fn
+        self.source = None
+        self.user = None
+        self.monitors = []
+        # timedated runs on demand: it is not started for this, its signals come when it runs
+        self.timedate = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None,
+                                               TIMEDATE, TIMEDATE_PATH, TIMEDATE, None)
+        self.timedate.connect("g-properties-changed", self.on_timedate_changed)
+        self.update()
+
+    def update(self):
+        if self.source is not None:
+            return
+        user = self.apply()
+        if user is None:
+            self.source = GLib.timeout_add_seconds(BOOT_POLL, self.on_poll)
+        else:
+            self.watch(user)
+
+    def on_poll(self):
+        user = self.apply()
+        if user is None:
+            return GLib.SOURCE_CONTINUE
+        self.source = None
+        self.watch(user)
+        return GLib.SOURCE_REMOVE
+
+    def watch(self, user):
+        """Watch the files of the user's settings (dconf writes a new file for each change)."""
+        if user == self.user:
+            return
+        self.user = user
+        for monitor in self.monitors:
+            monitor.cancel()
+        self.monitors = []
+        if not user:
+            return
+        try:
+            home = pwd.getpwnam(user).pw_dir
+        except KeyError:
+            return
+        for path in (os.path.join(home, ".config", "dconf", "user"), os.path.join(ACCOUNTS, user)):
+            try:
+                monitor = Gio.File.new_for_path(path).monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
+            except GLib.Error:
+                continue
+            monitor.connect("changed", self.on_file_changed)
+            self.monitors.append(monitor)
+
+    def on_file_changed(self, monitor, file, other, event):
+        if event in (Gio.FileMonitorEvent.CHANGES_DONE_HINT, Gio.FileMonitorEvent.CREATED,
+                     Gio.FileMonitorEvent.RENAMED, Gio.FileMonitorEvent.MOVED_IN):
+            self.update()
+
+    def on_timedate_changed(self, proxy, changed, invalidated):
+        if "Timezone" in changed.keys() or "Timezone" in invalidated:
+            self.update()
 
 
 class Watcher:
@@ -99,13 +391,14 @@ class Watcher:
 def main():
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-        # Held for as long as the loop runs: with it go its proxies and their handlers
+        # Held for as long as the loop runs: with them go their proxies and handlers
         watcher = Watcher(bus)
+        settings = Settings(bus)
     except GLib.Error as e:
-        print("Cannot watch the lock: %s" % e.message, file=sys.stderr)
+        print("Cannot watch the phone: %s" % e.message, file=sys.stderr)
         return 1
     GLib.MainLoop().run()
-    del watcher
+    del watcher, settings
     return 0
 
 
