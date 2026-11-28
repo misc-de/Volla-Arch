@@ -1,0 +1,967 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 10:44:23 +0100
+Subject: [PATCH 1/2] overview: Hold a card halfway away for a second to force
+ quit its app
+
+An app that does not close its window when asked to comes back to the
+overview a second after it was swiped away, and there was nothing else
+to do about it. Swiping its card at least halfway away and holding it
+there for a second now gives a short vibration and asks whether to
+force quit the app; once released the card goes back instead of
+closing. Other swipe-away bins (notifications, dialogs) are unchanged.
+
+Force quitting kills every process of the systemd user units that run
+exactly the app's id (app-gnome-<id>-<pid>.scope, app-flatpak-...,
+dbus-:1.2-<id>@1.service), never Phosh's own unit, so a terminal is not
+hit for an app started from it. Without such a unit the dialog says
+that no running process was found. An Android app of Waydroid's
+multi-window mode (waydroid.<package>) is stopped by Waydroid's helper
+through pkexec (am force-stop). The question goes away when the app
+closes after all and when the phone locks.
+---
+ src/activity.c           |  29 +++
+ src/meson.build          |   1 +
+ src/overview.c           | 206 ++++++++++++++++++++++
+ src/plinius-force-quit.c | 370 +++++++++++++++++++++++++++++++++++++++
+ src/plinius-force-quit.h |  25 +++
+ src/swipe-away-bin.c     | 117 +++++++++++++
+ src/swipe-away-bin.h     |   1 +
+ 7 files changed, 749 insertions(+)
+ create mode 100644 src/plinius-force-quit.c
+ create mode 100644 src/plinius-force-quit.h
+
+diff --git a/src/activity.c b/src/activity.c
+index 81203e26..3f3bea55 100644
+--- a/src/activity.c
++++ b/src/activity.c
+@@ -39,6 +39,7 @@ enum {
+   PLINIUS_REORDER_BEGIN,
+   PLINIUS_REORDER_UPDATE,
+   PLINIUS_REORDER_END,
++  PLINIUS_FORCE_QUIT,
+   N_SIGNALS
+ };
+ static guint signals[N_SIGNALS] = { 0 };
+@@ -251,6 +252,17 @@ clicked_cb (PhoshActivity *self)
+ }
+ 
+ 
++/* Plinius: swiped halfway away and held, see PhoshSwipeAwayBin::plinius-held */
++static void
++on_plinius_swipe_held (PhoshActivity *self)
++{
++  PhoshActivityPrivate *priv = phosh_activity_get_instance_private (self);
++
++  g_debug ("Activity %s held while swiped away", priv->app_id);
++  g_signal_emit (self, signals[PLINIUS_FORCE_QUIT], 0);
++}
++
++
+ static void
+ closed_cb (PhoshActivity *self)
+ {
+@@ -1069,6 +1081,18 @@ phosh_activity_class_init (PhoshActivityClass *klass)
+                                                G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+                                                NULL,
+                                                G_TYPE_NONE, 0);
++  /**
++   * PhoshActivity::plinius-force-quit
++   * @self: The activity
++   *
++   * Plinius: the card was swiped at least halfway away and held there for a second: ask
++   * whether to force quit the app. The card goes back once released.
++   */
++  signals[PLINIUS_FORCE_QUIT] = g_signal_new ("plinius-force-quit",
++                                              G_TYPE_FROM_CLASS (klass),
++                                              G_SIGNAL_RUN_LAST, 0, NULL, NULL,
++                                              NULL,
++                                              G_TYPE_NONE, 0);
+ 
+   g_type_ensure (PHOSH_TYPE_SWIPE_AWAY_BIN);
+ 
+@@ -1106,6 +1130,11 @@ phosh_activity_init (PhoshActivity *self)
+   priv->win_width = 300;
+ 
+   plinius_setup_reorder (self);
++
++  /* Plinius: held halfway away asks whether to force quit the app */
++  phosh_swipe_away_bin_set_hold_to_ask (PHOSH_SWIPE_AWAY_BIN (priv->swipe_bin), TRUE);
++  g_signal_connect_object (priv->swipe_bin, "plinius-held",
++                           G_CALLBACK (on_plinius_swipe_held), self, G_CONNECT_SWAPPED);
+ }
+ 
+ 
+diff --git a/src/meson.build b/src/meson.build
+index bb5ca5a8..d5ed8f07 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -272,6 +272,7 @@ phosh_tool_sources = files(
+   'volume-osd.c',
+   'overview.c',
+   'password-entry.c',
++  'plinius-force-quit.c',
+   'phosh-wayland.c',
+   'plugin-loader.c',
+   'power-menu-manager.c',
+diff --git a/src/overview.c b/src/overview.c
+index 412d03c7..e38f77ba 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -15,7 +15,9 @@
+ #include "app-grid.h"
+ #include "overview.h"
+ #include "phosh-wayland.h"
++#include "plinius-force-quit.h"
+ #include "shell-priv.h"
++#include "system-modal-dialog.h"
+ #include "toplevel-manager.h"
+ #include "toplevel-thumbnail.h"
+ #include "util.h"
+@@ -85,6 +87,13 @@ typedef struct {
+   cairo_surface_t    *plinius_keyboard;
+   guint               plinius_osk_capture_id;
+   struct _PliniusOskCapture *plinius_osk_capture;
++  /* The question whether to force quit an app: its card, the search for its units, what to quit */
++  PhoshActivity      *plinius_fq_activity;
++  GCancellable       *plinius_fq_cancel;
++  GtkWidget          *plinius_fq_dialog;
++  GStrv               plinius_fq_units;
++  char               *plinius_fq_package;
++  gulong              plinius_fq_locked_id;
+ } PhoshOverviewPrivate;
+ 
+ 
+@@ -642,6 +651,197 @@ on_activity_clicked (PhoshOverview *self, PhoshActivity *activity)
+ }
+ 
+ 
++/*
++ * Plinius: a card swiped at least halfway away and held there for a second asks whether to
++ * force quit its app, for an app that does not close its window when asked to. The card goes
++ * back once released. Asked only once the app's units are known: without one there is nothing
++ * to quit, and the dialog says so.
++ */
++static void
++plinius_fq_close (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++
++  g_cancellable_cancel (priv->plinius_fq_cancel);
++  g_clear_object (&priv->plinius_fq_cancel);
++  if (priv->plinius_fq_dialog) {
++    phosh_system_modal_dialog_close (PHOSH_SYSTEM_MODAL_DIALOG (priv->plinius_fq_dialog));
++    priv->plinius_fq_dialog = NULL;
++  }
++  g_clear_pointer (&priv->plinius_fq_units, g_strfreev);
++  g_clear_pointer (&priv->plinius_fq_package, g_free);
++  g_clear_weak_pointer (&priv->plinius_fq_activity);
++}
++
++
++static void
++on_plinius_fq_confirmed (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  g_autoptr (GError) err = NULL;
++
++  /* A tap while the dialog fades out counts for nothing */
++  if (priv->plinius_fq_dialog == NULL)
++    return;
++
++  if (priv->plinius_fq_package) {
++    g_debug ("Force quitting Android app %s", priv->plinius_fq_package);
++    if (!phosh_plinius_force_quit_android (priv->plinius_fq_package, &err))
++      g_warning ("Failed to force quit %s: %s", priv->plinius_fq_package, err->message);
++  } else {
++    phosh_plinius_force_quit_kill ((const char * const *) priv->plinius_fq_units);
++  }
++
++  plinius_fq_close (self);
++}
++
++
++static void
++on_plinius_fq_locked (PhoshOverview *self, GParamSpec *pspec, PhoshShell *shell)
++{
++  /* The question doesn't outlive the unlocked session */
++  if (phosh_shell_get_locked (shell))
++    plinius_fq_close (self);
++}
++
++
++static void
++plinius_fq_ask (PhoshOverview *self, gboolean found)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  PhoshActivity *activity = priv->plinius_fq_activity;
++  PhoshToplevel *toplevel = g_object_get_data (G_OBJECT (activity), "toplevel");
++  GAppInfo *info = phosh_activity_get_app_info (activity);
++  g_autofree char *title = NULL;
++  const char *name = NULL;
++  GtkWidget *label, *button;
++
++  if (info)
++    name = g_app_info_get_display_name (info);
++  if (name == NULL && toplevel)
++    name = phosh_toplevel_get_title (toplevel);
++  if (name == NULL || *name == '\0')
++    name = phosh_activity_get_app_id (activity);
++
++  priv->plinius_fq_dialog = phosh_system_modal_dialog_new ();
++  if (found) {
++    /* Translators: the title of the question after holding an app's card while swiping it away */
++    title = g_strdup_printf (_("Force Quit %s?"), name);
++    label = gtk_label_new (_("The app ends at once. Anything not saved is lost."));
++  } else {
++    /* Translators: the title when no running process of an app to force quit was found */
++    title = g_strdup_printf (_("Cannot Force Quit %s"), name);
++    label = gtk_label_new (_("No running process of the app was found."));
++  }
++  phosh_system_modal_dialog_set_title (PHOSH_SYSTEM_MODAL_DIALOG (priv->plinius_fq_dialog), title);
++  gtk_label_set_line_wrap (GTK_LABEL (label), TRUE);
++  gtk_label_set_justify (GTK_LABEL (label), GTK_JUSTIFY_CENTER);
++  gtk_label_set_max_width_chars (GTK_LABEL (label), 30);
++  gtk_widget_set_visible (label, TRUE);
++  phosh_system_modal_dialog_set_content (PHOSH_SYSTEM_MODAL_DIALOG (priv->plinius_fq_dialog), label);
++
++  button = gtk_button_new_with_label (found ? _("Cancel") : _("Close"));
++  gtk_widget_set_visible (button, TRUE);
++  g_signal_connect_object (button, "clicked", G_CALLBACK (plinius_fq_close), self, G_CONNECT_SWAPPED);
++  phosh_system_modal_dialog_add_button (PHOSH_SYSTEM_MODAL_DIALOG (priv->plinius_fq_dialog), button, -1);
++
++  if (found) {
++    /* Translators: the button that kills an app that does not close */
++    button = gtk_button_new_with_label (_("Force Quit"));
++    gtk_style_context_add_class (gtk_widget_get_style_context (button), "destructive-action");
++    gtk_widget_set_visible (button, TRUE);
++    g_signal_connect_object (button, "clicked", G_CALLBACK (on_plinius_fq_confirmed), self,
++                             G_CONNECT_SWAPPED);
++    phosh_system_modal_dialog_add_button (PHOSH_SYSTEM_MODAL_DIALOG (priv->plinius_fq_dialog),
++                                          button, -1);
++  }
++
++  g_signal_connect_object (priv->plinius_fq_dialog, "dialog-canceled",
++                           G_CALLBACK (plinius_fq_close), self, G_CONNECT_SWAPPED);
++  gtk_widget_set_visible (priv->plinius_fq_dialog, TRUE);
++}
++
++
++static void
++on_plinius_fq_found (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GError) err = NULL;
++  g_auto (GStrv) units = NULL;
++  PhoshOverview *self;
++  PhoshOverviewPrivate *priv;
++
++  units = phosh_plinius_force_quit_find_finish (res, &err);
++  /* Cancelled: the overview or the card went away, or the phone locked */
++  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++    return;
++
++  self = PHOSH_OVERVIEW (user_data);
++  priv = phosh_overview_get_instance_private (self);
++  g_clear_object (&priv->plinius_fq_cancel);
++
++  if (err)
++    g_warning ("Failed to look for the units of the app: %s", err->message);
++
++  if (priv->plinius_fq_activity == NULL) {
++    plinius_fq_close (self);
++    return;
++  }
++
++  priv->plinius_fq_units = g_steal_pointer (&units);
++  plinius_fq_ask (self, priv->plinius_fq_units && priv->plinius_fq_units[0]);
++}
++
++
++static void
++on_plinius_force_quit (PhoshOverview *self, PhoshActivity *activity)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  PhoshShell *shell = phosh_shell_get_default ();
++  GAppInfo *info = phosh_activity_get_app_info (activity);
++  const char *app_id = phosh_activity_get_app_id (activity);
++  g_autoptr (GStrvBuilder) ids = NULL;
++  g_auto (GStrv) app_ids = NULL;
++
++  /* A card of a running app, one question at a time */
++  if (g_object_get_data (G_OBJECT (activity), "toplevel") == NULL || app_id == NULL)
++    return;
++  if (priv->plinius_fq_dialog || priv->plinius_fq_cancel)
++    return;
++
++  phosh_trigger_feedback ("button-pressed", FALSE);
++  g_set_weak_pointer (&priv->plinius_fq_activity, activity);
++
++  if (priv->plinius_fq_locked_id == 0) {
++    priv->plinius_fq_locked_id = g_signal_connect_object (shell, "notify::locked",
++                                                          G_CALLBACK (on_plinius_fq_locked),
++                                                          self, G_CONNECT_SWAPPED);
++  }
++
++  /* An Android app: Waydroid stops it */
++  priv->plinius_fq_package = phosh_plinius_force_quit_android_package (app_id);
++  if (priv->plinius_fq_package) {
++    plinius_fq_ask (self, TRUE);
++    return;
++  }
++
++  ids = g_strv_builder_new ();
++  g_strv_builder_add (ids, app_id);
++  if (info && g_app_info_get_id (info)) {
++    g_autofree char *id = g_strdup (g_app_info_get_id (info));
++
++    if (g_str_has_suffix (id, ".desktop"))
++      id[strlen (id) - strlen (".desktop")] = '\0';
++    if (g_strcmp0 (id, app_id))
++      g_strv_builder_add (ids, id);
++  }
++  app_ids = g_strv_builder_end (ids);
++
++  priv->plinius_fq_cancel = g_cancellable_new ();
++  phosh_plinius_force_quit_find ((const char * const *) app_ids, priv->plinius_fq_cancel,
++                                 on_plinius_fq_found, self);
++}
++
++
+ static void
+ on_activity_closed (PhoshOverview *self, PhoshActivity *activity)
+ {
+@@ -695,6 +895,9 @@ on_toplevel_closed (PhoshToplevel *toplevel, PhoshOverview *overview)
+ 
+   activity = find_activity_by_toplevel (overview, toplevel);
+   g_return_if_fail (PHOSH_IS_ACTIVITY (activity));
++  /* Plinius: the app closed after all, nothing left to force quit */
++  if (priv->plinius_fq_activity == activity)
++    plinius_fq_close (overview);
+   gtk_widget_destroy (GTK_WIDGET (activity));
+ 
+   if (priv->activity == activity)
+@@ -902,6 +1105,8 @@ toplevel_to_activity (PhoshOverview *self, PhoshToplevel *toplevel)
+ 
+   g_object_connect (activity,
+                     "swapped-signal::closed", on_activity_closed, self,
++                    /* Plinius: held while swiped away, ask whether to force quit */
++                    "swapped-signal::plinius-force-quit", on_plinius_force_quit, self,
+                     "swapped-signal::fullscreened", on_activity_fullscreened, self,
+                     "swapped-signal::notify::has-focus", on_activity_has_focus_changed, self,
+                     "swapped-signal::resized", on_activity_resized, self,
+@@ -1564,6 +1769,7 @@ phosh_overview_dispose (GObject *object)
+   g_clear_pointer (&priv->plinius_osk_capture, plinius_osk_capture_free);
+   g_clear_pointer (&priv->plinius_keyboard, cairo_surface_destroy);
+   g_clear_weak_pointer (&priv->plinius_moving);
++  plinius_fq_close (self);
+   if (priv->plinius_tick_id) {
+     gtk_widget_remove_tick_callback (GTK_WIDGET (self), priv->plinius_tick_id);
+     priv->plinius_tick_id = 0;
+diff --git a/src/plinius-force-quit.c b/src/plinius-force-quit.c
+new file mode 100644
+index 00000000..fce1b0b9
+--- /dev/null
++++ b/src/plinius-force-quit.c
+@@ -0,0 +1,370 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phosh-force-quit"
++
++#include "phosh-config.h"
++
++#include "plinius-force-quit.h"
++
++#include <signal.h>
++#include <string.h>
++
++/*
++ * Plinius: force quit an app whose window does not close.
++ *
++ * Phosh, GLib and the desktop start every app in a systemd user unit of its own:
++ * app-gnome-org.gnome.Console-1234.scope (app-flatpak-..., app-desktop-...), an app activated
++ * through D-Bus in dbus-:1.2-org.gnome.Settings@1.service. Force quitting kills every process
++ * of the units that belong to exactly the app's id, so a terminal is never hit for an app
++ * started from it. An Android app runs under Android's user IDs in the Waydroid container: it
++ * is stopped by Waydroid's helper (am force-stop) through pkexec.
++ */
++
++#define SYSTEMD_NAME  "org.freedesktop.systemd1"
++#define SYSTEMD_PATH  "/org/freedesktop/systemd1"
++#define SYSTEMD_IFACE "org.freedesktop.systemd1.Manager"
++#define TIMEOUT_MS    5000
++
++#ifndef PLINIUS_ANDROID_STOP_HELPER
++#define PLINIUS_ANDROID_STOP_HELPER "/usr/lib/waydroid-plinius/waydroid-plinius-stop-app"
++#endif
++#define ANDROID_PREFIX "waydroid."
++#ifndef PLINIUS_OWN_CGROUP
++#define PLINIUS_OWN_CGROUP "/proc/self/cgroup"
++#endif
++
++
++static char *
++unescape_unit_name (const char *escaped, gsize len)
++{
++  GString *out = g_string_sized_new (len);
++
++  for (gsize i = 0; i < len; i++) {
++    if (escaped[i] == '\\' && i + 3 < len && escaped[i + 1] == 'x' &&
++        g_ascii_isxdigit (escaped[i + 2]) && g_ascii_isxdigit (escaped[i + 3])) {
++      g_string_append_c (out, (char) (g_ascii_xdigit_value (escaped[i + 2]) * 16 +
++                                      g_ascii_xdigit_value (escaped[i + 3])));
++      i += 3;
++    } else {
++      g_string_append_c (out, escaped[i]);
++    }
++  }
++  return g_string_free (out, FALSE);
++}
++
++
++/**
++ * phosh_plinius_force_quit_unit_app_id:
++ * @unit: A unit's name as systemd lists it (escaped)
++ *
++ * The app a unit runs: app-<launcher>-<app id>-<random>.scope,
++ * app-<launcher>-<app id>@<random>.service or dbus-<bus name>-<app id>@<n>.service. The app
++ * id's own "-" are escaped (\x2d), so the parts are told apart by the plain ones.
++ *
++ * Returns:(nullable)(transfer full): The app id, %NULL for any other unit
++ */
++char *
++phosh_plinius_force_quit_unit_app_id (const char *unit)
++{
++  const char *start, *end;
++
++  g_return_val_if_fail (unit, NULL);
++
++  if (g_str_has_prefix (unit, "dbus-") && g_str_has_suffix (unit, ".service")) {
++    /* Past the bus name, which has no "-" */
++    start = strchr (unit + strlen ("dbus-"), '-');
++    if (start == NULL)
++      return NULL;
++    start++;
++    end = strchr (start, '@');
++    if (end == NULL)
++      end = g_strrstr (start, ".service");
++  } else if (g_str_has_prefix (unit, "app-") &&
++             (g_str_has_suffix (unit, ".scope") || g_str_has_suffix (unit, ".service"))) {
++    /* Past the launcher (gnome, desktop, flatpak, ...) */
++    start = strchr (unit + strlen ("app-"), '-');
++    if (start == NULL)
++      return NULL;
++    start++;
++    if (g_str_has_suffix (start, ".scope")) {
++      /* The random part at the end: app-gnome-<app id>-<pid>.scope */
++      end = strrchr (start, '-');
++    } else {
++      end = strchr (start, '@');
++      if (end == NULL)
++        end = g_strrstr (start, ".service");
++    }
++  } else {
++    return NULL;
++  }
++
++  /* One part too many: not a unit of an app */
++  if (end == NULL || end <= start || memchr (start, '-', end - start))
++    return NULL;
++
++  return unescape_unit_name (start, end - start);
++}
++
++
++/**
++ * phosh_plinius_force_quit_android_package:
++ * @app_id: A window's app id
++ *
++ * The Android package of a window of Waydroid's multi-window mode (waydroid.<package>),
++ * checked as Waydroid's helper does: two or more parts of letters, digits and underscores,
++ * each starting with a letter.
++ *
++ * Returns:(nullable)(transfer full): The package, %NULL for any other app
++ */
++char *
++phosh_plinius_force_quit_android_package (const char *app_id)
++{
++  const char *package;
++  gboolean part_start = TRUE;
++  guint parts = 1;
++
++  if (app_id == NULL || !g_str_has_prefix (app_id, ANDROID_PREFIX))
++    return NULL;
++
++  package = app_id + strlen (ANDROID_PREFIX);
++  if (strlen (package) > 255)
++    return NULL;
++
++  for (const char *c = package; *c; c++) {
++    if (part_start) {
++      if (!g_ascii_isalpha (*c))
++        return NULL;
++      part_start = FALSE;
++    } else if (*c == '.') {
++      part_start = TRUE;
++      parts++;
++    } else if (!g_ascii_isalnum (*c) && *c != '_') {
++      return NULL;
++    }
++  }
++
++  if (part_start || parts < 2)
++    return NULL;
++
++  return g_strdup (package);
++}
++
++
++/* The unit Phosh itself runs in, never to be killed */
++static char *
++own_unit (void)
++{
++  g_autofree char *contents = NULL;
++  char *newline, *unit;
++
++  if (!g_file_get_contents (PLINIUS_OWN_CGROUP, &contents, NULL, NULL))
++    return NULL;
++
++  newline = strchr (contents, '\n');
++  if (newline)
++    *newline = '\0';
++  unit = strrchr (contents, '/');
++
++  return unit ? g_strdup (unit + 1) : NULL;
++}
++
++
++static void
++on_list_units_done (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GTask) task = G_TASK (user_data);
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = NULL;
++  g_autoptr (GVariantIter) iter = NULL;
++  g_autoptr (GStrvBuilder) units = g_strv_builder_new ();
++  g_autofree char *own = own_unit ();
++  const char * const *app_ids = g_task_get_task_data (task);
++  const char *name, *active;
++
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (reply == NULL) {
++    g_task_return_error (task, g_steal_pointer (&err));
++    return;
++  }
++
++  g_variant_get (reply, "(a(ssssssouso))", &iter);
++  while (g_variant_iter_next (iter, "(&s&s&s&s&s&s&ou&s&o)",
++                              &name, NULL, NULL, &active, NULL, NULL, NULL, NULL, NULL, NULL)) {
++    g_autofree char *app_id = NULL;
++
++    if (g_strcmp0 (active, "inactive") == 0 || g_strcmp0 (active, "failed") == 0)
++      continue;
++    if (g_strcmp0 (name, own) == 0)
++      continue;
++
++    app_id = phosh_plinius_force_quit_unit_app_id (name);
++    if (app_id && g_strv_contains (app_ids, app_id)) {
++      g_debug ("%s runs %s", name, app_id);
++      g_strv_builder_add (units, name);
++    }
++  }
++
++  g_task_return_pointer (task, g_strv_builder_end (units), (GDestroyNotify) g_strfreev);
++}
++
++
++static void
++on_bus_done (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autoptr (GTask) task = G_TASK (user_data);
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GDBusConnection) bus = NULL;
++  GCancellable *cancellable = g_task_get_cancellable (task);
++  const char *states[] = { NULL };
++  const char *patterns[] = { "app-*.scope", "app-*.service", "dbus-*.service", NULL };
++
++  bus = g_bus_get_finish (res, &err);
++  if (bus == NULL) {
++    g_task_return_error (task, g_steal_pointer (&err));
++    return;
++  }
++
++  g_dbus_connection_call (bus, SYSTEMD_NAME, SYSTEMD_PATH, SYSTEMD_IFACE, "ListUnitsByPatterns",
++                          g_variant_new ("(^as^as)", states, patterns),
++                          G_VARIANT_TYPE ("(a(ssssssouso))"),
++                          G_DBUS_CALL_FLAGS_NONE, TIMEOUT_MS,
++                          cancellable, on_list_units_done, g_steal_pointer (&task));
++}
++
++
++/**
++ * phosh_plinius_force_quit_find:
++ * @app_ids: The ids the app goes by (the window's, the desktop file's without .desktop)
++ * @cancellable: (nullable): To cancel the search
++ * @callback: Called with the result
++ * @user_data: For the callback
++ *
++ * Look for the running units of the user's systemd that run exactly one of @app_ids.
++ */
++void
++phosh_plinius_force_quit_find (const char * const  *app_ids,
++                               GCancellable        *cancellable,
++                               GAsyncReadyCallback  callback,
++                               gpointer             user_data)
++{
++  GTask *task;
++
++  g_return_if_fail (app_ids);
++
++  task = g_task_new (NULL, cancellable, callback, user_data);
++  g_task_set_source_tag (task, phosh_plinius_force_quit_find);
++  g_task_set_task_data (task, g_strdupv ((GStrv) app_ids), (GDestroyNotify) g_strfreev);
++
++  g_bus_get (G_BUS_TYPE_SESSION, cancellable, on_bus_done, task);
++}
++
++
++/**
++ * phosh_plinius_force_quit_find_finish:
++ * @res: The result
++ * @error: The error
++ *
++ * Returns:(transfer full): The units found, maybe none, %NULL on error
++ */
++GStrv
++phosh_plinius_force_quit_find_finish (GAsyncResult *res, GError **error)
++{
++  g_return_val_if_fail (g_task_is_valid (res, NULL), NULL);
++
++  return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++
++static void
++on_kill_unit_done (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autofree char *unit = user_data;
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GVariant) reply = NULL;
++
++  reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res, &err);
++  if (reply == NULL)
++    g_warning ("Failed to force quit %s: %s", unit, err->message);
++  else
++    g_message ("Force quit %s", unit);
++}
++
++
++/**
++ * phosh_plinius_force_quit_kill:
++ * @units: Units from phosh_plinius_force_quit_find()
++ *
++ * Kill every process of @units (SIGKILL): the app gets no chance to save anything.
++ */
++void
++phosh_plinius_force_quit_kill (const char * const *units)
++{
++  g_autoptr (GError) err = NULL;
++  g_autoptr (GDBusConnection) bus = NULL;
++
++  if (units == NULL || units[0] == NULL)
++    return;
++
++  bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &err);
++  if (bus == NULL) {
++    g_warning ("Failed to force quit, no session bus: %s", err->message);
++    return;
++  }
++
++  for (guint i = 0; units[i]; i++) {
++    g_dbus_connection_call (bus, SYSTEMD_NAME, SYSTEMD_PATH, SYSTEMD_IFACE, "KillUnit",
++                            g_variant_new ("(ssi)", units[i], "all", SIGKILL),
++                            NULL, G_DBUS_CALL_FLAGS_NONE, TIMEOUT_MS, NULL,
++                            on_kill_unit_done, g_strdup (units[i]));
++  }
++}
++
++
++static void
++on_android_stopped (GObject *source, GAsyncResult *res, gpointer user_data)
++{
++  g_autofree char *package = user_data;
++  g_autoptr (GError) err = NULL;
++
++  if (!g_subprocess_wait_check_finish (G_SUBPROCESS (source), res, &err))
++    g_warning ("Failed to force quit %s: %s", package, err->message);
++  else
++    g_message ("Force quit %s", package);
++}
++
++
++/**
++ * phosh_plinius_force_quit_android:
++ * @package: An Android package from phosh_plinius_force_quit_android_package()
++ * @error: The error
++ *
++ * Stop an Android app the Android way, by Waydroid's helper through pkexec. The helper's
++ * polkit action needs no PIN in the active session.
++ *
++ * Returns: %FALSE if the helper could not be started
++ */
++gboolean
++phosh_plinius_force_quit_android (const char *package, GError **error)
++{
++  g_autoptr (GSubprocess) helper = NULL;
++
++  g_return_val_if_fail (package, FALSE);
++
++  if (!g_file_test (PLINIUS_ANDROID_STOP_HELPER, G_FILE_TEST_IS_EXECUTABLE)) {
++    g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
++                 "%s is not installed", PLINIUS_ANDROID_STOP_HELPER);
++    return FALSE;
++  }
++
++  helper = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE, error,
++                             "pkexec", PLINIUS_ANDROID_STOP_HELPER, package, NULL);
++  if (helper == NULL)
++    return FALSE;
++
++  g_subprocess_wait_check_async (helper, NULL, on_android_stopped, g_strdup (package));
++  return TRUE;
++}
+diff --git a/src/plinius-force-quit.h b/src/plinius-force-quit.h
+new file mode 100644
+index 00000000..cb0d08c9
+--- /dev/null
++++ b/src/plinius-force-quit.h
+@@ -0,0 +1,25 @@
++/*
++ * Copyright (C) 2026 misc-de
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include <gio/gio.h>
++
++G_BEGIN_DECLS
++
++char  *phosh_plinius_force_quit_unit_app_id     (const char *unit);
++char  *phosh_plinius_force_quit_android_package (const char *app_id);
++void   phosh_plinius_force_quit_find            (const char * const  *app_ids,
++                                                 GCancellable        *cancellable,
++                                                 GAsyncReadyCallback  callback,
++                                                 gpointer             user_data);
++GStrv  phosh_plinius_force_quit_find_finish     (GAsyncResult        *res,
++                                                 GError             **error);
++void   phosh_plinius_force_quit_kill            (const char * const  *units);
++gboolean phosh_plinius_force_quit_android       (const char          *package,
++                                                 GError             **error);
++
++G_END_DECLS
+diff --git a/src/swipe-away-bin.c b/src/swipe-away-bin.c
+index 2ccf0927..a86bd2c8 100644
+--- a/src/swipe-away-bin.c
++++ b/src/swipe-away-bin.c
+@@ -14,6 +14,7 @@
+ 
+ enum {
+   REMOVED,
++  PLINIUS_HELD,
+   N_SIGNALS
+ };
+ static guint signals[N_SIGNALS] = { 0 };
+@@ -46,8 +47,22 @@ struct _PhoshSwipeAwayBin {
+   gboolean         enabled;
+   /* Plinius: a vertical swipe takes the child downwards instead of upwards */
+   gboolean         downwards;
++  /* Plinius: held at least halfway away for a while: ::plinius-held instead of removing */
++  gboolean         hold_to_ask;
++  guint            hold_id;
++  double           hold_progress;
++  gboolean         held;
+ };
+ 
++/*
++ * Plinius: how far the child has to be swiped away (of the swipe's distance) and how long it
++ * has to stay there, give or take PLINIUS_HOLD_SLACK, before ::plinius-held
++ */
++#define PLINIUS_HOLD_PROGRESS 0.5
++#define PLINIUS_HOLD_SLACK    0.08
++#define PLINIUS_HOLD_MS       1000
++
++
+ static void phosh_swipe_away_bin_swipeable_init (HdySwipeableInterface *iface);
+ 
+ G_DEFINE_TYPE_WITH_CODE (PhoshSwipeAwayBin, phosh_swipe_away_bin, GTK_TYPE_EVENT_BOX,
+@@ -118,12 +133,68 @@ animate (PhoshSwipeAwayBin *self,
+ }
+ 
+ 
++/* Plinius hold: held halfway away and kept there for a second, the child comes back */
++static void
++on_hold_timeout (gpointer data)
++{
++  PhoshSwipeAwayBin *self = PHOSH_SWIPE_AWAY_BIN (data);
++
++  self->hold_id = 0;
++  self->held = TRUE;
++  g_signal_emit (self, signals[PLINIUS_HELD], 0);
++}
++
++
++static void
++update_hold (PhoshSwipeAwayBin *self)
++{
++  if (!self->hold_to_ask || self->held)
++    return;
++
++  if (ABS (self->progress) < PLINIUS_HOLD_PROGRESS) {
++    g_clear_handle_id (&self->hold_id, g_source_remove);
++    return;
++  }
++
++  /* Still moving: the time starts again where the finger is now */
++  if (self->hold_id && ABS (self->progress - self->hold_progress) <= PLINIUS_HOLD_SLACK)
++    return;
++
++  g_clear_handle_id (&self->hold_id, g_source_remove);
++  self->hold_progress = self->progress;
++  self->hold_id = g_timeout_add_once (PLINIUS_HOLD_MS, on_hold_timeout, self);
++  g_source_set_name_by_id (self->hold_id, "[SwipeAwayBin] hold");
++}
++
++
++static void
++reset_hold (PhoshSwipeAwayBin *self)
++{
++  g_clear_handle_id (&self->hold_id, g_source_remove);
++  self->held = FALSE;
++}
++
++
++/* The swipe ended: whether it was held, so the child goes back instead of where it was going */
++static gboolean
++end_hold (PhoshSwipeAwayBin *self)
++{
++  gboolean held = self->held;
++
++  reset_hold (self);
++  return held;
++}
++/* Plinius hold end */
++
++
+ static void
+ begin_swipe_cb (PhoshSwipeAwayBin *self)
+ {
+   if (!self->enabled)
+     return;
+ 
++  reset_hold (self);
++
+   if (self->animation)
+     phosh_animation_stop (self->animation);
+ }
+@@ -137,6 +208,7 @@ update_swipe_cb (PhoshSwipeAwayBin *self,
+     return;
+ 
+   set_progress (self, progress);
++  update_hold (self);
+ }
+ 
+ 
+@@ -148,6 +220,12 @@ end_swipe_cb (PhoshSwipeAwayBin *self,
+   if (!self->enabled)
+     return;
+ 
++  /* Plinius: held, it asks instead: the child goes back where it was */
++  if (end_hold (self)) {
++    animate (self, 300, 0, PHOSH_ANIMATION_TYPE_EASE_OUT_CUBIC);
++    return;
++  }
++
+   animate (self, duration, to, PHOSH_ANIMATION_TYPE_EASE_OUT_CUBIC);
+ }
+ 
+@@ -176,6 +254,7 @@ phosh_swipe_away_bin_finalize (GObject *object)
+ 
+   g_object_unref (self->tracker);
+   g_clear_pointer (&self->animation, phosh_animation_unref);
++  g_clear_handle_id (&self->hold_id, g_source_remove);
+ 
+   G_OBJECT_CLASS (phosh_swipe_away_bin_parent_class)->finalize (object);
+ }
+@@ -408,6 +487,23 @@ phosh_swipe_away_bin_class_init (PhoshSwipeAwayBinClass *klass)
+                   NULL,
+                   G_TYPE_NONE,
+                   0);
++
++  /**
++   * PhoshSwipeAwayBin::plinius-held:
++   *
++   * Plinius: with hold-to-ask on, the child was swiped at least halfway away and held there
++   * for a second. Once released it goes back instead of being removed.
++   */
++  signals[PLINIUS_HELD] =
++    g_signal_new ("plinius-held",
++                  G_TYPE_FROM_CLASS (klass),
++                  G_SIGNAL_RUN_LAST,
++                  0,
++                  NULL,
++                  NULL,
++                  NULL,
++                  G_TYPE_NONE,
++                  0);
+ }
+ 
+ 
+@@ -535,6 +631,8 @@ phosh_swipe_away_bin_set_enabled (PhoshSwipeAwayBin *self,
+   self->enabled = enabled;
+   /* Plinius: not only ignore a swipe, a disabled bin must not be in the way of its content */
+   hdy_swipe_tracker_set_enabled (self->tracker, enabled);
++  if (!enabled)
++    reset_hold (self);
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ENABLED]);
+ }
+ 
+@@ -662,3 +760,22 @@ phosh_swipe_away_bin_set_downwards (PhoshSwipeAwayBin *self,
+   self->downwards = downwards;
+   update_orientation (self);
+ }
++
++
++/**
++ * phosh_swipe_away_bin_set_hold_to_ask:
++ * @self: The swipe away bin
++ * @hold_to_ask: Whether holding the child halfway away asks instead of removing it
++ *
++ * Plinius: the cards of the running apps ask whether to force quit an app that is held halfway
++ * away for a second, see #PhoshSwipeAwayBin::plinius-held.
++ */
++void
++phosh_swipe_away_bin_set_hold_to_ask (PhoshSwipeAwayBin *self, gboolean hold_to_ask)
++{
++  g_return_if_fail (PHOSH_IS_SWIPE_AWAY_BIN (self));
++
++  self->hold_to_ask = !!hold_to_ask;
++  if (!self->hold_to_ask)
++    reset_hold (self);
++}
+diff --git a/src/swipe-away-bin.h b/src/swipe-away-bin.h
+index 581b4927..6dab3fe4 100644
+--- a/src/swipe-away-bin.h
++++ b/src/swipe-away-bin.h
+@@ -29,3 +29,4 @@ void phosh_swipe_away_bin_reveal (PhoshSwipeAwayBin *self);
+ void phosh_swipe_away_bin_remove (PhoshSwipeAwayBin *self);
+ void phosh_swipe_away_bin_undo   (PhoshSwipeAwayBin *self);
+ void phosh_swipe_away_bin_set_downwards (PhoshSwipeAwayBin *self, gboolean downwards);
++void phosh_swipe_away_bin_set_hold_to_ask (PhoshSwipeAwayBin *self, gboolean hold_to_ask);
+-- 
+2.56.1
+

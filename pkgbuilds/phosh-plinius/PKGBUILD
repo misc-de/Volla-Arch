@@ -3,7 +3,7 @@
 
 pkgname=phosh-plinius
 pkgver=0.59.0
-pkgrel=33
+pkgrel=34
 pkgdesc="Phosh mobile shell with a restart button, NFC, cast and USB switches and settings for the notch, the app overview and the calendar week"
 arch=(aarch64 x86_64)  # x86_64 only for the KVM preview
 # Debug symbols in a -debug package (ALARM's makepkg.conf has !debug): perf names Phosh's functions
@@ -28,6 +28,7 @@ license=(GPL-3.0-or-later)
 # The contact card quick setting ("My Card") shares the own card over NFC and a QR code and takes
 # cards in (pkgbuilds/plinius-cardshare).
 # On a satellite network the cellular icon shows a satellite (pkgbuilds/plinius-satellite).
+# An app that does not close can be force quit: hold its card halfway away for a second.
 # Every access question, of the portals and of plinius-appaccess, asks with Allow Once, Always
 # Allow and Don't Allow.
 # Must follow the phosh version in ALARM (same phoc version, see pkgbuilds/phoc-plinius).
@@ -179,6 +180,8 @@ source=(
 	0114-po-The-cast-quick-setting.patch
 	0115-lockscreen-The-slide-hint-halfway-between-the-arrow-.patch
 	0116-aod-Half-the-light-in-the-dark.patch
+	0117-overview-Hold-a-card-halfway-away-for-a-second-to-force-quit-its-app.patch
+	0118-po-The-question-whether-to-force-quit-an-app.patch
 	phoc-ini-merge
 )
 sha256sums=('SKIP'
@@ -303,6 +306,8 @@ sha256sums=('SKIP'
 	'ebb9c179b37634f52e86b23e4377fee34a0120618c0674f662693d3bc764bbbc'
 	'cc1523ae7f391c0f391e1958efa1a0ad2b9396537347723c86d29552a20a69fe'
 	'65a910a1fcb0235d037d98864d90b795a3a8f69add0335e576c07abbce4deb0e'
+	'780b0c208053a5906073a52ce71073be4df5d87fa6a00f325e45532ada740104'
+	'58e536538e57fd3984b5954d22e5c4a64a2505772c15e94452e5cba566c8bd83'
 	'38ca9adca511598de91f13da14d67fdeaf596d5ccf59693488db6cbd3e44c9f1')
 
 prepare() {
@@ -600,6 +605,10 @@ prepare() {
 	patch -d phosh -Np1 -i "$srcdir/0115-lockscreen-The-slide-hint-halfway-between-the-arrow-.patch"
 	# Always-on display: half the light in the dark (its own claim of the light sensor)
 	patch -d phosh -Np1 -i "$srcdir/0116-aod-Half-the-light-in-the-dark.patch"
+	# Overview: a card held halfway away for a second asks whether to force quit its app
+	patch -d phosh -Np1 -i "$srcdir/0117-overview-Hold-a-card-halfway-away-for-a-second-to-force-quit-its-app.patch"
+	# The force quit question in the eight languages
+	patch -d phosh -Np1 -i "$srcdir/0118-po-The-question-whether-to-force-quit-an-app.patch"
 	# German: "WiFi" instead of "WLAN" in Phosh's own translation (msgstr lines only)
 	sed -i '/^msgstr/,/^$/{/^#/!s/WLAN\([^;]\)/WiFi\1/g}' phosh/po/de.po
 }

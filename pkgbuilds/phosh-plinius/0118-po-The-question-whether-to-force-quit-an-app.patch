@@ -1,0 +1,381 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: misc-de <misc-de@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 10:44:23 +0100
+Subject: [PATCH 2/2] po: The question whether to force quit an app
+
+Translations for de, es, fr, it, nl, pl, pt, pt_BR and ru.
+---
+ po/de.po    | 32 ++++++++++++++++++++++++++++++++
+ po/es.po    | 32 ++++++++++++++++++++++++++++++++
+ po/fr.po    | 32 ++++++++++++++++++++++++++++++++
+ po/it.po    | 32 ++++++++++++++++++++++++++++++++
+ po/nl.po    | 32 ++++++++++++++++++++++++++++++++
+ po/pl.po    | 32 ++++++++++++++++++++++++++++++++
+ po/pt.po    | 32 ++++++++++++++++++++++++++++++++
+ po/pt_BR.po | 32 ++++++++++++++++++++++++++++++++
+ po/ru.po    | 32 ++++++++++++++++++++++++++++++++
+ 9 files changed, 288 insertions(+)
+
+diff --git a/po/de.po b/po/de.po
+index 92810d38..70336bc0 100644
+--- a/po/de.po
++++ b/po/de.po
+@@ -1739,3 +1739,35 @@ msgstr "Link läuft – tippen zum Beenden"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Streaming auf diesen Fernseher beenden"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "%s zwangsweise beenden?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "Die App wird sofort beendet. Nicht Gespeichertes geht verloren."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "%s lässt sich nicht zwangsweise beenden"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Es wurde kein laufender Prozess der App gefunden."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Schließen"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Beenden erzwingen"
+diff --git a/po/es.po b/po/es.po
+index a45823fe..8929b9b7 100644
+--- a/po/es.po
++++ b/po/es.po
+@@ -1049,3 +1049,35 @@ msgstr "Reproduciendo un enlace: toca para detener"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Dejar de transmitir a este televisor"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "¿Forzar la salida de %s?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "La aplicación se cierra al instante. Se pierde todo lo que no esté guardado."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "No se puede forzar la salida de %s"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "No se encontró ningún proceso en ejecución de la aplicación."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Cerrar"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Forzar salida"
+diff --git a/po/fr.po b/po/fr.po
+index a7d95f93..99d69c28 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -1397,3 +1397,35 @@ msgstr "Lien en lecture – touchez pour arrêter"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Arrêter la diffusion sur ce téléviseur"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "Forcer %s à quitter ?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "L’application s’arrête immédiatement. Tout ce qui n’est pas enregistré est perdu."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "Impossible de forcer %s à quitter"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Aucun processus de l’application en cours d’exécution n’a été trouvé."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Fermer"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Forcer à quitter"
+diff --git a/po/it.po b/po/it.po
+index a994d619..bf96fc82 100644
+--- a/po/it.po
++++ b/po/it.po
+@@ -1131,3 +1131,35 @@ msgstr "Link in riproduzione – tocca per fermare"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Interrompi la trasmissione su questo televisore"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "Forzare la chiusura di %s?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "L'app termina subito. Tutto ciò che non è salvato va perso."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "Impossibile forzare la chiusura di %s"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Non è stato trovato nessun processo in esecuzione dell'app."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Chiudi"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Forza chiusura"
+diff --git a/po/nl.po b/po/nl.po
+index 514262af..89a49ddb 100644
+--- a/po/nl.po
++++ b/po/nl.po
+@@ -1742,3 +1742,35 @@ msgstr "Link wordt afgespeeld – tik om te stoppen"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Streamen naar deze tv stoppen"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "%s geforceerd stoppen?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "De app stopt meteen. Alles wat niet is opgeslagen gaat verloren."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "%s kan niet geforceerd worden gestopt"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Er is geen actief proces van de app gevonden."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Sluiten"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Geforceerd stoppen"
+diff --git a/po/pl.po b/po/pl.po
+index 4dbfad2b..8fdf31c2 100644
+--- a/po/pl.po
++++ b/po/pl.po
+@@ -1707,3 +1707,35 @@ msgstr "Odtwarzanie linku – dotknij, aby zatrzymać"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Zatrzymaj przesyłanie na ten telewizor"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "Wymusić zamknięcie %s?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "Aplikacja zostanie natychmiast zakończona. Wszystko, co niezapisane, zostanie utracone."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "Nie można wymusić zamknięcia %s"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Nie znaleziono uruchomionego procesu aplikacji."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Zamknij"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Wymuś zamknięcie"
+diff --git a/po/pt.po b/po/pt.po
+index d998f949..c75b28e1 100644
+--- a/po/pt.po
++++ b/po/pt.po
+@@ -1692,3 +1692,35 @@ msgstr "A reproduzir uma ligação – toque para parar"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Parar a transmissão para este televisor"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "Forçar o encerramento de %s?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "A aplicação termina de imediato. Tudo o que não estiver guardado perde-se."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "Não é possível forçar o encerramento de %s"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Não foi encontrado nenhum processo da aplicação em execução."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Fechar"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Forçar encerramento"
+diff --git a/po/pt_BR.po b/po/pt_BR.po
+index 81d4c4f8..18db8370 100644
+--- a/po/pt_BR.po
++++ b/po/pt_BR.po
+@@ -1784,3 +1784,35 @@ msgstr "A reproduzir uma ligação – toque para parar"
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Parar a transmissão para este televisor"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "Forçar o encerramento de %s?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "O aplicativo é encerrado imediatamente. Tudo o que não estiver salvo será perdido."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "Não é possível forçar o encerramento de %s"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Nenhum processo do aplicativo em execução foi encontrado."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Fechar"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Forçar encerramento"
+diff --git a/po/ru.po b/po/ru.po
+index 8b154627..e993c08d 100644
+--- a/po/ru.po
++++ b/po/ru.po
+@@ -1804,3 +1804,35 @@ msgstr "Ссылка воспроизводится — нажмите, чтоб
+ 
+ msgid "Stop casting to this TV"
+ msgstr "Остановить трансляцию на этот телевизор"
++
++#. Plinius: the title of the question after holding an app's card while swiping it away
++#: src/overview.c
++#, c-format
++msgid "Force Quit %s?"
++msgstr "Принудительно завершить %s?"
++
++#. Plinius: the question whether to force quit an app
++#: src/overview.c
++msgid "The app ends at once. Anything not saved is lost."
++msgstr "Приложение завершится сразу. Всё несохранённое будет потеряно."
++
++#. Plinius: the title when no running process of an app to force quit was found
++#: src/overview.c
++#, c-format
++msgid "Cannot Force Quit %s"
++msgstr "Не удаётся принудительно завершить %s"
++
++#. Plinius: no app to force quit
++#: src/overview.c
++msgid "No running process of the app was found."
++msgstr "Не найден ни один запущенный процесс приложения."
++
++#. Plinius: the button of the dialog that found no app to force quit
++#: src/overview.c
++msgid "Close"
++msgstr "Закрыть"
++
++#. Plinius: the button that kills an app that does not close
++#: src/overview.c
++msgid "Force Quit"
++msgstr "Завершить"
+-- 
+2.56.1
+
