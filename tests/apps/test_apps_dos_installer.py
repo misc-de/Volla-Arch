@@ -1092,7 +1092,9 @@ class Server:
         self.error = error
         self.reads = []
 
-    def __call__(self, url, timeout=None):
+    def __call__(self, req, timeout=None):
+        assert req.get_header("User-agent") == "Plinius Arch Linux"
+        url = req.full_url
         if self.error:
             raise self.error
         server = self
@@ -1957,27 +1959,36 @@ def test_touch_settings_from_a_preset(m):
     assert p.touch_settings(None) == {} and p.touch_settings(["stick"]) == {}
     assert p.touch_settings({"stick": "joystick", "buttons": "ctrl", "small": None}) == {}
     assert p.touch_settings({"stick": "numpad", "buttons": ["Ctrl", "alt; rm", 7, "f10", "a",
-                                                            "b", "c"],
+                                                            "b", "c", "d"],
                              "small": ["esc", "keyboard", "x" * 11]}) == {
-        "stick": "numpad", "buttons": ["ctrl", "f10", "a", "b"], "small": ["esc", "keyboard"]}
+        "stick": "numpad", "buttons": ["ctrl", "f10", "a", "b", "c"],
+        "small": ["esc", "keyboard"]}
     assert p.touch_args({"stick": "arrows", "buttons": [], "bad": 1}) == [
         "--stick", "arrows", "--buttons", ""]
     assert p.touch_args({}) == []
 
 
-def test_doom_gets_its_weapon_keys(m, home, monkeypatch):
+def test_games_get_their_controls_by_start_file(m, home, monkeypatch):
     p, dg = m.presets, m.dosgames
     weapons = ["1", "2", "3", "4", "5", "6", "7"]
+    doom = {"buttons": ["ctrl", "space", "alt", "rshift"],
+            "small": ["esc", "enter", "tab", "keyboard"], "keys": weapons + ["y"]}
     # By the start file, whatever case it is written in
-    assert p.game_touch({}, "DOOM2.EXE") == {"keys": weapons}
-    assert p.game_touch({"stick": "wasd"}, "doom.exe") == {"stick": "wasd", "keys": weapons}
-    assert p.touch_args({}, "DOOM.EXE") == ["--keys", "1,2,3,4,5,6,7"]
-    # A game's own keys win, also none at all; other games get none
-    assert p.game_touch({"keys": ["F1", "tab"]}, "DOOM2.EXE") == {"keys": ["f1", "tab"]}
-    assert p.game_touch({"keys": []}, "DOOM2.EXE") == {"keys": []}
-    assert p.game_touch({}, "HERETIC.EXE") == {} and p.game_touch({}, None) == {}
-    assert p.touch_settings({"keys": [str(n) for n in range(10)]})["keys"] == [
-        "0", "1", "2", "3", "4", "5", "6", "7"]
+    assert p.game_touch({}, "DOOM2.EXE") == doom
+    assert p.game_touch({"stick": "wasd"}, "doom.exe") == {"stick": "wasd", **doom}
+    assert p.touch_args({}, "DOOM.EXE") == [
+        "--buttons", "ctrl,space,alt,rshift", "--small", "esc,enter,tab,keyboard",
+        "--keys", "1,2,3,4,5,6,7,y"]
+    # A game's own lists win one by one, also an empty one; other games get none
+    assert p.game_touch({"keys": ["F1", "tab"]}, "DOOM2.EXE") == {**doom, "keys": ["f1", "tab"]}
+    assert p.game_touch({"keys": [], "small": ["esc"]}, "DOOM2.EXE") == {
+        "buttons": doom["buttons"], "small": ["esc"], "keys": []}
+    assert p.game_touch({}, "KEEN1.EXE") == {} and p.game_touch({}, None) == {}
+    # The table is not changed by what a game's settings do with its lists
+    p.game_touch({}, "DOOM.EXE")["keys"].append("q")
+    assert p.TOUCH_GAMES["DOOM.EXE"]["keys"] == weapons + ["y"]
+    assert p.touch_settings({"keys": [str(n) for n in range(10)] + list("abcd")})["keys"] == [
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"]
     # Played: the controls get them
     folder = home.games / "Doom II"
     (folder / "c").mkdir(parents=True)
@@ -1988,7 +1999,31 @@ def test_doom_gets_its_weapon_keys(m, home, monkeypatch):
     monkeypatch.setattr(dg.subprocess, "Popen", lambda cmd: Controls(cmd))
     assert dg.play(m.library.Game("Doom II", "dosbox", folder, [], "DOOM2", "DOOM2.EXE")) == 0
     assert Controls.made[-1].cmd == ["/usr/bin/plinius-touch-controls", "--app-id", "dosbox",
-                                     "--keys", "1,2,3,4,5,6,7"]
+                                     *p.touch_args({}, "DOOM2.EXE")]
+
+
+@pytest.mark.parametrize("program, big, small, keys", [
+    ("HERETIC.EXE", ["ctrl", "space", "alt", "enter"], ["esc", "tab", "y", "keyboard"],
+     ["1", "2", "3", "4", "5", "6", "7", "rshift", "lbracket", "rbracket"]),
+    ("HEXEN.EXE", ["ctrl", "space", "alt", "slash"], ["esc", "enter", "tab", "keyboard"],
+     ["1", "2", "3", "4", "lbracket", "rbracket", "rshift", "y"]),
+    ("STRIFE1.EXE", ["ctrl", "space", "alt", "a"], ["esc", "enter", "tab", "keyboard"],
+     ["1", "2", "3", "4", "5", "6", "7", "8", "lbracket", "rbracket", "rshift", "y"]),
+    ("WOLF3D.EXE", ["ctrl", "space", "alt", "rshift"], ["esc", "enter", "y", "keyboard"],
+     ["1", "2", "3", "4", "f8", "f9"]),
+    ("SPEAR.EXE", ["ctrl", "space", "alt", "rshift"], ["esc", "enter", "y", "keyboard"],
+     ["1", "2", "3", "4", "f8", "f9"]),
+    ("MK.EXE", ["kp7", "kp5", "kp9", "kp1", "kp3"], ["esc", "enter", "f10", "keyboard"],
+     ["f1", "f2"]),
+    ("DN1.EXE", ["ctrl", "alt"], ["esc", "enter", "y", "keyboard"], None),
+    ("DN3.EXE", ["ctrl", "alt"], ["esc", "enter", "y", "keyboard"], None),
+])
+def test_controls_of_the_known_games(m, program, big, small, keys):
+    p = m.presets
+    want = {"buttons": big, "small": small, **({"keys": keys} if keys else {})}
+    assert p.game_touch({}, program) == want
+    # Within what a preset may set, so that none of it is cut off
+    assert p.touch_settings(want) == want
 
 
 def test_after_install_takes_the_presets_touch_controls(m, tmp_path):

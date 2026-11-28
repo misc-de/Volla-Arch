@@ -2,7 +2,7 @@
 
 pkgname=plinius-dos-installer
 pkgver=0.1
-pkgrel=11
+pkgrel=12
 pkgdesc="Installs MS-DOS games from floppy disk images, CDs, archives or GOG installers, each with a launcher and the game's icon"
 arch=(any)
 license=(MIT)
@@ -33,6 +33,10 @@ license=(MIT)
 #   DOSBox's own value leaves a setting out.
 # - Doom and Doom II get the keys 1 to 7 for their weapons below Esc and the keyboard button
 #   (plinius-touch-controls --keys, 0.1-11), unless the game's settings name keys of their own.
+# - The known games get all of their touch controls by start file (0.1-12), as far as their own
+#   settings leave them out: the Doom engine (Doom, Doom II, Final Doom, Heretic, Hexen, Strife),
+#   Wolfenstein 3D and Spear of Destiny (run on the right Shift, as the game reads it), Mortal
+#   Kombat (the second player's keys, five buttons as on an arcade panel) and Duke Nukem.
 # - Installers from floppies run with all disks unpacked into one folder (own FAT12/16 reader);
 #   DOSBox 0.74 can only swap CD images, so the files that differ between the disks are swapped
 #   once DOSBox read the current disk's own files (/proc/<pid>/fdinfo).
@@ -55,7 +59,7 @@ depends=(python python-gobject gtk4 libadwaita dosbox scummvm 7zip innoextract
 	# The hook uses its launcher hiding script
 	device-volla-ansuz
 	# Stick and buttons on the screen while a game runs
-	'plinius-touch-controls>=0.1-7')
+	'plinius-touch-controls>=0.1-9')
 makedepends=(gettext python)
 install=plinius-dos-installer.install
 _langs=(de es fr it nl pl pt ru)
@@ -85,8 +89,8 @@ sha256sums=('1ff96fcd5a8c5e3f903f5be19767093564ad9f0baa1460889703efb9bd5e6069'
 	'fba02c864f6ffaef5d1df5aa00d85c2061b4128c465e4d4adb55f51eb3fcac1f'
 	'7a0dd02e01fd7d3a14813aff47921060df8ec4351ec21429f9709cf5dada1499'
 	'9539c5955843d40560530d80e74069d58189a53a3481a2b1ac9af44f3e291004'
-	'c69f59f69f8d3533d820a3e713c568c448622e0ba173fa09452e6048ba7595f6'
-	'4f531341ada7f584a258b98b4b2c790b3a6475e38c1a892d6012d299b045daad'
+	'8a89014d91426934facba8dbcad2f8967a91daeff406253bbe683d85f7e00c1a'
+	'a8214bd4e060cb3c7df5a73e39024350d5a2ac65c4408897b55de3cd086eb31f'
 	'621326e1c3031b6801e968da478ac1956bc5f31d8c89b8869b0a2fbaf10f0e30'
 	'a351ae17b518a6e916ceb760685563e13a51c72d408aa91804863a93b720f53f'
 	'7ca471bc62da83004aca0336887b21f95ea98a5b81fe541a3c820f744ddbda30'

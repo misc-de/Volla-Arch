@@ -56,6 +56,12 @@ KEYS = {
     "pgup": (104, "PgUp"), "pgdn": (109, "PgDn"), "home": (102, "Home"), "end": (107, "End"),
     "ins": (110, "Ins"), "del": (111, "Del"),
     "kp8": (72, "8"), "kp2": (80, "2"), "kp4": (75, "4"), "kp6": (77, "6"),
+    # The number pad's corners and middle: Mortal Kombat's second player fights with them
+    "kp7": (71, "7"), "kp9": (73, "9"), "kp1": (79, "1"), "kp3": (81, "3"), "kp5": (76, "5"),
+    # The right Shift: Wolfenstein 3D runs with it only, the Doom engine expects it
+    "rshift": (54, "Shift"),
+    # Hexen jumps with /, the Doom engine's later games page through their inventory with [ ]
+    "slash": (53, "/"), "lbracket": (26, "["), "rbracket": (27, "]"),
 }
 KEYS.update({f"f{n}": (58 + n if n <= 10 else 76 + n, f"F{n}") for n in range(1, 13)})
 KEYS.update({str(n): (1 + n if n else 11, str(n)) for n in range(10)})
@@ -73,10 +79,13 @@ STICKS = {"arrows": ("up", "down", "left", "right"), "wasd": ("w", "s", "a", "d"
           "numpad": ("kp8", "kp2", "kp4", "kp6")}
 DEFAULT_BUTTONS = ("ctrl", "space", "alt", "enter")
 DEFAULT_SMALL = ("esc", "keyboard")
-MAX_BUTTONS = 4
+# Five for a fighting game: three above, two below, as on an arcade panel
+MAX_BUTTONS = 5
 MAX_SMALL = 4
-# More keys in rows below the small buttons (a game's weapons, say), as many per row
-MAX_KEYS = 8
+# More keys in rows below the small buttons (a game's weapons, say), as many per row. Three
+# rows leave the big buttons as large as before lying, where the bars are narrow; upright
+# they get smaller.
+MAX_KEYS = 12
 KEYS_PER_ROW = 4
 
 # US layout, as the Terminal layout of the on-screen keyboard: DOSBox runs with keysyms
@@ -436,6 +445,11 @@ class Button:
 # where the thumb rests (bottom), then right, left, top
 DIAMOND = ((0, 1), (1, 0), (-1, 0), (0, -1))
 PAIR = ((-0.6, 0.45), (0.6, -0.45))
+# Five as on an arcade fighter's panel, in reading order: three above, two below between them,
+# as (x, y) in units of the side the buttons share. Each is 0.3 of the side across and at least
+# that far from the next; together they reach 0.495 sideways and 0.3 up and down.
+ARCADE = ((-0.345, -0.15), (0, -0.15), (0.345, -0.15), (-0.1725, 0.15), (0.1725, 0.15))
+ARCADE_R = 0.15
 
 
 def small_height(h):
@@ -464,13 +478,16 @@ def big_side(w, h, small, extra=()):
 def big_button_size(w, h, big, small, extra=()):
     """How wide (and high) one big button of a pad of w x h is."""
     side = big_side(w, h, small, extra)
+    if len(big) == len(ARCADE):
+        return side * 2 * ARCADE_R
     return side * 0.6 if len(big) == 1 else side * 0.38 if big else 0
 
 
 def button_layout(w, h, big, small, low=False, extra=()):
     """The buttons in a pad of w x h: the small ones in a row along the top, the extra keys in
-    rows below them, the big ones below as a diamond like a gamepad's, in the middle of the
-    room left or, low, in the pad's lower third (LOW), a button's height above its bottom."""
+    rows below them, the big ones below as a diamond like a gamepad's (five as on an arcade
+    panel), in the middle of the room left or, low, in the pad's lower third (LOW), a button's
+    height above its bottom."""
     gap = 8
     out = []
     sh = small_height(h)
@@ -490,9 +507,10 @@ def button_layout(w, h, big, small, low=False, extra=()):
     cx, cy = w / 2, top + area / 2
     if low:
         # How far the big buttons reach from their middle: a lone one 0.3 of the side, a pair
-        # 0.45 * 0.30 + 0.19, a diamond 0.30 + 0.19. Below them a button's height stays free;
-        # where that would push them into the rows above, they go down to the edge instead.
-        reach = side * {1: 0.3, 2: 0.325}.get(len(big), 0.49)
+        # 0.45 * 0.30 + 0.19, a diamond 0.30 + 0.19, five 0.15 + 0.15. Below them a button's
+        # height stays free; where that would push them into the rows above, they go down to
+        # the edge instead.
+        reach = side * {1: 0.3, 2: 0.325, len(ARCADE): 0.3}.get(len(big), 0.49)
         free = max(gap, big_button_size(w, h, big, small, extra))
         cy = low_centre(h, reach + free)
         if cy - reach < top:
@@ -501,6 +519,11 @@ def button_layout(w, h, big, small, low=False, extra=()):
     if len(big) == 1:
         r = side * 0.3
         out.append(Button(big[0], cx - r, cy - r, 2 * r, 2 * r, True))
+    elif len(big) == len(ARCADE):
+        r = side * ARCADE_R
+        for name, (ux, uy) in zip(big, ARCADE):
+            bx, by = cx + ux * side, cy + uy * side
+            out.append(Button(name, bx - r, by - r, 2 * r, 2 * r, True))
     elif big:
         r, d = side * 0.19, side * 0.30
         places = PAIR if len(big) == 2 else DIAMOND
@@ -684,11 +707,11 @@ class Buttons:
         self.buttons = button_layout(w, h, self.big, self.small, low, self.extra)
 
     def down(self, seq, x, y):
-        for b in self.buttons:
-            if b.hit(x, y):
-                break
-        else:
+        # A touch may reach two buttons that lie close (five big ones): the nearer one counts
+        hits = [b for b in self.buttons if b.hit(x, y)]
+        if not hits:
             return False
+        b = min(hits, key=lambda b: math.hypot(x - b.x - b.w / 2, y - b.y - b.h / 2))
         self.touches[seq] = b
         b.pressed = True
         self.feedback()
@@ -1125,7 +1148,8 @@ def parse_args(argv):
                    help="the game window's app id: shown while it is active, ends with it")
     p.add_argument("--stick", choices=sorted(STICKS), default="arrows")
     p.add_argument("--buttons", default=",".join(DEFAULT_BUTTONS),
-                   help=f"up to {MAX_BUTTONS} big buttons, first where the thumb rests")
+                   help=f"up to {MAX_BUTTONS} big buttons, first where the thumb rests "
+                   "(five: three above, two below, in reading order)")
     p.add_argument("--small", default=",".join(DEFAULT_SMALL),
                    help=f"up to {MAX_SMALL} small buttons along the top ('keyboard': the OSK)")
     p.add_argument("--keys", default="",

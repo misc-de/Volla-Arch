@@ -6,6 +6,7 @@
 import array
 import math
 import os
+import re
 import select
 import socket
 import struct
@@ -15,7 +16,7 @@ import cairo
 import pytest
 
 import desktop_fakes as fakes
-from conftest import PKG
+from conftest import PKG, load_script
 from desktop_mainrun import run_as_main
 
 TOUCH = PKG / "plinius-touch-controls" / "plinius-touch-controls.py"
@@ -158,6 +159,30 @@ def test_key_table(mod):
         assert all(name in keys for name in stick)
     assert all(n in keys for n in mod.DEFAULT_BUTTONS)
     assert all(n in keys or n in mod.ACTIONS for n in mod.DEFAULT_SMALL)
+    # Mortal Kombat's number pad, Wolfenstein's Shift, Hexen's jump, the inventory
+    assert [keys[f"kp{n}"][0] for n in (7, 8, 9, 4, 5, 6, 1, 2, 3)] == [
+        71, 72, 73, 75, 76, 77, 79, 80, 81]
+    assert keys["rshift"] == (54, "Shift") and keys["shift"][0] == 42
+    assert keys["slash"] == (53, "/") and keys["lbracket"] == (26, "[")
+    assert keys["rbracket"] == (27, "]")
+    # The right Shift is a Shift for the modifiers too
+    assert mod.MODIFIERS[keys["rshift"][0]] == mod.MODIFIERS[keys["shift"][0]]
+    # Names as a preset of the DOS Installer may write them
+    assert all(re.fullmatch(r"[a-z0-9]{1,10}", n) for n in list(keys) + list(mod.ACTIONS))
+
+
+def test_the_dos_installers_games_get_keys_the_controls_have(mod):
+    """Each game's controls in the DOS Installer (presets.TOUCH_GAMES) fit: known keys, no list
+    longer than the controls take, the same limits."""
+    presets = load_script(PKG / "plinius-dos-installer" / "presets.py", "presets_for_touch")
+    assert presets.TOUCH_LISTS == {"buttons": mod.MAX_BUTTONS, "small": mod.MAX_SMALL,
+                                   "keys": mod.MAX_KEYS}
+    assert set(presets.TOUCH_STICKS) == set(mod.STICKS)
+    for program, layout in presets.TOUCH_GAMES.items():
+        args = mod.parse_args(presets.touch_args({}, program))
+        assert args.buttons == layout["buttons"], program
+        assert args.small == layout["small"], program
+        assert args.keys == layout.get("keys", []), program
 
 
 # ----- the wire protocol -----
@@ -499,6 +524,53 @@ def test_button_layout_one_two_and_no_row(mod):
     # A flat pad leaves no room for big buttons, but no negative size
     (flat,) = mod.button_layout(100, 10, ["ctrl"], [])
     assert flat.w == 0
+
+
+def test_five_big_buttons_as_on_an_arcade_panel(mod):
+    # Mortal Kombat: high punch, block, high kick above; low punch, low kick below
+    names = ["kp7", "kp5", "kp9", "kp1", "kp3"]
+    small = ["esc", "enter", "f10", "keyboard"]
+    for w, h, low, extra in ((211, 429, True, ["f1", "f2"]), (238, 326, False, ["f1", "f2"]),
+                             (160, 312, True, []), (160, 120, True, [])):
+        out = mod.button_layout(w, h, names, small, low, extra)
+        big = [b for b in out if b.round]
+        assert [b.name for b in big] == names
+        hp, block, hk, lp, lk = (centre(b) for b in big)
+        # Three in a row above, two below between them
+        assert hp[1] == pytest.approx(block[1]) and hk[1] == pytest.approx(block[1])
+        assert lp[1] == pytest.approx(lk[1]) and lp[1] > hp[1]
+        assert hp[0] < lp[0] < block[0] < lk[0] < hk[0]
+        assert block[0] == pytest.approx(w / 2)
+        size = mod.big_button_size(w, h, names, small, extra)
+        assert all(b.w == pytest.approx(size) == pytest.approx(b.h) for b in big)
+        # Inside the pad, below the rows, not overlapping
+        rows_end = max(b.y + b.h for b in out if not b.round)
+        for b in big:
+            assert b.x >= 0 and b.x + b.w <= w and b.y > rows_end and b.y + b.h <= h
+        points = [hp, block, hk, lp, lk]
+        for i, a in enumerate(points):
+            for c in points[i + 1:]:
+                assert math.dist(a, c) >= size
+    # Lying, a button's height free below the lower two, as below Ctrl
+    out = mod.button_layout(211, 429, names, small, low=True, extra=["f1", "f2"])
+    lp = next(b for b in out if b.name == "kp1")
+    assert 429 - (lp.y + lp.h) == pytest.approx(lp.h)
+    # As large as a diamond's buttons lying: the bar's width decides, not the rows
+    diamond = mod.big_button_size(211, 429, ["ctrl", "space", "alt", "enter"], small)
+    assert mod.big_button_size(211, 429, names, small, ["f1", "f2"]) > 0.75 * diamond
+
+
+def test_a_touch_between_two_buttons_takes_the_nearer(mod):
+    board = Board()
+    b = mod.Buttons(mod.Keys(board), ["kp7", "kp5", "kp9", "kp1", "kp3"], [], {})
+    b.resize(211, 429, low=True)
+    hp, block = b.buttons[0], b.buttons[1]
+    (x1, y), (x2, _) = centre(hp), centre(block)
+    # Both are hit just right of the middle between them; the block is nearer
+    x = (x1 + x2) / 2 + 0.5
+    assert hp.hit(x, y) and block.hit(x, y)
+    assert b.down("t", x, y) and block.pressed and not hp.pressed
+    assert board.calls[0] == ("key", 76, True)
 
 
 def test_button_hit_and_label(mod):
@@ -1233,8 +1305,10 @@ def test_arguments(mod):
     assert (a.app_id, a.stick, a.buttons, a.small) == (
         "dosbox", "arrows", ["ctrl", "space", "alt", "enter"], ["esc", "keyboard"])
     assert a.aspect == pytest.approx(4 / 3) and a.keys == []
-    a = mod.parse_args(["--keys", "1,2,3,keyboard,4,5,6,7,8,9"])
-    assert a.keys == ["1", "2", "3", "4", "5", "6", "7", "8"]
+    a = mod.parse_args(["--keys", "1,2,3,keyboard,4,5,6,7,8,9,0,a,b,c"])
+    assert a.keys == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "a", "b"]
+    a = mod.parse_args(["--buttons", "kp7,kp5,kp9,kp1,kp3,ctrl"])
+    assert a.buttons == ["kp7", "kp5", "kp9", "kp1", "kp3"]
     a = mod.parse_args(["--stick", "wasd", "--buttons", "", "--small", "keyboard,f1,tab,esc,y",
                         "--app-id", "game"])
     assert (a.app_id, a.stick, a.buttons, a.small) == ("game", "wasd", [], [

@@ -17,6 +17,7 @@ INI = CONFIG / "scummvm/scummvm.ini"
 ICONS = DATA / "plinius-dos-installer/scummvm-icons-fetched"
 # ScummVM's icon collection (GPL-2.0), the source of its icon packs. One game's icon is a few
 # hundred KB, the packs together several hundred MB.
+USER_AGENT = "Plinius Arch Linux"  # every request says who asks
 ICON_URL = "https://raw.githubusercontent.com/scummvm/scummvm-icons/master/icons/{}.png"
 
 # No window: detection and --add work without a display this way
@@ -90,7 +91,8 @@ def fetch_icon(d, log=print):
     if dest.exists():
         return True
     try:
-        with urllib.request.urlopen(ICON_URL.format(name), timeout=20) as r:
+        with urllib.request.urlopen(
+                urllib.request.Request(ICON_URL.format(name), headers={"User-Agent": USER_AGENT}), timeout=20) as r:
             data = r.read(4 * 1024 * 1024)
     except (urllib.error.URLError, OSError) as e:
         log(f"no icon for {name}: {e}")

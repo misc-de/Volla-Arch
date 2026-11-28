@@ -33,6 +33,7 @@ from pathlib import Path
 URL = "https://plinius.cais.de/dos/presets.json"
 BUNDLED = Path(__file__).with_name("presets.json")
 CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "plinius-dos-installer"
+USER_AGENT = "Plinius Arch Linux"  # every request says who asks
 FETCH_TIMEOUT = 6  # seconds; without a network the bundled list is used
 SCHEMA = 1
 # The repository's signing key (ASCII armored) and the fingerprints pacman trusts or revoked
@@ -149,12 +150,16 @@ def _read_cache():
         return None
 
 
+def _request(url):
+    return urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+
+
 def _fetch(log):
     """The list from the server if it is signed and newer than the kept one; else None."""
     try:
-        with urllib.request.urlopen(URL, timeout=FETCH_TIMEOUT) as r:
+        with urllib.request.urlopen(_request(URL), timeout=FETCH_TIMEOUT) as r:
             data = r.read(4 << 20)
-        with urllib.request.urlopen(URL + ".sig", timeout=FETCH_TIMEOUT) as r:
+        with urllib.request.urlopen(_request(URL + ".sig"), timeout=FETCH_TIMEOUT) as r:
             signature = r.read(64 << 10)
     except OSError as e:
         log(f"presets: not fetched ({e})")
@@ -301,15 +306,54 @@ def dosbox_conf(settings):
 
 
 # The touch controls (plinius-touch-controls) a preset may set: what the stick holds, the big
-# buttons (the first where the thumb rests), the small ones along the top and more keys in rows
-# below those. Key names are checked by plinius-touch-controls itself, which leaves out names it
-# does not know.
+# buttons (the first where the thumb rests; five as on an arcade panel), the small ones along the
+# top and more keys in rows below those. Key names are checked by plinius-touch-controls itself,
+# which leaves out names it does not know.
 TOUCH_STICKS = ("arrows", "wasd", "numpad")
-TOUCH_LISTS = {"buttons": 4, "small": 4, "keys": 8}
-# Keys a game gets unless its settings name their own, by its start file: Doom and Doom II
-# (Final Doom too) pick their weapons with 1 to 7
-TOUCH_GAME_KEYS = {"DOOM.EXE": [str(n) for n in range(1, 8)],
-                   "DOOM2.EXE": [str(n) for n in range(1, 8)]}
+TOUCH_LISTS = {"buttons": 5, "small": 4, "keys": 12}
+
+
+def _weapons(n):
+    return [str(i) for i in range(1, n + 1)]
+
+
+# The controls a game gets by its start file, as far as its own settings leave them out. All
+# keep the stick on the arrow keys (with_stick leaves the arrows out of a game's settings).
+# The Doom engine: fire, open, sideways and run (the right Shift, its own key for it); Enter for
+# the menu, Tab for the map, Y for the game's questions (quit, quick load).
+_DOOM = {"buttons": ["ctrl", "space", "alt", "rshift"],
+         "small": ["esc", "enter", "tab", "keyboard"], "keys": _weapons(7) + ["y"]}
+TOUCH_GAMES = {
+    # Doom, Doom II and Final Doom (Plutonia and TNT start with DOOM2.EXE)
+    "DOOM.EXE": _DOOM, "DOOM2.EXE": _DOOM,
+    # Heretic: Enter uses the item picked with [ and ], seven weapons
+    "HERETIC.EXE": {"buttons": ["ctrl", "space", "alt", "enter"],
+                    "small": ["esc", "tab", "y", "keyboard"],
+                    "keys": _weapons(7) + ["rshift", "lbracket", "rbracket"]},
+    # Hexen: as Heretic, four weapons, / jumps
+    "HEXEN.EXE": {"buttons": ["ctrl", "space", "alt", "slash"],
+                  "small": ["esc", "enter", "tab", "keyboard"],
+                  "keys": _weapons(4) + ["lbracket", "rbracket", "rshift", "y"]},
+    # Strife: eight weapons, A jumps, Enter uses the item picked with [ and ]
+    "STRIFE1.EXE": {"buttons": ["ctrl", "space", "alt", "a"],
+                    "small": ["esc", "enter", "tab", "keyboard"],
+                    "keys": _weapons(8) + ["lbracket", "rbracket", "rshift", "y"]},
+    # Wolfenstein 3D and Spear of Destiny: run is the right Shift only (CONFIG.WL6 as the game
+    # writes it), four weapons, F8 and F9 save and load quickly
+    "WOLF3D.EXE": {"buttons": ["ctrl", "space", "alt", "rshift"],
+                   "small": ["esc", "enter", "y", "keyboard"],
+                   "keys": _weapons(4) + ["f8", "f9"]},
+    # Mortal Kombat: the second player's keys in its CMOS file (the arrows and the number pad),
+    # as on the arcade panel: high punch, block, high kick above, low punch and low kick below.
+    # F10 is its setup, the keyboard for the word from the manual it asks for. Its start keys
+    # are in no file: F1 and F2 offered until tried on the phone.
+    "MK.EXE": {"buttons": ["kp7", "kp5", "kp9", "kp1", "kp3"],
+               "small": ["esc", "enter", "f10", "keyboard"], "keys": ["f1", "f2"]},
+    # Duke Nukem, all three episodes: Ctrl jumps, Alt fires, up on the stick uses
+    **{f"DN{n}.EXE": {"buttons": ["ctrl", "alt"], "small": ["esc", "enter", "y", "keyboard"]}
+       for n in (1, 2, 3)},
+}
+TOUCH_GAMES["SPEAR.EXE"] = TOUCH_GAMES["WOLF3D.EXE"]
 
 
 def touch_settings(settings):
@@ -338,12 +382,13 @@ def with_stick(settings, stick):
 
 
 def game_touch(settings, program=""):
-    """The touch settings of a game started with program: its own, else the keys its start file
-    wants (TOUCH_GAME_KEYS)."""
+    """The touch settings of a game started with program: its own, and for what they leave out
+    the controls its start file wants (TOUCH_GAMES)."""
     s = touch_settings(settings)
-    keys = TOUCH_GAME_KEYS.get((program or "").upper())
-    if keys and "keys" not in s:
-        s["keys"] = list(keys)
+    known = TOUCH_GAMES.get((program or "").upper(), {})
+    for key in TOUCH_LISTS:
+        if key in known and key not in s:
+            s[key] = list(known[key])
     return s
 
 

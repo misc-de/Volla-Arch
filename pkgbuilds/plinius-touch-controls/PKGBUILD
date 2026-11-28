@@ -2,7 +2,7 @@
 
 pkgname=plinius-touch-controls
 pkgver=0.1
-pkgrel=8
+pkgrel=9
 pkgdesc="Touch stick and buttons beside a game's picture that send the keys it wants"
 arch=(any)
 license=(MIT)
@@ -23,6 +23,9 @@ license=(MIT)
 # 0.1-7: --keys, up to 8 more keys in rows of 4 below the small buttons (Doom's weapons).
 # 0.1-8: without room for a button's height below them, the big buttons and the stick go down
 # to the edge; a pair of big buttons reaches only as far as it does.
+# 0.1-9: keys for the DOS Installer's games (the right Shift, the number pad's 7 9 1 3 5, / [ ]);
+# five big buttons as on an arcade panel (Mortal Kombat), up to 12 more keys in three rows; a
+# touch that reaches two buttons takes the nearer one.
 # The wire protocol is spoken by the script itself: python-pywayland
 # has no virtual keyboard and GTK does not share its connection.
 depends=(python python-gobject python-cairo gtk3 gtk-layer-shell)
@@ -30,7 +33,7 @@ optdepends=('feedbackd: a short vibration per button'
 	'stevia: the keyboard button unfolds it')
 source=(plinius-touch-controls.py
 	LICENSE)
-sha256sums=('18f4e30ac2968c36068d92f56536497fae2f0b0bb369f52df182b66aac5fbb55'
+sha256sums=('a74d3eef4cbdec3d1d34d4fc80ce651b54f6169b0fe7d0689883ae6879045201'
 	'1f18c6c362e3c14577e914c06d551c588720f91959e6aa99a121b86863ffd076')
 
 package() {
